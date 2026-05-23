@@ -40,10 +40,7 @@ class HomeViewModel {
         error = nil
 
         do {
-            let response: SectionsResponse = try await ContinuumAPI.shared.get(
-                "/api/v1/home/sections"
-            )
-            ResponseCache.shared.set(response, for: CacheKey.homeSections)
+            let response = try await StartupContentPrefetcher.fetchHomeSections()
             sections = response.sections.filter { !$0.items.isEmpty }
         } catch let err {
             // Don't blow away painted content on a transient failure —

@@ -38,6 +38,7 @@ class LoginViewModel {
 
         do {
             try await auth.login(username: username, password: password)
+            await StartupContentPrefetcher.prefetchProfiles()
             router.showProfileSelection()
         } catch let loginError {
             self.error = loginError.localizedDescription

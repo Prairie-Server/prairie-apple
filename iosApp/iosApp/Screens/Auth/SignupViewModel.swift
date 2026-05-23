@@ -50,6 +50,7 @@ class SignupViewModel {
                 password: password,
                 inviteCode: inviteCode
             )
+            await StartupContentPrefetcher.prefetchProfiles()
             router.showProfileSelection()
         } catch {
             self.error = error.localizedDescription

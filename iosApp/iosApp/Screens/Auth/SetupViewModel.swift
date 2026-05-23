@@ -44,6 +44,7 @@ class SetupViewModel {
                 email: email,
                 password: password
             )
+            await StartupContentPrefetcher.prefetchProfiles()
             router.showProfileSelection()
         } catch {
             self.error = error.localizedDescription

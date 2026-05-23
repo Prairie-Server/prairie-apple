@@ -31,8 +31,7 @@ class ProfileSelectionViewModel {
         }
 
         do {
-            let fresh = try await auth.getProfiles()
-            ResponseCache.shared.set(fresh, for: CacheKey.profiles)
+            let fresh = try await StartupContentPrefetcher.fetchProfiles()
             profiles = fresh
         } catch {
             if profiles.isEmpty {
@@ -50,6 +49,7 @@ class ProfileSelectionViewModel {
     func selectProfile(_ profile: UserProfile, router: AppRouter) async {
         do {
             try await auth.selectProfile(profileId: profile.id)
+            StartupContentPrefetcher.prefetchHomeSections()
             await PlayerSettings.shared.refreshFromServer()
             router.resetToHome()
         } catch {
@@ -60,6 +60,7 @@ class ProfileSelectionViewModel {
     /// Select a profile with a PIN.
     func selectProfileWithPIN(_ profile: UserProfile, pin: String, router: AppRouter) async throws {
         try await auth.selectProfile(profileId: profile.id, pin: pin)
+        StartupContentPrefetcher.prefetchHomeSections()
         await PlayerSettings.shared.refreshFromServer()
         router.resetToHome()
     }

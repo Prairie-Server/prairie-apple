@@ -1,15 +1,12 @@
 import SwiftUI
 
-#if os(tvOS)
-private let startupSplashMinimumDuration: TimeInterval = 4.0
-#else
-private let startupSplashMinimumDuration: TimeInterval = 1.25
-#endif
-
 struct ContentView: View {
     @State private var router = AppRouter()
     @State private var debugPlayContentId: String?
     @State private var didAttemptDebugAutoPlay = false
+    @State private var didStartInitialStateCheck = false
+    @State private var didFinishStartupSplash = false
+    @State private var pendingInitialAuthState: AppRouter.AuthState?
     /// Deep link URL received before the auth state was ready. Drained
     /// on the next `.authenticated` transition so Top Shelf taps during
     /// a cold launch still route to the correct screen.
@@ -28,8 +25,15 @@ struct ContentView: View {
         Group {
             switch router.authState {
             case .loading:
-                StartupSplashView()
-                    .task { await checkInitialState() }
+                StartupSplashView {
+                    didFinishStartupSplash = true
+                    finishInitialStartupIfReady()
+                }
+                .task {
+                    guard !didStartInitialStateCheck else { return }
+                    didStartInitialStateCheck = true
+                    await checkInitialState()
+                }
 
             case .needsServerSetup:
                 #if os(tvOS)
@@ -181,8 +185,6 @@ struct ContentView: View {
     /// is an actor and needs an explicit `switchActiveServer` hop before
     /// its Keychain reads target the right slot.
     private func checkInitialState() async {
-        let startedAt = Date()
-
         if let activeId = ServerRegistry.shared.activeServerId, !activeId.isEmpty {
             await TokenStore.shared.switchActiveServer(serverId: activeId)
         }
@@ -199,31 +201,19 @@ struct ContentView: View {
             targetState = .authenticated
         }
 
-        // Race the homepage fetch against the splash's minimum duration so
-        // HomeView can paint from cache instead of a skeleton when it mounts.
-        // HomeViewModel.init reads CacheKey.homeSections synchronously.
-        if targetState == .authenticated {
-            Task { @MainActor in
-                do {
-                    let response = try await ContinuumAPI.shared.homeSections()
-                    ResponseCache.shared.set(response, for: CacheKey.homeSections)
-                } catch {
-                    // Best effort — HomeView's .task fetches on appear.
-                }
-            }
-        }
-
-        let elapsed = Date().timeIntervalSince(startedAt)
-        if elapsed < startupSplashMinimumDuration {
-            let remaining = UInt64((startupSplashMinimumDuration - elapsed) * 1_000_000_000)
-            try? await Task.sleep(nanoseconds: remaining)
-        }
-
-        router.authState = targetState
+        StartupContentPrefetcher.prefetchForInitialRoute(targetState)
+        pendingInitialAuthState = targetState
+        finishInitialStartupIfReady()
 
         #if DEBUG
         Task.detached(priority: .background) { await Self.logTopShelfDiagnostics() }
         #endif
+    }
+
+    private func finishInitialStartupIfReady() {
+        guard didFinishStartupSplash, let targetState = pendingInitialAuthState else { return }
+        pendingInitialAuthState = nil
+        router.authState = targetState
     }
 
     #if DEBUG

@@ -10,9 +10,18 @@ import UIKit
 
 /// Full-screen startup animation shown while the app resolves its initial auth route.
 struct StartupSplashView: View {
-    @State private var player = AVQueuePlayer()
-    @State private var looper: AVPlayerLooper?
+    private static let fallbackDuration: TimeInterval = 4.0
+
+    let onFinished: () -> Void
+
+    @State private var player = AVPlayer()
+    @State private var playerItem: AVPlayerItem?
+    @State private var statusObservation: NSKeyValueObservation?
+    @State private var playbackEndObserver: NSObjectProtocol?
+    @State private var playbackFailureObserver: NSObjectProtocol?
+    @State private var fallbackCompletionTask: Task<Void, Never>?
     @State private var isVideoAvailable = true
+    @State private var didFinish = false
 
     var body: some View {
         ZStack {
@@ -41,15 +50,19 @@ struct StartupSplashView: View {
     }
 
     private func startPlayback() {
-        if looper == nil {
+        if playerItem == nil {
             guard let url = Bundle.main.url(forResource: "startup_splash", withExtension: "mp4") else {
                 isVideoAvailable = false
+                scheduleFallbackCompletion()
                 return
             }
 
             let item = AVPlayerItem(url: url)
-            looper = AVPlayerLooper(player: player, templateItem: item)
+            playerItem = item
+            player.replaceCurrentItem(with: item)
             player.isMuted = true
+            installPlaybackObservers(for: item)
+            installStatusObservation(for: item)
         }
 
         player.play()
@@ -57,6 +70,77 @@ struct StartupSplashView: View {
 
     private func stopPlayback() {
         player.pause()
+        fallbackCompletionTask?.cancel()
+        fallbackCompletionTask = nil
+        removePlaybackObservers()
+        removeStatusObservation()
+    }
+
+    private func installPlaybackObservers(for item: AVPlayerItem) {
+        removePlaybackObservers()
+
+        playbackEndObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { _ in
+            finish()
+        }
+
+        playbackFailureObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemFailedToPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { _ in
+            isVideoAvailable = false
+            scheduleFallbackCompletion()
+        }
+    }
+
+    private func installStatusObservation(for item: AVPlayerItem) {
+        removeStatusObservation()
+        statusObservation = item.observe(\.status, options: [.new]) { item, _ in
+            guard item.status == .failed else { return }
+            Task { @MainActor in
+                isVideoAvailable = false
+                scheduleFallbackCompletion()
+            }
+        }
+    }
+
+    private func removePlaybackObservers() {
+        if let playbackEndObserver {
+            NotificationCenter.default.removeObserver(playbackEndObserver)
+            self.playbackEndObserver = nil
+        }
+        if let playbackFailureObserver {
+            NotificationCenter.default.removeObserver(playbackFailureObserver)
+            self.playbackFailureObserver = nil
+        }
+    }
+
+    private func removeStatusObservation() {
+        statusObservation?.invalidate()
+        statusObservation = nil
+    }
+
+    private func scheduleFallbackCompletion() {
+        guard fallbackCompletionTask == nil else { return }
+        fallbackCompletionTask = Task {
+            try? await Task.sleep(nanoseconds: UInt64(Self.fallbackDuration * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            await MainActor.run { finish() }
+        }
+    }
+
+    private func finish() {
+        guard !didFinish else { return }
+        didFinish = true
+        fallbackCompletionTask?.cancel()
+        fallbackCompletionTask = nil
+        removePlaybackObservers()
+        removeStatusObservation()
+        onFinished()
     }
 }
 

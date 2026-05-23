@@ -11,6 +11,7 @@ struct PINEntryView: View {
     @Environment(\.dismiss) private var dismiss
 
     private let maxDigits = 4
+    private let sheetDragIndicatorClearance: CGFloat = 24
 
     // 3-column grid for the number pad
     private let padColumns = Array(repeating: GridItem(.flexible(), spacing: 16), count: 3)
@@ -39,17 +40,17 @@ struct PINEntryView: View {
 
             VStack(spacing: 32) {
                 header(avatarSize: 64)
-                .padding(.top, ContinuumTheme.largePadding)
+                    .padding(.top, ContinuumTheme.largePadding + sheetDragIndicatorClearance)
 
                 pinDots(dotSize: 20, spacing: 20)
 
                 Spacer()
 
                 numberPad
-                .padding(.horizontal, ContinuumTheme.largePadding)
+                    .padding(.horizontal, ContinuumTheme.largePadding)
 
                 cancelButton
-                .padding(.bottom, ContinuumTheme.largePadding)
+                    .padding(.bottom, ContinuumTheme.largePadding)
             }
         }
     }

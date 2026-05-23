@@ -40,6 +40,7 @@ struct TVLoginView: View {
         }
         .onChange(of: qrVM.state) { _, newValue in
             if case .approved = newValue {
+                StartupContentPrefetcher.prefetchProfiles()
                 router.showProfileSelection()
             }
         }

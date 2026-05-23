@@ -4,6 +4,23 @@
 
 This repository contains only the Silo Apple clients. SwiftUI app code lives under `iosApp/iosApp/`, tests live in `iosApp/Tests/`, Top Shelf code lives in `iosApp/TopShelf/`, resources live in `iosApp/Resources/`, and generated Xcode structure is controlled by `iosApp/project.yml`. Apple TV playback notes live in `docs/tvos-player/`; release automation lives in `fastlane/`.
 
+## Silo Workspace Context
+
+This repository is part of a broader multi-repo Silo workspace. The sibling
+repositories are usually checked out alongside this repository.
+
+- `silo-apple` owns iOS, tvOS, and macOS client code only.
+- `silo-server` owns the Go backend, web admin UI, API contracts, auth/session
+  behavior, catalog/scanner/playback services, database migrations, Jellyfin
+  compatibility, and host-side plugin runtime.
+- `silo-android` owns the Android phone and TV clients. When changing shared
+  client behavior, compare Android so Apple and Android stay aligned.
+
+When a task touches auth, API models, playback/session state, library browsing,
+metadata display, or server-driven behavior, check whether the server and
+Android client need coordinated changes. Do not force server concerns into this
+repo.
+
 ## Build, Test, and Development Commands
 
 - `cd iosApp && xcodegen generate` regenerates `Silo.xcodeproj` from `project.yml`; do this after target or source layout changes.
