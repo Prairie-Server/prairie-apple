@@ -7,14 +7,25 @@ import SwiftUI
 struct ProfileSelectionView: View {
     var router: AppRouter
     @State private var viewModel = ProfileSelectionViewModel()
-    @State private var showPINEntry: Bool = false
-    @State private var selectedProfile: UserProfile?
+    @State private var pinEntryContext: PINEntryContext?
     @State private var showCreateProfile: Bool = false
-    @State private var pinEntryPurpose: PINEntryPurpose = .profileSelection
 
-    private enum PINEntryPurpose {
+    private enum PINEntryPurpose: String {
         case profileSelection
         case profileManagement
+    }
+
+    private struct PINEntryContext: Identifiable {
+        let profile: UserProfile
+        let purpose: PINEntryPurpose
+
+        var id: String {
+            "\(purpose.rawValue)-\(profile.id)"
+        }
+    }
+
+    private var isPINEntryPresented: Bool {
+        pinEntryContext != nil
     }
 
     var body: some View {
@@ -23,8 +34,8 @@ struct ProfileSelectionView: View {
 
             pickerContent
                 #if os(tvOS)
-                .disabled(showPINEntry)
-                .accessibilityHidden(showPINEntry)
+                .disabled(isPINEntryPresented)
+                .accessibilityHidden(isPINEntryPresented)
                 #endif
         }
         .task {
@@ -53,8 +64,8 @@ struct ProfileSelectionView: View {
         }
         #endif
         #if !os(tvOS)
-        .sheet(isPresented: $showPINEntry) {
-            pinEntryContent
+        .sheet(item: $pinEntryContext) { context in
+            pinEntryContent(for: context)
                 .presentationDetents([.medium])
                 .presentationDragIndicator(.visible)
         }
@@ -237,10 +248,8 @@ struct ProfileSelectionView: View {
     }
 
     private func handleProfileTap(_ profile: UserProfile) {
-        pinEntryPurpose = .profileSelection
         if profile.hasPin {
-            selectedProfile = profile
-            showPINEntry = true
+            pinEntryContext = PINEntryContext(profile: profile, purpose: .profileSelection)
         } else {
             Task { await viewModel.selectProfile(profile, router: router) }
         }
@@ -256,9 +265,7 @@ struct ProfileSelectionView: View {
         }
 
         if primaryProfile.hasPin {
-            pinEntryPurpose = .profileManagement
-            selectedProfile = primaryProfile
-            showPINEntry = true
+            pinEntryContext = PINEntryContext(profile: primaryProfile, purpose: .profileManagement)
             return
         }
 
@@ -280,31 +287,30 @@ struct ProfileSelectionView: View {
 
     @ViewBuilder
     private var pinEntryOverlay: some View {
-        if showPINEntry {
-            pinEntryContent
+        if let context = pinEntryContext {
+            pinEntryContent(for: context)
                 .transition(.opacity.combined(with: .scale(scale: 0.96)))
                 .zIndex(10)
         }
     }
 
-    @ViewBuilder
-    private var pinEntryContent: some View {
-        if let profile = selectedProfile {
-            PINEntryView(
-                profile: profile,
-                onCancel: { showPINEntry = false }
-            ) { pin in
-                handlePINEntry(profile: profile, pin: pin)
-            }
+    private func pinEntryContent(for context: PINEntryContext) -> some View {
+        PINEntryView(
+            profile: context.profile,
+            onCancel: { pinEntryContext = nil }
+        ) { pin in
+            handlePINEntry(context: context, pin: pin)
         }
     }
 
-    private func handlePINEntry(profile: UserProfile, pin: String) {
+    private func handlePINEntry(context: PINEntryContext, pin: String) {
+        pinEntryContext = nil
+
         Task {
             do {
-                switch pinEntryPurpose {
+                switch context.purpose {
                 case .profileSelection:
-                    try await viewModel.selectProfileWithPIN(profile, pin: pin, router: router)
+                    try await viewModel.selectProfileWithPIN(context.profile, pin: pin, router: router)
                 case .profileManagement:
                     try await viewModel.prepareForProfileManagement(pin: pin)
                     await MainActor.run { showCreateProfile = true }
@@ -315,7 +321,6 @@ struct ProfileSelectionView: View {
                 }
             }
         }
-        showPINEntry = false
     }
 
     // MARK: - Platform sizing
