@@ -1,0 +1,42 @@
+# Xcode / XcodeGen
+iosApp/Silo.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+*.xcuserstate
+DerivedData/
+
+# SwiftPM / CocoaPods
+.build/
+iosApp/Pods/
+
+# Local signing and secrets
+iosApp/Signing/Local.xcconfig
+.env
+.env.*
+!.env.example
+*.p8
+*.p12
+*.mobileprovision
+*.cer
+
+# Ruby / Fastlane
+vendor/bundle/
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/
+fastlane/test_output/
+
+# Local tooling state
+.claude/
+.codex/
+.cursor/
+.worktrees/
+.playwright-mcp/
+.playwright-cli/
+
+# Logs and OS files
+*.log
+logs/
+output/
+.DS_Store
+Thumbs.db

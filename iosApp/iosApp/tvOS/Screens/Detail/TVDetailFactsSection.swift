@@ -1,0 +1,123 @@
+#if os(tvOS)
+import SwiftUI
+
+/// "Details" block under the hero on tvOS — lists directors, writers,
+/// studios/networks, countries, and release date in a key/value grid.
+///
+/// Data is pulled from `detail.crew`, `detail.studios`, etc. The section
+/// hides cleanly when no facts are available.
+struct TVDetailFactsSection: View {
+    let detail: ItemDetail
+
+    private let columnGap: CGFloat = 64
+    private let rowGap: CGFloat = 20
+    private let maxCreditNames = 3
+
+    var body: some View {
+        let facts = assembleFacts()
+        if !facts.isEmpty {
+            VStack(spacing: 0) {
+                ForEach(Array(facts.enumerated()), id: \.element.label) { index, fact in
+                    if index > 0 {
+                        Rectangle()
+                            .fill(Color.white.opacity(0.08))
+                            .frame(height: 1)
+                    }
+                    HStack(alignment: .top, spacing: columnGap) {
+                        Text(fact.label.uppercased())
+                            .font(.system(size: 18, weight: .bold))
+                            .tracking(2.0)
+                            .foregroundColor(.continuumOnSurface.opacity(0.5))
+                            .frame(width: 260, alignment: .leading)
+                        Text(fact.value)
+                            .font(.system(size: 22, weight: .regular))
+                            .foregroundColor(.continuumOnSurface)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(.vertical, 22)
+                }
+            }
+            .frame(maxWidth: 1400, alignment: .leading)
+        }
+    }
+
+    private struct Fact {
+        let label: String
+        let value: String
+    }
+
+    private func assembleFacts() -> [Fact] {
+        var facts: [Fact] = []
+
+        if let directors = creditNames(forJobs: ["Director"]), !directors.isEmpty {
+            facts.append(Fact(label: "Director", value: directors))
+        }
+        if let writers = creditNames(forJobs: ["Writer", "Screenplay", "Story"]), !writers.isEmpty {
+            facts.append(Fact(label: writerLabel, value: writers))
+        }
+
+        if let studios = detail.studios, !studios.isEmpty {
+            facts.append(Fact(label: "Studio", value: studios.prefix(3).joined(separator: ", ")))
+        }
+        if let networks = detail.networks, !networks.isEmpty {
+            facts.append(Fact(label: "Network", value: networks.prefix(3).joined(separator: ", ")))
+        }
+        if let countries = detail.countries, !countries.isEmpty {
+            facts.append(Fact(label: "Country", value: countries.prefix(3).joined(separator: ", ")))
+        }
+        if let releaseDate = formattedDate(detail.releaseDate) {
+            facts.append(Fact(label: "Released", value: releaseDate))
+        }
+        if let firstAired = formattedDate(detail.firstAirDate) {
+            facts.append(Fact(label: "First Aired", value: firstAired))
+        }
+        if let lastAired = formattedDate(detail.lastAirDate) {
+            facts.append(Fact(label: "Last Aired", value: lastAired))
+        }
+        return facts
+    }
+
+    private var writerLabel: String {
+        let hasScreenplay = detail.crew?.contains { $0.job?.lowercased() == "screenplay" } ?? false
+        return hasScreenplay ? "Writer" : "Written by"
+    }
+
+    private func creditNames(forJobs jobs: [String]) -> String? {
+        guard let crew = detail.crew else { return nil }
+        let lowered = jobs.map { $0.lowercased() }
+        let names = crew
+            .filter { member in
+                guard let job = member.job?.lowercased() else { return false }
+                return lowered.contains(job)
+            }
+            .map(\.name)
+        if names.isEmpty { return nil }
+        let trimmed = Array(Set(names)).sorted()
+        let joined = trimmed.prefix(maxCreditNames).joined(separator: ", ")
+        return trimmed.count > maxCreditNames ? "\(joined), …" : joined
+    }
+
+    private func formattedDate(_ raw: String?) -> String? {
+        guard let raw, !raw.isEmpty else { return nil }
+        let parser = ISO8601DateFormatter()
+        parser.formatOptions = [.withFullDate]
+        if let parsed = parser.date(from: raw) {
+            return Self.displayDateFormatter.string(from: parsed)
+        }
+
+        let fallback = DateFormatter()
+        fallback.dateFormat = "yyyy-MM-dd"
+        fallback.locale = Locale(identifier: "en_US_POSIX")
+        if let parsed = fallback.date(from: raw) {
+            return Self.displayDateFormatter.string(from: parsed)
+        }
+        return raw
+    }
+
+    private static let displayDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .long
+        return f
+    }()
+}
+#endif

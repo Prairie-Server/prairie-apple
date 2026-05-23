@@ -1,0 +1,248 @@
+name: Silo
+options:
+  bundleIdPrefix: com.continuum.play
+  deploymentTarget:
+    iOS: "18.0"
+    macOS: "15.0"
+    tvOS: "26.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5"
+    ENABLE_USER_SCRIPT_SANDBOXING: false
+    # DEVELOPMENT_TEAM is intentionally omitted — set via the DEVELOPMENT_TEAM env var locally
+    # or injected by the CI pipeline.
+    CODE_SIGN_STYLE: Automatic
+    # SPM packages (Nuke, FFmpeg) only ship arm64 simulator slices. Exclude
+    # x86_64 for all simulator SDKs so Apple Silicon Macs don't try to link
+    # the missing slice.
+    EXCLUDED_ARCHS[sdk=appletvsimulator*]: x86_64
+    EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
+
+packages:
+  # FFmpeg xcframeworks (LGPL). Provides the Libavcodec / Libavformat /
+  # Libavutil / Libswresample modules consumed by CoreMediaPlayerCore.
+  # Smaller and cleaner than the old player dependency: ships only the
+  # FFmpeg libraries with no libmpv GPL surface. Upstream is archived but
+  # functional; pinned to the tip commit that includes the HLS seek fix
+  # landed after the 7.1.0 tag.
+  FFmpeg:
+    url: https://github.com/mpvkit/ffmpeg-build
+    revision: b38afaffe8a38c82c3922d36e044a915bf668f27
+  Nuke:
+    url: https://github.com/kean/Nuke
+    from: "12.8.0"
+
+targets:
+  Silo:
+    type: application
+    platform: iOS
+    sources:
+      - path: iosApp
+        excludes:
+          - "**/*.xcodeproj"
+          - "**/*.xcworkspace"
+          - "macOS/**"
+      - path: Resources
+        buildPhase: resources
+    # PRODUCT_BUNDLE_IDENTIFIER and CODE_SIGN_ENTITLEMENTS live in
+    # Signing/Silo.xcconfig so local contributors can override
+    # them via Signing/Local.xcconfig without dirtying this file.
+    # Target-level `settings` entries win over xcconfig, so they MUST
+    # NOT be set below.
+    configFiles:
+      Debug: Signing/Silo.xcconfig
+      Release: Signing/Silo.xcconfig
+    settings:
+      base:
+        PRODUCT_NAME: Silo
+        INFOPLIST_FILE: iosApp/Info.plist
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: 1
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: "NO"
+        SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: "NO"
+        SDKROOT: iphoneos
+        SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
+        SWIFT_OBJC_BRIDGING_HEADER: iosApp/Screens/Player/CoreMedia/SiloPlayerBridging.h
+    dependencies:
+      - package: FFmpeg
+        product: FFmpeg
+      - package: Nuke
+        product: Nuke
+      - package: Nuke
+        product: NukeUI
+
+  # NOTE: tvOS-specific source files live under iosApp/tvOS/. They are guarded
+  # by #if os(tvOS) so they compile out on the iOS target even though the
+  # directory is included in both targets' source tree.
+  SiloTV:
+    type: application
+    platform: tvOS
+    sources:
+      - path: iosApp
+        excludes:
+          - "**/*.xcodeproj"
+          - "**/*.xcworkspace"
+          - "Info.plist"
+          - "macOS/**"
+      - path: Resources
+        buildPhase: resources
+    # PRODUCT_BUNDLE_IDENTIFIER and CODE_SIGN_ENTITLEMENTS live in
+    # Signing/SiloTV.xcconfig so local contributors can override
+    # them via Signing/Local.xcconfig without dirtying this file.
+    # Target-level `settings` entries win over xcconfig, so they MUST
+    # NOT be set below.
+    configFiles:
+      Debug: Signing/SiloTV.xcconfig
+      Release: Signing/SiloTV.xcconfig
+    settings:
+      base:
+        PRODUCT_NAME: SiloTV
+        INFOPLIST_FILE: iosApp/tvOS-Info.plist
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: 1
+        ASSETCATALOG_COMPILER_APPICON_NAME: TVAppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: "NO"
+        SDKROOT: appletvos
+        SUPPORTED_PLATFORMS: "appletvos appletvsimulator"
+        OTHER_LDFLAGS: "$(inherited) -Wl,-no_warn_reduced_section_align"
+        # Bridging header exposes the Obj-C audio graph exception catcher on
+        # Apple targets and the private AVDisplayCriteria initializer on tvOS.
+        SWIFT_OBJC_BRIDGING_HEADER: iosApp/Screens/Player/CoreMedia/SiloPlayerBridging.h
+    dependencies:
+      - package: FFmpeg
+        product: FFmpeg
+      - package: Nuke
+        product: Nuke
+      - package: Nuke
+        product: NukeUI
+      - target: SiloTVTopShelf
+        embed: true
+
+  SiloMac:
+    type: application
+    platform: macOS
+    sources:
+      - path: iosApp
+        excludes:
+          - "**/*.xcodeproj"
+          - "**/*.xcworkspace"
+          - "Info.plist"
+          - "tvOS-Info.plist"
+          - "TopShelf/**"
+          - "tvOS/**"
+          - "Screens/Player/AVPlayerRoute/AVPlayerSurface.swift"
+          - "Screens/Player/CoreMedia/PlayerSurface.swift"
+          - "Screens/Player/iOS/**"
+          - "Screens/Player/tvOS/**"
+          - "Screens/Player/PlayerView.swift"
+      - path: iosApp/Screens/Player/PlayerTimeFormatter.swift
+      - path: iosApp/tvOS/Caching/CachedAsyncImage.swift
+      - path: iosApp/tvOS/Caching/PosterImageCache.swift
+      - path: Resources
+        buildPhase: resources
+    postBuildScripts:
+      - path: scripts/prepare-macos-ffmpeg-frameworks.sh
+        name: Prepare macOS FFmpeg Frameworks
+        basedOnDependencyAnalysis: false
+    configFiles:
+      Debug: Signing/SiloMac.xcconfig
+      Release: Signing/SiloMac.xcconfig
+    settings:
+      base:
+        PRODUCT_NAME: Silo
+        INFOPLIST_FILE: macOS-Info.plist
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: 1
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        SDKROOT: macosx
+        SUPPORTED_PLATFORMS: "macosx"
+        SWIFT_OBJC_BRIDGING_HEADER: iosApp/Screens/Player/CoreMedia/SiloPlayerBridging.h
+    dependencies:
+      - package: FFmpeg
+        product: FFmpeg
+      - package: Nuke
+        product: Nuke
+      - package: Nuke
+        product: NukeUI
+
+  # Top Shelf extension: populates the Apple TV Home Screen with
+  # Continue Watching / Next Up rows when the Silo app icon is
+  # focused. Shares auth state with the host app via an App Group +
+  # shared Keychain access group. Compiles `iosApp/Shared/` for the
+  # SharedStorage helpers used on both sides.
+  SiloTVTopShelf:
+    type: app-extension
+    platform: tvOS
+    sources:
+      - path: TopShelf
+      - path: iosApp/Shared
+    # PRODUCT_BUNDLE_IDENTIFIER and CODE_SIGN_ENTITLEMENTS live in
+    # Signing/SiloTVTopShelf.xcconfig so local contributors can
+    # override them via Signing/Local.xcconfig without dirtying this
+    # file. Target-level `settings` entries win over xcconfig, so they
+    # MUST NOT be set below.
+    configFiles:
+      Debug: Signing/SiloTVTopShelf.xcconfig
+      Release: Signing/SiloTVTopShelf.xcconfig
+    settings:
+      base:
+        PRODUCT_NAME: SiloTVTopShelf
+        INFOPLIST_FILE: TopShelf/Info.plist
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: 1
+        SDKROOT: appletvos
+        SUPPORTED_PLATFORMS: "appletvos appletvsimulator"
+    dependencies:
+      - sdk: TVServices.framework
+
+schemes:
+  Silo:
+    build:
+      targets:
+        Silo: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+    archive:
+      config: Release
+    analyze:
+      config: Debug
+    profile:
+      config: Release
+  SiloTV:
+    build:
+      targets:
+        SiloTV: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+    archive:
+      config: Release
+    analyze:
+      config: Debug
+    profile:
+      config: Release
+  SiloMac:
+    build:
+      targets:
+        SiloMac: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+    archive:
+      config: Release
+    analyze:
+      config: Debug
+    profile:
+      config: Release

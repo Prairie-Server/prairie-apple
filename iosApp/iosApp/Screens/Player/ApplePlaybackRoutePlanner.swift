@@ -1,0 +1,1093 @@
+import AVFoundation
+import Foundation
+#if canImport(UIKit)
+import UIKit
+#endif
+
+/// Snapshot of the device's playback output capabilities at plan time.
+/// Plumbed into `ApplePlaybackPlannerInput` so the planner can stop
+/// over-promising HDR / Dolby Vision purely from source metadata. Today
+/// the planner consumes the snapshot for trace + degradation warnings;
+/// future iterations can use it to actually gate route eligibility.
+///
+/// The probe is conservative: any field defaults to `false` / `nil` when
+/// it cannot be determined. "Unknown" never reads as "supported".
+struct ApplePlaybackDisplayCapabilities: Equatable {
+    let supportsDolbyVision: Bool
+    let supportsHDR10: Bool
+    let supportsHLG: Bool
+    let supportsAtmos: Bool
+    let maxResolution: ResolutionHint?
+    let supportsTenBit: Bool
+
+    enum ResolutionHint: String, Equatable {
+        case sd
+        case hd
+        case fullHD
+        case uhd4K
+    }
+
+    static let unknown = ApplePlaybackDisplayCapabilities(
+        supportsDolbyVision: false,
+        supportsHDR10: false,
+        supportsHLG: false,
+        supportsAtmos: false,
+        maxResolution: nil,
+        supportsTenBit: false
+    )
+
+    /// Best-effort capability snapshot from the host. AVAudioSession's
+    /// current route gives us spatial-audio capability on iOS/tvOS;
+    /// AVDisplayManager (tvOS) gives display dynamic-range hints. Where a
+    /// value cannot be obtained, the field stays at its conservative
+    /// default rather than being optimistically populated.
+    static func probe() -> ApplePlaybackDisplayCapabilities {
+        var supportsAtmos = false
+        #if !os(macOS)
+        let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
+        if #available(iOS 15.0, tvOS 15.0, *) {
+            supportsAtmos = outputs.contains { $0.isSpatialAudioEnabled }
+        }
+        #endif
+        // Display range / resolution probing on tvOS lives behind the
+        // private `AVDisplayCriteria` bridge; surfacing it as typed
+        // capabilities is a follow-up. For now, leave them unknown so
+        // callers don't accidentally consume optimistic defaults.
+        return ApplePlaybackDisplayCapabilities(
+            supportsDolbyVision: false,
+            supportsHDR10: false,
+            supportsHLG: false,
+            supportsAtmos: supportsAtmos,
+            maxResolution: nil,
+            supportsTenBit: false
+        )
+    }
+}
+
+struct ApplePlaybackPlannerInput {
+    let session: PlaybackSessionResponse
+    let selectedVersion: FileVersion
+    let streamRequest: StreamRequest
+    let routeRequirements: PlaybackRouteRequirements
+    let selectedAudioTrackId: Int64?
+    let pendingAudioFfIndex: Int?
+    let preferredAudioTrackIndex: Int?
+    let selectedPrimarySubtitleTrackId: Int64?
+    let selectedSecondarySubtitleTrackId: Int64?
+    let hlsRouteFeatureEnabled: Bool
+    let preferProfile7HDR10Fallback: Bool
+    /// Captured at plan-creation time so route choice and degradation
+    /// warnings can reflect the actual output, not just source metadata.
+    /// Defaults to `.unknown` (conservative no-knowledge state) so older
+    /// callers continue to compile while the probe wires in.
+    let displayCapabilities: ApplePlaybackDisplayCapabilities
+
+    init(
+        session: PlaybackSessionResponse,
+        selectedVersion: FileVersion,
+        streamRequest: StreamRequest,
+        routeRequirements: PlaybackRouteRequirements,
+        selectedAudioTrackId: Int64?,
+        pendingAudioFfIndex: Int?,
+        preferredAudioTrackIndex: Int?,
+        selectedPrimarySubtitleTrackId: Int64?,
+        selectedSecondarySubtitleTrackId: Int64?,
+        hlsRouteFeatureEnabled: Bool,
+        preferProfile7HDR10Fallback: Bool,
+        displayCapabilities: ApplePlaybackDisplayCapabilities = .unknown
+    ) {
+        self.session = session
+        self.selectedVersion = selectedVersion
+        self.streamRequest = streamRequest
+        self.routeRequirements = routeRequirements
+        self.selectedAudioTrackId = selectedAudioTrackId
+        self.pendingAudioFfIndex = pendingAudioFfIndex
+        self.preferredAudioTrackIndex = preferredAudioTrackIndex
+        self.selectedPrimarySubtitleTrackId = selectedPrimarySubtitleTrackId
+        self.selectedSecondarySubtitleTrackId = selectedSecondarySubtitleTrackId
+        self.hlsRouteFeatureEnabled = hlsRouteFeatureEnabled
+        self.preferProfile7HDR10Fallback = preferProfile7HDR10Fallback
+        self.displayCapabilities = displayCapabilities
+    }
+}
+
+struct ApplePlaybackRoutePlanner {
+    private static let nativeDirectContainers: Set<String> = ["mp4", "mov", "m4v"]
+    private static let nativeDirectVideoCodecs: Set<String> = ["h264", "hevc"]
+    private static let nativeDirectAudioCodecs: Set<String> = ["aac", "ac3", "eac3", "alac", "mp3"]
+    private static let nativeDirectSubtitleCodecs: Set<String> = ["mov_text", "tx3g", "wvtt", "webvtt"]
+    private static let siloSourceContainers: Set<String> = ["mkv", "matroska", "ts", "m2ts", "mts", "mpegts"]
+    private static let siloVideoCodecs: Set<String> = ["h264", "hevc"]
+    private static let siloTextSubtitleCodecs: Set<String> = [
+        "ass", "ssa", "srt", "subrip", "webvtt", "mov_text", "tx3g"
+    ]
+    private static let siloBitmapSubtitleCodecs: Set<String> = [
+        "pgs", "hdmv_pgs_subtitle", "dvd_subtitle", "dvb_subtitle", "vobsub"
+    ]
+
+    func makeExecutionPlan(input: ApplePlaybackPlannerInput) -> PlaybackExecutionPlan {
+        let session = input.session
+        let selectedVersion = input.selectedVersion
+        let delivery = PlaybackDeliveryStrategy(playMethod: session.playMethod)
+        let sourceMetadata = Self.sourceMetadata(for: selectedVersion, session: session)
+        let directDolbyVisionProfile = sourceMetadata.dolbyVisionProfile
+        let directDvProfile8BaseLayer = Self.dvProfile8BaseLayer(for: selectedVersion, sourceMetadata: sourceMetadata)
+        var directLoopbackVideoMode: LoopbackSessionSpec.VideoMode? = switch directDolbyVisionProfile {
+        case 5:
+            .passthroughProfile5
+        case 7:
+            input.preferProfile7HDR10Fallback ? .passthroughHEVC : .convertProfile7To81
+        case 8:
+            .passthroughProfile8(directDvProfile8BaseLayer)
+        default:
+            nil
+        }
+        var directLoopbackSession: LoopbackSessionSpec? = nil
+
+        let engine: PlaybackEngineKind
+        let featureFlagEnabled: Bool
+        let parityBlockers: [String]
+        let routeCapabilities: ApplePlaybackRouteCapabilities
+        let decisionTrace: [String]
+        let degradationWarnings: [String]
+        let reason: String
+
+        switch delivery {
+        case .direct:
+            featureFlagEnabled = true
+            let directAssessment = Self.assessNativeDirectRoute(
+                selectedVersion: selectedVersion,
+                session: session,
+                requirements: input.routeRequirements
+            )
+            let siloAssessment = Self.assessSiloRoute(
+                selectedVersion: selectedVersion,
+                session: session,
+                nativeAssessment: directAssessment,
+                sourceMetadata: sourceMetadata,
+                requirements: input.routeRequirements,
+                selectedAudioTrackId: input.selectedAudioTrackId,
+                pendingAudioFfIndex: input.pendingAudioFfIndex,
+                preferredAudioTrackIndex: input.preferredAudioTrackIndex,
+                selectedPrimarySubtitleTrackId: input.selectedPrimarySubtitleTrackId,
+                selectedSecondarySubtitleTrackId: input.selectedSecondarySubtitleTrackId
+            )
+            if directLoopbackVideoMode == nil, let mode = siloAssessment.videoMode {
+                directLoopbackVideoMode = mode
+            }
+            directLoopbackSession = directLoopbackVideoMode.flatMap { videoMode in
+                Self.makeLoopbackSessionSpec(
+                    for: selectedVersion,
+                    selectedAudioTrackIndex: session.audioTrackIndex,
+                    selectedAudioTrackId: input.selectedAudioTrackId,
+                    pendingAudioFfIndex: input.pendingAudioFfIndex,
+                    preferredAudioTrackIndex: input.preferredAudioTrackIndex,
+                    streamRequest: input.streamRequest,
+                    videoMode: videoMode,
+                    videoRange: Self.videoRange(for: videoMode, source: selectedVersion),
+                    sourceStartTimeSeconds: session.position
+                )
+            }
+            if directDolbyVisionProfile == 7, directLoopbackSession != nil {
+                engine = .avPlayerLocalDVLoopback
+                parityBlockers = []
+                routeCapabilities = .avPlayerLocalDVLoopback
+                reason = input.preferProfile7HDR10Fallback
+                    ? "dolby_vision_profile7_hdr10_fallback_loopback"
+                    : "dolby_vision_profile7_to81_base_layer_loopback"
+            } else if directDolbyVisionProfile == 5, directLoopbackSession != nil {
+                engine = .avPlayerLocalDVLoopback
+                parityBlockers = []
+                routeCapabilities = .avPlayerLocalDVLoopback
+                reason = "dolby_vision_profile5_loopback"
+            } else if directDolbyVisionProfile == 8, directLoopbackSession != nil {
+                engine = .avPlayerLocalDVLoopback
+                parityBlockers = []
+                routeCapabilities = .avPlayerLocalDVLoopback
+                reason = directDvProfile8BaseLayer == .hlg
+                    ? "dolby_vision_profile84_passthrough_loopback"
+                    : "dolby_vision_profile81_passthrough_loopback"
+            } else if directAssessment.isEligible {
+                engine = .avPlayerNativeDirect
+                parityBlockers = []
+                routeCapabilities = .avPlayerNativeDirect
+                reason = "native_direct_asset"
+            } else if siloAssessment.isEligible, directLoopbackSession != nil {
+                engine = .avPlayerLocalDVLoopback
+                parityBlockers = []
+                routeCapabilities = .avPlayerLocalDVLoopback
+                reason = siloAssessment.reason
+            } else {
+                #if os(macOS)
+                engine = .playerCoreDirect
+                parityBlockers = directAssessment.blockers + siloAssessment.blockers.map { "silo_\($0)" }
+                routeCapabilities = .playerCoreDirect
+                reason = "macos_direct_blocked"
+                #else
+                engine = .playerCoreDirect
+                var blockers = directAssessment.blockers + siloAssessment.blockers.map { "silo_\($0)" }
+                if (directDolbyVisionProfile == 5
+                    || directDolbyVisionProfile == 7
+                    || directDolbyVisionProfile == 8
+                    || siloAssessment.isEligible),
+                   directLoopbackSession == nil {
+                    blockers.append("silo_loopback_session_unresolved")
+                }
+                parityBlockers = blockers
+                routeCapabilities = .playerCoreDirect
+                reason = directAssessment.blockers.isEmpty
+                    ? "direct_play_uses_coremedia"
+                    : "native_direct_blocked"
+                #endif
+            }
+            var trace = input.routeRequirements.summaryTokens
+            if let directDolbyVisionProfile {
+                trace.append("dolby_vision_profile_\(directDolbyVisionProfile)")
+            }
+            if directDolbyVisionProfile == 7 {
+                trace.append(
+                    input.preferProfile7HDR10Fallback
+                        ? "profile7_hdr10_fallback_selected"
+                        : "profile7_to81_base_layer_loopback_selected"
+                )
+            } else if directDolbyVisionProfile == 5 {
+                trace.append("profile5_loopback_selected")
+            } else if directDolbyVisionProfile == 8 {
+                trace.append(
+                    directDvProfile8BaseLayer == .hlg
+                        ? "profile84_passthrough_loopback_selected"
+                        : "profile81_passthrough_loopback_selected"
+                )
+            } else if siloAssessment.isEligible, engine == .avPlayerLocalDVLoopback {
+                trace.append("\(siloAssessment.reason)_selected")
+            }
+            let fallbackOrderToken: String = switch engine {
+            case .avPlayerNativeDirect:
+                "fallback_order_native_silo_compatibility"
+            case .avPlayerLocalDVLoopback:
+                "fallback_order_silo_compatibility"
+            case .playerCoreDirect:
+                "fallback_order_compatibility_only"
+            case .avPlayerHLS:
+                "fallback_order_hls_controlled_retry"
+            }
+            decisionTrace = trace + directAssessment.trace + siloAssessment.trace + [fallbackOrderToken]
+            degradationWarnings = routeCapabilities.degradationNotes(for: input.routeRequirements)
+                + siloAssessment.degradations
+        case .remux, .transcode:
+            let flagOn = input.hlsRouteFeatureEnabled
+            featureFlagEnabled = flagOn
+            parityBlockers = flagOn ? [] : ["feature_flag_off"]
+            engine = flagOn ? .avPlayerHLS : .playerCoreDirect
+            routeCapabilities = flagOn ? .avPlayerHLS : .playerCoreDirect
+            decisionTrace = input.routeRequirements.summaryTokens + [
+                "delivery_\(delivery.name)",
+                flagOn ? "avplayer_hls_enabled" : "avplayer_hls_disabled",
+                flagOn ? "fallback_order_hls_controlled_retry" : "fallback_order_compatibility_only"
+            ]
+            degradationWarnings = routeCapabilities.degradationNotes(for: input.routeRequirements)
+            reason = flagOn ? "apple_hls_route_enabled" : "parity_gate_blocked"
+        }
+
+        let startMode: PlaybackStartMode
+        switch session.playMethod.lowercased() {
+        case "remux":
+            startMode = .startOfManifest
+        default:
+            startMode = .absolutePosition(session.position)
+        }
+
+        let capabilityBlockers = routeCapabilities.blockingReasons(for: input.routeRequirements)
+        let allBlockers = parityBlockers + capabilityBlockers
+
+        return PlaybackExecutionPlan(
+            delivery: delivery,
+            engine: engine,
+            startMode: startMode,
+            streamRequest: input.streamRequest,
+            loopbackSession: engine == .avPlayerLocalDVLoopback ? directLoopbackSession : nil,
+            capabilities: routeCapabilities.backendCapabilities,
+            routeCapabilities: routeCapabilities,
+            requirements: input.routeRequirements,
+            featureFlagEnabled: featureFlagEnabled,
+            parityBlockers: allBlockers,
+            decisionTrace: decisionTrace + allBlockers.map { "blocker_\($0)" },
+            degradationWarnings: degradationWarnings,
+            reason: reason,
+            playbackSessionId: session.sessionId,
+            sourceMetadata: sourceMetadata,
+            normalizationSummary: Self.normalizationSummary(
+                engine: engine,
+                delivery: delivery,
+                loopbackSession: directLoopbackSession,
+                sourceMetadata: sourceMetadata
+            )
+        )
+    }
+
+    static func makeRouteRequirements(
+        selectedVersion: FileVersion,
+        session: PlaybackSessionResponse
+    ) -> PlaybackRouteRequirements {
+        let hasPrimaryAudioSelection = !(selectedVersion.audioTracks ?? []).isEmpty
+        let hasEmbeddedSubtitles = (selectedVersion.subtitleTracks ?? []).contains { !($0.external ?? false) }
+        let hasSidecarSubtitles = !(session.subtitleUrls ?? []).isEmpty
+        let hasChapters = !Self.chapterInfoList(from: selectedVersion).isEmpty
+
+        return PlaybackRouteRequirements(
+            needsPrimaryAudioSelection: hasPrimaryAudioSelection,
+            needsPrimarySubtitleSelection: hasEmbeddedSubtitles || hasSidecarSubtitles,
+            needsSidecarPrimarySubtitles: hasSidecarSubtitles,
+            needsSecondarySubtitles: hasSidecarSubtitles,
+            needsChapters: hasChapters,
+            needsNowPlayingIntegration: true,
+            keepsPictureInPictureDisabledUntilValidated: true,
+            keepsExternalPlaybackDisabledUntilValidated: true,
+            needsValidatedPremiumClaims: Self.versionHasDolbyVision(selectedVersion)
+                || Self.versionHasPotentialAtmos(selectedVersion)
+        )
+    }
+
+    static func makeLoopbackSessionSpec(
+        for version: FileVersion,
+        selectedAudioTrackIndex: Int?,
+        selectedAudioTrackId: Int64?,
+        pendingAudioFfIndex: Int?,
+        preferredAudioTrackIndex: Int?,
+        streamRequest: StreamRequest,
+        videoMode: LoopbackSessionSpec.VideoMode,
+        videoRange: String = "PQ",
+        sourceStartTimeSeconds: Double = 0
+    ) -> LoopbackSessionSpec? {
+        let tracks = normalizedLoopbackAudioTracks(
+            for: version,
+            selectedAudioTrackId: selectedAudioTrackId,
+            pendingAudioFfIndex: pendingAudioFfIndex,
+            preferredAudioTrackIndex: preferredAudioTrackIndex
+        )
+        let selectedTrack = tracks.first(where: { $0.srcId == selectedAudioTrackIndex })
+            ?? resolveLoopbackSelectedAudioTrack(
+                from: tracks,
+                selectedAudioTrackId: selectedAudioTrackId,
+                pendingAudioFfIndex: pendingAudioFfIndex,
+                preferredAudioTrackIndex: preferredAudioTrackIndex
+            )
+        guard let selectedTrack,
+              let selectedTrackIndex = selectedTrack.srcId ?? selectedAudioTrackIndex else {
+            return nil
+        }
+
+        let outputMode = loopbackAudioOutputMode(for: selectedTrack)
+        let preservesAtmos = outputMode == .copy && loopbackAudioPreservesAtmos(for: selectedTrack)
+        let advertisedProfile: Int? = switch videoMode {
+        case .passthroughProfile5:
+            5
+        case .convertProfile7To81:
+            8
+        case .passthroughProfile8:
+            8
+        case .passthroughHEVC, .passthroughH264:
+            nil
+        }
+        let compatibilityBrand: String? = switch videoMode {
+        case .passthroughProfile5:
+            nil
+        case .convertProfile7To81:
+            "db1p"
+        case .passthroughProfile8(.hdr10):
+            "db1p"
+        case .passthroughProfile8(.hlg):
+            "db4h"
+        case .passthroughHEVC, .passthroughH264:
+            nil
+        }
+
+        return LoopbackSessionSpec(
+            sourceURL: streamRequest.url,
+            headers: streamRequest.headers,
+            sourceStartTimeSeconds: sourceStartTimeSeconds.isFinite
+                ? max(0, sourceStartTimeSeconds)
+                : 0,
+            sourceBitrateBps: version.bitrate.map { Double($0) * 1_000 },
+            videoMode: videoMode,
+            sourceVideoFrameRate: loopbackSourceFrameRate(for: version),
+            selectedAudio: LoopbackSessionSpec.SelectedAudio(
+                trackIndex: selectedTrackIndex,
+                ffIndex: selectedTrack.ffIndex,
+                sourceCodec: selectedTrack.codec,
+                sourceChannelCount: selectedTrack.audioChannelCount,
+                sourceChannelLayout: selectedTrack.audioChannelsLayout,
+                outputMode: outputMode,
+                preservesAtmos: preservesAtmos
+            ),
+            availableAudioTracks: tracks,
+            manifestMetadata: LoopbackSessionSpec.ManifestMetadata(
+                advertisedDolbyVisionProfile: advertisedProfile,
+                compatibilityBrand: compatibilityBrand,
+                videoRange: videoRange,
+                mayClaimAtmos: preservesAtmos
+            )
+        )
+    }
+}
+
+private struct NativeDirectAssessment {
+    let isEligible: Bool
+    let blockers: [String]
+    let trace: [String]
+}
+
+private struct SiloRouteAssessment {
+    let isEligible: Bool
+    let videoMode: LoopbackSessionSpec.VideoMode?
+    let blockers: [String]
+    let trace: [String]
+    let degradations: [String]
+    let reason: String
+}
+
+private extension ApplePlaybackRoutePlanner {
+    static func assessNativeDirectRoute(
+        selectedVersion: FileVersion,
+        session: PlaybackSessionResponse,
+        requirements: PlaybackRouteRequirements
+    ) -> NativeDirectAssessment {
+        var blockers: [String] = []
+        var trace: [String] = ["delivery_direct"]
+
+        let container = normalizedContainer(for: selectedVersion)
+        trace.append("container_\(container ?? "unknown")")
+        if let container {
+            if !nativeDirectContainers.contains(container) {
+                blockers.append("container_not_allowlisted")
+            }
+        } else {
+            blockers.append("container_unknown")
+        }
+
+        let videoCodec = normalizedVideoCodec(selectedVersion.codecVideo ?? session.playbackInfo?.videoCodec)
+        trace.append("video_\(videoCodec ?? "unknown")")
+        if let videoCodec {
+            if !nativeDirectVideoCodecs.contains(videoCodec) {
+                blockers.append("video_codec_not_allowlisted")
+            }
+        } else {
+            blockers.append("video_codec_unknown")
+        }
+
+        let audioCodec = normalizedAudioCodec(selectedVersion.codecAudio ?? session.playbackInfo?.audioCodec)
+        trace.append("audio_\(audioCodec ?? "unknown")")
+        if let audioCodec {
+            if !nativeDirectAudioCodecs.contains(audioCodec) {
+                blockers.append("audio_codec_not_allowlisted")
+            }
+        } else {
+            blockers.append("audio_codec_unknown")
+        }
+
+        let unsupportedSubtitleCodecs = unsupportedEmbeddedSubtitleCodecs(for: selectedVersion)
+        if !unsupportedSubtitleCodecs.isEmpty {
+            blockers.append("embedded_subtitles_require_compatibility")
+            trace.append("embedded_subtitles_\(unsupportedSubtitleCodecs.joined(separator: "_"))")
+        }
+
+        let capabilityBlockers = PlaybackEngineKind.avPlayerNativeDirect.routeCapabilities
+            .blockingReasons(for: requirements)
+        blockers.append(contentsOf: capabilityBlockers)
+
+        return NativeDirectAssessment(
+            isEligible: blockers.isEmpty,
+            blockers: blockers,
+            trace: trace
+        )
+    }
+
+    static func assessSiloRoute(
+        selectedVersion: FileVersion,
+        session: PlaybackSessionResponse,
+        nativeAssessment: NativeDirectAssessment,
+        sourceMetadata: PlaybackSourceMetadata,
+        requirements: PlaybackRouteRequirements,
+        selectedAudioTrackId: Int64?,
+        pendingAudioFfIndex: Int?,
+        preferredAudioTrackIndex: Int?,
+        selectedPrimarySubtitleTrackId: Int64?,
+        selectedSecondarySubtitleTrackId: Int64?
+    ) -> SiloRouteAssessment {
+        var blockers: [String] = []
+        var trace: [String] = ["silo_assessment"]
+        var degradations: [String] = []
+
+        guard sourceMetadata.dolbyVisionProfile == nil else {
+            return SiloRouteAssessment(
+                isEligible: true,
+                videoMode: nil,
+                blockers: [],
+                trace: trace + ["silo_dv_profile_owned_by_dv_policy"],
+                degradations: [],
+                reason: "dolby_vision_loopback"
+            )
+        }
+
+        guard nativeAssessment.blockers.contains("container_not_allowlisted")
+                || nativeAssessment.blockers.contains("audio_codec_not_allowlisted")
+                || nativeAssessment.blockers.contains("embedded_subtitles_require_compatibility") else {
+            return SiloRouteAssessment(
+                isEligible: false,
+                videoMode: nil,
+                blockers: ["no_normalization_needed"],
+                trace: trace + ["silo_not_needed"],
+                degradations: [],
+                reason: "silo_not_needed"
+            )
+        }
+
+        guard let container = sourceMetadata.container else {
+            blockers.append("container_unknown")
+            return blockedSilo(blockers: blockers, trace: trace, degradations: degradations)
+        }
+        trace.append("silo_container_\(container)")
+        if !siloSourceContainers.contains(container), !nativeDirectContainers.contains(container) {
+            blockers.append("container_not_normalizable")
+        }
+
+        guard let videoCodec = sourceMetadata.videoCodec else {
+            blockers.append("video_codec_unknown")
+            return blockedSilo(blockers: blockers, trace: trace, degradations: degradations)
+        }
+        trace.append("silo_video_\(videoCodec)")
+        guard siloVideoCodecs.contains(videoCodec) else {
+            blockers.append("video_not_copyable")
+            return blockedSilo(blockers: blockers, trace: trace, degradations: degradations)
+        }
+
+        let mandatoryEmbeddedSubtitleCodecs = selectedOrMandatoryEmbeddedSubtitleCodecs(
+            for: selectedVersion,
+            selectedPrimarySubtitleTrackId: selectedPrimarySubtitleTrackId,
+            selectedSecondarySubtitleTrackId: selectedSecondarySubtitleTrackId
+        )
+        let bitmapSubtitleCodecs = mandatoryEmbeddedSubtitleCodecs.filter { siloBitmapSubtitleCodecs.contains($0) }
+        if !bitmapSubtitleCodecs.isEmpty {
+            blockers.append("bitmap_subtitles_require_compatibility")
+            trace.append("silo_bitmap_subtitles_\(bitmapSubtitleCodecs.joined(separator: "_"))")
+        }
+        let nonTextSubtitleCodecs = mandatoryEmbeddedSubtitleCodecs.filter {
+            !siloTextSubtitleCodecs.contains($0) && !siloBitmapSubtitleCodecs.contains($0)
+        }
+        if !nonTextSubtitleCodecs.isEmpty {
+            blockers.append("embedded_subtitle_codec_unknown")
+            trace.append("silo_unknown_subtitles_\(nonTextSubtitleCodecs.joined(separator: "_"))")
+        }
+        if !mandatoryEmbeddedSubtitleCodecs.isEmpty, blockers.isEmpty {
+            trace.append("silo_subtitles_extract_or_register")
+        }
+
+        let audioMode = normalizedLoopbackAudioTracks(
+            for: selectedVersion,
+            selectedAudioTrackId: selectedAudioTrackId,
+            pendingAudioFfIndex: pendingAudioFfIndex,
+            preferredAudioTrackIndex: preferredAudioTrackIndex
+        ).first(where: { $0.isSelected }).map(loopbackAudioOutputMode)
+        if audioMode == .transcodeAAC || audioMode == .transcodeAC3 || audioMode == .transcodeEC3 {
+            degradations.append("Loopback audio may use an explicit lossy fallback.")
+        }
+
+        if !PlaybackEngineKind.avPlayerLocalDVLoopback.routeCapabilities
+            .blockingReasons(for: requirements).isEmpty {
+            blockers.append(contentsOf: PlaybackEngineKind.avPlayerLocalDVLoopback.routeCapabilities
+                .blockingReasons(for: requirements))
+        }
+
+        guard blockers.isEmpty else {
+            return blockedSilo(blockers: blockers, trace: trace, degradations: degradations)
+        }
+
+        let mode: LoopbackSessionSpec.VideoMode = videoCodec == "hevc"
+            ? .passthroughHEVC
+            : .passthroughH264
+        let reason: String
+        if nativeAssessment.blockers.contains("audio_codec_not_allowlisted") {
+            reason = "\(videoCodec)_audio_normalization_loopback"
+        } else if nativeAssessment.blockers.contains("embedded_subtitles_require_compatibility") {
+            reason = "\(videoCodec)_subtitle_normalization_loopback"
+        } else {
+            reason = "\(videoCodec)_container_loopback"
+        }
+        if mode == .passthroughH264 {
+            // The local loopback writer fragments H.264 at source keyframes.
+            // Long-GOP MKVs can show one frame, then stall while AVPlayer waits
+            // on sparse fMP4/HLS fragments. Use the Compatibility route until
+            // H.264 loopback has a seek-safe short-fragment strategy.
+            return blockedSilo(
+                blockers: ["h264_loopback_startup_unreliable"],
+                trace: trace + ["silo_reason_\(reason)", "silo_h264_loopback_disabled"],
+                degradations: degradations
+            )
+        }
+        if mode == .passthroughHEVC, (Self.transferKind(for: selectedVersion) ?? "SDR") == "SDR" {
+            // Plain SDR HEVC has the same long-fragment startup risk without a
+            // Dolby Vision/HDR video presentation claim that requires AVPlayer
+            // ownership. Keep it on CompatibilityPlayer until Silo can fragment
+            // independently of sparse source keyframes.
+            return blockedSilo(
+                blockers: ["hevc_sdr_loopback_startup_unreliable"],
+                trace: trace + ["silo_reason_\(reason)", "silo_hevc_sdr_loopback_disabled"],
+                degradations: degradations
+            )
+        }
+        return SiloRouteAssessment(
+            isEligible: true,
+            videoMode: mode,
+            blockers: [],
+            trace: trace + ["silo_eligible", "silo_reason_\(reason)"],
+            degradations: degradations,
+            reason: reason
+        )
+    }
+
+    static func blockedSilo(
+        blockers: [String],
+        trace: [String],
+        degradations: [String]
+    ) -> SiloRouteAssessment {
+        SiloRouteAssessment(
+            isEligible: false,
+            videoMode: nil,
+            blockers: blockers,
+            trace: trace + blockers.map { "silo_blocker_\($0)" },
+            degradations: degradations,
+            reason: "silo_blocked"
+        )
+    }
+
+    static func sourceMetadata(
+        for version: FileVersion,
+        session: PlaybackSessionResponse
+    ) -> PlaybackSourceMetadata {
+        PlaybackSourceMetadata(
+            container: normalizedContainer(for: version),
+            videoCodec: normalizedVideoCodec(version.codecVideo ?? session.playbackInfo?.videoCodec),
+            audioCodec: normalizedAudioCodec(version.codecAudio ?? session.playbackInfo?.audioCodec),
+            subtitleCodecs: embeddedSubtitleCodecs(for: version),
+            dolbyVisionProfile: dolbyVisionProfile(for: version)
+        )
+    }
+
+    static func normalizationSummary(
+        engine: PlaybackEngineKind,
+        delivery: PlaybackDeliveryStrategy,
+        loopbackSession: LoopbackSessionSpec?,
+        sourceMetadata: PlaybackSourceMetadata
+    ) -> PlaybackNormalizationSummary {
+        switch engine {
+        case .avPlayerHLS:
+            return PlaybackNormalizationSummary(
+                containerMode: delivery.name,
+                videoMode: "server_output",
+                audioMode: "server_output",
+                subtitleMode: "server_or_sidecar"
+            )
+        case .avPlayerLocalDVLoopback:
+            return PlaybackNormalizationSummary(
+                containerMode: "local_fmp4_hls",
+                videoMode: loopbackSession?.videoMode.logToken ?? "loopback_unresolved",
+                audioMode: loopbackSession?.selectedAudio.outputMode.logToken ?? "loopback_unresolved",
+                subtitleMode: sourceMetadata.subtitleCodecs.isEmpty ? "none" : "extract_or_sidecar"
+            )
+        case .avPlayerNativeDirect:
+            return .none
+        case .playerCoreDirect:
+            return PlaybackNormalizationSummary(
+                containerMode: "none",
+                videoMode: "compatibility_decode",
+                audioMode: "compatibility_decode",
+                subtitleMode: "compatibility_render"
+            )
+        }
+    }
+
+    static func videoRange(
+        for videoMode: LoopbackSessionSpec.VideoMode,
+        source: FileVersion? = nil
+    ) -> String {
+        switch videoMode {
+        case .passthroughProfile5, .convertProfile7To81:
+            return "PQ"
+        case .passthroughProfile8(.hdr10):
+            return "PQ"
+        case .passthroughProfile8(.hlg):
+            return "HLG"
+        case .passthroughHEVC:
+            return source.flatMap(transferKind(for:)) ?? "PQ"
+        case .passthroughH264:
+            return "SDR"
+        }
+    }
+
+    /// Map a video track's `color_transfer` (FFmpeg AVCOL_TRC name) to the
+    /// HLS `VIDEO-RANGE` token. Prefers `color_transfer` over the higher-level
+    /// `video_range` because the latter says "DolbyVision" for both PQ-base
+    /// (8.1) and HLG-base (8.4) sources, which would conflate them.
+    static func transferKind(for version: FileVersion) -> String? {
+        guard let track = (version.videoTracks ?? []).first else { return nil }
+        switch normalizedToken(track.colorTransfer) {
+        case "smpte2084", "pq", "smpte-st-2084", "smptest2084":
+            return "PQ"
+        case "arib-std-b67", "hlg":
+            return "HLG"
+        case "bt709", "bt-709", "bt470bg", "smpte170m", "smpte240m":
+            return "SDR"
+        default:
+            break
+        }
+        switch normalizedToken(track.videoRange) {
+        case "hdr10", "hdr10plus", "hdr10+", "hdr": return "PQ"
+        case "hlg": return "HLG"
+        case "sdr": return "SDR"
+        // "dolbyvision" is intentionally not handled here — without
+        // color_transfer we can't tell PQ-base (8.1) from HLG-base (8.4).
+        default: return nil
+        }
+    }
+
+    /// Decide whether a Dolby Vision Profile 8 source carries an HDR10 base
+    /// layer (8.1, brand `db1p`) or an HLG base layer (8.4, brand `db4h`).
+    /// Defaults to HDR10 — by far the more common variant — when signaling
+    /// is missing or ambiguous.
+    static func dvProfile8BaseLayer(
+        for version: FileVersion,
+        sourceMetadata: PlaybackSourceMetadata
+    ) -> LoopbackSessionSpec.DVProfile8BaseLayer {
+        switch transferKind(for: version) {
+        case "HLG": return .hlg
+        default: return .hdr10
+        }
+    }
+
+    static func normalizedContainer(for version: FileVersion) -> String? {
+        if let raw = normalizedToken(version.container) {
+            if raw == "quicktime" { return "mov" }
+            return raw
+        }
+
+        guard let fileName = version.fileName else { return nil }
+        let ext = URL(fileURLWithPath: fileName).pathExtension.lowercased()
+        return ext.isEmpty ? nil : ext
+    }
+
+    static func normalizedVideoCodec(_ raw: String?) -> String? {
+        switch normalizedToken(raw) {
+        case "h264", "h.264", "avc", "avc1":
+            return "h264"
+        case "hevc", "h265", "h.265", "hvc1", "hev1":
+            return "hevc"
+        default:
+            return normalizedToken(raw)
+        }
+    }
+
+    static func normalizedAudioCodec(_ raw: String?) -> String? {
+        switch normalizedToken(raw) {
+        case "aac", "mp4a":
+            return "aac"
+        case "ac3":
+            return "ac3"
+        case "eac3", "ec3", "ec-3", "e-ac-3":
+            return "eac3"
+        case "truehd", "true-hd", "dolbytruehd", "mlp", "mlpa":
+            return "truehd"
+        case "alac":
+            return "alac"
+        case "mp3":
+            return "mp3"
+        default:
+            return normalizedToken(raw)
+        }
+    }
+
+    static func normalizedSubtitleCodec(_ raw: String?) -> String? {
+        switch normalizedToken(raw) {
+        case "mov_text", "tx3g":
+            return "mov_text"
+        case "wvtt", "webvtt", "web_vtt":
+            return "webvtt"
+        case "hdmv_pgs_subtitle":
+            return "hdmv_pgs_subtitle"
+        default:
+            return normalizedToken(raw)
+        }
+    }
+
+    static func unsupportedEmbeddedSubtitleCodecs(for version: FileVersion) -> [String] {
+        embeddedSubtitleCodecs(for: version).filter { !nativeDirectSubtitleCodecs.contains($0) }
+    }
+
+    static func embeddedSubtitleCodecs(for version: FileVersion) -> [String] {
+        (version.subtitleTracks ?? [])
+            .filter { !($0.external ?? false) }
+            .map { track in normalizedSubtitleCodec(track.codec) ?? "unknown" }
+    }
+
+    static func selectedOrMandatoryEmbeddedSubtitleCodecs(
+        for version: FileVersion,
+        selectedPrimarySubtitleTrackId: Int64?,
+        selectedSecondarySubtitleTrackId: Int64?
+    ) -> [String] {
+        let embedded = (version.subtitleTracks ?? []).filter { !($0.external ?? false) }
+        let selectedStreamIndexes = [selectedPrimarySubtitleTrackId, selectedSecondarySubtitleTrackId]
+            .compactMap { trackId -> Int? in
+                guard let trackId else { return nil }
+                if SubtitleTrackIdSpace.isSidecar(trackId) { return nil }
+                if SubtitleTrackIdSpace.isAVPlayerEmbedded(trackId) {
+                    return Int(SubtitleTrackIdSpace.avPlayerEmbeddedStreamIndex(from: trackId))
+                }
+                if trackId >= 20_000 {
+                    return Int(trackId - 20_000)
+                }
+                return Int(trackId)
+            }
+        let selected = embedded.filter { track in
+            guard let index = track.index else { return false }
+            return selectedStreamIndexes.contains(index)
+        }
+        let mandatory = embedded.filter { ($0.forced ?? false) || ($0.isDefault ?? false) }
+        let candidates = selected.isEmpty ? mandatory : selected
+        return candidates.map { normalizedSubtitleCodec($0.codec) ?? "unknown" }
+    }
+
+    static func versionHasDolbyVision(_ version: FileVersion) -> Bool {
+        (version.videoTracks ?? []).contains { track in
+            normalizedToken(track.dolbyVision) != nil
+        }
+    }
+
+    static func dolbyVisionProfile(for version: FileVersion) -> Int? {
+        (version.videoTracks ?? []).compactMap { track in
+            dolbyVisionProfile(from: track.dolbyVision)
+        }.first
+    }
+
+    static func dolbyVisionProfile(from raw: String?) -> Int? {
+        guard let token = normalizedToken(raw) else { return nil }
+
+        if let profile = Int(token), profile > 0 {
+            return profile
+        }
+
+        let pattern = #"(?:profile|dvhe|dvh1|dvav|dva1|dvvp|p)\D*([0-9]{1,2})"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return nil
+        }
+        let range = NSRange(token.startIndex..<token.endIndex, in: token)
+        guard let match = regex.firstMatch(in: token, range: range),
+              match.numberOfRanges > 1,
+              let captureRange = Range(match.range(at: 1), in: token),
+              let profile = Int(token[captureRange]),
+              profile > 0 else {
+            return nil
+        }
+
+        return profile
+    }
+
+    static func versionHasPotentialAtmos(_ version: FileVersion) -> Bool {
+        (version.audioTracks ?? []).contains { track in
+            let codec = normalizedToken(track.codec)
+            let title = normalizedToken(track.title)
+            return codec == "truehd"
+                || codec == "e-ac-3"
+                || codec == "eac3"
+                || title?.localizedCaseInsensitiveContains("atmos") == true
+        }
+    }
+
+    static func chapterInfoList(from version: FileVersion) -> [PlayerChapterInfo] {
+        (version.chapters ?? [])
+            .filter { chapter in
+                chapter.startSeconds.isFinite && chapter.startSeconds >= 0
+            }
+            .sorted { lhs, rhs in
+                if lhs.startSeconds == rhs.startSeconds {
+                    return lhs.index < rhs.index
+                }
+                return lhs.startSeconds < rhs.startSeconds
+            }
+            .map { chapter in
+                PlayerChapterInfo(
+                    index: chapter.index,
+                    title: chapter.title,
+                    time: chapter.startSeconds
+                )
+            }
+    }
+
+    static func makeLoopbackAudioTracks(for version: FileVersion) -> [PlayerTrack] {
+        (version.audioTracks ?? []).enumerated().map { audioTrackIndex, track in
+            PlayerTrack(audioTrack: track, offset: audioTrackIndex)
+        }
+    }
+
+    static func normalizedLoopbackAudioTracks(
+        for version: FileVersion,
+        selectedAudioTrackId: Int64?,
+        pendingAudioFfIndex: Int?,
+        preferredAudioTrackIndex: Int?
+    ) -> [PlayerTrack] {
+        let sourceTracks = makeLoopbackAudioTracks(for: version)
+        guard !sourceTracks.isEmpty else { return [] }
+        let selectedFfIndex = resolveLoopbackSelectedAudioTrack(
+            from: sourceTracks,
+            selectedAudioTrackId: selectedAudioTrackId,
+            pendingAudioFfIndex: pendingAudioFfIndex,
+            preferredAudioTrackIndex: preferredAudioTrackIndex
+        )?.ffIndex
+        return sourceTracks.map { track in
+            PlayerTrack(
+                trackId: track.trackId,
+                kind: track.kind,
+                title: track.title,
+                lang: track.lang,
+                codec: track.codec,
+                audioChannelsLayout: track.audioChannelsLayout,
+                audioChannelCount: track.audioChannelCount,
+                bitrate: track.bitrate,
+                isDefault: track.isDefault,
+                isForced: track.isForced,
+                isHearingImpaired: track.isHearingImpaired,
+                isVisualImpaired: track.isVisualImpaired,
+                isExternal: track.isExternal,
+                isSelected: track.ffIndex == selectedFfIndex,
+                ffIndex: track.ffIndex,
+                srcId: track.srcId
+            )
+        }
+    }
+
+    static func resolveLoopbackSelectedAudioTrack(
+        from tracks: [PlayerTrack],
+        selectedAudioTrackId: Int64?,
+        pendingAudioFfIndex: Int?,
+        preferredAudioTrackIndex: Int?
+    ) -> PlayerTrack? {
+        if let selectedAudioTrackId,
+           let track = tracks.first(where: { $0.trackId == selectedAudioTrackId }) {
+            return track
+        }
+        if let pendingAudioFfIndex,
+           let track = tracks.first(where: { audioSelectionIndex(for: $0) == pendingAudioFfIndex }) {
+            return track
+        }
+        if let preferredAudioTrackIndex,
+           let track = tracks.first(where: { audioSelectionIndex(for: $0) == preferredAudioTrackIndex }) {
+            return track
+        }
+        if let track = tracks.first(where: { $0.isDefault }) {
+            return track
+        }
+        return tracks.first
+    }
+
+    static func audioSelectionIndex(for track: PlayerTrack) -> Int? {
+        track.srcId ?? track.ffIndex
+    }
+
+    static func loopbackAudioOutputMode(for track: PlayerTrack) -> LoopbackSessionSpec.AudioOutputMode {
+        switch normalizedToken(track.codec)?.replacingOccurrences(of: "-", with: "") {
+        case "aac", "ac3", "eac3":
+            return .copy
+        case "truehd", "dolbytruehd":
+            return .requireFLAC
+        case "mlp", "mlpa":
+            return .requireFLAC
+        default:
+            if let channelCount = track.audioChannelCount, channelCount > 2 {
+                return .transcodeFLAC
+            }
+            return .transcodeAAC
+        }
+    }
+
+    static func loopbackAudioPreservesAtmos(for track: PlayerTrack) -> Bool {
+        guard normalizedToken(track.codec)?.replacingOccurrences(of: "-", with: "") == "eac3" else {
+            return false
+        }
+        let titleToken = normalizedToken(track.title)
+        return titleToken?.contains("atmos") == true || titleToken?.contains("joc") == true
+    }
+
+    static func loopbackSourceFrameRate(for version: FileVersion) -> Float? {
+        (version.videoTracks ?? [])
+            .compactMap { parseLoopbackFrameRate($0.frameRate) }
+            .first
+    }
+
+    static func parseLoopbackFrameRate(_ raw: String?) -> Float? {
+        guard let token = normalizedToken(raw) else { return nil }
+        if token.contains("/") {
+            let parts = token.split(separator: "/", maxSplits: 1).map(String.init)
+            guard parts.count == 2,
+                  let numerator = Float(parts[0]),
+                  let denominator = Float(parts[1]),
+                  numerator > 0,
+                  denominator > 0 else {
+                return nil
+            }
+            return numerator / denominator
+        }
+
+        guard let value = Float(token), value > 0 else {
+            return nil
+        }
+        return value
+    }
+
+    static func normalizedToken(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let token = raw
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return token.isEmpty ? nil : token
+    }
+}
+
+private extension LoopbackSessionSpec.AudioOutputMode {
+    var logToken: String {
+        switch self {
+        case .copy:
+            return "copy"
+        case .transcodeFLAC:
+            return "transcode_flac"
+        case .requireFLAC:
+            return "require_flac"
+        case .transcodeEC3:
+            return "transcode_ec3"
+        case .transcodeAC3:
+            return "transcode_ac3"
+        case .transcodeAAC:
+            return "transcode_aac"
+        }
+    }
+}
+
+private extension PlayerTrack {
+    init(audioTrack: AudioTrack, offset: Int) {
+        self.init(
+            trackId: Int64(10_000 + offset),
+            kind: .audio,
+            title: audioTrack.title,
+            lang: audioTrack.language,
+            codec: audioTrack.codec,
+            audioChannelsLayout: audioTrack.channelLayout,
+            audioChannelCount: audioTrack.channels,
+            bitrate: audioTrack.bitrate.map(Int64.init),
+            isDefault: audioTrack.isDefault ?? false,
+            isForced: false,
+            isHearingImpaired: false,
+            isVisualImpaired: false,
+            isExternal: false,
+            isSelected: false,
+            ffIndex: audioTrack.index,
+            srcId: offset
+        )
+    }
+}

@@ -1,0 +1,375 @@
+#if os(tvOS)
+import SwiftUI
+
+/// tvOS player overlay. Post-redesign the idle state is VidHub-minimal:
+/// no hero strip, thin scrubber, icon-only transport row along the bottom.
+/// When the user opens the options panel, the idle overlay steps aside and
+/// `TVPlayerInfoHUD` takes over as a floating top-center HUD (Infuse idiom).
+/// Controls auto-hide after 5 s of no focus movement while playing; Menu
+/// either hides the HUD, dismisses the overlay, or exits the player
+/// depending on what's on screen.
+struct TVPlayerControls: View {
+    let viewModel: PlayerViewModel
+    let onDismiss: () -> Void
+
+    /// Remembered so reopening the HUD lands on the last-used tab rather
+    /// than always snapping back to Info. Lives at this level because the
+    /// HUD view is recreated each time HUD presentation toggles.
+    @State private var activeHUDTab: TVPlayerInfoHUD.Tab = .info
+
+    /// Flipped on immediately *before* the HUD appears so the scrubber's
+    /// focus-lost path treats the resulting blur as a cancel rather than a
+    /// commit. Without this, opening the HUD with an in-flight scrub preview
+    /// would seek to that preview as a side-effect.
+    @State private var cancelPendingScrub: Bool = false
+
+    // Focus states. SwiftUI's focus engine only holds focus on one
+    // focusable at a time, so selecting one of these implicitly clears the
+    // others. The HUD tab focus lives here (rather than inside
+    // `TVPlayerInfoHUD`) so we can explicitly seed it at open time — without
+    // a deterministic initial focus target the HUD can appear with nothing
+    // focused, which leaves the Menu button with no exit handler to bubble
+    // to and the user stranded inside the panel.
+    @FocusState private var isScrubberFocused: Bool
+    @FocusState private var focusedTransportButton: TVPlayerTransportCluster.FocusTarget?
+    @FocusState private var focusedHUDTab: TVPlayerInfoHUD.Tab?
+    @FocusState private var focusedIntroAction: IntroAction?
+
+    private var isHUDPresented: Bool { viewModel.isHUDPresented }
+
+    var body: some View {
+        ZStack {
+            // Idle overlay and HUD are mutually exclusive. Stacking both
+            // confused the focus engine (scrubber clicks bleeding into
+            // hidden transport buttons) and added visual noise from the
+            // progress bar showing underneath the panel.
+            if viewModel.showControls && !isHUDPresented {
+                idleOverlay
+                    .transition(.opacity)
+            }
+            if viewModel.showIntroSkip {
+                introSkipLayer
+                    .transition(.opacity)
+            }
+            if isHUDPresented {
+                TVPlayerInfoHUD(
+                    viewModel: viewModel,
+                    activeTab: $activeHUDTab,
+                    focusedTab: $focusedHUDTab,
+                    onDismiss: { closeHUD() }
+                )
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isHUDPresented)
+        // Menu / exit handling intentionally lives at the `PlayerView` level
+        // rather than here. That higher handler reads `viewModel.isHUDPresented`
+        // directly so it catches Menu presses even when focus has drifted off
+        // the HUD's tab pill — adding a handler here would consume Menu while
+        // the HUD is closed and break the "dismiss controls first" path.
+        .onChange(of: isHUDPresented) { _, presented in
+            if !presented {
+                cancelPendingScrub = false
+                focusedHUDTab = nil
+                focusedTransportButton = nil
+                isScrubberFocused = true
+            }
+        }
+        .onChange(of: viewModel.showIntroSkip) { _, visible in
+            focusedIntroAction = visible ? .skip : nil
+        }
+        .onChange(of: viewModel.requestedTVHUDEntryPoint) { _, entryPoint in
+            guard let entryPoint else { return }
+            applyHUDEntryPoint(entryPoint)
+            viewModel.consumeTVHUDEntryRequest()
+        }
+    }
+
+    // MARK: - Idle overlay
+
+    @ViewBuilder
+    private var idleOverlay: some View {
+        ZStack(alignment: .bottom) {
+            bottomGradient.ignoresSafeArea()
+            statusColumn
+                .padding(.top, 64)
+                .padding(.horizontal, 80)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            transportStack
+                .padding(.horizontal, 80)
+                .padding(.bottom, 48)
+        }
+        .onAppear {
+            focusedTransportButton = nil
+            isScrubberFocused = true
+        }
+    }
+
+    /// Subtle bottom gradient so the transport has contrast against bright
+    /// frames. Shallower than pre-redesign (340pt → 240pt) since the scrubber
+    /// and icon buttons now carry their own outlines and need less backdrop.
+    private var bottomGradient: some View {
+        VStack(spacing: 0) {
+            Spacer()
+            LinearGradient(
+                colors: [.clear, .black.opacity(0.55)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: 240)
+        }
+    }
+
+    /// Buffering + sleep-timer chips float in the top-right when active.
+    /// Everything else that used to live in the hero strip (title, series,
+    /// badges, year, runtime, chapter) is now in the HUD's Info tab.
+    private var statusColumn: some View {
+        VStack(alignment: .trailing, spacing: 10) {
+            if viewModel.isBuffering {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .tint(.white)
+                        .progressViewStyle(.circular)
+                        .scaleEffect(0.9)
+                    Text("Buffering")
+                        .font(.continuumSmall.weight(.medium))
+                        .foregroundStyle(.white.opacity(0.8))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Capsule().fill(.ultraThinMaterial))
+            }
+
+            if viewModel.sleepTimer.isActive {
+                Label(formatCountdown(viewModel.sleepTimer.remainingSeconds),
+                      systemImage: "moon.zzz.fill")
+                    .font(.continuumSmall.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .monospacedDigit()
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Capsule().fill(.ultraThinMaterial))
+            }
+        }
+    }
+
+    private var introSkipLayer: some View {
+        introSkipButton
+            .padding(.horizontal, 80)
+            .padding(.bottom, viewModel.showControls && !isHUDPresented ? 156 : 96)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+    }
+
+    private var introSkipButton: some View {
+        VStack(alignment: .trailing, spacing: 12) {
+            if let countdown = viewModel.introAutoSkipCountdownSeconds {
+                Text("Skipping intro in \(countdown)")
+                    .font(.system(size: 22, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 10)
+                    .background(Capsule(style: .continuous).fill(.ultraThinMaterial))
+                    .shadow(color: .black.opacity(0.4), radius: 12, y: 5)
+            }
+
+            HStack(spacing: 14) {
+                if viewModel.introAutoSkipCountdownSeconds != nil {
+                    Button {
+                        viewModel.cancelIntroAutoSkip()
+                    } label: {
+                        Text("Cancel")
+                            .font(.system(size: 26, weight: .semibold, design: .rounded))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .frame(width: 120)
+                    }
+                    .buttonStyle(TVPillButtonStyle(kind: .secondary))
+                    .focused($focusedIntroAction, equals: .cancel)
+                    .accessibilityLabel("Cancel Auto-Skip Intro")
+                }
+
+                skipIntroNowButton
+            }
+        }
+    }
+
+    private var skipIntroNowButton: some View {
+        Button {
+            viewModel.skipIntro()
+        } label: {
+            Label(
+                viewModel.introAutoSkipCountdownSeconds == nil ? "Skip Intro" : "Skip Now",
+                systemImage: "forward.end.fill"
+            )
+                .font(.system(size: 28, weight: .semibold, design: .rounded))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .frame(width: 190)
+        }
+        .buttonStyle(TVPillButtonStyle(kind: .primary))
+        .focused($focusedIntroAction, equals: .skip)
+        .accessibilityLabel(
+            viewModel.introAutoSkipCountdownSeconds == nil ? "Skip Intro" : "Skip Intro Now"
+        )
+    }
+
+    private enum IntroAction: Hashable {
+        case cancel
+        case skip
+    }
+
+    // MARK: - Transport stack
+
+    private var transportStack: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            titleFooter
+            TVPlayerScrubber(
+                viewModel: viewModel,
+                isFocused: $isScrubberFocused,
+                onMoveToTransport: {
+                    isScrubberFocused = false
+                    focusedTransportButton = .playPause
+                },
+                onExitWhenIdle: {
+                    viewModel.dismissControls()
+                },
+                cancelOnBlur: cancelPendingScrub
+            )
+            timeRow
+            TVPlayerTransportCluster(
+                viewModel: viewModel,
+                onOpenHUD: { openHUD() },
+                onMoveToScrubber: {
+                    focusedTransportButton = nil
+                    isScrubberFocused = true
+                },
+                onDismiss: onDismiss,
+                focusedButton: $focusedTransportButton
+            )
+        }
+    }
+
+    /// Quiet title footer above the scrubber — the VidHub idiom of surfacing
+    /// the currently-playing title as bottom-left caption rather than a hero
+    /// slab. Hidden while we still have no title resolved.
+    @ViewBuilder
+    private var titleFooter: some View {
+        let title = heroTitleText
+        if !title.isEmpty {
+            VStack(alignment: .leading, spacing: 2) {
+                if let series = viewModel.metadata.seriesTitle, !series.isEmpty {
+                    Text(series)
+                        .font(.continuumSmall.weight(.medium))
+                        .foregroundStyle(.white.opacity(0.65))
+                        .lineLimit(1)
+                }
+                HStack(spacing: 10) {
+                    Text(title)
+                        .font(.continuumHeadline)
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                    if let episode = viewModel.metadata.episodeTag {
+                        Text(episode)
+                            .font(.continuumSmall)
+                            .foregroundStyle(.white.opacity(0.6))
+                    }
+                }
+            }
+            .shadow(color: .black.opacity(0.55), radius: 4, y: 1)
+        }
+    }
+
+    private var heroTitleText: String {
+        viewModel.metadata.primaryTitle.isEmpty
+            ? viewModel.title
+            : viewModel.metadata.primaryTitle
+    }
+
+    private var timeRow: some View {
+        HStack {
+            Text(formatTime(scrubberDisplayTime))
+                .font(.system(size: 28, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white)
+                .monospacedDigit()
+            Spacer()
+            if viewModel.duration > 0 {
+                Text("−\(formatTime(remainingTime))")
+                    .font(.system(size: 28, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.7))
+                    .monospacedDigit()
+            }
+        }
+    }
+
+    private var scrubberDisplayTime: Double {
+        viewModel.isScrubbing ? viewModel.scrubPreviewTime : viewModel.currentTime
+    }
+
+    private var remainingTime: Double {
+        max(0, viewModel.duration - scrubberDisplayTime)
+    }
+
+    // MARK: - HUD open/close
+
+    /// Open the Infuse-style HUD. Side-effects land in this order so focus
+    /// transitions cleanly:
+    ///   1. Flip `cancelPendingScrub` so the scrubber treats the imminent
+    ///      blur as a cancel rather than a commit.
+    ///   2. Drop the idle overlay's focus bindings so SwiftUI isn't trying
+    ///      to hold focus on a view that's about to leave the hierarchy.
+    ///   3. Seed `focusedHUDTab` so the HUD opens with a deterministic
+    ///      focus target — otherwise focus can land nowhere and the Menu
+    ///      button has no exit handler to bubble to.
+    ///   4. Present the HUD via the view model (single source of truth).
+    private func openHUD() {
+        cancelPendingScrub = true
+        isScrubberFocused = false
+        focusedTransportButton = nil
+        focusedHUDTab = activeHUDTab
+        viewModel.openHUD()
+    }
+
+    private func openSettingsHUD() {
+        applyHUDEntryPoint(.settings)
+        viewModel.openSettingsHUD()
+    }
+
+    private func openPlaybackHUD() {
+        applyHUDEntryPoint(.playback)
+        viewModel.openPlaybackHUD()
+    }
+
+    private func applyHUDEntryPoint(_ entryPoint: PlayerViewModel.TVHUDEntryPoint) {
+        cancelPendingScrub = true
+        isScrubberFocused = false
+        focusedTransportButton = nil
+        switch entryPoint {
+        case .settings:
+            activeHUDTab = .video
+        case .playback:
+            activeHUDTab = preferredPlaybackHUDTab
+        }
+        focusedHUDTab = activeHUDTab
+    }
+
+    private var preferredPlaybackHUDTab: TVPlayerInfoHUD.Tab {
+        if !viewModel.audioTracks.isEmpty { return .audio }
+        if !viewModel.subtitleTracks.isEmpty { return .subtitles }
+        return .video
+    }
+
+    private func closeHUD() {
+        viewModel.closeHUD()
+    }
+
+    // MARK: - Helpers
+
+    private func formatTime(_ seconds: Double) -> String {
+        PlayerTimeFormatter.formatHMS(seconds)
+    }
+
+    private func formatCountdown(_ seconds: Int) -> String {
+        PlayerTimeFormatter.formatCountdown(seconds)
+    }
+}
+#endif

@@ -1,0 +1,66 @@
+# Apple Route Capability Matrix
+
+Snapshot date: 2026-04-29 (HEAD `6c2b4af`)
+
+This matrix is the implementation-facing truth source for the current Apple
+player routes in `silo-apple`. It separates:
+
+- `Repo-verified`: behavior grounded in the current code path
+- `Validation required`: behavior that may exist on some device/output paths
+  but cannot be claimed yet
+- `Unsupported` / `Unclaimed`: behavior Silo does not currently promise on
+  that route
+
+## Routes
+
+| Implementation route | Route family | Display label | Current role |
+| --- | --- | --- | --- |
+| `playerCoreDirect` | CompatibilityPlayer | CompatibilityPlayer Direct | Compatibility-first direct playback |
+| `avPlayerHLS` | NativePlayer | NativePlayer HLS | Native adaptive path for explicit quality/bitrate-reduction HLS behind the local rollout gate |
+| `avPlayerNativeDirect` | NativePlayer | NativePlayer Direct | Narrow native-direct path for allowlisted `mp4` / `mov` / `m4v` assets |
+| `avPlayerLocalDVLoopback` | SiloPlayer | SiloPlayer Loopback | Local normalization path for Dolby Vision / rejected HEVC edge cases |
+
+## Matrix
+
+| Capability | `playerCoreDirect` | `avPlayerHLS` | `avPlayerNativeDirect` | `avPlayerLocalDVLoopback` |
+| --- | --- | --- | --- | --- |
+| Primary audio selection | Repo-verified | Repo-verified | Repo-verified | Repo-verified |
+| Primary subtitle selection | Repo-verified | Repo-verified | Repo-verified on allowlisted assets | Repo-verified |
+| Sidecar primary subtitles | Repo-verified | Repo-verified | Repo-verified | Repo-verified |
+| Secondary subtitles | Repo-verified | Repo-verified, sidecar-only | Repo-verified, sidecar-only | Repo-verified, sidecar-only |
+| Chapters | Repo-verified | Repo-verified | Repo-verified | Repo-verified |
+| Buffered-ahead reporting | Unsupported | Repo-verified | Repo-verified | Repo-verified |
+| Video gravity control | Repo-verified | Unsupported | Unsupported | Unsupported |
+| HDR toggle | Repo-verified | Unsupported | Unsupported | Unsupported |
+| Audio delay | Unsupported | Unsupported | Unsupported | Unsupported |
+| Subtitle delay | Repo-verified | Silo-rendered tracks only | Silo-rendered tracks only | Silo-rendered tracks only |
+| Subtitle styling | Repo-verified | Silo-rendered tracks only | Silo-rendered tracks only | Silo-rendered tracks only |
+| tvOS custom shell / Siri Remote ownership | Repo-verified | Repo-verified | Repo-verified | Repo-verified |
+| Now Playing / remote commands | Repo-verified | Repo-verified | Repo-verified | Repo-verified |
+| PiP | Unsupported | Validation required | Validation required | Validation required |
+| AirPlay / external playback | Unclaimed | Unclaimed | Unclaimed | Unclaimed |
+| Premium HDR / DV / Atmos claims | Validation required | Validation required | Validation required | Validation required |
+
+## Notes
+
+- `PlayerCore.setAudioDelay(...)` is still a TODO, so audio delay must not be
+  surfaced as supported even on the compatibility route.
+- `avPlayerNativeDirect` is intentionally narrow. It only applies to direct
+  assets whose container, codecs, and embedded subtitle shape match the
+  client-side allowlist.
+- NativePlayer and SiloPlayer secondary subtitles remain sidecar-only today.
+  The UI should not imply arbitrary embedded-secondary subtitle parity on those
+  routes.
+- "Silo-rendered tracks" means subtitle tracks whose presentation goes
+  through the shared libass session: text sidecars, FFmpeg-extracted text
+  tracks, and ASS/SSA streams. Silo delay and styling controls apply
+  only to those tracks.
+- Native AVFoundation caption fallback (used when the libass extraction path
+  is unavailable on a given asset/route) does not honor Silo
+  delay/styling. The capability rows above describe what Silo can
+  promise on each route; they are not a claim about every embedded subtitle
+  on a NativePlayer or SiloPlayer asset.
+- PiP and external playback stay intentionally conservative until Silo has
+  route-specific lifecycle handling, UI, and device/output validation.
+- Premium-media claims stay validation-gated even when playback itself uses a
+  NativePlayer or SiloPlayer route.

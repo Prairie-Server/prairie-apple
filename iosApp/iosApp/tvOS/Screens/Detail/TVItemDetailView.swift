@@ -1,0 +1,538 @@
+#if os(tvOS)
+import SwiftUI
+
+/// Cinematic item-detail screen for tvOS. Replaces the shared
+/// `MovieDetailContent` / `SeriesDetailContent` layouts on tvOS only; the
+/// iOS / iPadOS targets continue to use those views verbatim.
+///
+/// The layout mirrors VidHub / Infuse / Plex: a full-width backdrop hero
+/// with the title + key metadata + primary actions overlaid on the left,
+/// then a scrollable body of horizontal rails below the fold.
+struct TVItemDetailView: View {
+    let contentId: String
+
+    @State private var viewModel: ItemDetailViewModel
+    @State private var preferredVersionFileId: Int?
+    @State private var preferredAudioTrackIndex: Int?
+    @State private var preferredSubtitleTrackIndex: Int?
+    @State private var preferredNextUpFileId: Int?
+    @State private var preferredNextUpAudioTrackIndex: Int?
+    @State private var preferredNextUpSubtitleTrackIndex: Int?
+    @State private var nextUpPlaybackDetail: ItemDetail?
+    @State private var isLoadingNextUpPlaybackDetail = false
+    @State private var didLoadNextUpPlaybackDetail = false
+    @Environment(AppRouter.self) private var router
+
+    init(contentId: String) {
+        self.contentId = contentId
+        // Resolve the cached view model eagerly so the first `body`
+        // evaluation can render cached content without a blank frame.
+        _viewModel = State(
+            initialValue: ItemDetailCache.shared.viewModel(for: contentId)
+        )
+    }
+
+    var body: some View {
+        Group {
+            // Skip the spinner on cache hits — `detail != nil` means we
+            // already have something to paint and the `.task` below is
+            // refreshing it in the background.
+            if let detail = viewModel.detail {
+                content(for: detail)
+            } else if let error = viewModel.error {
+                ErrorView(state: error, onRetry: { Task { await viewModel.loadDetail(contentId: contentId) } })
+            } else {
+                Color.clear
+            }
+        }
+        .continuumBackground()
+        .continuumNavigationTitleDisplayMode(.inline)
+        .continuumNavigationBarBackgroundHidden()
+        .task(id: contentId) {
+            preferredVersionFileId = nil
+            preferredAudioTrackIndex = nil
+            preferredSubtitleTrackIndex = nil
+            preferredNextUpFileId = nil
+            preferredNextUpAudioTrackIndex = nil
+            preferredNextUpSubtitleTrackIndex = nil
+            nextUpPlaybackDetail = nil
+            isLoadingNextUpPlaybackDetail = false
+            didLoadNextUpPlaybackDetail = false
+            await viewModel.loadDetail(contentId: contentId)
+        }
+    }
+
+    @ViewBuilder
+    private func content(for detail: ItemDetail) -> some View {
+        if detail.type == "season" {
+            TVSeasonDetailView(
+                detail: detail,
+                isFavorite: viewModel.isFavorite,
+                inWatchlist: viewModel.inWatchlist,
+                isWatched: viewModel.isWatched,
+                seasons: viewModel.seasons,
+                selectedSeason: viewModel.selectedSeason,
+                episodes: viewModel.episodes,
+                isLoadingEpisodes: viewModel.isLoadingEpisodes,
+                selectedNextUpFileId: preferredNextUpFileId,
+                selectedNextUpAudioTrackIndex: preferredNextUpAudioTrackIndex,
+                selectedNextUpSubtitleTrackIndex: preferredNextUpSubtitleTrackIndex,
+                nextUpPlaybackDetail: nextUpPlaybackDetail,
+                onPlayEpisode: { id, fileId, startFromBeginning in
+                    let episode = viewModel.episodes.first { $0.contentId == id }
+                    let resumePosition = startFromBeginning
+                        ? nil
+                        : playableResumePosition(
+                            position: episode?.userData?.positionSeconds,
+                            duration: episode?.userData?.durationSeconds
+                        )
+                    if let fileId {
+                        router.navigate(
+                            to: .playerWithFile(
+                                contentId: id,
+                                fileId: fileId,
+                                audioTrackIndex: preferredNextUpAudioTrackIndex,
+                                subtitleTrackIndex: preferredNextUpSubtitleTrackIndex,
+                                startFromBeginning: startFromBeginning,
+                                resumePosition: resumePosition
+                            )
+                        )
+                    } else {
+                        router.navigate(
+                            to: .player(
+                                contentId: id,
+                                startFromBeginning: startFromBeginning,
+                                resumePosition: resumePosition
+                            )
+                        )
+                    }
+                },
+                onEpisodeTap: { id in
+                    router.navigate(to: .itemDetail(contentId: id))
+                },
+                onSelectSeason: { season in
+                    guard season.id != detail.contentId else { return }
+                    router.navigate(to: .itemDetail(contentId: season.contentId))
+                },
+                onSelectNextUpVersion: { fileId in
+                    preferredNextUpFileId = fileId
+                    preferredNextUpAudioTrackIndex = sanitizedAudioTrackIndex(
+                        for: nextUpPlaybackDetail,
+                        versionFileId: fileId,
+                        candidate: preferredNextUpAudioTrackIndex
+                    )
+                    preferredNextUpSubtitleTrackIndex = sanitizedSubtitleTrackIndex(
+                        for: nextUpPlaybackDetail,
+                        versionFileId: fileId,
+                        candidate: preferredNextUpSubtitleTrackIndex
+                    )
+                },
+                onSelectNextUpAudioTrack: { index in
+                    preferredNextUpAudioTrackIndex = sanitizedAudioTrackIndex(
+                        for: nextUpPlaybackDetail,
+                        versionFileId: preferredNextUpFileId,
+                        candidate: index
+                    )
+                },
+                onSelectNextUpSubtitleTrack: { index in
+                    preferredNextUpSubtitleTrackIndex = sanitizedSubtitleTrackIndex(
+                        for: nextUpPlaybackDetail,
+                        versionFileId: preferredNextUpFileId,
+                        candidate: index
+                    )
+                },
+                onToggleFavorite: { Task { await viewModel.toggleFavorite() } },
+                onToggleWatchlist: { Task { await viewModel.toggleWatchlist() } },
+                onToggleWatched: { Task { await viewModel.toggleWatched() } },
+                onPersonTap: { personId in
+                    if let pid = Int(personId) {
+                        router.navigate(to: .personDetail(personId: pid))
+                    }
+                },
+                onNavigateToItem: { id in
+                    router.navigate(to: .itemDetail(contentId: id))
+                }
+            )
+            .task(id: seasonNextUpEpisodeContentId(for: detail)) {
+                await loadSeasonNextUpPlaybackDetail(for: detail)
+            }
+        } else if detail.type == "series" {
+            TVSeriesDetailView(
+                detail: detail,
+                isFavorite: viewModel.isFavorite,
+                inWatchlist: viewModel.inWatchlist,
+                isWatched: viewModel.isWatched,
+                seasons: viewModel.seasons,
+                selectedSeason: viewModel.selectedSeason,
+                episodes: viewModel.episodes,
+                isLoadingEpisodes: viewModel.isLoadingEpisodes,
+                selectedNextUpFileId: preferredNextUpFileId,
+                nextUpPlaybackDetail: nextUpPlaybackDetail,
+                isLoadingNextUpPlaybackDetail: isLoadingNextUpPlaybackDetail,
+                didLoadNextUpPlaybackDetail: didLoadNextUpPlaybackDetail,
+                onSelectSeason: { season in
+                    Task { await viewModel.selectSeason(season) }
+                },
+                onPlayEpisode: { id, fileId, startFromBeginning in
+                    let resumePosition = startFromBeginning
+                        ? nil
+                        : viewModel.episodes.first(where: { $0.contentId == id })?.userData?.positionSeconds
+                    if let fileId {
+                        router.navigate(
+                            to: .playerWithFile(
+                                contentId: id,
+                                fileId: fileId,
+                                audioTrackIndex: nil,
+                                subtitleTrackIndex: nil,
+                                startFromBeginning: startFromBeginning,
+                                resumePosition: resumePosition
+                            )
+                        )
+                    } else {
+                        router.navigate(
+                            to: .player(
+                                contentId: id,
+                                startFromBeginning: startFromBeginning,
+                                resumePosition: resumePosition
+                            )
+                        )
+                    }
+                },
+                onEpisodeTap: { id in
+                    router.navigate(to: .itemDetail(contentId: id))
+                },
+                onSelectNextUpVersion: { fileId in
+                    preferredNextUpFileId = fileId
+                },
+                onToggleFavorite: { Task { await viewModel.toggleFavorite() } },
+                onToggleWatchlist: { Task { await viewModel.toggleWatchlist() } },
+                onToggleWatched: { Task { await viewModel.toggleWatched() } },
+                onPersonTap: { personId in
+                    if let pid = Int(personId) {
+                        router.navigate(to: .personDetail(personId: pid))
+                    }
+                },
+                onNavigateToItem: { id in
+                    router.navigate(to: .itemDetail(contentId: id))
+                }
+            )
+            .task(id: seriesNextUpEpisodeContentId(for: detail)) {
+                await loadSeriesNextUpPlaybackDetail(for: detail)
+            }
+        } else {
+            TVMovieDetailView(
+                detail: detail,
+                isFavorite: viewModel.isFavorite,
+                inWatchlist: viewModel.inWatchlist,
+                isWatched: viewModel.isWatched,
+                selectedVersionFileId: preferredVersionFileId,
+                selectedAudioTrackIndex: preferredAudioTrackIndex,
+                selectedSubtitleTrackIndex: preferredSubtitleTrackIndex,
+                seasons: viewModel.seasons,
+                selectedSeason: viewModel.selectedSeason,
+                seasonEpisodes: viewModel.episodes,
+                isLoadingEpisodes: viewModel.isLoadingEpisodes,
+                onPlay: { startFromBeginning in
+                    let resumePosition = startFromBeginning ? nil : playableResumePosition(for: detail)
+                    if let fileId = playbackFileId(for: detail) {
+                        router.navigate(
+                            to: .playerWithFile(
+                                contentId: contentId,
+                                fileId: fileId,
+                                audioTrackIndex: preferredAudioTrackIndex,
+                                subtitleTrackIndex: preferredSubtitleTrackIndex,
+                                startFromBeginning: startFromBeginning,
+                                resumePosition: resumePosition
+                            )
+                        )
+                    } else {
+                        router.navigate(
+                            to: .player(
+                                contentId: contentId,
+                                startFromBeginning: startFromBeginning,
+                                resumePosition: resumePosition
+                            )
+                        )
+                    }
+                },
+                onSelectVersion: { fileId in
+                    preferredVersionFileId = fileId
+                    preferredAudioTrackIndex = sanitizedAudioTrackIndex(
+                        for: detail,
+                        versionFileId: fileId,
+                        candidate: preferredAudioTrackIndex
+                    )
+                    preferredSubtitleTrackIndex = sanitizedSubtitleTrackIndex(
+                        for: detail,
+                        versionFileId: fileId,
+                        candidate: preferredSubtitleTrackIndex
+                    )
+                },
+                onSelectAudioTrack: { index in
+                    preferredAudioTrackIndex = sanitizedAudioTrackIndex(
+                        for: detail,
+                        versionFileId: preferredVersionFileId,
+                        candidate: index
+                    )
+                },
+                onSelectSubtitleTrack: { index in
+                    preferredSubtitleTrackIndex = sanitizedSubtitleTrackIndex(
+                        for: detail,
+                        versionFileId: preferredVersionFileId,
+                        candidate: index
+                    )
+                },
+                onSelectSeason: { season in
+                    guard season.id != detail.contentId else { return }
+                    router.navigate(to: .itemDetail(contentId: season.contentId))
+                },
+                onToggleFavorite: { Task { await viewModel.toggleFavorite() } },
+                onToggleWatchlist: { Task { await viewModel.toggleWatchlist() } },
+                onToggleWatched: { Task { await viewModel.toggleWatched() } },
+                onPersonTap: { personId in
+                    if let pid = Int(personId) {
+                        router.navigate(to: .personDetail(personId: pid))
+                    }
+                },
+                onNavigateToItem: { id in
+                    router.navigate(to: .itemDetail(contentId: id))
+                },
+                onEpisodeTap: { id in
+                    router.navigate(to: .itemDetail(contentId: id))
+                }
+            )
+        }
+    }
+
+    private func playbackFileId(for detail: ItemDetail) -> Int? {
+        if let preferredVersionFileId {
+            return preferredVersionFileId
+        }
+        if preferredAudioTrackIndex != nil || preferredSubtitleTrackIndex != nil {
+            return effectiveVersion(for: detail, versionFileId: preferredVersionFileId)?.fileId
+        }
+        return nil
+    }
+
+    private func playableResumePosition(for detail: ItemDetail) -> Double? {
+        playableResumePosition(
+            position: detail.userData?.positionSeconds,
+            duration: detail.userData?.durationSeconds
+        )
+    }
+
+    private func playableResumePosition(position: Double?, duration: Double?) -> Double? {
+        guard let position, position.isFinite, position > 30 else { return nil }
+        if let duration, duration.isFinite, duration > 0, position >= duration - 5 {
+            return nil
+        }
+        return position
+    }
+
+    private func effectiveVersion(for detail: ItemDetail, versionFileId: Int?) -> FileVersion? {
+        DetailVersionSelection.displayVersion(
+            versions: detail.versions ?? [],
+            selectedFileId: versionFileId,
+            lastFileId: detail.userData?.lastFileId,
+            preferredQualityId: PlayerSettings.shared.preferredQuality
+        )
+    }
+
+    private func sanitizedAudioTrackIndex(
+        for detail: ItemDetail,
+        versionFileId: Int?,
+        candidate: Int?
+    ) -> Int? {
+        guard let candidate else { return nil }
+        guard let version = effectiveVersion(for: detail, versionFileId: versionFileId) else {
+            return nil
+        }
+        let available = version.audioTracks?.compactMap(\.index) ?? []
+        return available.contains(candidate) ? candidate : nil
+    }
+
+    private func sanitizedSubtitleTrackIndex(
+        for detail: ItemDetail,
+        versionFileId: Int?,
+        candidate: Int?
+    ) -> Int? {
+        guard let candidate else { return nil }
+        if candidate < 0 { return candidate }
+        guard let version = effectiveVersion(for: detail, versionFileId: versionFileId) else {
+            return nil
+        }
+        let available = version.subtitleTracks?.compactMap(\.index) ?? []
+        return available.contains(candidate) ? candidate : nil
+    }
+
+    private func sanitizedAudioTrackIndex(
+        for detail: ItemDetail?,
+        versionFileId: Int?,
+        candidate: Int?
+    ) -> Int? {
+        guard let detail else { return nil }
+        return sanitizedAudioTrackIndex(for: detail, versionFileId: versionFileId, candidate: candidate)
+    }
+
+    private func sanitizedSubtitleTrackIndex(
+        for detail: ItemDetail?,
+        versionFileId: Int?,
+        candidate: Int?
+    ) -> Int? {
+        guard let detail else { return nil }
+        return sanitizedSubtitleTrackIndex(for: detail, versionFileId: versionFileId, candidate: candidate)
+    }
+
+    private func seasonNextUpEpisode(for detail: ItemDetail) -> EpisodeListItem? {
+        guard detail.type == "season" else { return nil }
+        if let inProgress = viewModel.episodes.first(where: { $0.userData?.isInProgress == true }) {
+            return inProgress
+        }
+        if let unwatched = viewModel.episodes.first(where: { !($0.userData?.played ?? false) }) {
+            return unwatched
+        }
+        return viewModel.episodes.first
+    }
+
+    private func seasonNextUpEpisodeContentId(for detail: ItemDetail) -> String? {
+        seasonNextUpEpisode(for: detail)?.contentId
+    }
+
+    private func loadSeasonNextUpPlaybackDetail(for detail: ItemDetail) async {
+        guard let nextUp = seasonNextUpEpisode(for: detail) else {
+            nextUpPlaybackDetail = nil
+            isLoadingNextUpPlaybackDetail = false
+            didLoadNextUpPlaybackDetail = false
+            preferredNextUpFileId = nil
+            preferredNextUpAudioTrackIndex = nil
+            preferredNextUpSubtitleTrackIndex = nil
+            return
+        }
+
+        nextUpPlaybackDetail = nil
+        isLoadingNextUpPlaybackDetail = true
+        didLoadNextUpPlaybackDetail = false
+        preferredNextUpFileId = nil
+        preferredNextUpAudioTrackIndex = nil
+        preferredNextUpSubtitleTrackIndex = nil
+
+        do {
+            let item = try await ContinuumAPI.shared.itemDetail(contentId: nextUp.contentId)
+            guard !Task.isCancelled else { return }
+            let enriched = await enrichPlaybackMetadata(for: item, contentId: nextUp.contentId)
+            guard !Task.isCancelled else { return }
+            nextUpPlaybackDetail = enriched
+            didLoadNextUpPlaybackDetail = true
+        } catch {
+            guard !Task.isCancelled else { return }
+            nextUpPlaybackDetail = nil
+            didLoadNextUpPlaybackDetail = true
+        }
+        isLoadingNextUpPlaybackDetail = false
+    }
+
+    private func seriesNextUpEpisode(for detail: ItemDetail) -> EpisodeListItem? {
+        guard detail.type == "series" else { return nil }
+        if let inProgress = viewModel.episodes.first(where: { $0.userData?.isInProgress == true }) {
+            return inProgress
+        }
+        if let unwatched = viewModel.episodes.first(where: { !($0.userData?.played ?? false) }) {
+            return unwatched
+        }
+        return viewModel.episodes.first
+    }
+
+    private func seriesNextUpEpisodeContentId(for detail: ItemDetail) -> String? {
+        seriesNextUpEpisode(for: detail)?.contentId
+    }
+
+    private func loadSeriesNextUpPlaybackDetail(for detail: ItemDetail) async {
+        guard let nextUp = seriesNextUpEpisode(for: detail) else {
+            nextUpPlaybackDetail = nil
+            isLoadingNextUpPlaybackDetail = false
+            didLoadNextUpPlaybackDetail = false
+            preferredNextUpFileId = nil
+            return
+        }
+
+        nextUpPlaybackDetail = nil
+        isLoadingNextUpPlaybackDetail = true
+        didLoadNextUpPlaybackDetail = false
+        preferredNextUpFileId = nil
+
+        do {
+            let item = try await ContinuumAPI.shared.itemDetail(contentId: nextUp.contentId)
+            guard !Task.isCancelled else { return }
+            let enriched = await enrichPlaybackMetadata(for: item, contentId: nextUp.contentId)
+            guard !Task.isCancelled else { return }
+            nextUpPlaybackDetail = enriched
+            didLoadNextUpPlaybackDetail = true
+        } catch {
+            guard !Task.isCancelled else { return }
+            nextUpPlaybackDetail = nil
+            didLoadNextUpPlaybackDetail = true
+        }
+        isLoadingNextUpPlaybackDetail = false
+    }
+
+    private func enrichPlaybackMetadata(for item: ItemDetail, contentId: String) async -> ItemDetail {
+        guard item.type != "series" else { return item }
+
+        do {
+            let watchDetail = try await ContinuumAPI.shared.watchDetail(contentId: contentId)
+            return ItemDetail(
+                contentId: item.contentId,
+                type: item.type,
+                status: item.status,
+                title: item.title,
+                sortTitle: item.sortTitle,
+                originalTitle: item.originalTitle,
+                originalLanguage: item.originalLanguage,
+                showStatus: item.showStatus,
+                year: item.year,
+                overview: item.overview,
+                tagline: item.tagline,
+                runtime: item.runtime,
+                contentRating: item.contentRating,
+                genres: item.genres,
+                ratingImdb: item.ratingImdb,
+                ratingTmdb: item.ratingTmdb,
+                ratingRtCritic: item.ratingRtCritic,
+                ratingRtAudience: item.ratingRtAudience,
+                imdbId: item.imdbId,
+                tmdbId: item.tmdbId,
+                tvdbId: item.tvdbId,
+                cast: item.cast,
+                crew: item.crew,
+                studios: item.studios,
+                networks: item.networks,
+                countries: item.countries,
+                releaseDate: item.releaseDate,
+                firstAirDate: item.firstAirDate,
+                lastAirDate: item.lastAirDate,
+                posterUrl: item.posterUrl,
+                posterThumbhash: item.posterThumbhash,
+                backdropUrl: item.backdropUrl,
+                backdropThumbhash: item.backdropThumbhash,
+                logoUrl: item.logoUrl,
+                seasonCount: item.seasonCount,
+                seriesId: item.seriesId,
+                seriesTitle: item.seriesTitle,
+                seasonNumber: item.seasonNumber,
+                episodeNumber: item.episodeNumber,
+                episodeCount: item.episodeCount,
+                airDate: item.airDate,
+                isSpecials: item.isSpecials,
+                userData: item.userData,
+                versions: watchDetail.versions,
+                subtitles: watchDetail.subtitles,
+                intro: watchDetail.intro,
+                credits: watchDetail.credits,
+                overlaySummary: item.overlaySummary
+            )
+        } catch {
+            return item
+        }
+    }
+}
+#endif

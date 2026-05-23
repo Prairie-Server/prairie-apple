@@ -1,0 +1,2197 @@
+import AVFoundation
+import Foundation
+import OSLog
+#if canImport(UIKit)
+import UIKit
+#endif
+#if canImport(AppKit)
+import AppKit
+#endif
+
+final class AVPlayerBackend {
+    enum SourceStrategy {
+        case remoteHLS(url: URL, headers: [String: String])
+        case remoteDirect(url: URL, headers: [String: String])
+        case localDVLoopback(spec: LoopbackSessionSpec)
+    }
+
+    private struct MediaSelectionState {
+        let kind: PlayerTrack.Kind
+        let group: AVMediaSelectionGroup
+        let optionsByTrackId: [Int64: AVMediaSelectionOption]
+    }
+
+    private static let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "com.continuum.app",
+        category: "AVPlayerBackend"
+    )
+
+    /// Forward buffer applied to the loopback `AVPlayerItem` at item
+    /// creation. Sized for fast initial readyToPlay — AVPlayer otherwise
+    /// waits for whole GOP-sized fragments before declaring ready.
+    private static let loopbackStartupForwardBuffer: Double = 4.0
+    /// Safety net for local loopback startup. The writer now waits until the
+    /// first playlist already contains enough long-GOP fragments for AVPlayer's
+    /// initial read; if AVPlayer still has not become ready well after that
+    /// hand-off, treat the route as stuck and use the Compatibility fallback.
+    private static let loopbackStartupReadyTimeout: TimeInterval = 12.0
+    private static let loopbackSeekWindowTolerance: Double = 0.25
+
+    /// Default forward buffer applied once the initial-video-display gate
+    /// releases. Used when the source bitrate is unknown. Keep this modest on
+    /// tvOS because AVPlayer's forward buffer is only one part of the resident
+    /// playback budget.
+    private static let loopbackSteadyStateForwardBufferDefault: Double = 30.0
+    private static let generatedHLSSpillBudgetBytes: Int64 = 4 * 1024 * 1024 * 1024
+    private static var isConstrainedMemoryDevice: Bool {
+        #if os(tvOS)
+        return ProcessInfo.processInfo.physicalMemory <= 3_500_000_000
+        #else
+        return false
+        #endif
+    }
+    private static var loopbackSteadyStateBufferTargetMiB: Double {
+        isConstrainedMemoryDevice ? 160 : 270
+    }
+    private static var loopbackSegmentStoreMemoryBudgetBytes: Int {
+        isConstrainedMemoryDevice ? 96 * 1024 * 1024 : 128 * 1024 * 1024
+    }
+
+    /// Adaptive forward-buffer target for the local DV loopback. Aims for
+    /// a fixed resident-memory target while clamping the duration into a
+    /// sensible window so very high-bitrate sources don't blow tvOS RAM and
+    /// very low-bitrate sources still keep enough cushion for transient WAN
+    /// dips.
+    static func loopbackSteadyStateForwardBufferTarget(
+        forBitsPerSecond bitrateBps: Double?
+    ) -> Double {
+        guard let bps = bitrateBps, bps > 0 else {
+            return isConstrainedMemoryDevice ? 20.0 : loopbackSteadyStateForwardBufferDefault
+        }
+        // target MiB / bitrate seconds = duration that sustains the budget.
+        let targetBits = loopbackSteadyStateBufferTargetMiB * 1_048_576 * 8
+        let computed = targetBits / bps
+        // Clamp: avoid underrun on jitter while capping memory and seek-back
+        // churn. Lower-memory Apple TVs get a tighter window.
+        let minSeconds = isConstrainedMemoryDevice ? 8.0 : 12.0
+        let maxSeconds = isConstrainedMemoryDevice ? 36.0 : 60.0
+        return min(maxSeconds, max(minSeconds, computed))
+    }
+
+    private static func generatedHLSSpillPolicy(for spec: LoopbackSessionSpec) -> DVSegmentStore.SpillPolicy {
+        if ProcessInfo.processInfo.environment["SILO_ENABLE_HLS_DISK_SPILL"] == "1" {
+            return .enabled(reason: "env", maxBytes: generatedHLSSpillBudgetBytes)
+        }
+        return .enabled(
+            reason: spec.sourceBitrateBps == nil ? "source_bitrate_unknown" : "local_hls_event_playlist",
+            maxBytes: generatedHLSSpillBudgetBytes
+        )
+    }
+
+    var onTimeChange: ((Double) -> Void)?
+    var onDurationChange: ((Double) -> Void)?
+    var onPauseChange: ((Bool) -> Void)?
+    var onFileLoaded: (() -> Void)?
+    var onError: ((String) -> Void)?
+    var onEndOfFile: (() -> Void)?
+    var onBufferingChange: ((Bool) -> Void)?
+    var onBufferedAheadChange: ((Double) -> Void)?
+    var onPlaybackStatsChange: ((PlaybackStats) -> Void)?
+    var onTracksChange: (([PlayerTrack]) -> Void)?
+    var onChaptersChange: (([PlayerChapterInfo]) -> Void)?
+    var onTimelineOffsetChange: ((Double) -> Void)?
+    var onSidecarTracksRegistered: (([SidecarSubtitleDescriptor]) -> Void)?
+    var onSubtitleLoadStatusChange: ((SubtitleSlot, SubtitleLoadStatus) -> Void)?
+
+    let avPlayer = AVPlayer()
+    weak var subtitleOverlay: SubtitleOverlayView?
+    var subtitleRendererForOverlay: SubtitleRenderer? {
+        subtitleSession?.underlyingRenderer
+    }
+    var hasControlledSubtitleSelection: Bool {
+        selectedControlledSubtitleTrackId != nil || selectedSecondaryControlledSubtitleTrackId != nil
+    }
+
+    private var currentSourceStrategy: SourceStrategy?
+    private var currentItem: AVPlayerItem?
+    private var audioSelectionState: MediaSelectionState?
+    private var subtitleSelectionState: MediaSelectionState?
+    private var timeObserver: Any?
+    #if os(macOS)
+    private var subtitleDisplayLink: Timer?
+    #else
+    private var subtitleDisplayLink: CADisplayLink?
+    #endif
+    private var didFireFileLoaded = false
+    private var pendingStartTime: Double = 0
+    private var hasSeekedToStart = false
+    private var isDisposed = false
+    private var isSeekPending = false
+    private var isInitialSeekInFlight = false
+    private var initialSeekRetryCount = 0
+    private var subtitleSession: SubtitleSession?
+    private var embeddedSubtitleExtractor: AVPlayerEmbeddedSubtitleExtractor?
+    private var selectedControlledSubtitleTrackId: Int64?
+    private var selectedSecondaryControlledSubtitleTrackId: Int64?
+    private var mediaTimelineOffsetSeconds: Double = 0
+    private var serverChapters: [PlayerChapterInfo] = []
+    private var currentLoopbackAudioTracks: [PlayerTrack] = []
+    private var bufferLoadCount = 0
+    private var lastStatsEmitWall: CFTimeInterval = 0
+    private var loopbackSourceDownloadBitrateBps: Double?
+    private var loopbackSourceBytesRead: Int64?
+    private var isInitialVideoDisplayGatePrepared = false
+    private var isWaitingForInitialVideoDisplay = false
+    private var didTemporarilyMuteForInitialVideoDisplay = false
+    private var initialVideoDisplayGateStartTime: Double?
+    private var initialVideoDisplayFallback: DispatchWorkItem?
+    private var loopbackStartupTimeout: DispatchWorkItem?
+
+    private var segmentWriter: DVSegmentWriter?
+    private var segmentServer: DVSegmentServer?
+    private var segmentStore: DVSegmentStore?
+    private var sessionDirectory: URL?
+    private var activeLoopbackSessionID: String?
+    private var loopbackGeneration: UInt64 = 0
+    private let loopbackPlaybackClockLock = NSLock()
+    private var loopbackPlaybackClockSecondsValue: Double = 0
+    private var pendingLocalLoopbackRecoveryMediaTime: Double?
+    private var lastLocalLoopbackStallRecoveryAt: CFTimeInterval = 0
+    private var isUserPaused = false
+    private var preserveSessionDirectory = false
+    private var audioSessionActive = false
+    private var isPreservingTVDisplayCriteriaForReload = false
+
+    private var statusObs: NSKeyValueObservation?
+    private var rateObs: NSKeyValueObservation?
+    private var timeControlObs: NSKeyValueObservation?
+    private var bufferFullObs: NSKeyValueObservation?
+    private var bufferEmptyObs: NSKeyValueObservation?
+    private var itemPlaybackStalledObserver: NSObjectProtocol?
+    private var itemFailedToEndObserver: NSObjectProtocol?
+    private var durationObs: NSKeyValueObservation?
+    private var loadedRangesObs: NSKeyValueObservation?
+    private var seekableRangesObs: NSKeyValueObservation?
+    private var endObserver: NSObjectProtocol?
+
+    init() {
+        let session = SubtitleSession()
+        session.onSidecarTracksRegistered = { [weak self] descriptors in
+            self?.onSidecarTracksRegistered?(descriptors)
+        }
+        session.onStatusChange = { [weak self] slot, status in
+            self?.onSubtitleLoadStatusChange?(slot, status)
+        }
+        session.currentPositionSecondsProvider = { [weak self] in
+            guard let self else { return 0 }
+            return self.mediaTime(for: self.currentTime())
+        }
+        subtitleSession = session
+        let extractor = AVPlayerEmbeddedSubtitleExtractor(subtitleSession: session)
+        extractor.currentMediaTimeProvider = { [weak self] in
+            guard let self else { return 0 }
+            return self.mediaTime(for: self.currentTime())
+        }
+        extractor.onTracksChanged = { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.emitTrackList()
+            }
+        }
+        embeddedSubtitleExtractor = extractor
+    }
+
+    deinit {
+        dispose()
+    }
+
+    func load(
+        sessionSpec: LoopbackSessionSpec,
+        startTime: Double,
+    ) {
+        isUserPaused = false
+        load(
+            strategy: .localDVLoopback(spec: sessionSpec),
+            startTime: startTime
+        )
+    }
+
+    func loadRemoteHLS(url: URL, headers: [String: String], startTime: Double) {
+        isUserPaused = false
+        load(
+            strategy: .remoteHLS(url: url, headers: headers),
+            startTime: startTime
+        )
+    }
+
+    func loadDirectFile(url: URL, headers: [String: String], startTime: Double) {
+        isUserPaused = false
+        load(
+            strategy: .remoteDirect(url: url, headers: headers),
+            startTime: startTime
+        )
+    }
+
+    func play() {
+        isUserPaused = false
+        onPauseChange?(false)
+        if case .some(.localDVLoopback(let spec)) = currentSourceStrategy,
+           let mediaSeconds = pendingLocalLoopbackRecoveryMediaTime {
+            pendingLocalLoopbackRecoveryMediaTime = nil
+            Self.logger.info(
+                "[CMP-AVP] local loopback deferred recovery reanchor media=\(mediaSeconds, privacy: .public)"
+            )
+            subtitleSession?.flushOnSeek()
+            embeddedSubtitleExtractor?.seek(to: mediaSeconds)
+            load(strategy: .localDVLoopback(spec: spec.reanchored(at: mediaSeconds)), startTime: mediaSeconds)
+            return
+        }
+        avPlayer.play()
+    }
+
+    func pause() {
+        isUserPaused = true
+        onPauseChange?(true)
+        avPlayer.pause()
+    }
+
+    func prepareToBackground() {
+        pause()
+    }
+
+    func videoSurfaceBecameReadyForDisplay() {
+        guard let item = currentItem, !isDisposed else { return }
+        guard isWaitingForInitialVideoDisplay else { return }
+        finishInitialVideoDisplayGate(for: item, reason: "ready_for_display")
+    }
+
+    func setMediaTimelineOffset(_ offset: Double) {
+        mediaTimelineOffsetSeconds = offset.isFinite ? max(0, offset) : 0
+        onTimelineOffsetChange?(mediaTimelineOffsetSeconds)
+        Self.logger.info(
+            "[CMP-SEEK] AVPlayer timeline offset set requested=\(offset, privacy: .public) applied=\(self.mediaTimelineOffsetSeconds, privacy: .public)"
+        )
+    }
+
+    func seek(to seconds: Double) {
+        let mediaSeconds = seconds.isFinite ? max(0, seconds) : 0
+        let playerSeconds = playerTime(forMediaTime: mediaSeconds)
+        if case .some(.localDVLoopback(let spec)) = currentSourceStrategy {
+            if let reason = localLoopbackReanchorReason(
+                mediaSeconds: mediaSeconds,
+                playerSeconds: playerSeconds
+            ) {
+                reloadLocalLoopbackForSeek(
+                    spec: spec,
+                    mediaSeconds: mediaSeconds,
+                    playerSeconds: playerSeconds,
+                    reason: reason
+                )
+                return
+            }
+        }
+
+        let time = CMTime(seconds: playerSeconds, preferredTimescale: 600)
+        isSeekPending = true
+        let seekItem = currentItem
+        Self.logger.info(
+            "[CMP-SEEK] AVPlayer seek request media=\(mediaSeconds, privacy: .public) player=\(playerSeconds, privacy: .public) offset=\(self.mediaTimelineOffsetSeconds, privacy: .public)"
+        )
+        subtitleSession?.flushOnSeek()
+        avPlayer.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+            guard let self, !self.isDisposed else { return }
+            guard seekItem === self.currentItem else { return }
+            self.isSeekPending = false
+            let landed = self.avPlayer.currentTime().seconds
+            let mediaTime = self.mediaTime(for: landed)
+            Self.logger.info(
+                "[CMP-SEEK] AVPlayer seek complete finished=\(finished, privacy: .public) landedPlayer=\(landed, privacy: .public) landedMedia=\(mediaTime, privacy: .public) requestedMedia=\(mediaSeconds, privacy: .public) offset=\(self.mediaTimelineOffsetSeconds, privacy: .public)"
+            )
+            guard finished, landed.isFinite, mediaTime.isFinite else { return }
+            self.embeddedSubtitleExtractor?.seek(to: mediaTime)
+            self.onTimeChange?(landed)
+            self.pumpSubtitleOverlay(referenceTime: mediaTime)
+        }
+    }
+
+    private func localLoopbackReanchorReason(
+        mediaSeconds: Double,
+        playerSeconds: Double
+    ) -> String? {
+        if mediaSeconds + 0.05 < mediaTimelineOffsetSeconds {
+            return "before_anchor"
+        }
+        if let stats = segmentStore?.stats() {
+            let generatedEnd = stats.generatedMediaSeconds
+            if generatedEnd.isFinite,
+               generatedEnd > 0,
+               playerSeconds > generatedEnd - Self.loopbackSeekWindowTolerance {
+                return "outside_generated_window"
+            }
+        }
+        guard let currentItem,
+              !itemHasSeekableMedia(currentItem, containing: playerSeconds) else {
+            return nil
+        }
+        return "outside_generated_window"
+    }
+
+    private func reloadLocalLoopbackForSeek(
+        spec: LoopbackSessionSpec,
+        mediaSeconds: Double,
+        playerSeconds: Double,
+        reason: String
+    ) {
+        Self.logger.info(
+            "[CMP-SEEK] AVPlayer loopback reanchor requestedMedia=\(mediaSeconds, privacy: .public) requestedPlayer=\(playerSeconds, privacy: .public) anchor=\(self.mediaTimelineOffsetSeconds, privacy: .public) reason=\(reason, privacy: .public)"
+        )
+        subtitleSession?.flushOnSeek()
+        embeddedSubtitleExtractor?.seek(to: mediaSeconds)
+        load(strategy: .localDVLoopback(spec: spec.reanchored(at: mediaSeconds)), startTime: mediaSeconds)
+    }
+
+    func currentTime() -> Double {
+        avPlayer.currentTime().seconds
+    }
+
+    private func mediaTime(for playerTime: Double) -> Double {
+        guard playerTime.isFinite else { return 0 }
+        return max(0, playerTime + mediaTimelineOffsetSeconds)
+    }
+
+    private func setLoopbackPlaybackClock(_ seconds: Double) {
+        guard seconds.isFinite else { return }
+        loopbackPlaybackClockLock.lock()
+        loopbackPlaybackClockSecondsValue = max(0, seconds)
+        loopbackPlaybackClockLock.unlock()
+    }
+
+    private func loopbackPlaybackClockSeconds() -> Double {
+        loopbackPlaybackClockLock.lock()
+        let value = loopbackPlaybackClockSecondsValue
+        loopbackPlaybackClockLock.unlock()
+        return value
+    }
+
+    private func playerTime(forMediaTime mediaTime: Double) -> Double {
+        guard mediaTime.isFinite else { return 0 }
+        return max(0, mediaTime - mediaTimelineOffsetSeconds)
+    }
+
+    func isPaused() -> Bool {
+        isUserPaused
+    }
+
+    func dispose() {
+        guard !isDisposed else { return }
+        isDisposed = true
+        Self.logger.info("[CMP-AVP] dispose")
+        teardownMediaPipeline()
+    }
+
+    func setSpeed(_ rate: Double) {
+        avPlayer.defaultRate = Float(rate)
+        if avPlayer.rate != 0 {
+            avPlayer.rate = Float(rate)
+        }
+    }
+
+    func setSubtitleDelay(_ seconds: Double) {
+        var params = subtitleSession?.currentParams ?? .default
+        params.syncOffsetMs = Int((seconds * 1000.0).rounded())
+        subtitleSession?.applyStyling(params)
+    }
+
+    func applySubtitleAppearance(_ appearance: SubtitleAppearance) {
+        let syncOffset = subtitleSession?.currentParams.syncOffsetMs ?? 0
+        let params = SubtitleStylingOverride.Parameters.from(
+            appearance: appearance,
+            syncOffsetMs: syncOffset
+        )
+        subtitleSession?.applyStyling(params)
+    }
+
+    func selectAudioTrack(_ trackId: Int64) {
+        if case .some(.localDVLoopback(let spec)) = currentSourceStrategy {
+            guard let selectedTrack = spec.availableAudioTracks.first(where: { $0.trackId == trackId }),
+                  let selectedTrackIndex = selectedTrack.srcId else {
+                return
+            }
+            let playerSeconds = currentTime()
+            let startTime = playerSeconds.isFinite
+                ? mediaTime(for: max(0, playerSeconds))
+                : pendingStartTime
+            let updatedTracks = spec.availableAudioTracks.map { track in
+                PlayerTrack(
+                    trackId: track.trackId,
+                    kind: track.kind,
+                    title: track.title,
+                    lang: track.lang,
+                    codec: track.codec,
+                    audioChannelsLayout: track.audioChannelsLayout,
+                    audioChannelCount: track.audioChannelCount,
+                    bitrate: track.bitrate,
+                    isDefault: track.isDefault,
+                    isForced: track.isForced,
+                    isHearingImpaired: track.isHearingImpaired,
+                    isVisualImpaired: track.isVisualImpaired,
+                    isExternal: track.isExternal,
+                    isSelected: track.trackId == trackId,
+                    ffIndex: track.ffIndex,
+                    srcId: track.srcId
+                )
+            }
+            let updatedSpec = LoopbackSessionSpec(
+                sourceURL: spec.sourceURL,
+                headers: spec.headers,
+                sourceStartTimeSeconds: startTime,
+                sourceBitrateBps: spec.sourceBitrateBps,
+                videoMode: spec.videoMode,
+                sourceVideoFrameRate: spec.sourceVideoFrameRate,
+                selectedAudio: LoopbackSessionSpec.SelectedAudio(
+                    trackIndex: selectedTrackIndex,
+                    ffIndex: selectedTrack.ffIndex,
+                    sourceCodec: selectedTrack.codec,
+                    sourceChannelCount: selectedTrack.audioChannelCount,
+                    sourceChannelLayout: selectedTrack.audioChannelsLayout,
+                    outputMode: Self.loopbackAudioOutputMode(for: selectedTrack),
+                    preservesAtmos: Self.loopbackPreservesAtmos(for: selectedTrack)
+                ),
+                availableAudioTracks: updatedTracks,
+                manifestMetadata: LoopbackSessionSpec.ManifestMetadata(
+                    advertisedDolbyVisionProfile: spec.manifestMetadata.advertisedDolbyVisionProfile,
+                    compatibilityBrand: spec.manifestMetadata.compatibilityBrand,
+                    videoRange: spec.manifestMetadata.videoRange,
+                    mayClaimAtmos: Self.loopbackPreservesAtmos(for: selectedTrack)
+                )
+            )
+            Self.logger.info(
+                "[CMP-AVP] rebuilding loopback for audio trackId=\(trackId, privacy: .public) trackIndex=\(selectedTrackIndex, privacy: .public) ffIndex=\(selectedTrack.ffIndex ?? -1, privacy: .public)"
+            )
+            load(
+                strategy: .localDVLoopback(spec: updatedSpec),
+                startTime: startTime
+            )
+            return
+        }
+
+        guard let item = currentItem,
+              let state = audioSelectionState,
+              let option = state.optionsByTrackId[trackId] else {
+            return
+        }
+
+        item.select(option, in: state.group)
+        emitTrackList()
+    }
+
+    func selectSubtitleTrack(_ trackId: Int64?) {
+        guard let item = currentItem else {
+            return
+        }
+
+        if let trackId, SubtitleTrackIdSpace.isSidecar(trackId) {
+            if let state = subtitleSelectionState {
+                item.select(nil, in: state.group)
+            }
+            embeddedSubtitleExtractor?.clear(slot: .primary)
+            selectedControlledSubtitleTrackId = trackId
+            subtitleSession?.openSidecar(
+                urlIndex: SubtitleTrackIdSpace.sidecarIndex(from: trackId),
+                slot: .primary
+            )
+            emitTrackList()
+            return
+        }
+
+        if let trackId, embeddedSubtitleExtractor?.canSelect(trackId: trackId) == true {
+            if let state = subtitleSelectionState {
+                item.select(nil, in: state.group)
+            }
+            selectedControlledSubtitleTrackId = trackId
+            embeddedSubtitleExtractor?.select(
+                trackId: trackId,
+                slot: .primary,
+                startSeconds: mediaTime(for: currentTime())
+            )
+            emitTrackList()
+            return
+        }
+
+        embeddedSubtitleExtractor?.clear(slot: .primary)
+        selectedControlledSubtitleTrackId = nil
+        if let state = subtitleSelectionState {
+            item.select(nil, in: state.group)
+        }
+        if trackId != nil {
+            Self.logger.info(
+                "[CMP-AVP] primary subtitle ignored because track is not controlled by libass trackId=\(trackId.map(String.init) ?? "nil", privacy: .public)"
+            )
+        }
+        emitTrackList()
+    }
+
+    func setSecondarySubtitleTrack(_ trackId: Int64?) {
+        guard let trackId else {
+            embeddedSubtitleExtractor?.clear(slot: .secondary)
+            selectedSecondaryControlledSubtitleTrackId = nil
+            subtitleSession?.closeSlot(.secondary)
+            return
+        }
+        if embeddedSubtitleExtractor?.canSelect(trackId: trackId) == true {
+            selectedSecondaryControlledSubtitleTrackId = trackId
+            embeddedSubtitleExtractor?.select(
+                trackId: trackId,
+                slot: .secondary,
+                startSeconds: mediaTime(for: currentTime())
+            )
+            return
+        }
+        guard SubtitleTrackIdSpace.isSidecar(trackId) else {
+            embeddedSubtitleExtractor?.clear(slot: .secondary)
+            selectedSecondaryControlledSubtitleTrackId = nil
+            subtitleSession?.closeSlot(.secondary)
+            Self.logger.info(
+                "[CMP-AVP] secondary subtitle ignored for non-sidecar trackId=\(trackId, privacy: .public)"
+            )
+            return
+        }
+        embeddedSubtitleExtractor?.clear(slot: .secondary)
+        selectedSecondaryControlledSubtitleTrackId = trackId
+        subtitleSession?.openSidecar(
+            urlIndex: SubtitleTrackIdSpace.sidecarIndex(from: trackId),
+            slot: .secondary
+        )
+    }
+
+    func registerSidecarSubtitles(_ descriptors: [SidecarSubtitleDescriptor]) {
+        subtitleSession?.registerSidecarTracks(descriptors)
+        emitTrackList()
+    }
+
+    func setServerChapters(_ chapters: [PlayerChapterInfo]) {
+        serverChapters = chapters
+        if didFireFileLoaded {
+            onChaptersChange?(chapters)
+        }
+    }
+
+    private func load(strategy: SourceStrategy, startTime: Double) {
+        guard !isDisposed else { return }
+        cmpLog("[CMP-AVP] load strategy=\(Self.describe(strategy)) startTime=\(startTime)")
+
+        let preserveDisplayCriteria = shouldPreserveTVDisplayCriteriaDuringReload(
+            from: currentSourceStrategy,
+            to: strategy
+        )
+        teardownMediaPipeline(clearDisplayCriteria: !preserveDisplayCriteria)
+        isPreservingTVDisplayCriteriaForReload = preserveDisplayCriteria
+        currentSourceStrategy = strategy
+        currentLoopbackAudioTracks = Self.normalizedLoopbackAudioTracks(for: strategy)
+        configureEmbeddedSubtitleExtraction(for: strategy)
+        setLoopbackPlaybackClock(0)
+        bufferLoadCount = 0
+        lastStatsEmitWall = 0
+        loopbackSourceDownloadBitrateBps = nil
+        loopbackSourceBytesRead = nil
+        pendingLocalLoopbackRecoveryMediaTime = nil
+        lastLocalLoopbackStallRecoveryAt = 0
+        didFireFileLoaded = false
+        hasSeekedToStart = false
+        pendingStartTime = startTime
+        initialSeekRetryCount = 0
+        isInitialSeekInFlight = false
+
+        switch strategy {
+        case .remoteHLS(let url, let headers):
+            prepareAssetPlayback(url: url, headers: headers)
+        case .remoteDirect(let url, let headers):
+            prepareAssetPlayback(url: url, headers: headers)
+        case .localDVLoopback(let spec):
+            setMediaTimelineOffset(spec.sourceStartTimeSeconds)
+            startLocalDVLoopback(sessionSpec: spec)
+        }
+    }
+
+    private func startLocalDVLoopback(
+        sessionSpec: LoopbackSessionSpec
+    ) {
+        let sessionID = UUID().uuidString
+        activeLoopbackSessionID = sessionID
+        loopbackGeneration &+= 1
+        let generation = loopbackGeneration
+        let debugBaseDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("continuum-dv-hls-debug", isDirectory: true)
+        let sessionDir = debugBaseDir.appendingPathComponent(sessionID, isDirectory: true)
+        sessionDirectory = sessionDir
+        preserveSessionDirectory = Self.keepLoopbackArtifacts
+
+        let debugDirectory = preserveSessionDirectory ? sessionDir : nil
+        let store = DVSegmentStore(
+            generation: generation,
+            memoryBudgetBytes: Self.loopbackSegmentStoreMemoryBudgetBytes,
+            spillPolicy: Self.generatedHLSSpillPolicy(for: sessionSpec),
+            debugDirectory: debugDirectory
+        )
+        segmentStore = store
+        if preserveSessionDirectory {
+            print("[CMP-AVP] preserving local DV artifacts due to SILO_KEEP_DV_HLS=1 dir=\(sessionDir.path)")
+        }
+
+        let server = DVSegmentServer(segmentStore: store)
+        // Stash the server immediately so a synchronous teardown (e.g. fast
+        // user dismiss) can find and cancel the still-binding listener.
+        segmentServer = server
+
+        // Server bind goes through `withCheckedThrowingContinuation` rather
+        // than blocking the main actor on a 2 s semaphore. Defer writer setup
+        // until bind completes; if the user disposes the backend or switches
+        // sessions in the meantime, bail before touching state.
+        Task { @MainActor [weak self] in
+            do {
+                try await server.start()
+            } catch {
+                guard let self else { return }
+                // The server's catch arm already cancelled the listener; null
+                // out our reference so callers don't trip on a cancelled
+                // server still hanging off `segmentServer`.
+                if self.segmentServer === server {
+                    self.segmentServer = nil
+                }
+                guard !self.isDisposed,
+                      self.activeLoopbackSessionID == sessionID else {
+                    return
+                }
+                self.reportError("Local HLS server failed to start: \(error)")
+                return
+            }
+            guard let self, !self.isDisposed else {
+                server.stop()
+                return
+            }
+            guard self.activeLoopbackSessionID == sessionID else {
+                server.stop()
+                return
+            }
+            self.startLocalDVLoopbackWriter(sessionID: sessionID,
+                                             sessionSpec: sessionSpec,
+                                             sessionDir: sessionDir,
+                                             segmentStore: store,
+                                             debugDirectory: nil)
+        }
+    }
+
+    @MainActor
+    private func startLocalDVLoopbackWriter(
+        sessionID: String,
+        sessionSpec: LoopbackSessionSpec,
+        sessionDir: URL,
+        segmentStore: DVSegmentStore,
+        debugDirectory: URL?
+    ) {
+        let writer = DVSegmentWriter(
+            sessionSpec: sessionSpec,
+            outputDirectory: sessionDir,
+            segmentStore: segmentStore,
+            debugOutputDirectory: debugDirectory
+        )
+        writer.onFirstSegmentReady = { [weak self] playlistName in
+            DispatchQueue.main.async {
+                self?.handleFirstSegmentReady(playlistName: playlistName, sessionID: sessionID)
+            }
+        }
+        writer.onFinished = { [weak self] error in
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.isDisposed else { return }
+                guard self.activeLoopbackSessionID == sessionID else { return }
+                if let error {
+                    self.reportError("Remuxer failed: \(error)")
+                }
+            }
+        }
+        writer.onTimelineAnchorResolved = { [weak self] sourceStartSeconds in
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.isDisposed else { return }
+                guard self.activeLoopbackSessionID == sessionID else { return }
+                guard case .localDVLoopback = self.currentSourceStrategy else { return }
+                self.setMediaTimelineOffset(sourceStartSeconds)
+            }
+        }
+        writer.playbackPositionProvider = { [weak self] in
+            self?.loopbackPlaybackClockSeconds()
+        }
+        writer.onSourceDownloadStats = { [weak self] bitsPerSecond, totalBytesRead in
+            DispatchQueue.main.async {
+                guard let self, !self.isDisposed else { return }
+                guard self.activeLoopbackSessionID == sessionID else { return }
+                let previousBitrate = self.loopbackSourceDownloadBitrateBps
+                self.loopbackSourceDownloadBitrateBps = bitsPerSecond
+                self.loopbackSourceBytesRead = totalBytesRead
+                self.emitPlaybackStats(referenceTime: self.currentTime(), force: true)
+                if let bitsPerSecond {
+                    let mbps = bitsPerSecond / 1_000_000
+                    let mib = totalBytesRead.map { Double($0) / 1_048_576 } ?? 0
+                    Self.logger.info(
+                        "[CMP-AVP] loopback source rate=\(String(format: "%.1f", mbps), privacy: .public)Mbps totalRead=\(String(format: "%.1f", mib), privacy: .public)MiB"
+                    )
+                }
+                // First measurable bitrate (or a meaningful change) — re-
+                // evaluate the steady-state forward buffer so a high-
+                // bitrate source doesn't sit on the conservative 30 s
+                // default after the gate has already been released.
+                if previousBitrate == nil, bitsPerSecond != nil,
+                   let item = self.currentItem,
+                   self.canRampLoopbackBufferToSteadyState {
+                    self.rampLoopbackBufferToSteadyStateIfNeeded(for: item)
+                }
+            }
+        }
+        segmentWriter = writer
+        writer.start()
+    }
+
+    private func handleFirstSegmentReady(playlistName: String, sessionID: String) {
+        guard activeLoopbackSessionID == sessionID else { return }
+        guard !isDisposed, currentItem == nil, let server = segmentServer else { return }
+        let url = URL(string: "http://127.0.0.1:\(server.port)/\(playlistName)")!
+        cmpLog("[CMP-AVP] local playlist ready \(url.absoluteString)")
+        logTVDisplayManagerState(context: "before_prepare_\(playlistName)")
+        applyTVDisplayCriteriaForLoopbackIfNeeded(context: "before_prepare_\(playlistName)")
+        // The local loopback server is an in-app HTTP surface. Remote auth
+        // headers are only for libavformat's source fetch and should not be
+        // propagated into AVPlayer's localhost HLS requests.
+        prepareAssetPlayback(url: url, headers: [:])
+    }
+
+    private func prepareAssetPlayback(url: URL, headers: [String: String]) {
+        activateAudioSession()
+        var options: [String: Any] = [:]
+        if !headers.isEmpty {
+            options["AVURLAssetHTTPHeaderFieldsKey"] = headers
+        }
+        let asset = AVURLAsset(url: url, options: options)
+        let item = AVPlayerItem(asset: asset)
+        // For the local DV loopback the writer produces segments much faster
+        // than realtime against a localhost server, so AVPlayer's default
+        // automatic buffer-up was waiting for many of the source's long
+        // (~30s, one per GOP) fragments before declaring readyToPlay. Tell
+        // it to start as soon as the first fragment is decodable and cap
+        // forward buffer at one fragment-equivalent for *startup only*.
+        //
+        // After the initial-video-display gate releases (see
+        // `finishInitialVideoDisplayGate`) we ramp the forward buffer up
+        // to `loopbackSteadyStateForwardBuffer` and re-enable
+        // `automaticallyWaitsToMinimizeStalling` so AVPlayer can ride out
+        // network jitter on high-bitrate sources where the WAN headroom
+        // over the source's bitrate is small (e.g. 4K DV at 72 Mbps over
+        // 80 Mbps).
+        //
+        // Remote routes keep AVPlayer's defaults since automatic buffering
+        // is genuinely useful over the WAN.
+        if case .localDVLoopback = currentSourceStrategy {
+            avPlayer.automaticallyWaitsToMinimizeStalling = false
+            item.preferredForwardBufferDuration = Self.loopbackStartupForwardBuffer
+            // Do not let AVPlayer poll the local EVENT playlist while paused.
+            // The writer intentionally backpressures when generated media is
+            // far ahead of playback; paused polling can therefore see an
+            // unchanged playlist long enough for CoreMedia to fail the item.
+            item.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+        }
+        currentItem = item
+        beginInitialVideoDisplayGate()
+        attachItemObservers(item)
+        avPlayer.replaceCurrentItem(with: item)
+        scheduleLoopbackStartupTimeoutIfNeeded(for: item)
+        installPeriodicTimeObserver()
+        installSubtitleDisplayLink()
+    }
+
+    private func activateAudioSession() {
+        #if os(macOS)
+        return
+        #else
+        guard !audioSessionActive else { return }
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.setCategory(.playback, mode: .moviePlayback, options: [])
+            try session.setActive(true, options: [])
+            audioSessionActive = true
+        } catch {
+            let message = "AVPlayer audio session setup failed: \(error.localizedDescription)"
+            cmpLog("[CMP-AVP] ERROR: \(message)")
+        }
+        #endif
+    }
+
+    private func deactivateAudioSession() {
+        #if os(macOS)
+        return
+        #else
+        guard audioSessionActive else { return }
+        audioSessionActive = false
+        try? AVAudioSession.sharedInstance().setActive(
+            false, options: [.notifyOthersOnDeactivation]
+        )
+        #endif
+    }
+
+    private func configureEmbeddedSubtitleExtraction(for strategy: SourceStrategy) {
+        let source: AVPlayerSubtitleExtractionSource?
+        switch strategy {
+        case .remoteDirect(let url, let headers):
+            source = AVPlayerSubtitleExtractionSource(
+                mediaURL: url,
+                requestHeaders: headers,
+                routeLabel: "remoteDirect",
+                seekable: true
+            )
+        case .localDVLoopback(let spec):
+            source = AVPlayerSubtitleExtractionSource(
+                mediaURL: spec.sourceURL,
+                requestHeaders: spec.headers,
+                routeLabel: "localDVLoopback",
+                seekable: true
+            )
+        case .remoteHLS:
+            source = nil
+        }
+        embeddedSubtitleExtractor?.configure(source: source)
+    }
+
+    private func installPeriodicTimeObserver() {
+        if let observer = timeObserver {
+            avPlayer.removeTimeObserver(observer)
+            timeObserver = nil
+        }
+
+        let interval = CMTime(value: 1, timescale: 10)
+        timeObserver = avPlayer.addPeriodicTimeObserver(
+            forInterval: interval,
+            queue: .main
+        ) { [weak self] time in
+            guard let self, !self.isDisposed else { return }
+            if self.isSeekPending { return }
+            if case .localDVLoopback = self.currentSourceStrategy {
+                self.setLoopbackPlaybackClock(time.seconds)
+            }
+            self.releaseInitialVideoDisplayGateIfPlaybackAdvanced(currentTime: time.seconds)
+            self.onTimeChange?(time.seconds)
+            self.emitBufferedAhead(referenceTime: time.seconds)
+            self.emitPlaybackStats(referenceTime: time.seconds)
+        }
+    }
+
+    private func installSubtitleDisplayLink() {
+        subtitleDisplayLink?.invalidate()
+        #if os(macOS)
+        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            guard !self.isDisposed, !self.isSeekPending else { return }
+            self.pumpSubtitleOverlay(referenceTime: self.mediaTime(for: self.avPlayer.currentTime().seconds))
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        subtitleDisplayLink = timer
+        #else
+        let link = CADisplayLink(target: self, selector: #selector(subtitleDisplayLinkTick(_:)))
+        link.add(to: .main, forMode: .common)
+        subtitleDisplayLink = link
+        #endif
+    }
+
+    #if !os(macOS)
+    @objc private func subtitleDisplayLinkTick(_ link: CADisplayLink) {
+        guard !isDisposed, !isSeekPending else { return }
+        pumpSubtitleOverlay(referenceTime: mediaTime(for: avPlayer.currentTime().seconds))
+    }
+    #endif
+
+    private func emitBufferedAhead(referenceTime: Double) {
+        guard let item = currentItem, referenceTime.isFinite else { return }
+        let ranges = item.loadedTimeRanges.map { $0.timeRangeValue }
+        guard !ranges.isEmpty else {
+            onBufferedAheadChange?(0)
+            return
+        }
+
+        let aheadEnd = ranges
+            .compactMap { range -> Double? in
+                let start = range.start.seconds
+                let end = (range.start + range.duration).seconds
+                guard start.isFinite, end.isFinite, end > referenceTime else {
+                    return nil
+                }
+                return start <= referenceTime ? end : nil
+            }
+            .max() ?? referenceTime
+
+        onBufferedAheadChange?(max(0, aheadEnd - referenceTime))
+    }
+
+    private func emitPlaybackStats(referenceTime: Double, force: Bool = false) {
+        let now = CACurrentMediaTime()
+        guard force || now - lastStatsEmitWall >= 1.0 else { return }
+        lastStatsEmitWall = now
+        guard let item = currentItem else { return }
+
+        Task { [weak self, item] in
+            await self?.emitPlaybackStatsSnapshot(for: item, referenceTime: referenceTime)
+        }
+    }
+
+    @MainActor
+    private func emitPlaybackStatsSnapshot(for item: AVPlayerItem, referenceTime: Double) async {
+        guard currentItem === item else { return }
+        let accessEvent = item.accessLog()?.events.last
+        let indicatedBitrate = positive(accessEvent?.indicatedBitrate)
+        let shouldPublishNetworkStats = publishesRemoteAccessLogNetworkStats
+        let observedBitrate = shouldPublishNetworkStats
+            ? positive(accessEvent?.observedBitrate)
+            : nil
+        let videoFormat = await AVFoundationPlaybackIntrospection.videoFormat(for: item)
+        let audio = await audioStats(for: item)
+        guard currentItem === item else { return }
+
+        var stats = PlaybackStats()
+        stats.route = currentSourceStrategy.map(Self.displayRouteLabel)
+        stats.source = sourceLabel(for: currentSourceStrategy)
+        stats.video = PlaybackStats.MediaStream(
+            codec: videoFormat.stream.codec ?? videoCodecLabel(for: currentSourceStrategy),
+            detail: videoFormat.stream.detail ?? videoDetail(for: item),
+            bitrateBps: indicatedBitrate ?? observedBitrate ?? videoFormat.stream.bitrateBps
+        )
+        stats.dynamicRange = dynamicRangeLabel(for: currentSourceStrategy) ?? videoFormat.dynamicRange
+        stats.audio = audio
+        stats.subtitles = selectedSubtitleLabel()
+        stats.screenFrameRate = PlatformScreen.maximumFramesPerSecond
+        stats.playbackRate = Double(avPlayer.rate == 0 ? avPlayer.defaultRate : avPlayer.rate)
+        stats.bufferStatus = bufferStatus(for: item)
+        stats.bufferedAheadSeconds = bufferedAheadSeconds(for: item, referenceTime: referenceTime)
+        stats.bufferLoadCount = bufferLoadCount
+        stats.observedBitrateBps = observedBitrate
+        stats.indicatedBitrateBps = indicatedBitrate
+        stats.currentDownloadBitrateBps = observedBitrate ?? loopbackSourceDownloadBitrateBps
+        if let segmentStats = segmentStore?.stats() {
+            stats.generatedAheadSeconds = max(0, segmentStats.generatedMediaSeconds - referenceTime)
+            stats.generatedSegmentCount = segmentStats.segmentCount
+            stats.generatedSpilledSegmentCount = segmentStats.spilledSegmentCount
+            stats.segmentStoreBytes = segmentStats.memoryBytes
+            stats.segmentStoreBudgetBytes = segmentStats.memoryBudgetBytes
+            stats.segmentStoreTempSpillBytes = segmentStats.tempSpillBytes
+            stats.segmentStoreDebugMirrorBytes = segmentStats.debugMirrorBytes
+            stats.segmentServerRequestCount = segmentStats.requestCount
+            stats.segmentServerBytesServed = segmentStats.bytesServed
+            stats.segmentServerLastLatencyMs = segmentStats.lastRequestLatencyMs
+            stats.segmentServerWaitCount = segmentStats.waitCount
+        }
+        if let observedBitrate, let indicatedBitrate, indicatedBitrate > 0 {
+            stats.streamSpeed = observedBitrate / indicatedBitrate
+        } else if let loopbackSourceDownloadBitrateBps,
+                  let averageFileBitrateBps = stats.averageFileBitrateBps,
+                  averageFileBitrateBps > 0 {
+            stats.streamSpeed = loopbackSourceDownloadBitrateBps / averageFileBitrateBps
+        }
+        if shouldPublishNetworkStats,
+           let bytes = accessEvent?.numberOfBytesTransferred,
+           bytes > 0 {
+            stats.bytesTransferred = bytes
+        } else if !shouldPublishNetworkStats {
+            stats.bytesTransferred = loopbackSourceBytesRead
+        }
+        stats.deviceInfo = Self.deviceInfo()
+        stats.freeDiskSpaceBytes = Self.freeDiskSpaceBytes()
+        onPlaybackStatsChange?(stats)
+    }
+
+    private var publishesRemoteAccessLogNetworkStats: Bool {
+        switch currentSourceStrategy {
+        case .localDVLoopback:
+            return false
+        case .remoteHLS, .remoteDirect:
+            return true
+        case .none:
+            return false
+        }
+    }
+
+    private func sourceLabel(for strategy: SourceStrategy?) -> String? {
+        switch strategy {
+        case .remoteHLS(let url, _), .remoteDirect(let url, _):
+            return url.host ?? url.scheme
+        case .localDVLoopback:
+            return "SiloPlayer local stream"
+        case .none:
+            return nil
+        }
+    }
+
+    private func videoCodecLabel(for strategy: SourceStrategy?) -> String? {
+        switch strategy {
+        case .localDVLoopback(let spec):
+            return spec.videoMode.sampleEntryCodec
+        case .remoteHLS:
+            return "hls"
+        case .remoteDirect, .none:
+            return nil
+        }
+    }
+
+    private func videoDetail(for item: AVPlayerItem) -> String? {
+        let size = item.presentationSize
+        guard size.width.isFinite, size.height.isFinite, size.width > 0, size.height > 0 else {
+            return nil
+        }
+        return "\(Int(size.width.rounded()))x\(Int(size.height.rounded()))"
+    }
+
+    @MainActor
+    private func audioStats(for item: AVPlayerItem) async -> PlaybackStats.MediaStream {
+        if case .localDVLoopback(let spec) = currentSourceStrategy {
+            let outputMode = Self.audioOutputModeLabel(spec.selectedAudio.outputMode)
+            let liveStream = await AVFoundationPlaybackIntrospection.audioStream(for: item)
+            return PlaybackStats.MediaStream(
+                codec: liveStream.codec ?? outputMode,
+                detail: audioDetail(
+                    channels: spec.selectedAudio.sourceChannelCount,
+                    layout: spec.selectedAudio.sourceChannelLayout,
+                    suffix: loopbackAudioSuffix(sourceCodec: spec.selectedAudio.sourceCodec, outputMode: outputMode, preservesAtmos: spec.selectedAudio.preservesAtmos)
+                ),
+                bitrateBps: liveStream.bitrateBps
+            )
+        }
+
+        guard let state = audioSelectionState,
+              let option = item.currentMediaSelection.selectedMediaOption(in: state.group) else {
+            return await AVFoundationPlaybackIntrospection.audioStream(for: item)
+        }
+        let selectionLabel = normalizedTitle(for: option) ?? languageCode(for: option)
+        let liveStream = await AVFoundationPlaybackIntrospection.audioStream(for: item, selectionHint: selectionLabel)
+        return PlaybackStats.MediaStream(
+            codec: liveStream.codec ?? codecLabel(for: option),
+            detail: joined([liveStream.detail, selectionLabel]),
+            bitrateBps: liveStream.bitrateBps
+        )
+    }
+
+    private func selectedSubtitleLabel() -> String? {
+        if let selectedControlledSubtitleTrackId,
+           let track = embeddedSubtitleExtractor?
+            .playerTracks(selectedPrimaryTrackId: selectedControlledSubtitleTrackId)
+            .first(where: { $0.trackId == selectedControlledSubtitleTrackId }) {
+            return track.title ?? track.lang ?? track.codec ?? "On"
+        }
+        guard let state = subtitleSelectionState,
+              let option = currentItem?.currentMediaSelection.selectedMediaOption(in: state.group) else {
+            return "Off"
+        }
+        return normalizedTitle(for: option) ?? languageCode(for: option) ?? codecLabel(for: option) ?? "On"
+    }
+
+    private func audioDetail(channels: Int?, layout: String?, suffix: String?) -> String? {
+        var parts: [String] = []
+        if let layout, !layout.isEmpty {
+            parts.append(layout)
+        } else if let channels, channels > 0 {
+            parts.append("\(channels) ch")
+        }
+        if let suffix, !suffix.isEmpty {
+            parts.append(suffix)
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: ", ")
+    }
+
+    private func dynamicRangeLabel(for strategy: SourceStrategy?) -> String? {
+        guard case .localDVLoopback(let spec) = strategy else { return nil }
+        switch spec.videoMode {
+        case .passthroughProfile5:
+            return "HDR output validation required (Profile \(spec.manifestMetadata.advertisedDolbyVisionProfile ?? 5) source)"
+        case .convertProfile7To81:
+            return "HDR output validation required (Profile 7 base layer signaled as Profile 8.1)"
+        case .passthroughProfile8(.hdr10):
+            return "HDR output validation required (Profile 8.1 source)"
+        case .passthroughProfile8(.hlg):
+            return "HDR output validation required (Profile 8.4 source)"
+        case .passthroughHEVC:
+            switch spec.manifestMetadata.videoRange {
+            case "HLG": return "HLG"
+            case "SDR": return "SDR"
+            default: return "HDR10"
+            }
+        case .passthroughH264:
+            return "SDR"
+        }
+    }
+
+    private func shouldPreserveTVDisplayCriteriaDuringReload(
+        from current: SourceStrategy?,
+        to next: SourceStrategy
+    ) -> Bool {
+        #if os(tvOS)
+        guard case .localDVLoopback(let currentSpec) = current,
+              case .localDVLoopback(let nextSpec) = next,
+              currentSpec.videoMode.isDolbyVision,
+              nextSpec.videoMode.isDolbyVision else {
+            return false
+        }
+
+        let currentRate = currentSpec.sourceVideoFrameRate ?? 24.0
+        let nextRate = nextSpec.sourceVideoFrameRate ?? 24.0
+        return abs(currentRate - nextRate) < 0.01
+        #else
+        return false
+        #endif
+    }
+
+    private func loopbackAudioSuffix(sourceCodec: String?, outputMode: String, preservesAtmos: Bool) -> String {
+        var parts: [String] = []
+        if let sourceCodec,
+           !sourceCodec.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           sourceCodec.caseInsensitiveCompare(outputMode) != .orderedSame {
+            parts.append("from \(sourceCodec)")
+        }
+        if preservesAtmos {
+            parts.append("receiver Atmos validation required")
+        }
+        if parts.isEmpty {
+            parts.append(outputMode)
+        }
+        return parts.joined(separator: ", ")
+    }
+
+    private func joined(_ parts: [String?]) -> String? {
+        let values = parts.compactMap { value -> String? in
+            guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !value.isEmpty else { return nil }
+            return value
+        }
+        return values.isEmpty ? nil : values.joined(separator: ", ")
+    }
+
+    private func bufferStatus(for item: AVPlayerItem) -> String {
+        if item.isPlaybackBufferEmpty { return "Buffering" }
+        if item.isPlaybackLikelyToKeepUp { return "Healthy" }
+        return "Filling"
+    }
+
+    private func bufferedAheadSeconds(for item: AVPlayerItem, referenceTime: Double) -> Double? {
+        let ranges = item.loadedTimeRanges.map(\.timeRangeValue)
+        let end = ranges.compactMap { range -> Double? in
+            let start = range.start.seconds
+            let end = (range.start + range.duration).seconds
+            guard start.isFinite, end.isFinite, end > referenceTime, start <= referenceTime else {
+                return nil
+            }
+            return end
+        }.max()
+        return end.map { max(0, $0 - referenceTime) }
+    }
+
+    private func describeLoadedRanges(_ item: AVPlayerItem) -> String {
+        let ranges = item.loadedTimeRanges.map(\.timeRangeValue)
+        guard !ranges.isEmpty else { return "[]" }
+        return ranges.map { range in
+            let start = range.start.seconds
+            let end = (range.start + range.duration).seconds
+            return String(format: "%.2f-%.2f", start, end)
+        }.joined(separator: ",")
+    }
+
+    private func positive(_ value: Double?) -> Double? {
+        guard let value, value.isFinite, value > 0 else { return nil }
+        return value
+    }
+
+    private static func deviceInfo() -> String {
+        let memoryGB = Double(ProcessInfo.processInfo.physicalMemory) / 1_073_741_824
+        #if os(macOS)
+        let model = Host.current().localizedName ?? "Mac"
+        #else
+        let model = UIDevice.current.model
+        #endif
+        return "\(model) / \(String(format: "%.0f", memoryGB)) GB"
+    }
+
+    private static func freeDiskSpaceBytes() -> Int64? {
+        let attributes = try? FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
+        return (attributes?[.systemFreeSize] as? NSNumber)?.int64Value
+    }
+
+    private static func audioOutputModeLabel(_ mode: LoopbackSessionSpec.AudioOutputMode) -> String {
+        switch mode {
+        case .copy: return "copy"
+        case .transcodeFLAC: return "flac"
+        case .requireFLAC: return "flac(required)"
+        case .transcodeEC3: return "ec-3"
+        case .transcodeAC3: return "ac-3"
+        case .transcodeAAC: return "aac"
+        }
+    }
+
+    private func attachItemObservers(_ item: AVPlayerItem) {
+        statusObs = item.observe(\.status, options: [.new, .initial]) { [weak self] item, _ in
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.isDisposed else { return }
+                switch item.status {
+                case .readyToPlay:
+                    self.cancelLoopbackStartupTimeout()
+                    self.attemptInitialPlaybackStart(for: item, trigger: "status.readyToPlay")
+                case .failed:
+                    self.cancelLoopbackStartupTimeout()
+                    self.reportItemFailure(item)
+                default:
+                    break
+                }
+            }
+        }
+
+        rateObs = avPlayer.observe(\.rate, options: [.new, .initial]) { [weak self] _, _ in
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.isDisposed else { return }
+                self.onPauseChange?(self.isUserPaused)
+            }
+        }
+
+        timeControlObs = avPlayer.observe(\.timeControlStatus, options: [.new, .initial]) { [weak self] player, _ in
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.isDisposed else { return }
+                guard case .localDVLoopback = self.currentSourceStrategy else { return }
+                let status: String
+                switch player.timeControlStatus {
+                case .paused:
+                    status = "paused"
+                case .waitingToPlayAtSpecifiedRate:
+                    status = "waiting"
+                case .playing:
+                    status = "playing"
+                @unknown default:
+                    status = "unknown"
+                }
+                let reason = player.reasonForWaitingToPlay?.rawValue ?? "-"
+                Self.logger.info(
+                    "[CMP-AVP] timeControlStatus=\(status, privacy: .public) reason=\(reason, privacy: .public) rate=\(player.rate, privacy: .public) current=\(player.currentTime().seconds, privacy: .public)"
+                )
+            }
+        }
+
+        bufferEmptyObs = item.observe(\.isPlaybackBufferEmpty, options: [.new]) { [weak self] item, _ in
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.isDisposed else { return }
+                if item.isPlaybackBufferEmpty {
+                    self.bufferLoadCount += 1
+                    if case .localDVLoopback = self.currentSourceStrategy {
+                        Self.logger.info(
+                            "[CMP-AVP] item buffer empty current=\(self.currentTime(), privacy: .public) loadedRanges=\(self.describeLoadedRanges(item), privacy: .public)"
+                        )
+                    }
+                    self.onBufferingChange?(true)
+                    self.emitPlaybackStats(referenceTime: self.currentTime(), force: true)
+                }
+            }
+        }
+
+        bufferFullObs = item.observe(\.isPlaybackLikelyToKeepUp, options: [.new]) { [weak self] item, _ in
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.isDisposed else { return }
+                if item.isPlaybackLikelyToKeepUp {
+                    self.onBufferingChange?(false)
+                    self.emitPlaybackStats(referenceTime: self.currentTime(), force: true)
+                    self.resumeLocalLoopbackPlaybackIfNeeded(for: item, trigger: "likely_to_keep_up")
+                }
+            }
+        }
+
+        durationObs = item.observe(\.duration, options: [.new]) { [weak self] item, _ in
+            let duration = item.duration.seconds
+            guard duration.isFinite, duration > 0 else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.isDisposed else { return }
+                self.onDurationChange?(duration)
+            }
+        }
+
+        loadedRangesObs = item.observe(\.loadedTimeRanges, options: [.new]) { [weak self] _, _ in
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.isDisposed else { return }
+                self.emitBufferedAhead(referenceTime: self.currentTime())
+                self.attemptInitialPlaybackStart(for: item, trigger: "loadedTimeRanges")
+                self.resumeLocalLoopbackPlaybackIfNeeded(for: item, trigger: "loaded_ranges")
+            }
+        }
+
+        seekableRangesObs = item.observe(\.seekableTimeRanges, options: [.new, .initial]) { [weak self] _, _ in
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.isDisposed else { return }
+                self.attemptInitialPlaybackStart(for: item, trigger: "seekableTimeRanges")
+            }
+        }
+
+        endObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self, !self.isDisposed else { return }
+            self.onEndOfFile?()
+        }
+
+        itemPlaybackStalledObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemPlaybackStalled,
+            object: item,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self, !self.isDisposed else { return }
+            Self.logger.info(
+                "[CMP-AVP] item playback stalled current=\(self.currentTime(), privacy: .public) loadedRanges=\(self.describeLoadedRanges(item), privacy: .public)"
+            )
+            self.recoverLocalLoopbackStallIfNeeded(item: item)
+        }
+
+        itemFailedToEndObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemFailedToPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { [weak self] note in
+            guard let self, !self.isDisposed else { return }
+            let error = note.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
+            Self.logger.info(
+                "[CMP-AVP] item failed to play to end current=\(self.currentTime(), privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+            self.recoverLocalLoopbackFailureIfNeeded(item: item, error: error)
+        }
+    }
+
+    private func recoverLocalLoopbackFailureIfNeeded(item: AVPlayerItem, error: Error?) {
+        let description = String(describing: error)
+        guard description.contains("Playlist File unchanged") || description.contains("-12888") else {
+            return
+        }
+        if isUserPaused {
+            let playerSeconds = currentTime()
+            guard playerSeconds.isFinite else { return }
+            let mediaSeconds = mediaTime(for: playerSeconds)
+            pendingLocalLoopbackRecoveryMediaTime = mediaSeconds
+            Self.logger.info(
+                "[CMP-AVP] local loopback playlist_unchanged recovery deferred until play media=\(mediaSeconds, privacy: .public) player=\(playerSeconds, privacy: .public)"
+            )
+            return
+        }
+        recoverLocalLoopbackStallIfNeeded(item: item, requireBufferedEdge: false, reason: "playlist_unchanged")
+    }
+
+    private func recoverLocalLoopbackStallIfNeeded(
+        item: AVPlayerItem,
+        requireBufferedEdge: Bool = true,
+        reason: String = "stall"
+    ) {
+        guard case .some(.localDVLoopback(let spec)) = currentSourceStrategy,
+              item === currentItem,
+              didFireFileLoaded,
+              !isUserPaused else { return }
+        let now = CACurrentMediaTime()
+        guard now - lastLocalLoopbackStallRecoveryAt >= 10 else { return }
+        let playerSeconds = currentTime()
+        guard playerSeconds.isFinite else { return }
+        let bufferedAhead = bufferedAheadSeconds(for: item, referenceTime: playerSeconds) ?? 0
+        guard !requireBufferedEdge || bufferedAhead <= 0.5 else { return }
+        guard let stats = segmentStore?.stats() else { return }
+        let generatedAhead = stats.generatedMediaSeconds - playerSeconds
+        let minimumGeneratedAhead = playerSeconds < 10 ? Self.loopbackStartupForwardBuffer : 10
+        guard generatedAhead > minimumGeneratedAhead else { return }
+        lastLocalLoopbackStallRecoveryAt = now
+        let mediaSeconds = mediaTime(for: playerSeconds)
+        Self.logger.info(
+            "[CMP-AVP] local loopback \(reason, privacy: .public) reanchor media=\(mediaSeconds, privacy: .public) player=\(playerSeconds, privacy: .public) generatedAhead=\(generatedAhead, privacy: .public) bufferedAhead=\(bufferedAhead, privacy: .public)"
+        )
+        subtitleSession?.flushOnSeek()
+        embeddedSubtitleExtractor?.seek(to: mediaSeconds)
+        load(strategy: .localDVLoopback(spec: spec.reanchored(at: mediaSeconds)), startTime: mediaSeconds)
+    }
+
+    private func resumeLocalLoopbackPlaybackIfNeeded(for item: AVPlayerItem, trigger: String) {
+        guard case .localDVLoopback = currentSourceStrategy,
+              item === currentItem,
+              didFireFileLoaded,
+              !isUserPaused,
+              avPlayer.rate == 0 else { return }
+        let playerSeconds = currentTime()
+        guard playerSeconds.isFinite else { return }
+        let bufferedAhead = bufferedAheadSeconds(for: item, referenceTime: playerSeconds) ?? 0
+        guard item.isPlaybackLikelyToKeepUp || bufferedAhead > 0.5 else { return }
+        Self.logger.info(
+            "[CMP-AVP] local loopback auto resume trigger=\(trigger, privacy: .public) player=\(playerSeconds, privacy: .public) bufferedAhead=\(bufferedAhead, privacy: .public)"
+        )
+        avPlayer.play()
+    }
+
+    private func attemptInitialPlaybackStart(for item: AVPlayerItem, trigger: String) {
+        guard item === currentItem, !isDisposed, item.status == .readyToPlay else { return }
+
+        let mediaTarget = max(0, pendingStartTime)
+        let playerTarget = playerTime(forMediaTime: mediaTarget)
+        guard !hasSeekedToStart, !isInitialSeekInFlight else { return }
+        guard mediaTarget > 0, playerTarget > 0.05 else {
+            startPlaybackIfNeeded(for: item)
+            hasSeekedToStart = true
+            embeddedSubtitleExtractor?.seek(to: mediaTarget)
+            onTimeChange?(avPlayer.currentTime().seconds)
+            return
+        }
+        guard itemHasSeekableMedia(item, containing: playerTarget) else {
+            Self.logger.info(
+                "Deferring initial resume seek mediaTarget=\(mediaTarget, privacy: .public) playerTarget=\(playerTarget, privacy: .public) trigger=\(trigger, privacy: .public) because the target is not seekable yet"
+            )
+            return
+        }
+
+        isInitialSeekInFlight = true
+        isSeekPending = true
+        subtitleSession?.flushOnSeek()
+        let time = CMTime(seconds: playerTarget, preferredTimescale: 600)
+        Self.logger.info(
+            "Attempting initial resume seek mediaTarget=\(mediaTarget, privacy: .public) playerTarget=\(playerTarget, privacy: .public) trigger=\(trigger, privacy: .public)"
+        )
+        avPlayer.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+            guard let self, !self.isDisposed, item === self.currentItem else { return }
+            self.isSeekPending = false
+            self.isInitialSeekInFlight = false
+
+            let landed = self.avPlayer.currentTime().seconds
+            let landedMedia = self.mediaTime(for: landed)
+            let landedCorrectly = finished && self.isInitialSeekSatisfied(target: mediaTarget, landed: landedMedia)
+            Self.logger.info(
+                "Initial resume seek completed finished=\(finished, privacy: .public) mediaTarget=\(mediaTarget, privacy: .public) playerTarget=\(playerTarget, privacy: .public) landedPlayer=\(landed, privacy: .public) landedMedia=\(landedMedia, privacy: .public)"
+            )
+
+            if landedCorrectly {
+                self.hasSeekedToStart = true
+                self.initialSeekRetryCount = 0
+                self.embeddedSubtitleExtractor?.seek(to: landedMedia)
+                self.startPlaybackIfNeeded(for: item)
+                self.onTimeChange?(landed)
+                return
+            }
+
+            self.initialSeekRetryCount += 1
+            if self.initialSeekRetryCount <= 8 {
+                let retry = self.initialSeekRetryCount
+                Self.logger.warning(
+                    "Initial resume seek did not land mediaTarget=\(mediaTarget, privacy: .public) landedMedia=\(landedMedia, privacy: .public) landedPlayer=\(landed, privacy: .public) finished=\(finished, privacy: .public) retry=\(retry, privacy: .public)"
+                )
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                    guard let self, !self.isDisposed else { return }
+                    self.attemptInitialPlaybackStart(for: item, trigger: "retry-\(retry)")
+                }
+            } else {
+                Self.logger.error(
+                    "Initial resume seek failed after retries mediaTarget=\(mediaTarget, privacy: .public) landedMedia=\(landedMedia, privacy: .public) landedPlayer=\(landed, privacy: .public)"
+                )
+                if self.itemHasSeekableMedia(item, containing: playerTarget) {
+                    self.startPlaybackIfNeeded(for: item)
+                    self.onTimeChange?(landed)
+                }
+            }
+        }
+    }
+
+    private func startPlaybackIfNeeded(for item: AVPlayerItem) {
+        armInitialVideoDisplayGateIfNeeded()
+        avPlayer.play()
+        if isWaitingForInitialVideoDisplay {
+            scheduleInitialVideoDisplayFallback(for: item)
+        } else {
+            finishInitialLoadIfNeeded(for: item)
+        }
+    }
+
+    private func scheduleLoopbackStartupTimeoutIfNeeded(for item: AVPlayerItem) {
+        guard case .localDVLoopback = currentSourceStrategy else { return }
+        cancelLoopbackStartupTimeout()
+        let work = DispatchWorkItem { [weak self, weak item] in
+            guard let self,
+                  let item,
+                  !self.isDisposed,
+                  item === self.currentItem,
+                  !self.didFireFileLoaded,
+                  case .localDVLoopback = self.currentSourceStrategy else {
+                return
+            }
+            guard item.status != .readyToPlay else { return }
+            self.reportError(
+                String(
+                    format: "Local DV loopback startup timed out after %.1fs before AVPlayer became ready",
+                    Self.loopbackStartupReadyTimeout
+                )
+            )
+        }
+        loopbackStartupTimeout = work
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.loopbackStartupReadyTimeout,
+            execute: work
+        )
+    }
+
+    private func cancelLoopbackStartupTimeout() {
+        loopbackStartupTimeout?.cancel()
+        loopbackStartupTimeout = nil
+    }
+
+    private func beginInitialVideoDisplayGate() {
+        initialVideoDisplayFallback?.cancel()
+        initialVideoDisplayFallback = nil
+        isInitialVideoDisplayGatePrepared = true
+        isWaitingForInitialVideoDisplay = false
+        didTemporarilyMuteForInitialVideoDisplay = !avPlayer.isMuted
+        if didTemporarilyMuteForInitialVideoDisplay {
+            avPlayer.isMuted = true
+        }
+        Self.logger.info("[CMP-AVP] prepared initial video frame gate before startup audio")
+    }
+
+    private func armInitialVideoDisplayGateIfNeeded() {
+        guard isInitialVideoDisplayGatePrepared else { return }
+        isInitialVideoDisplayGatePrepared = false
+        isWaitingForInitialVideoDisplay = true
+        initialVideoDisplayGateStartTime = avPlayer.currentTime().seconds
+        Self.logger.info("[CMP-AVP] waiting for initial video frame before unmuting startup audio")
+    }
+
+    private func releaseInitialVideoDisplayGateIfPlaybackAdvanced(currentTime: Double) {
+        guard isWaitingForInitialVideoDisplay, let item = currentItem else { return }
+        let startTime = initialVideoDisplayGateStartTime ?? currentTime
+        guard currentTime.isFinite, startTime.isFinite, currentTime - startTime >= 0.05 else { return }
+        finishInitialVideoDisplayGate(for: item, reason: "playback_clock_advanced")
+    }
+
+    private func scheduleInitialVideoDisplayFallback(for item: AVPlayerItem) {
+        guard initialVideoDisplayFallback == nil else { return }
+        let work = DispatchWorkItem { [weak self, weak item] in
+            guard let self, let item, !self.isDisposed, item === self.currentItem else { return }
+            self.finishInitialVideoDisplayGate(for: item, reason: "ready_for_display_timeout")
+        }
+        initialVideoDisplayFallback = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: work)
+    }
+
+    private func finishInitialVideoDisplayGate(for item: AVPlayerItem, reason: String) {
+        guard item === currentItem, !isDisposed else { return }
+        guard isWaitingForInitialVideoDisplay else {
+            finishInitialLoadIfNeeded(for: item)
+            return
+        }
+        isWaitingForInitialVideoDisplay = false
+        initialVideoDisplayGateStartTime = nil
+        initialVideoDisplayFallback?.cancel()
+        initialVideoDisplayFallback = nil
+        finishInitialLoadIfNeeded(for: item)
+        if didTemporarilyMuteForInitialVideoDisplay {
+            avPlayer.isMuted = false
+            didTemporarilyMuteForInitialVideoDisplay = false
+        }
+        rampLoopbackBufferToSteadyStateIfNeeded(for: item)
+        Self.logger.info("[CMP-AVP] initial video display gate released reason=\(reason, privacy: .public)")
+    }
+
+    /// Once the first frame is on screen, expand AVPlayer's forward
+    /// buffer target so the loopback path can ride out brief network
+    /// dips. Until now the buffer was capped at
+    /// `loopbackStartupForwardBuffer` to keep readyToPlay snappy; that
+    /// cushion is too thin for sustained playback when the source
+    /// bitrate is close to the user's WAN throughput. Re-enable
+    /// `automaticallyWaitsToMinimizeStalling` so AVPlayer pauses cleanly
+    /// to rebuffer on actual underrun instead of presenting a stutter.
+    private func rampLoopbackBufferToSteadyStateIfNeeded(for item: AVPlayerItem) {
+        guard case .localDVLoopback = currentSourceStrategy else { return }
+        guard canRampLoopbackBufferToSteadyState else { return }
+        let target = Self.loopbackSteadyStateForwardBufferTarget(
+            forBitsPerSecond: loopbackSourceDownloadBitrateBps
+        )
+        guard item.preferredForwardBufferDuration < target else { return }
+        item.preferredForwardBufferDuration = target
+        avPlayer.automaticallyWaitsToMinimizeStalling = true
+        Self.logger.info(
+            "[CMP-AVP] loopback buffer ramp forwardBuffer=\(target, privacy: .public)s automaticallyWaits=1 sourceBitrate=\(self.loopbackSourceDownloadBitrateBps ?? 0, privacy: .public)bps"
+        )
+    }
+
+    private var canRampLoopbackBufferToSteadyState: Bool {
+        didFireFileLoaded && !isInitialVideoDisplayGatePrepared && !isWaitingForInitialVideoDisplay
+    }
+
+    private func itemHasSeekableMedia(_ item: AVPlayerItem, containing target: Double) -> Bool {
+        let target = target.isFinite ? max(0, target) : 0
+        if item.seekableTimeRanges.contains(where: { range in
+            Self.timeRange(range.timeRangeValue, contains: target)
+        }) {
+            return true
+        }
+
+        return item.loadedTimeRanges.contains { range in
+            Self.timeRange(range.timeRangeValue, contains: target)
+        }
+    }
+
+    private static func timeRange(_ range: CMTimeRange, contains target: Double) -> Bool {
+        let start = range.start.seconds
+        let duration = range.duration.seconds
+        let end = (range.start + range.duration).seconds
+        guard start.isFinite, duration.isFinite, end.isFinite, duration > 0 else {
+            return false
+        }
+        let tolerance = 0.05
+        return target + tolerance >= start && target <= end + tolerance
+    }
+
+    private func isInitialSeekSatisfied(target: Double, landed: Double) -> Bool {
+        guard target.isFinite, landed.isFinite else { return false }
+        return abs(landed - target) <= 1.0
+    }
+
+    private func finishInitialLoadIfNeeded(for item: AVPlayerItem) {
+        guard !didFireFileLoaded else { return }
+        cancelLoopbackStartupTimeout()
+        didFireFileLoaded = true
+        onFileLoaded?()
+        loadMediaSelections(for: item)
+        onChaptersChange?(serverChapters)
+        emitPlaybackStats(referenceTime: currentTime(), force: true)
+        logReadyItemFormat(item)
+        logTVDisplayManagerState(context: "item_ready")
+    }
+
+    private func loadMediaSelections(for item: AVPlayerItem) {
+        audioSelectionState = nil
+        subtitleSelectionState = nil
+        emitTrackList()
+
+        let asset = item.asset
+        if currentLoopbackAudioTracks.isEmpty {
+            asset.loadMediaSelectionGroup(for: .audible) { [weak self, weak item] group, error in
+                DispatchQueue.main.async { [weak self, weak item] in
+                    guard let self, let item, !self.isDisposed, item === self.currentItem else { return }
+                    self.updateMediaSelectionState(group: group, kind: .audio, error: error)
+                }
+            }
+        }
+        asset.loadMediaSelectionGroup(for: .legible) { [weak self, weak item] group, error in
+            DispatchQueue.main.async { [weak self, weak item] in
+                guard let self, let item, !self.isDisposed, item === self.currentItem else { return }
+                self.updateMediaSelectionState(group: group, kind: .sub, error: error)
+            }
+        }
+    }
+
+    private func updateMediaSelectionState(
+        group: AVMediaSelectionGroup?,
+        kind: PlayerTrack.Kind,
+        error: Error?
+    ) {
+        if let error {
+            Self.logger.warning(
+                "Failed loading \(kind.rawValue, privacy: .public) tracks: \(error.localizedDescription, privacy: .public)"
+            )
+        }
+
+        let state = group.flatMap { makeMediaSelectionState(group: $0, kind: kind) }
+        switch kind {
+        case .audio:
+            audioSelectionState = state
+        case .sub:
+            subtitleSelectionState = state
+        case .video, .unknown:
+            break
+        }
+        emitTrackList()
+    }
+
+    private func makeMediaSelectionState(
+        group: AVMediaSelectionGroup,
+        kind: PlayerTrack.Kind
+    ) -> MediaSelectionState? {
+        let options = AVMediaSelectionGroup.playableMediaSelectionOptions(from: group.options)
+        guard !options.isEmpty else { return nil }
+
+        var optionsByTrackId: [Int64: AVMediaSelectionOption] = [:]
+        for (index, option) in options.enumerated() {
+            optionsByTrackId[makeTrackId(for: kind, index: index)] = option
+        }
+
+        return MediaSelectionState(
+            kind: kind,
+            group: group,
+            optionsByTrackId: optionsByTrackId
+        )
+    }
+
+    private func emitTrackList() {
+        guard let item = currentItem else {
+            onTracksChange?([])
+            return
+        }
+
+        var tracks: [PlayerTrack] = []
+        if !currentLoopbackAudioTracks.isEmpty {
+            tracks.append(contentsOf: currentLoopbackAudioTracks)
+        } else if let audioSelectionState {
+            let mediaSelection = item.currentMediaSelection
+            tracks.append(
+                contentsOf: buildTracks(
+                    from: audioSelectionState,
+                    selectedOption: mediaSelection.selectedMediaOption(in: audioSelectionState.group)
+                )
+            )
+        }
+        let extractedSubtitles = embeddedSubtitleExtractor?
+            .playerTracks(selectedPrimaryTrackId: selectedControlledSubtitleTrackId) ?? []
+        tracks.append(contentsOf: extractedSubtitles)
+        onTracksChange?(tracks)
+    }
+
+    private func buildTracks(
+        from state: MediaSelectionState,
+        selectedOption: AVMediaSelectionOption?
+    ) -> [PlayerTrack] {
+        state.optionsByTrackId.keys.sorted().compactMap { trackId in
+            guard let option = state.optionsByTrackId[trackId] else { return nil }
+            let isSelected = selectedOption.map { ObjectIdentifier($0) == ObjectIdentifier(option) } ?? false
+            let isHearingImpaired = option.hasMediaCharacteristic(.transcribesSpokenDialogForAccessibility)
+                || option.hasMediaCharacteristic(.describesMusicAndSoundForAccessibility)
+            return PlayerTrack(
+                trackId: trackId,
+                kind: state.kind,
+                title: normalizedTitle(for: option),
+                lang: languageCode(for: option),
+                codec: codecLabel(for: option),
+                audioChannelsLayout: nil,
+                audioChannelCount: nil,
+                bitrate: nil,
+                isDefault: state.group.defaultOption.map { ObjectIdentifier($0) == ObjectIdentifier(option) } ?? false,
+                isForced: option.hasMediaCharacteristic(.containsOnlyForcedSubtitles),
+                isHearingImpaired: isHearingImpaired,
+                isVisualImpaired: option.hasMediaCharacteristic(.describesVideoForAccessibility),
+                isExternal: false,
+                isSelected: isSelected,
+                ffIndex: nil,
+                srcId: nil
+            )
+        }
+    }
+
+    private func makeTrackId(for kind: PlayerTrack.Kind, index: Int) -> Int64 {
+        let base: Int64
+        switch kind {
+        case .audio:
+            base = 10_000
+        case .sub:
+            base = 20_000
+        case .video:
+            base = 30_000
+        case .unknown:
+            base = 40_000
+        }
+        return base + Int64(index)
+    }
+
+    private func normalizedTitle(for option: AVMediaSelectionOption) -> String? {
+        let value = option.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
+    }
+
+    private func languageCode(for option: AVMediaSelectionOption) -> String? {
+        if let localeCode = option.locale?.language.languageCode?.identifier, !localeCode.isEmpty {
+            return localeCode
+        }
+        if let tag = option.extendedLanguageTag?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !tag.isEmpty {
+            return tag.split(separator: "-").first.map(String.init)
+        }
+        return nil
+    }
+
+    private func codecLabel(for option: AVMediaSelectionOption) -> String? {
+        guard let subtype = option.mediaSubTypes.first?.uint32Value else { return nil }
+        let bytes: [UInt8] = [
+            UInt8((subtype >> 24) & 0xFF),
+            UInt8((subtype >> 16) & 0xFF),
+            UInt8((subtype >> 8) & 0xFF),
+            UInt8(subtype & 0xFF)
+        ]
+        guard let code = String(bytes: bytes, encoding: .ascii)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !code.isEmpty else {
+            return nil
+        }
+        return code
+    }
+
+    private func pumpSubtitleOverlay(referenceTime: Double) {
+        guard let session = subtitleSession else { return }
+        let nowMs = Int64(referenceTime * 1000.0)
+        guard let overlay = subtitleOverlay else { return }
+        let renderer = session.underlyingRenderer
+        guard renderer.hasAnyActiveTrack else {
+            DispatchQueue.main.async {
+                overlay.clear()
+            }
+            return
+        }
+
+        let syncOffsetMs = Int64(session.currentParams.syncOffsetMs)
+        let assNowMs = nowMs - syncOffsetMs
+        let bounds = overlay.bounds
+        #if os(macOS)
+        let scale = overlay.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        #else
+        let scale = overlay.window?.screen.scale ?? overlay.traitCollection.displayScale
+        #endif
+
+        renderer.sessionQueue.async { [weak overlay] in
+            let out = renderer.renderOnSessionQueue(
+                atMilliseconds: assNowMs,
+                frameSize: bounds.size,
+                scale: scale
+            )
+            guard out.isDirty else { return }
+            let image = out.image
+            DispatchQueue.main.async {
+                overlay?.updateContents(image)
+            }
+        }
+    }
+
+    private func teardownMediaPipeline(clearDisplayCriteria: Bool = true) {
+        if clearDisplayCriteria {
+            clearTVDisplayCriteria(context: "teardown")
+        } else {
+            logTVDisplayManagerState(context: "preserve_for_loopback_reload")
+        }
+        avPlayer.pause()
+        if let observer = timeObserver {
+            avPlayer.removeTimeObserver(observer)
+            timeObserver = nil
+        }
+        subtitleDisplayLink?.invalidate()
+        subtitleDisplayLink = nil
+        statusObs?.invalidate(); statusObs = nil
+        rateObs?.invalidate(); rateObs = nil
+        timeControlObs?.invalidate(); timeControlObs = nil
+        bufferFullObs?.invalidate(); bufferFullObs = nil
+        bufferEmptyObs?.invalidate(); bufferEmptyObs = nil
+        durationObs?.invalidate(); durationObs = nil
+        loadedRangesObs?.invalidate(); loadedRangesObs = nil
+        seekableRangesObs?.invalidate(); seekableRangesObs = nil
+        if let observer = endObserver {
+            NotificationCenter.default.removeObserver(observer)
+            endObserver = nil
+        }
+        if let observer = itemPlaybackStalledObserver {
+            NotificationCenter.default.removeObserver(observer)
+            itemPlaybackStalledObserver = nil
+        }
+        if let observer = itemFailedToEndObserver {
+            NotificationCenter.default.removeObserver(observer)
+            itemFailedToEndObserver = nil
+        }
+        audioSelectionState = nil
+        subtitleSelectionState = nil
+        currentLoopbackAudioTracks = []
+        selectedControlledSubtitleTrackId = nil
+        selectedSecondaryControlledSubtitleTrackId = nil
+        embeddedSubtitleExtractor?.teardown()
+        activeLoopbackSessionID = nil
+        isInitialSeekInFlight = false
+        initialSeekRetryCount = 0
+        isInitialVideoDisplayGatePrepared = false
+        isWaitingForInitialVideoDisplay = false
+        initialVideoDisplayGateStartTime = nil
+        initialVideoDisplayFallback?.cancel()
+        initialVideoDisplayFallback = nil
+        cancelLoopbackStartupTimeout()
+        if didTemporarilyMuteForInitialVideoDisplay {
+            avPlayer.isMuted = false
+            didTemporarilyMuteForInitialVideoDisplay = false
+        }
+        avPlayer.replaceCurrentItem(with: nil)
+        deactivateAudioSession()
+        currentItem = nil
+        subtitleSession?.teardown()
+        DispatchQueue.main.async { [weak self] in
+            self?.subtitleOverlay?.clear()
+        }
+
+        let writer = segmentWriter
+        segmentWriter = nil
+        writer?.onFirstSegmentReady = nil
+        writer?.onSegmentAppended = nil
+        writer?.onTimelineAnchorResolved = nil
+        writer?.onSourceDownloadStats = nil
+        writer?.onFinished = nil
+        segmentServer?.stop()
+        segmentServer = nil
+        segmentStore = nil
+
+        let dir = sessionDirectory
+        let preserveDir = preserveSessionDirectory
+        sessionDirectory = nil
+        preserveSessionDirectory = false
+        writer?.stop {
+            if let dir, preserveDir {
+                print("[CMP-AVP] retained local DV artifacts dir=\(dir.path)")
+            } else if let dir {
+                try? FileManager.default.removeItem(at: dir)
+            }
+        }
+        if writer == nil, let dir {
+            if preserveDir {
+                print("[CMP-AVP] retained local DV artifacts dir=\(dir.path)")
+            } else {
+                try? FileManager.default.removeItem(at: dir)
+            }
+        }
+    }
+
+    private func reportError(_ message: String) {
+        cmpLog("[CMP-AVP] ERROR: \(message)")
+        onError?(message)
+    }
+
+    private func logReadyItemFormat(_ item: AVPlayerItem) {
+        Task { [item] in
+            let videoFormat = await AVFoundationPlaybackIntrospection.videoFormat(for: item)
+            let audioFormat = await AVFoundationPlaybackIntrospection.audioStream(for: item)
+            print(
+                "[CMP-AVP] item ready format videoCodec=\(videoFormat.stream.codec ?? "nil") videoDetail=\(videoFormat.stream.detail ?? "nil") dynamicRange=\(videoFormat.dynamicRange ?? "nil") audioCodec=\(audioFormat.codec ?? "nil") audioDetail=\(audioFormat.detail ?? "nil")"
+            )
+        }
+    }
+
+    private func logTVDisplayManagerState(context: String) {
+        #if os(tvOS)
+        let window: UIWindow? = {
+            for scene in UIApplication.shared.connectedScenes {
+                guard let windowScene = scene as? UIWindowScene else { continue }
+                if let keyWindow = windowScene.windows.first(where: \.isKeyWindow) {
+                    return keyWindow
+                }
+                if let firstWindow = windowScene.windows.first {
+                    return firstWindow
+                }
+            }
+            return nil
+        }()
+        guard let displayManager = window?.avDisplayManager else {
+            print("[CMP-AVP] tv display context=\(context) manager=nil")
+            return
+        }
+        print(
+            "[CMP-AVP] tv display context=\(context) matching=\(displayManager.isDisplayCriteriaMatchingEnabled ? 1 : 0) switchInProgress=\(displayManager.isDisplayModeSwitchInProgress ? 1 : 0)"
+        )
+        #endif
+    }
+
+    private func applyTVDisplayCriteriaForLoopbackIfNeeded(context: String) {
+        #if os(tvOS)
+        guard case .localDVLoopback(let spec) = currentSourceStrategy else { return }
+        switch spec.videoMode {
+        case .passthroughProfile5, .convertProfile7To81, .passthroughProfile8:
+            let preservedForReload = isPreservingTVDisplayCriteriaForReload
+            isPreservingTVDisplayCriteriaForReload = false
+            let window: UIWindow? = {
+                for scene in UIApplication.shared.connectedScenes {
+                    guard let windowScene = scene as? UIWindowScene else { continue }
+                    if let keyWindow = windowScene.windows.first(where: \.isKeyWindow) {
+                        return keyWindow
+                    }
+                    if let firstWindow = windowScene.windows.first {
+                        return firstWindow
+                    }
+                }
+                return nil
+            }()
+            guard let displayManager = window?.avDisplayManager else {
+                print("[CMP-AVP] tv display apply context=\(context) manager=nil")
+                return
+            }
+            guard displayManager.isDisplayCriteriaMatchingEnabled else {
+                print("[CMP-AVP] tv display apply context=\(context) matching=0 skipped=matching_disabled")
+                return
+            }
+
+            let refreshRate = spec.sourceVideoFrameRate ?? 24.0
+            let criteria = AVDisplayCriteria(
+                refreshRate: refreshRate,
+                videoDynamicRange: SpikeDynamicRange.dolbyVision.rawValue
+            )
+            displayManager.preferredDisplayCriteria = criteria
+            print(String(format: "[CMP-AVP] tv display apply context=%@ fps=%.3f dr=%d matching=1 preservedReload=%d", context, Double(refreshRate), Int(SpikeDynamicRange.dolbyVision.rawValue), preservedForReload ? 1 : 0))
+        case .passthroughHEVC, .passthroughH264:
+            isPreservingTVDisplayCriteriaForReload = false
+            return
+        }
+        #endif
+    }
+
+    private func clearTVDisplayCriteria(context: String) {
+        #if os(tvOS)
+        DispatchQueue.main.async {
+            let window: UIWindow? = {
+                for scene in UIApplication.shared.connectedScenes {
+                    guard let windowScene = scene as? UIWindowScene else { continue }
+                    if let keyWindow = windowScene.windows.first(where: \.isKeyWindow) {
+                        return keyWindow
+                    }
+                    if let firstWindow = windowScene.windows.first {
+                        return firstWindow
+                    }
+                }
+                return nil
+            }()
+            guard let displayManager = window?.avDisplayManager else {
+                print("[CMP-AVP] tv display clear context=\(context) manager=nil")
+                return
+            }
+            displayManager.preferredDisplayCriteria = nil
+            print("[CMP-AVP] tv display clear context=\(context) switchInProgress=\(displayManager.isDisplayModeSwitchInProgress ? 1 : 0)")
+        }
+        #endif
+    }
+
+    private func reportItemFailure(_ item: AVPlayerItem) {
+        preserveLoopbackArtifactsIfDebugEnabled(reason: "avplayer_item_failed")
+        let nsError = item.error as NSError?
+        let domain = nsError?.domain ?? "unknown"
+        let code = nsError?.code ?? 0
+        let description = nsError?.localizedDescription ?? "AVPlayer item failed"
+        let failingURL = (nsError?.userInfo[NSURLErrorFailingURLErrorKey] as? URL)?.absoluteString
+        let underlying = (nsError?.userInfo[NSUnderlyingErrorKey] as? NSError).map {
+            "\($0.domain)(\($0.code)): \($0.localizedDescription)"
+        }
+        let latestErrorLog = item.errorLog()?.events.last.map { event in
+            let uri = event.uri ?? "nil"
+            let comment = event.errorComment ?? "nil"
+            return "uri=\(uri) status=\(event.errorStatusCode) domain=\(event.errorDomain) comment=\(comment)"
+        }
+
+        var details = "AVPlayer item failed: \(description) domain=\(domain) code=\(code)"
+        if let failingURL, !failingURL.isEmpty {
+            details += " failingURL=\(failingURL)"
+        }
+        if let underlying, !underlying.isEmpty {
+            details += " underlying=\(underlying)"
+        }
+        if let latestErrorLog, !latestErrorLog.isEmpty {
+            details += " errorLog=\(latestErrorLog)"
+        }
+        reportError(details)
+    }
+
+    private func preserveLoopbackArtifactsIfDebugEnabled(reason: String) {
+        guard Self.keepLoopbackArtifacts else { return }
+        guard let dir = sessionDirectory else { return }
+        if !preserveSessionDirectory {
+            print("[CMP-AVP] preserving local DV artifacts after \(reason) dir=\(dir.path)")
+        }
+        preserveSessionDirectory = true
+    }
+
+    private static var keepLoopbackArtifacts: Bool {
+        let raw = ProcessInfo.processInfo.environment["SILO_KEEP_DV_HLS"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return raw == "1" || raw == "true" || raw == "yes"
+    }
+
+    private static func describe(_ strategy: SourceStrategy) -> String {
+        switch strategy {
+        case .remoteHLS(let url, _):
+            return "remoteHLS(\(url.absoluteString))"
+        case .remoteDirect(let url, _):
+            return "remoteDirect(\(url.absoluteString))"
+        case .localDVLoopback(let spec):
+            return "localDVLoopback(\(spec.sourceURL.absoluteString), videoMode=\(spec.videoMode.logToken), start=\(spec.sourceStartTimeSeconds), audioTrackIndex=\(spec.selectedAudio.trackIndex), audioFfIndex=\(spec.selectedAudio.ffIndex ?? -1))"
+        }
+    }
+
+    private static func displayRouteLabel(_ strategy: SourceStrategy) -> String {
+        switch strategy {
+        case .remoteHLS:
+            return "Native Player HLS"
+        case .remoteDirect:
+            return "Native Player Direct"
+        case .localDVLoopback(let spec):
+            switch spec.videoMode {
+            case .passthroughH264:
+                return "SiloPlayer H.264 Loopback"
+            case .passthroughHEVC:
+                return "SiloPlayer HEVC Loopback"
+            case .passthroughProfile5, .convertProfile7To81, .passthroughProfile8:
+                return "SiloPlayer Dolby Vision Loopback"
+            }
+        }
+    }
+
+    private static func normalizedLoopbackAudioTracks(for strategy: SourceStrategy) -> [PlayerTrack] {
+        switch strategy {
+        case .localDVLoopback(let spec):
+            let audioTracks = spec.availableAudioTracks
+            guard !audioTracks.isEmpty else { return [] }
+            if audioTracks.contains(where: { $0.isSelected }) {
+                return audioTracks
+            }
+            return audioTracks.enumerated().map { index, track in
+                PlayerTrack(
+                    trackId: track.trackId,
+                    kind: track.kind,
+                    title: track.title,
+                    lang: track.lang,
+                    codec: track.codec,
+                    audioChannelsLayout: track.audioChannelsLayout,
+                    audioChannelCount: track.audioChannelCount,
+                    bitrate: track.bitrate,
+                    isDefault: track.isDefault,
+                    isForced: track.isForced,
+                    isHearingImpaired: track.isHearingImpaired,
+                    isVisualImpaired: track.isVisualImpaired,
+                    isExternal: track.isExternal,
+                    isSelected: index == 0,
+                    ffIndex: track.ffIndex,
+                    srcId: track.srcId
+                )
+            }
+        case .remoteHLS, .remoteDirect:
+            return []
+        }
+    }
+
+    private static func loopbackAudioOutputMode(for track: PlayerTrack) -> LoopbackSessionSpec.AudioOutputMode {
+        switch normalizedCodecToken(track.codec) {
+        case "aac", "ac3", "eac3":
+            return .copy
+        case "truehd":
+            return .requireFLAC
+        default:
+            if let channelCount = track.audioChannelCount, channelCount > 2 {
+                return .transcodeFLAC
+            }
+            return .transcodeAAC
+        }
+    }
+
+    private static func loopbackPreservesAtmos(for track: PlayerTrack) -> Bool {
+        guard normalizedCodecToken(track.codec) == "eac3" else { return false }
+        let title = track.title?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return title?.contains("atmos") == true || title?.contains("joc") == true
+    }
+
+    private static func normalizedCodecToken(_ raw: String?) -> String? {
+        let token = raw?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "-", with: "")
+        switch token {
+        case "dolbytruehd", "mlp", "mlpa":
+            return "truehd"
+        default:
+            return token
+        }
+    }
+}

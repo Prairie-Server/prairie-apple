@@ -1,0 +1,642 @@
+import SwiftUI
+
+#if os(tvOS)
+private let startupSplashMinimumDuration: TimeInterval = 4.0
+#else
+private let startupSplashMinimumDuration: TimeInterval = 1.25
+#endif
+
+struct ContentView: View {
+    @State private var router = AppRouter()
+    @State private var debugPlayContentId: String?
+    @State private var didAttemptDebugAutoPlay = false
+    /// Deep link URL received before the auth state was ready. Drained
+    /// on the next `.authenticated` transition so Top Shelf taps during
+    /// a cold launch still route to the correct screen.
+    @State private var pendingDeepLink: URL?
+    /// Shared with every screen that renders cards. Hydrates lazily on
+    /// the first .authenticated transition so cards stay visible during
+    /// the brief window between sign-in and the overlay-config fetch.
+    @StateObject private var overlayPrefs = OverlayPrefsStore.shared
+    /// Used to retry overlay hydration on foreground transitions: if the
+    /// initial fetch failed transiently, `hydrateIfNeeded()` will retry
+    /// because the store left `hasHydrated == false`. Idempotent when
+    /// the previous hydration succeeded.
+    @Environment(\.scenePhase) private var scenePhase
+
+    var body: some View {
+        Group {
+            switch router.authState {
+            case .loading:
+                StartupSplashView()
+                    .task { await checkInitialState() }
+
+            case .needsServerSetup:
+                #if os(tvOS)
+                TVServerSetupView(router: router)
+                #else
+                ServerSetupView(router: router)
+                #endif
+
+            case .needsLogin:
+                NavigationStack(path: $router.path) {
+                    loginRoot
+                        .navigationDestination(for: Route.self) { route in
+                            destinationView(for: route)
+                        }
+                }
+
+            case .needsProfile:
+                NavigationStack(path: $router.path) {
+                    ProfileSelectionView(router: router)
+                        .navigationDestination(for: Route.self) { route in
+                            profileFlowDestination(for: route)
+                        }
+                }
+                .environment(router)
+
+            case .authenticated:
+                #if os(tvOS)
+                TVMainTabView(router: router)
+                #else
+                MainTabView(router: router)
+                #endif
+            }
+        }
+        .environmentObject(overlayPrefs)
+        .preferredColorScheme(.dark)
+        #if os(macOS)
+        .sheet(isPresented: Binding(
+            get: { debugPlayContentId != nil },
+            set: { if !$0 { debugPlayContentId = nil } }
+        )) {
+            if let contentId = debugPlayContentId {
+                PlayerView(contentId: contentId)
+            }
+        }
+        #else
+        .fullScreenCover(isPresented: Binding(
+            get: { debugPlayContentId != nil },
+            set: { if !$0 { debugPlayContentId = nil } }
+        )) {
+            if let contentId = debugPlayContentId {
+                PlayerView(contentId: contentId)
+            }
+        }
+        #endif
+        .onReceive(NotificationCenter.default.publisher(for: .continuumDeepLink)) { notification in
+            guard let url = notification.userInfo?["url"] as? URL else { return }
+            handleDeepLink(url)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .continuumSessionExpired)) { _ in
+            router.expiredSession()
+        }
+        .task {
+            // Debug: auto-play from launch argument -debugPlay <contentId>
+            if let idx = CommandLine.arguments.firstIndex(of: "-debugPlay"),
+               idx + 1 < CommandLine.arguments.count {
+                let contentId = CommandLine.arguments[idx + 1]
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                debugPlayContentId = contentId
+            }
+        }
+        .task(id: router.authState) {
+            await maybeAutoPlayForDebug()
+            if router.authState == .authenticated {
+                if let pending = pendingDeepLink {
+                    pendingDeepLink = nil
+                    handleDeepLink(pending)
+                }
+                await overlayPrefs.hydrateIfNeeded()
+            }
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            // Cover the transient-failure case Codex flagged on #41:
+            // initial overlay hydration runs once in the auth-state
+            // task above. If that fetch transiently failed and the
+            // user never opens overlay settings, the admin kill
+            // switch and baseline stay stale until app restart.
+            // Foreground transitions are a natural opportunity to
+            // retry — `hydrateIfNeeded()` is a no-op when the
+            // previous hydration succeeded, so this costs nothing in
+            // the happy path.
+            guard newPhase == .active,
+                  router.authState == .authenticated else { return }
+            Task { await overlayPrefs.hydrateIfNeeded() }
+        }
+    }
+
+    /// Resolves a `continuum://` URL to a navigation action. Supported
+    /// shapes:
+    /// - `continuum://item/{contentId}` — push the detail screen
+    /// - `continuum://play/{contentId}` — push the player (resume from
+    ///   last known position)
+    ///
+    /// If the auth state isn't ready yet, the link is queued in
+    /// `pendingDeepLink` and drained on the next `.authenticated`
+    /// transition.
+    private func handleDeepLink(_ url: URL) {
+        guard let host = url.host, !url.pathComponents.isEmpty else { return }
+        let contentId = url.pathComponents
+            .dropFirst()
+            .first?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let contentId, !contentId.isEmpty else { return }
+
+        guard router.authState == .authenticated else {
+            pendingDeepLink = url
+            return
+        }
+
+        switch host {
+        case "item":
+            router.navigate(to: .itemDetail(contentId: contentId))
+        case "play":
+            router.navigate(
+                to: .player(
+                    contentId: contentId,
+                    startFromBeginning: false,
+                    resumePosition: nil
+                )
+            )
+        default:
+            break
+        }
+    }
+
+    @ViewBuilder
+    private var loginRoot: some View {
+        #if os(tvOS)
+        TVLoginView(router: router)
+        #else
+        LoginView(router: router)
+        #endif
+    }
+
+    /// Determine the initial auth state based on stored credentials.
+    ///
+    /// Before reading auth state, sync the actor-isolated `TokenStore`
+    /// with the observable `ServerRegistry`'s active server. The
+    /// registry loads its state synchronously in `init`, but TokenStore
+    /// is an actor and needs an explicit `switchActiveServer` hop before
+    /// its Keychain reads target the right slot.
+    private func checkInitialState() async {
+        let startedAt = Date()
+
+        if let activeId = ServerRegistry.shared.activeServerId, !activeId.isEmpty {
+            await TokenStore.shared.switchActiveServer(serverId: activeId)
+        }
+
+        let api = AuthService.shared
+        let targetState: AppRouter.AuthState
+        if !api.hasServer {
+            targetState = .needsServerSetup
+        } else if !api.isLoggedIn {
+            targetState = .needsLogin
+        } else if !api.hasProfile {
+            targetState = .needsProfile
+        } else {
+            targetState = .authenticated
+        }
+
+        // Race the homepage fetch against the splash's minimum duration so
+        // HomeView can paint from cache instead of a skeleton when it mounts.
+        // HomeViewModel.init reads CacheKey.homeSections synchronously.
+        if targetState == .authenticated {
+            Task { @MainActor in
+                do {
+                    let response = try await ContinuumAPI.shared.homeSections()
+                    ResponseCache.shared.set(response, for: CacheKey.homeSections)
+                } catch {
+                    // Best effort — HomeView's .task fetches on appear.
+                }
+            }
+        }
+
+        let elapsed = Date().timeIntervalSince(startedAt)
+        if elapsed < startupSplashMinimumDuration {
+            let remaining = UInt64((startupSplashMinimumDuration - elapsed) * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: remaining)
+        }
+
+        router.authState = targetState
+
+        #if DEBUG
+        Task.detached(priority: .background) { await Self.logTopShelfDiagnostics() }
+        #endif
+    }
+
+    #if DEBUG
+    /// Dumps the state the Top Shelf extension relies on, plus the last
+    /// breadcrumb the extension wrote. tvOS captures main-app stdout only,
+    /// so this is how we inspect the extension's view of the world
+    /// post-hoc. Run off the critical launch path.
+    private static func logTopShelfDiagnostics() async {
+        let suite = SharedStorage.suite
+        let keychain = SharedKeychain()
+        let serverUrl = suite.string(forKey: SharedStorage.serverUrlKey) ?? "<nil>"
+        let profileId = suite.string(forKey: SharedStorage.profileIdKey) ?? "<nil>"
+        let hasAccess = keychain.get(SharedStorage.mirroredAccessTokenAccount) != nil
+        let hasProfile = keychain.get(SharedStorage.mirroredProfileTokenAccount) != nil
+        let lastRun = suite.string(forKey: SharedStorage.topShelfLastRunAtKey) ?? "<never>"
+        let lastStatus = suite.string(forKey: SharedStorage.topShelfLastStatusKey) ?? "<none>"
+        print("[TopShelfDiag] suite.serverUrl=\(serverUrl) suite.profileId=\(profileId) mirroredAccess=\(hasAccess) mirroredProfile=\(hasProfile)")
+        print("[TopShelfDiag] lastRunAt=\(lastRun) lastStatus=\(lastStatus)")
+    }
+    #endif
+
+    private func maybeAutoPlayForDebug() async {
+        guard router.authState == .authenticated else { return }
+        guard !didAttemptDebugAutoPlay else { return }
+
+        if let searchQuery = debugPlaySearchQuery {
+            didAttemptDebugAutoPlay = true
+
+            do {
+                debugPlayContentId = try await resolveDebugSearchContentId(query: searchQuery)
+            } catch {
+                print("[DebugPlaySearch] Failed to resolve '\(searchQuery)': \(error)")
+            }
+            return
+        }
+
+        guard CommandLine.arguments.contains("-debugPlayFirst") else { return }
+        didAttemptDebugAutoPlay = true
+
+        do {
+            let sections = try await ContinuumAPI.shared.homeSections()
+            guard let contentId = sections.sections.lazy
+                .compactMap({ $0.items.first?.contentId })
+                .first else {
+                return
+            }
+            debugPlayContentId = contentId
+        } catch {
+            print("[DebugPlayFirst] Failed to fetch home sections: \(error)")
+        }
+    }
+
+    private var debugPlaySearchQuery: String? {
+        guard let index = CommandLine.arguments.firstIndex(of: "-debugPlaySearch"),
+              index + 1 < CommandLine.arguments.count else {
+            return nil
+        }
+        return CommandLine.arguments[index + 1].trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func resolveDebugSearchContentId(query: String) async throws -> String {
+        let response = try await ContinuumAPI.shared.catalog(query: [
+            "source": "query",
+            "q": query,
+            "limit": "20",
+            "offset": "0",
+        ])
+
+        let normalizedQuery = query.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        let preferredItem = response.items.first { item in
+            item.type == "series" &&
+            item.title.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current) == normalizedQuery
+        } ?? response.items.first { item in
+            item.title.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current) == normalizedQuery
+        } ?? response.items.first
+
+        guard let preferredItem else {
+            throw DebugAutoPlayError.noSearchResults(query: query)
+        }
+
+        if preferredItem.type == "series" {
+            let seasons = try await ContinuumAPI.shared.seasons(seriesId: preferredItem.contentId)
+            guard let firstSeason = seasons.seasons.sorted(by: { $0.seasonNumber < $1.seasonNumber }).first else {
+                throw DebugAutoPlayError.noPlayableEpisode(seriesTitle: preferredItem.title)
+            }
+
+            let episodes = try await ContinuumAPI.shared.episodes(
+                seriesId: preferredItem.contentId,
+                seasonNumber: firstSeason.seasonNumber
+            )
+            guard let firstEpisode = episodes.episodes
+                .sorted(by: { $0.episodeNumber < $1.episodeNumber })
+                .first else {
+                throw DebugAutoPlayError.noPlayableEpisode(seriesTitle: preferredItem.title)
+            }
+
+            print(
+                "[DebugPlaySearch] Resolved '\(query)' to series=\(preferredItem.title) " +
+                "season=\(firstSeason.seasonNumber) episode=\(firstEpisode.episodeNumber) contentId=\(firstEpisode.contentId)"
+            )
+            return firstEpisode.contentId
+        }
+
+        print("[DebugPlaySearch] Resolved '\(query)' to \(preferredItem.type) contentId=\(preferredItem.contentId)")
+        return preferredItem.contentId
+    }
+
+    @ViewBuilder
+    private func destinationView(for route: Route) -> some View {
+        switch route {
+        case .setup:
+            SetupView(router: router)
+        case .signup:
+            SignupView(router: router)
+        case .login:
+            LoginView(router: router)
+        case .serverSetup:
+            ServerSetupView(router: router)
+        default:
+            // Routes handled inside the authenticated tab view
+            EmptyStateView(
+                icon: "hammer.fill",
+                title: "Coming Soon",
+                subtitle: "This screen is under construction."
+            )
+            .continuumBackground()
+        }
+    }
+
+    /// Destinations reachable from the profile-selection stack. The
+    /// "Change Server" chip pushes `.serverList`; from there the user
+    /// can swap active servers or dive into `.serverSetup` to add a
+    /// new one. Auth-flow routes are included so an "Add Server" tap
+    /// on tvOS — which stays inside this stack rather than flipping
+    /// `authState` — still lands on a real view.
+    @ViewBuilder
+    private func profileFlowDestination(for route: Route) -> some View {
+        switch route {
+        case .serverList:
+            ServerListView()
+        case .serverSetup:
+            #if os(tvOS)
+            TVServerSetupView(router: router)
+            #else
+            ServerSetupView(router: router)
+            #endif
+        case .login:
+            #if os(tvOS)
+            TVLoginView(router: router)
+            #else
+            LoginView(router: router)
+            #endif
+        case .setup:
+            SetupView(router: router)
+        case .signup:
+            SignupView(router: router)
+        default:
+            EmptyStateView(icon: "questionmark.circle", title: "Unknown", subtitle: nil)
+                .continuumBackground()
+        }
+    }
+}
+
+private enum DebugAutoPlayError: LocalizedError {
+    case noPlayableEpisode(seriesTitle: String)
+    case noSearchResults(query: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .noPlayableEpisode(let seriesTitle):
+            return "No playable episode found for \(seriesTitle)"
+        case .noSearchResults(let query):
+            return "No search results found for \(query)"
+        }
+    }
+}
+
+// MARK: - Main Tab View
+
+struct MainTabView: View {
+    @Bindable var router: AppRouter
+    @State private var selectedTab: AppTab = .home
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    #if !os(macOS)
+    @Environment(\.horizontalSizeClass) private var hSize
+    #endif
+
+    var body: some View {
+        Group {
+            if prefersSidebarLayout {
+                sidebarLayout
+            } else {
+                tabLayout
+            }
+        }
+        .tint(.continuumOnSurface)
+        .environment(router)
+        #if !os(macOS)
+        .fullScreenCover(item: $router.presentedPlayer) { payload in
+            PlayerView(
+                contentId: payload.contentId,
+                preferredFileId: payload.fileId,
+                preferredAudioTrackIndex: payload.audioTrackIndex,
+                preferredSubtitleTrackIndex: payload.subtitleTrackIndex,
+                startFromBeginning: payload.startFromBeginning,
+                resumePositionOverride: payload.resumePosition,
+                posterURLHint: payload.posterURL,
+                backdropURLHint: payload.backdropURL
+            )
+        }
+        #endif
+    }
+
+    private var prefersSidebarLayout: Bool {
+        #if os(macOS)
+        true
+        #else
+        hSize == .regular
+        #endif
+    }
+
+    /// iPhone + iPad compact width: bottom tab bar, single navigation stack.
+    private var tabLayout: some View {
+        NavigationStack(path: $router.path) {
+            TabView(selection: $selectedTab) {
+                ForEach(AppTab.visibleCases) { tab in
+                    tabContent(for: tab)
+                        .tabItem {
+                            #if os(tvOS)
+                            // Text-only tabs on tvOS keep the top bar compact —
+                            // adding an icon blows up each tab's focus pill.
+                            Text(tab.rawValue)
+                            #else
+                            Label(
+                                tab.rawValue,
+                                systemImage: selectedTab == tab ? tab.selectedIcon : tab.icon
+                            )
+                            #endif
+                        }
+                        .tag(tab)
+                }
+            }
+            .navigationDestination(for: Route.self) { route in
+                routeContent(for: route)
+            }
+        }
+    }
+
+    /// iPad regular width: sidebar list + detail pane.
+    /// Selection drives both the highlighted row and the detail content.
+    ///
+    /// Home / Libraries / Recommendations hide the nav bar (so SwiftUI's
+    /// default sidebar toggle isn't visible on those screens). We inject a
+    /// toggle closure through `\.sidebarToggle` instead — each custom header
+    /// renders a `SidebarToggleButton` on its leading edge, which collapses
+    /// and re-expands the sidebar. Video playback doesn't overlap the sidebar
+    /// because the player is presented via `fullScreenCover` on
+    /// `router.presentedPlayer` rather than pushed into the detail pane.
+    private var sidebarLayout: some View {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            List(selection: Binding<AppTab?>(
+                get: { selectedTab },
+                set: { if let v = $0 { selectedTab = v } }
+            )) {
+                ForEach(AppTab.visibleCases) { tab in
+                    Label(
+                        tab.rawValue,
+                        systemImage: selectedTab == tab ? tab.selectedIcon : tab.icon
+                    )
+                    .tag(tab)
+                }
+            }
+            .navigationTitle("Silo")
+        } detail: {
+            NavigationStack(path: $router.path) {
+                tabContent(for: selectedTab)
+                    .navigationDestination(for: Route.self) { route in
+                        routeContent(for: route)
+                    }
+            }
+        }
+        .environment(\.sidebarToggle, toggleSidebar)
+    }
+
+    /// Collapses or re-expands the sidebar. Animated so the detail pane
+    /// slides into place rather than snapping.
+    private func toggleSidebar() {
+        withAnimation(.easeInOut(duration: 0.25)) {
+            columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
+        }
+    }
+
+    @ViewBuilder
+    private func tabContent(for tab: AppTab) -> some View {
+        switch tab {
+        case .home:
+            HomeView()
+
+        case .libraries:
+            LibrariesTabView()
+
+        case .search:
+            SearchView()
+
+        case .recommendations:
+            RecommendationsView()
+
+        case .settings:
+            SettingsView()
+
+        case .switchProfile, .switchServer:
+            // tvOS-only sidebar shortcuts; filtered out of iOS visibleCases.
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private func routeContent(for route: Route) -> some View {
+        switch route {
+        case .library(let libraryId, let title):
+            LibraryDetailView(libraryId: libraryId, initialTitle: title)
+        case .libraryCollection(let libraryId, let collectionId, let title, let kind):
+            LibraryCollectionDetailView(
+                libraryId: libraryId,
+                collectionId: collectionId,
+                title: title,
+                kind: kind
+            )
+        case .itemDetail(let contentId):
+            ItemDetailView(contentId: contentId)
+        case .personDetail(let personId):
+            PersonDetailView(personId: personId)
+        case .player(let contentId, let startFromBeginning, let resumePosition):
+            #if os(macOS)
+            PlayerView(
+                contentId: contentId,
+                startFromBeginning: startFromBeginning,
+                resumePositionOverride: resumePosition
+            )
+            #else
+            // Player is presented as a full-screen cover (see MainTabView)
+            // so it isn't boxed into the iPad detail pane. This route arm
+            // exists only so switch exhaustiveness holds.
+            EmptyView()
+            #endif
+        case .playerWithFile(
+            let contentId,
+            let fileId,
+            let audioTrackIndex,
+            let subtitleTrackIndex,
+            let startFromBeginning,
+            let resumePosition
+        ):
+            #if os(macOS)
+            PlayerView(
+                contentId: contentId,
+                preferredFileId: fileId,
+                preferredAudioTrackIndex: audioTrackIndex,
+                preferredSubtitleTrackIndex: subtitleTrackIndex,
+                startFromBeginning: startFromBeginning,
+                resumePositionOverride: resumePosition
+            )
+            #else
+            EmptyView()
+            #endif
+        case .favorites:
+            FavoritesView()
+        case .watchlist:
+            WatchlistView()
+        case .history:
+            HistoryView()
+        case .collections:
+            CollectionsView()
+        case .collectionDetail(let id):
+            CollectionDetailView(collectionId: id)
+        case .browse(let libraryId):
+            BrowseView(libraryId: libraryId)
+        case .admin:
+            AdminDashboardView()
+        case .search:
+            SearchView()
+        case .settings:
+            SettingsView()
+        case .recommendations:
+            RecommendationsView()
+        case .serverList:
+            ServerListView()
+        default:
+            EmptyStateView(icon: "questionmark.circle", title: "Unknown", subtitle: nil)
+                .continuumBackground()
+        }
+    }
+
+    private var settingsPlaceholder: some View {
+        List {
+            Section {
+                Button("Switch Profile") {
+                    AuthService.shared.profileId = nil
+                    router.showProfileSelection()
+                }
+                .foregroundColor(.continuumOnSurface)
+            }
+
+            Section {
+                Button("Sign Out") {
+                    router.signOutAndReset()
+                }
+                .foregroundColor(.continuumError)
+            }
+        }
+        .continuumScrollContentBackgroundHidden()
+        .background(Color.continuumBackground)
+        .navigationTitle("Settings")
+        .continuumToolbarColorSchemeDark()
+    }
+}

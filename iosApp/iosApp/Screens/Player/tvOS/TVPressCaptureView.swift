@@ -1,0 +1,342 @@
+#if os(tvOS)
+import SwiftUI
+import UIKit
+
+/// Bridges the Siri Remote's press lifecycle into SwiftUI. `.onMoveCommand`
+/// only exposes single press events with no way to distinguish a held
+/// press from a tap, so seek-mode entry — where we want a long press to
+/// enter a persistent seek session and a short press to trigger a quick
+/// skip — isn't expressible in pure SwiftUI. This representable hosts a
+/// focusable `UIView` that overrides `pressesBegan` / `pressesEnded` /
+/// `pressesCancelled` and fires two callbacks: quick tap (released
+/// before the hold threshold), hold begin (crossed the threshold while still
+/// held), hold repeat, and hold end.
+struct TVPressCaptureView: UIViewRepresentable {
+    enum ArrowDirection: Hashable {
+        case left, right, up, down
+    }
+
+    /// Which arrow directions this view should consume. Directions outside
+    /// this set fall through to UIKit so normal focus movement can continue.
+    var capturedDirections: Set<ArrowDirection> = [.left, .right, .up, .down]
+    /// Press + release within the hold threshold.
+    var onArrowTap: (ArrowDirection) -> Void = { _ in }
+    /// Crossed the threshold while still held — seek session should start.
+    var onArrowHoldBegin: (ArrowDirection) -> Void = { _ in }
+    /// Fires repeatedly while an arrow remains held after hold-begin.
+    var onArrowHoldRepeat: (ArrowDirection) -> Void = { _ in }
+    /// Release after a hold.
+    var onArrowHoldEnd: (ArrowDirection) -> Void = { _ in }
+    /// Select (center button) press. Menu is intentionally not intercepted
+    /// so SwiftUI's `.onExitCommand` chain continues to own it.
+    var onSelect: () -> Void = {}
+
+    func makeUIView(context: Context) -> PressCaptureUIView {
+        let v = PressCaptureUIView()
+        apply(to: v)
+        return v
+    }
+
+    func updateUIView(_ uiView: PressCaptureUIView, context: Context) {
+        apply(to: uiView)
+    }
+
+    private func apply(to view: PressCaptureUIView) {
+        view.capturedDirections = capturedDirections
+        view.onArrowTap = onArrowTap
+        view.onArrowHoldBegin = onArrowHoldBegin
+        view.onArrowHoldRepeat = onArrowHoldRepeat
+        view.onArrowHoldEnd = onArrowHoldEnd
+        view.onSelect = onSelect
+    }
+}
+
+/// Window-level press gesture bridge for places where SwiftUI owns focus but
+/// we still need press lifecycle. Unlike `TVPressCaptureView`, this view does
+/// not need to become focused; UIKit gesture recognizers attached to the window
+/// observe the remote press while SwiftUI keeps rendering the focused scrubber.
+struct TVDirectionalPressGestureView: UIViewRepresentable {
+    var isActive: Bool
+    var onArrowTap: (TVPressCaptureView.ArrowDirection) -> Void = { _ in }
+    var onArrowHoldBegin: (TVPressCaptureView.ArrowDirection) -> Void = { _ in }
+    var onArrowHoldRepeat: (TVPressCaptureView.ArrowDirection) -> Void = { _ in }
+    var onArrowHoldEnd: (TVPressCaptureView.ArrowDirection) -> Void = { _ in }
+
+    func makeUIView(context: Context) -> DirectionalPressGestureUIView {
+        let view = DirectionalPressGestureUIView()
+        apply(to: view)
+        return view
+    }
+
+    func updateUIView(_ uiView: DirectionalPressGestureUIView, context: Context) {
+        apply(to: uiView)
+    }
+
+    private func apply(to view: DirectionalPressGestureUIView) {
+        view.isActive = isActive
+        view.onArrowTap = onArrowTap
+        view.onArrowHoldBegin = onArrowHoldBegin
+        view.onArrowHoldRepeat = onArrowHoldRepeat
+        view.onArrowHoldEnd = onArrowHoldEnd
+    }
+}
+
+final class DirectionalPressGestureUIView: UIView, UIGestureRecognizerDelegate {
+    var isActive: Bool = false
+    var onArrowTap: (TVPressCaptureView.ArrowDirection) -> Void = { _ in }
+    var onArrowHoldBegin: (TVPressCaptureView.ArrowDirection) -> Void = { _ in }
+    var onArrowHoldRepeat: (TVPressCaptureView.ArrowDirection) -> Void = { _ in }
+    var onArrowHoldEnd: (TVPressCaptureView.ArrowDirection) -> Void = { _ in }
+
+    private static let holdThreshold: TimeInterval = 0.3
+    private static let holdRepeatInterval: TimeInterval = 0.1
+
+    private weak var attachedWindow: UIWindow?
+    private var recognizers: [UIGestureRecognizer] = []
+    private var didFireHold: [TVPressCaptureView.ArrowDirection: Bool] = [:]
+    private var repeatTimers: [TVPressCaptureView.ArrowDirection: DispatchWorkItem] = [:]
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        attachRecognizersIfNeeded()
+    }
+
+    deinit {
+        cancelAllRepeatTimers()
+        detachRecognizers()
+    }
+
+    private func attachRecognizersIfNeeded() {
+        guard let window, attachedWindow !== window else { return }
+        detachRecognizers()
+        attachedWindow = window
+
+        for direction in [TVPressCaptureView.ArrowDirection.left, .right] {
+            let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
+            tap.allowedPressTypes = [NSNumber(value: pressType(for: direction).rawValue)]
+            tap.delegate = self
+            tap.name = gestureName(for: direction)
+
+            let hold = UILongPressGestureRecognizer(target: self, action: #selector(handleHold(_:)))
+            hold.allowedPressTypes = [NSNumber(value: pressType(for: direction).rawValue)]
+            hold.minimumPressDuration = Self.holdThreshold
+            hold.delegate = self
+            hold.name = gestureName(for: direction)
+
+            tap.require(toFail: hold)
+            window.addGestureRecognizer(tap)
+            window.addGestureRecognizer(hold)
+            recognizers.append(tap)
+            recognizers.append(hold)
+        }
+    }
+
+    private func detachRecognizers() {
+        guard let attachedWindow else { return }
+        for recognizer in recognizers {
+            attachedWindow.removeGestureRecognizer(recognizer)
+        }
+        recognizers.removeAll()
+        self.attachedWindow = nil
+    }
+
+    @objc private func handleTap(_ recognizer: UITapGestureRecognizer) {
+        guard isActive, recognizer.state == .ended, let direction = direction(for: recognizer) else { return }
+        onArrowTap(direction)
+    }
+
+    @objc private func handleHold(_ recognizer: UILongPressGestureRecognizer) {
+        guard isActive, let direction = direction(for: recognizer) else { return }
+        switch recognizer.state {
+        case .began:
+            didFireHold[direction] = true
+            onArrowHoldBegin(direction)
+            scheduleHoldRepeat(for: direction)
+        case .ended, .cancelled, .failed:
+            cancelHoldRepeat(for: direction)
+            if didFireHold[direction] == true {
+                onArrowHoldEnd(direction)
+            }
+            didFireHold[direction] = false
+        default:
+            break
+        }
+    }
+
+    private func scheduleHoldRepeat(for direction: TVPressCaptureView.ArrowDirection) {
+        cancelHoldRepeat(for: direction)
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, self.isActive, self.didFireHold[direction] == true else { return }
+            self.onArrowHoldRepeat(direction)
+            self.scheduleHoldRepeat(for: direction)
+        }
+        repeatTimers[direction] = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.holdRepeatInterval, execute: workItem)
+    }
+
+    private func cancelHoldRepeat(for direction: TVPressCaptureView.ArrowDirection) {
+        repeatTimers.removeValue(forKey: direction)?.cancel()
+    }
+
+    private func cancelAllRepeatTimers() {
+        for timer in repeatTimers.values {
+            timer.cancel()
+        }
+        repeatTimers.removeAll()
+    }
+
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        isActive
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        true
+    }
+
+    private func gestureName(for direction: TVPressCaptureView.ArrowDirection) -> String {
+        switch direction {
+        case .left: return "continuum.leftPress"
+        case .right: return "continuum.rightPress"
+        case .up, .down: return "continuum.otherPress"
+        }
+    }
+
+    private func direction(for recognizer: UIGestureRecognizer) -> TVPressCaptureView.ArrowDirection? {
+        switch recognizer.name {
+        case "continuum.leftPress": return .left
+        case "continuum.rightPress": return .right
+        default: return nil
+        }
+    }
+
+    private func pressType(for direction: TVPressCaptureView.ArrowDirection) -> UIPress.PressType {
+        switch direction {
+        case .left: return .leftArrow
+        case .right: return .rightArrow
+        case .up: return .upArrow
+        case .down: return .downArrow
+        }
+    }
+}
+
+final class PressCaptureUIView: UIView {
+    var capturedDirections: Set<TVPressCaptureView.ArrowDirection> = [.left, .right, .up, .down]
+    var onArrowTap: (TVPressCaptureView.ArrowDirection) -> Void = { _ in }
+    var onArrowHoldBegin: (TVPressCaptureView.ArrowDirection) -> Void = { _ in }
+    var onArrowHoldRepeat: (TVPressCaptureView.ArrowDirection) -> Void = { _ in }
+    var onArrowHoldEnd: (TVPressCaptureView.ArrowDirection) -> Void = { _ in }
+    var onSelect: () -> Void = {}
+
+    /// Threshold between "tap" and "hold". 300 ms is snappy enough that a
+    /// deliberate single press never feels like it missed, but long enough
+    /// that a natural press-and-release doesn't trip hold-seek.
+    private static let holdThreshold: TimeInterval = 0.3
+    private static let holdRepeatInterval: TimeInterval = 0.1
+
+    private struct Pending {
+        let direction: TVPressCaptureView.ArrowDirection
+        var holdTimer: DispatchWorkItem?
+        var repeatTimer: DispatchWorkItem?
+        var didFireHold: Bool
+    }
+    /// In-flight arrow presses keyed by `UIPress.PressType` so multiple
+    /// simultaneous presses (rare on the Siri Remote, but possible on a
+    /// Bluetooth keyboard) track independently.
+    private var pending: [UIPress.PressType: Pending] = [:]
+
+    override var canBecomeFocused: Bool { true }
+
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        var handled = false
+        for press in presses {
+            if let direction = Self.arrowDirection(from: press.type),
+               capturedDirections.contains(direction) {
+                handled = true
+                startArrow(type: press.type, direction: direction)
+            } else if press.type == .select {
+                handled = true
+                onSelect()
+            }
+        }
+        if !handled {
+            super.pressesBegan(presses, with: event)
+        }
+    }
+
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        var handled = false
+        for press in presses {
+            if let direction = Self.arrowDirection(from: press.type),
+               capturedDirections.contains(direction) {
+                handled = true
+                endArrow(type: press.type)
+            }
+        }
+        if !handled {
+            super.pressesEnded(presses, with: event)
+        }
+    }
+
+    override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses {
+            guard let direction = Self.arrowDirection(from: press.type),
+                  capturedDirections.contains(direction)
+            else { continue }
+            endArrow(type: press.type)
+        }
+        super.pressesCancelled(presses, with: event)
+    }
+
+    private func startArrow(type: UIPress.PressType, direction: TVPressCaptureView.ArrowDirection) {
+        // Schedule the hold-fire callback. If `pressesEnded` runs before
+        // it executes, we cancel and emit a tap instead.
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, var entry = self.pending[type] else { return }
+            entry.didFireHold = true
+            self.pending[type] = entry
+            self.onArrowHoldBegin(direction)
+            self.scheduleHoldRepeat(type: type)
+        }
+        pending[type] = Pending(direction: direction, holdTimer: workItem, repeatTimer: nil, didFireHold: false)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.holdThreshold, execute: workItem)
+    }
+
+    private func scheduleHoldRepeat(type: UIPress.PressType) {
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, var entry = self.pending[type], entry.didFireHold else { return }
+            self.onArrowHoldRepeat(entry.direction)
+            entry.repeatTimer = nil
+            self.pending[type] = entry
+            self.scheduleHoldRepeat(type: type)
+        }
+        guard var entry = pending[type], entry.didFireHold else { return }
+        entry.repeatTimer = workItem
+        pending[type] = entry
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.holdRepeatInterval, execute: workItem)
+    }
+
+    private func endArrow(type: UIPress.PressType) {
+        guard let entry = pending.removeValue(forKey: type) else { return }
+        entry.holdTimer?.cancel()
+        entry.repeatTimer?.cancel()
+        if entry.didFireHold {
+            onArrowHoldEnd(entry.direction)
+        } else {
+            onArrowTap(entry.direction)
+        }
+    }
+
+    private static func arrowDirection(from type: UIPress.PressType) -> TVPressCaptureView.ArrowDirection? {
+        switch type {
+        case .leftArrow:  return .left
+        case .rightArrow: return .right
+        case .upArrow:    return .up
+        case .downArrow:  return .down
+        default:          return nil
+        }
+    }
+}
+#endif

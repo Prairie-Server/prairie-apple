@@ -1,0 +1,16 @@
+// iOS app signing defaults. CI and the paid team use these as-is.
+// Local contributors without access to the paid team can override any of
+// these by dropping a `Local.xcconfig` into this directory — see
+// `Local.xcconfig.sample` for the template.
+//
+// Indirection via `SILO_IOS_BUNDLE_ID` / `SILO_IOS_ENTITLEMENTS`
+// lets Local.xcconfig swap values without touching the other targets'
+// xcconfigs.
+
+SILO_IOS_BUNDLE_ID = com.continuum.play
+SILO_IOS_ENTITLEMENTS = Silo.entitlements
+
+PRODUCT_BUNDLE_IDENTIFIER = $(SILO_IOS_BUNDLE_ID)
+CODE_SIGN_ENTITLEMENTS = $(SILO_IOS_ENTITLEMENTS)
+
+#include? "Local.xcconfig"

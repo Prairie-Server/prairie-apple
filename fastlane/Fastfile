@@ -1,0 +1,365 @@
+require "base64"
+
+# Root-level Fastfile — covers iOS, tvOS (Android lanes to be added later).
+#
+# Lane overview:
+#   ios beta_ios   — build iOS app, upload to TestFlight
+#   ios beta_tvos  — build tvOS app, upload to TestFlight (must run after beta_ios to avoid
+#                    build number races; enforce ordering in CI)
+#
+# All identifying values (bundle ID, team ID, email, certs repo) come from environment
+# variables. Nothing is hardcoded — this file is safe to commit to a public repo.
+
+default_platform(:ios)
+
+# ── Private helpers ──────────────────────────────────────────────────────────
+
+# Loads the App Store Connect API key.
+#
+# CI path:   base64-decode APP_STORE_CONNECT_API_KEY_KEY env var.
+# Local path: read ~/.appstoreconnect/AuthKey_<KEY_ID>.p8 from disk.
+#
+# Returns the api_key hash produced by app_store_connect_api_key() so callers
+# can pass it explicitly to actions that accept api_key:.
+private_lane :setup_api_key do
+  key_id     = ENV["APP_STORE_CONNECT_API_KEY_KEY_ID"]
+  issuer_id  = ENV["APP_STORE_CONNECT_API_KEY_ISSUER_ID"]
+  key_base64 = ENV["APP_STORE_CONNECT_API_KEY_KEY"]
+
+  if key_base64 && !key_base64.empty?
+    # CI: key content is stored as a base64-encoded environment variable.
+    # Encode with: base64 < AuthKey_XXXX.p8 | tr -d '\n'
+    key_content = Base64.decode64(key_base64)
+  else
+    # Local dev: read the .p8 file from the standard App Store Connect location.
+    p8_path = File.expand_path("~/.appstoreconnect/AuthKey_#{key_id}.p8")
+    UI.user_error!(
+      "ASC API key not found at #{p8_path}. " \
+      "Either place the .p8 file there or set APP_STORE_CONNECT_API_KEY_KEY."
+    ) unless File.exist?(p8_path)
+    key_content = File.read(p8_path)
+  end
+
+  app_store_connect_api_key(
+    key_id:      key_id,
+    issuer_id:   issuer_id,
+    key_content: key_content,
+    in_house:    false,
+    duration:    1200          # Max allowed by Apple — avoids expiry during slow SPM steps
+  )
+end
+
+def env_list(name)
+  ENV[name].to_s.split(",").map(&:strip).reject(&:empty?)
+end
+
+def env_truthy?(name, default:)
+  value = ENV[name]
+  return default if value.nil? || value.strip.empty?
+
+  %w[1 true yes y on].include?(value.strip.downcase)
+end
+
+def testflight_distribution
+  mode = ENV.fetch("TESTFLIGHT_DISTRIBUTION", "internal").strip.downcase
+
+  case mode
+  when "", "internal", "private"
+    "internal"
+  when "external", "public"
+    "external"
+  else
+    UI.user_error!(
+      "Unsupported TESTFLIGHT_DISTRIBUTION=#{mode.inspect}. " \
+      "Use internal, public, or external."
+    )
+  end
+end
+
+def testflight_upload_config
+  distribution = testflight_distribution
+  internal_groups = env_list("TESTFLIGHT_INTERNAL_GROUPS")
+
+  return {
+    distribution: distribution,
+    groups: internal_groups.any? ? internal_groups : nil,
+    distribute_external: false,
+    notify_external_testers: false,
+  } if distribution == "internal"
+
+  external_groups = env_list("TESTFLIGHT_EXTERNAL_GROUPS")
+  UI.user_error!(
+    "TESTFLIGHT_EXTERNAL_GROUPS must be set to one or more external " \
+    "TestFlight group names when TESTFLIGHT_DISTRIBUTION is public/external."
+  ) if external_groups.empty?
+
+  {
+    distribution: distribution,
+    groups: external_groups,
+    distribute_external: true,
+    notify_external_testers: env_truthy?("TESTFLIGHT_NOTIFY_EXTERNAL_TESTERS", default: true),
+  }
+end
+
+# ── CI keychain teardown ──────────────────────────────────────────────────────
+#
+# setup_ci creates fastlane_tmp_keychain and makes it the user default. With
+# no teardown, an interrupted lane leaves the temp keychain as the permanent
+# user default; once its file is later removed, macOS pops "Keychain Not
+# Found" prompts at random for unrelated apps on the runner. Snapshot the
+# original state before any lane runs and restore it on success and error.
+
+before_all do |_lane, _options|
+  next unless is_ci
+  ENV["FL_ORIG_DEFAULT_KC"] = `security default-keychain -d user`.scan(/"([^"]+)"/).flatten.first.to_s
+  ENV["FL_ORIG_KC_LIST"]    = `security list-keychains   -d user`.scan(/"([^"]+)"/).flatten.join(":")
+end
+
+after_all do |_lane, _options|
+  restore_ci_keychain_state if is_ci
+end
+
+error do |_lane, _exception, _options|
+  restore_ci_keychain_state if is_ci
+end
+
+# Each step is independently rescued so a failure in one doesn't abort the
+# others — the search-list restore is the load-bearing recovery for the
+# original "Keychain Not Found" symptom and must run even if the default
+# restore fails.
+def restore_ci_keychain_state
+  begin
+    delete_keychain(name: "fastlane_tmp_keychain")
+  rescue StandardError
+    # Already removed by another lane / the keychain sweeper — fine.
+  end
+
+  default = ENV["FL_ORIG_DEFAULT_KC"]
+  if default && !default.empty? && File.exist?(default)
+    begin
+      sh("security default-keychain -d user -s #{default.shellescape}")
+    rescue StandardError => e
+      UI.important("Failed to restore default keychain (#{default}): #{e.message}")
+    end
+  end
+
+  list = (ENV["FL_ORIG_KC_LIST"] || "").split(":").reject(&:empty?)
+  unless list.empty?
+    begin
+      sh("security list-keychains   -d user -s #{list.map(&:shellescape).join(' ')}")
+    rescue StandardError => e
+      UI.important("Failed to restore keychain search list: #{e.message}")
+    end
+  end
+end
+
+# ── iOS + tvOS ────────────────────────────────────────────────────────────────
+
+platform :ios do
+
+  # ── iOS TestFlight ────────────────────────────────────────────────────────
+
+  desc "Build the iOS app and upload to TestFlight"
+  lane :beta_ios do
+    # setup_ci creates a temporary keychain on CI runners; no-op locally.
+    setup_ci if is_ci
+
+    api_key        = setup_api_key
+    app_id         = "com.continuum.play"
+    team_id        = ENV["TEAM_ID"]
+    # CI sets TESTFLIGHT_DISTRIBUTION from the release tag. Internal is the
+    # default; public/external tags also distribute to TESTFLIGHT_EXTERNAL_GROUPS.
+    testflight_upload = testflight_upload_config
+    # Apple requires a "What to Test" note for every external group build.
+    # Set TESTFLIGHT_CHANGELOG in CI variables for an explicit note;
+    # falls back to the latest git commit subject when not set.
+    changelog       = ENV["TESTFLIGHT_CHANGELOG"] || `git log -1 --pretty=format:"%s"`.strip
+    ios_app_dir     = File.expand_path("../iosApp", __dir__)
+    UI.message("TestFlight distribution: #{testflight_upload[:distribution]}")
+
+    # Regenerate Silo.xcodeproj from project.yml first — match must run on
+    # an existing project so it can write the provisioning profile specifier into
+    # it. Running xcodegen after match would wipe those settings out.
+    sh("xcodegen generate --spec '#{ios_app_dir}/project.yml'")
+
+    # Sync the iOS distribution cert + provisioning profile from the shared
+    # Match certs repo — read-only on CI. Sets PROVISIONING_PROFILE_SPECIFIER
+    # in the project and the lane context for gym to pick up.
+    match(
+      type:           "appstore",
+      platform:       "ios",
+      app_identifier: app_id,
+      readonly:       is_ci,
+      api_key:        api_key
+    )
+
+    # Query the iOS-specific build number and increment by 1.
+    # platform: "ios" scopes the query to iOS builds only — tvOS tracks
+    # its own build sequence independently under Universal Purchase.
+    build_number = latest_testflight_build_number(
+      api_key:        api_key,
+      app_identifier: app_id,
+      platform:       "ios"
+    ) + 1
+
+    # Resolve SPM packages so DerivedData is populated before the FFmpeg patch.
+    sh("xcodebuild -project '#{ios_app_dir}/Silo.xcodeproj' " \
+       "-scheme Silo -resolvePackageDependencies")
+
+    # Patch the FFmpeg libavutil module map: removes the hwcontext_amf.h reference
+    # that is absent on macOS and breaks compilation on Apple Silicon build agents.
+    sh("bash '#{ios_app_dir}/scripts/patch-libavutil-modulemap.sh'")
+
+    # match populates MATCH_PROVISIONING_PROFILE_MAPPING in the lane context.
+    # Pass the profile specifier explicitly in xcargs so xcodebuild uses it
+    # during the archive step (export_options only covers the IPA packaging step).
+    profile_specifier = lane_context[SharedValues::MATCH_PROVISIONING_PROFILE_MAPPING][app_id]
+
+    build_app(
+      project:          "#{ios_app_dir}/Silo.xcodeproj",
+      scheme:           "Silo",
+      destination:      "generic/platform=iOS",
+      export_method:    "app-store",
+      output_directory: "build/ios",
+      output_name:      "Silo.ipa",
+      xcargs: "CODE_SIGN_STYLE=Manual " \
+              "CODE_SIGN_IDENTITY='Apple Distribution' " \
+              "PROVISIONING_PROFILE_SPECIFIER='#{profile_specifier}' " \
+              "CURRENT_PROJECT_VERSION=#{build_number} " \
+              "DEVELOPMENT_TEAM=#{team_id}"
+    )
+
+    upload_to_testflight(
+      api_key:                 api_key,
+      app_identifier:          app_id,
+      ipa:                     "build/ios/Silo.ipa",
+      # Public/external tags wait for Apple processing so groups can be assigned.
+      changelog:               changelog,
+      groups:                  testflight_upload[:groups],
+      distribute_external:     testflight_upload[:distribute_external],
+      notify_external_testers: testflight_upload[:notify_external_testers]
+    )
+  end
+
+  # ── tvOS TestFlight ───────────────────────────────────────────────────────
+
+  desc "Build the tvOS app and upload to TestFlight"
+  lane :beta_tvos do
+    # setup_ci creates a temporary keychain on CI runners; no-op locally.
+    setup_ci if is_ci
+
+    api_key        = setup_api_key
+    app_id         = "com.continuum.play"
+    topshelf_id    = "com.continuum.play.topshelf"
+    team_id        = ENV["TEAM_ID"]
+    # CI sets TESTFLIGHT_DISTRIBUTION from the release tag. Internal is the
+    # default; public/external tags also distribute to TESTFLIGHT_EXTERNAL_GROUPS.
+    testflight_upload = testflight_upload_config
+    # Apple requires a "What to Test" note for every external group build.
+    # Set TESTFLIGHT_CHANGELOG in CI variables for an explicit note;
+    # falls back to the latest git commit subject when not set.
+    changelog       = ENV["TESTFLIGHT_CHANGELOG"] || `git log -1 --pretty=format:"%s"`.strip
+    ios_app_dir     = File.expand_path("../iosApp", __dir__)
+    UI.message("TestFlight distribution: #{testflight_upload[:distribution]}")
+
+    # Regenerate .xcodeproj from project.yml first — same reason as beta_ios:
+    # match must write the provisioning profile into an existing project, and
+    # xcodegen must not run after match or it will overwrite those settings.
+    sh("xcodegen generate --spec '#{ios_app_dir}/project.yml'")
+
+    # Sync distribution certs + provisioning profiles for both the tvOS app
+    # and the embedded Top Shelf extension. Both need their own profile because
+    # they have different bundle IDs and different entitlements (App Group +
+    # Keychain Sharing must be declared in the portal for both App IDs).
+    match(
+      type:           "appstore",
+      platform:       "tvos",
+      app_identifier: [app_id, topshelf_id],
+      readonly:       is_ci,
+      api_key:        api_key
+    )
+
+    # Query the tvOS-specific build number and increment by 1.
+    # platform: "appletvos" scopes the query to tvOS builds only — independent
+    # from the iOS sequence under Universal Purchase.
+    build_number = latest_testflight_build_number(
+      api_key:        api_key,
+      app_identifier: app_id,
+      platform:       "appletvos"
+    ) + 1
+
+    # Resolve SPM packages for DerivedData population.
+    sh("xcodebuild -project '#{ios_app_dir}/Silo.xcodeproj' " \
+       "-scheme SiloTV -resolvePackageDependencies")
+
+    # Patch FFmpeg module map.
+    sh("bash '#{ios_app_dir}/scripts/patch-libavutil-modulemap.sh'")
+
+    # Pull both profile names from the match mapping.
+    profile_map     = lane_context[SharedValues::MATCH_PROVISIONING_PROFILE_MAPPING]
+    tv_profile      = profile_map[app_id]
+    shelf_profile   = profile_map[topshelf_id]
+
+    # Patch signing settings per-target in the regenerated Xcode project.
+    # xcodebuild needs per-target PROVISIONING_PROFILE_SPECIFIER during the
+    # archive step; a single global xcarg would apply the wrong profile to the
+    # extension target (different bundle ID → different entitlements → signing
+    # failure). update_code_signing_settings writes the correct profile name
+    # into each target's build settings before archiving.
+    update_code_signing_settings(
+      use_automatic_signing: false,
+      path:                  "#{ios_app_dir}/Silo.xcodeproj",
+      targets:               ["SiloTV"],
+      code_sign_identity:    "Apple Distribution",
+      profile_name:          tv_profile,
+      team_id:               team_id
+    )
+
+    update_code_signing_settings(
+      use_automatic_signing: false,
+      path:                  "#{ios_app_dir}/Silo.xcodeproj",
+      targets:               ["SiloTVTopShelf"],
+      code_sign_identity:    "Apple Distribution",
+      profile_name:          shelf_profile,
+      team_id:               team_id
+    )
+
+    build_app(
+      project:          "#{ios_app_dir}/Silo.xcodeproj",
+      scheme:           "SiloTV",
+      destination:      "generic/platform=tvOS",
+      export_method:    "app-store",
+      output_directory: "build/tvos",
+      output_name:      "SiloTV.ipa",
+      # PROVISIONING_PROFILE_SPECIFIER is intentionally absent from xcargs —
+      # a global value would override both targets with the same profile.
+      # Per-target settings were written above via update_code_signing_settings.
+      xcargs: "CODE_SIGN_STYLE=Manual " \
+              "CODE_SIGN_IDENTITY='Apple Distribution' " \
+              "CURRENT_PROJECT_VERSION=#{build_number} " \
+              "DEVELOPMENT_TEAM=#{team_id}",
+      # export_options.provisioningProfiles maps each bundle ID to its profile
+      # name for the IPA packaging step (separate from the archive step above).
+      export_options: {
+        method:               "app-store",
+        signingStyle:         "manual",
+        provisioningProfiles: {
+          app_id      => tv_profile,
+          topshelf_id => shelf_profile,
+        }
+      }
+    )
+
+    upload_to_testflight(
+      api_key:                 api_key,
+      app_identifier:          app_id,
+      ipa:                     "build/tvos/SiloTV.ipa",
+      # Public/external tags wait for Apple processing so groups can be assigned.
+      changelog:               changelog,
+      groups:                  testflight_upload[:groups],
+      distribute_external:     testflight_upload[:distribute_external],
+      notify_external_testers: testflight_upload[:notify_external_testers]
+    )
+  end
+
+end

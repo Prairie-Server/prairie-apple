@@ -1,0 +1,11 @@
+# All values come from CI/CD environment variables.
+# Nothing identifying is hardcoded — this file is safe to commit to a public repo.
+
+storage_mode("git")
+git_url(ENV["MATCH_GIT_URL"])           # Private certs repo — never hardcoded here
+
+type("appstore")
+app_identifier(["com.continuum.play", "com.continuum.play.topshelf"])
+team_id(ENV["TEAM_ID"])
+# username omitted: all match calls pass api_key: explicitly, so
+# username/password auth is never used.

@@ -1,0 +1,8 @@
+# All values come from CI/CD environment variables.
+# Nothing identifying is hardcoded — this file is safe to commit to a public repo.
+#
+# APPLE_ID is intentionally omitted: all lanes authenticate via the App Store
+# Connect API key, so username/password auth is never invoked.
+
+app_identifier("com.continuum.play")
+team_id(ENV["TEAM_ID"])
