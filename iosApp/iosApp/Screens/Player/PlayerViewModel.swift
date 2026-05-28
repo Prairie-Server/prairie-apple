@@ -1757,6 +1757,7 @@ class PlayerViewModel {
     ) async throws -> SourceProxyPreparation {
         guard plan.delivery == .direct,
               plan.engine != .avPlayerHLS,
+              plan.engine != .playerCoreDirect,
               ["http", "https"].contains(plan.sourceStreamRequest.url.scheme?.lowercased()) else {
             if plan.engine == .avPlayerLocalDVLoopback {
                 throw SourceProxyPreparationError.unsupportedSourceURL

@@ -2339,7 +2339,18 @@ final class PlayerCore: NSObject {
         // Enable reconnection for flaky HTTP.
         av_dict_set(&options, "reconnect", "1", 0)
         av_dict_set(&options, "reconnect_streamed", "1", 0)
+        av_dict_set(&options, "reconnect_on_network_error", "1", 0)
+        av_dict_set(&options, "reconnect_at_eof", "1", 0)
+        av_dict_set(&options, "reconnect_on_http_error", "5xx", 0)
         av_dict_set(&options, "reconnect_delay_max", "5", 0)
+        // Matroska over HTTP needs frequent small seeks during probing and
+        // startup. Keep requests bounded so CDN/proxy TLS connections are not
+        // held as one large open-ended range while the demuxer seeks around.
+        av_dict_set(&options, "seekable", "1", 0)
+        av_dict_set(&options, "multiple_requests", "1", 0)
+        av_dict_set(&options, "initial_request_size", "2097152", 0)
+        av_dict_set(&options, "request_size", "2097152", 0)
+        av_dict_set(&options, "short_seek_size", "2097152", 0)
         // Per-operation socket timeout (microseconds). 10s matches the
         // interrupt callback so either mechanism can unstick us first.
         av_dict_set(&options, "rw_timeout", "10000000", 0)
