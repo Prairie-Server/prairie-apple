@@ -4,6 +4,10 @@ import SwiftUI
 /// screen. Reuses the existing SectionRow UI so each row renders with the
 /// same layout as Home.
 struct RecommendationsView: View {
+    /// Active focus hand-down token from `TVMainTabView`. When this changes
+    /// (the For You root was selected), focus is pushed onto the saved-
+    /// shortcuts row so the screen never opens with a dead remote.
+    var focusRequest: Int = 0
     var onTopMenuFocusRequest: (() -> Void)? = nil
 
     @State private var viewModel = RecommendationsViewModel()
@@ -90,6 +94,7 @@ struct RecommendationsView: View {
         ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(spacing: sectionSpacing) {
                 SavedShortcutsRow(
+                    focusRequest: focusRequest,
                     onSelect: { router.navigate(to: $0.route) },
                     onMoveUp: onTopMenuFocusRequest
                 )
@@ -192,8 +197,11 @@ struct RecommendationsView: View {
 }
 
 private struct SavedShortcutsRow: View {
+    var focusRequest: Int = 0
     let onSelect: (SavedShortcut) -> Void
     let onMoveUp: (() -> Void)?
+
+    @FocusState private var focusedShortcut: SavedShortcut?
 
     #if os(tvOS)
     @Namespace private var focusScope
@@ -217,6 +225,7 @@ private struct SavedShortcutsRow: View {
                 }
                 .buttonStyle(SavedShortcutButtonStyle())
                 .accessibilityLabel(shortcut.rawValue)
+                .focused($focusedShortcut, equals: shortcut)
                 #if os(tvOS)
                 .prefersDefaultFocus(shortcut == .watchlist, in: focusScope)
                 #endif
@@ -231,8 +240,20 @@ private struct SavedShortcutsRow: View {
                 onMoveUp?()
             }
         }
+        // Imperative hand-down from the top menu: prefersDefaultFocus only
+        // fires when the engine ENTERS this scope, which doesn't happen when
+        // the For You root is swapped in beneath a remote sitting in the menu.
+        .onAppear { applyFocusRequest(focusRequest) }
+        .onChange(of: focusRequest) { _, request in applyFocusRequest(request) }
         #endif
     }
+
+    #if os(tvOS)
+    private func applyFocusRequest(_ request: Int) {
+        guard request > 0 else { return }
+        focusedShortcut = .watchlist
+    }
+    #endif
 
     private var labelFont: Font {
         #if os(tvOS)

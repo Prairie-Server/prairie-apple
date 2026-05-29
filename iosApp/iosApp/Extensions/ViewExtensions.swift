@@ -207,6 +207,7 @@ private struct PrimaryButtonBody: View {
     let configuration: ButtonStyle.Configuration
     let isLoading: Bool
     @Environment(\.isFocused) private var isFocused
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 8) {
@@ -245,7 +246,7 @@ private struct PrimaryButtonBody: View {
             }
             #endif
         }
-        .scaleEffect(isFocused ? 1.055 : 1.0)
+        .scaleEffect(isFocused && !reduceMotion ? 1.055 : 1.0)
         .shadow(
             color: isFocused ? Color.continuumOnSurface.opacity(0.48) : .clear,
             radius: isFocused ? 24 : 0,
@@ -270,6 +271,7 @@ struct ContinuumSecondaryButtonStyle: ButtonStyle {
 private struct SecondaryButtonBody: View {
     let configuration: ButtonStyle.Configuration
     @Environment(\.isFocused) private var isFocused
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         configuration.label
@@ -288,7 +290,7 @@ private struct SecondaryButtonBody: View {
                     lineWidth: isFocused ? 3 : 1.5
                 )
             )
-            .scaleEffect(isFocused ? 1.045 : 1.0)
+            .scaleEffect(isFocused && !reduceMotion ? 1.045 : 1.0)
             .shadow(
                 color: isFocused ? Color.continuumOnSurface.opacity(0.36) : .clear,
                 radius: isFocused ? 18 : 0,

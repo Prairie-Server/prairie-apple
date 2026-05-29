@@ -177,13 +177,17 @@ struct TVLoginView: View {
             }
 
             Button {
+                guard !loginVM.isLoading else { return }
                 Task { await loginVM.login(router: router) }
             } label: {
                 Text(loginVM.isLoading ? "Signing in…" : "Sign In")
             }
             .buttonStyle(ContinuumPrimaryButtonStyle(isLoading: loginVM.isLoading))
             .focused($focusedField, equals: .signIn)
-            .disabled(loginVM.isLoading)
+            // Stay focusable while submitting: disabling the focused button makes
+            // tvOS bounce focus to a neighbour mid-request, stranding the user on
+            // the wrong control when sign-in fails. The spinner label + button
+            // style already signal the in-flight state; re-entry is guarded above.
 
             // Change Server lives at the bottom of the form column —
             // focus can D-pad Down from Sign In to reach it, and Up
@@ -211,6 +215,9 @@ struct TVLoginView: View {
         )
         .animation(.easeInOut(duration: 0.2), value: loginVM.error)
         .focusSection()
+        // First focus lands on the username field rather than an incidental
+        // top-left control.
+        .defaultFocus($focusedField, .username, priority: .userInitiated)
     }
 
     @ViewBuilder

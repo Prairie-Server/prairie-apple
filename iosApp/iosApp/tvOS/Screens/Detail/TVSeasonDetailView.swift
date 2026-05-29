@@ -60,12 +60,10 @@ struct TVSeasonDetailView: View {
                         castSection(cast: cast)
                     }
                     detailsSection
-                        .focusable()
-                        .focusEffectDisabled()
+                        .readableFocusSection()
                     if detail.overview?.isEmpty == false {
                         aboutSection
-                            .focusable()
-                            .focusEffectDisabled()
+                            .readableFocusSection()
                     }
                 }
                 .padding(.horizontal, ContinuumTheme.safePadding)

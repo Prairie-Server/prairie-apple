@@ -17,7 +17,13 @@ struct TVMainTabView: View {
     @State private var isTopMenuFocused = false
     @State private var isTopMenuFocusSuppressed = true
     @State private var topMenuFocusRequest = 0
-    @State private var homeFocusRequest = 1
+    /// Active focus hand-down token. Incremented whenever a root is
+    /// selected so the freshly-swapped-in content imperatively claims
+    /// focus, instead of relying on `prefersDefaultFocus` (which can lose
+    /// to geometric proximity, per CLAUDE.md's "tvOS default focus on
+    /// d-pad entry"). Starts at 1 so the initial Home content focuses on
+    /// first appear.
+    @State private var contentFocusRequest = 1
     @Namespace private var tabContentNamespace
 
     var body: some View {
@@ -95,7 +101,7 @@ struct TVMainTabView: View {
         switch selectedRoot {
         case .home:
             HomeView(
-                homeFocusRequest: homeFocusRequest,
+                homeFocusRequest: contentFocusRequest,
                 onTopMenuFocusRequest: focusTopMenuIfVisible
             )
         case .search:
@@ -105,10 +111,14 @@ struct TVMainTabView: View {
                 selectedMode: $libraryMode,
                 headerContext: $libraryHeaderContext,
                 librarySelectionRequest: librarySelectionRequest,
+                focusRequest: contentFocusRequest,
                 onTopMenuFocusRequest: focusTopMenuIfVisible
             )
         case .forYou:
-            RecommendationsView(onTopMenuFocusRequest: focusTopMenuIfVisible)
+            RecommendationsView(
+                focusRequest: contentFocusRequest,
+                onTopMenuFocusRequest: focusTopMenuIfVisible
+            )
         }
     }
 
@@ -121,9 +131,12 @@ struct TVMainTabView: View {
 
         suppressTopMenuFocusForContentHandoff()
         selectedRoot = root
-        if root == .home {
-            homeFocusRequest += 1
-        }
+        // Push focus into whichever root content is swapping in. Suppressing
+        // the menu relinquishes its focus (TVTopMenuBar.onChange(isFocusSuppressed)),
+        // so without an active hand-down the new content never claims focus and
+        // the remote goes dead until the user blindly swipes. Home always had
+        // this; Libraries and For You now share it.
+        contentFocusRequest += 1
     }
 
     private func focusTopMenuIfVisible() {
@@ -142,6 +155,10 @@ struct TVMainTabView: View {
     private func returnToHomeInMenu() {
         selectedRoot = .home
         withAnimation(ContinuumTheme.springAnimation) {
+            // Un-suppress before requesting focus: requestMenuFocus drops the
+            // request while the menu is suppressed, which could leave the
+            // Home button unfocused after the exit-to-home gesture.
+            isTopMenuFocusSuppressed = false
             topMenuFocusRequest += 1
         }
     }

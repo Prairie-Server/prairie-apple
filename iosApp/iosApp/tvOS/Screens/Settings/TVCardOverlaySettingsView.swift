@@ -19,7 +19,9 @@ struct TVCardOverlaySettingsView: View {
     var body: some View {
         HStack(alignment: .top, spacing: 60) {
             previewPane
+                .focusSection()
             controlsPane
+                .focusSection()
         }
         .padding(.horizontal, 80)
         .padding(.top, 40)

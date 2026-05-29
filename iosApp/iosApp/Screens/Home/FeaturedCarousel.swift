@@ -454,6 +454,7 @@ struct FeaturedCarousel: View {
         .prefersDefaultFocus(role.isActive && prefersDefaultFocus, in: heroActionFocusNamespace)
         .focusEffectDisabled()
         .accessibilityAddTraits(role.isActive ? .isButton : [])
+        .accessibilityLabel(item.title)
         .onTapGesture {
             guard role.isActive, actionFocus == .heroCard else { return }
             onItemTap(item.contentId)

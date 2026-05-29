@@ -159,13 +159,15 @@ struct TVServerSetupView: View {
             }
 
             Button {
+                guard !viewModel.isLoading else { return }
                 Task { await viewModel.connect(router: router) }
             } label: {
                 Text(viewModel.isLoading ? "Connecting…" : "Connect")
             }
             .buttonStyle(ContinuumPrimaryButtonStyle(isLoading: viewModel.isLoading))
             .focused($focusedField, equals: .connect)
-            .disabled(viewModel.isLoading)
+            // Stay focusable while connecting so focus isn't bounced to a
+            // neighbour mid-request; re-entry is guarded above.
         }
         .padding(.horizontal, 48)
         .padding(.vertical, 44)
@@ -180,6 +182,9 @@ struct TVServerSetupView: View {
         .animation(.easeInOut(duration: 0.2), value: viewModel.error)
         .animation(.easeInOut(duration: 0.2), value: viewModel.showsAdvancedOptions)
         .focusSection()
+        // Land first focus on the address field rather than whatever the engine
+        // picks geometrically — this is the first screen a new user sees.
+        .defaultFocus($focusedField, .host, priority: .userInitiated)
     }
 
     private func protocolTextColor(for scheme: ServerSetupScheme) -> Color {

@@ -18,6 +18,7 @@ struct TVSeasonChip: View {
                 .padding(.vertical, 14)
         }
         .buttonStyle(TVSeasonChipStyle(isSelected: isSelected))
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private var chipLabel: String {
@@ -108,6 +109,15 @@ struct TVSeasonChipRow: View {
                 withAnimation(.easeOut(duration: ContinuumTheme.fastDuration)) {
                     proxy.scrollTo(newId, anchor: .center)
                 }
+            }
+            .onAppear {
+                // Center the selected chip on first paint too. Without this a
+                // high-numbered season (e.g. Season 8) opens with the row
+                // scrolled to Season 1 and the selected chip clipped off-screen
+                // until the user d-pads into it. The HStack is non-lazy, so the
+                // target chip is already laid out — no dispatch hop needed.
+                guard let selectedSeasonId else { return }
+                proxy.scrollTo(selectedSeasonId, anchor: .center)
             }
         }
     }

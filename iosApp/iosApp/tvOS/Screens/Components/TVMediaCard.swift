@@ -22,6 +22,23 @@ struct TVMediaCard: View {
     var cardWidth: CGFloat = ContinuumTheme.posterCardWidth
     var prefersDefaultFocus: Bool = false
     var defaultFocusNamespace: Namespace.ID? = nil
+    /// Focus visual. `.nativeCard` keeps tvOS's `.card` lift + parallax
+    /// (library grids, search). `.ring` matches the white-ring + scale
+    /// treatment of the episode and cast rails so the detail-page
+    /// "Recommended / More Like This" rail reads consistently with its
+    /// neighbours instead of using the subtler native lift.
+    var focusTreatment: FocusTreatment = .nativeCard
+    /// Optional external focus hook so a parent rail can make this card a
+    /// `.defaultFocus` target on d-pad entry. The focusable element is the
+    /// inner Button, so the binding is applied there — a `.focused` on the
+    /// card's outer VStack silently no-ops. Mirrors `MediaCard.focusedItemId`.
+    var focusBinding: FocusState<String?>.Binding? = nil
+    var focusContentId: String? = nil
+
+    enum FocusTreatment {
+        case nativeCard
+        case ring
+    }
 
     @FocusState private var isFocused: Bool
     @EnvironmentObject private var overlayStore: OverlayPrefsStore
@@ -31,19 +48,28 @@ struct TVMediaCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Button(action: action) {
-                posterImage
-            }
-            .buttonStyle(.card)
-            .focused($isFocused)
-            .applyDefaultFocusIfNeeded(
-                prefersDefaultFocus,
-                namespace: defaultFocusNamespace
-            )
-
+            posterButton
             caption
         }
         .frame(width: cardWidth)
+    }
+
+    @ViewBuilder
+    private var posterButton: some View {
+        switch focusTreatment {
+        case .nativeCard:
+            Button(action: action) { posterImage }
+                .buttonStyle(.card)
+                .focused($isFocused)
+                .applyDefaultFocusIfNeeded(prefersDefaultFocus, namespace: defaultFocusNamespace)
+                .applyRailFocus(focusBinding, contentId: focusContentId)
+        case .ring:
+            Button(action: action) { posterImage }
+                .buttonStyle(TVPosterRingButtonStyle())
+                .focused($isFocused)
+                .applyDefaultFocusIfNeeded(prefersDefaultFocus, namespace: defaultFocusNamespace)
+                .applyRailFocus(focusBinding, contentId: focusContentId)
+        }
     }
 
     // MARK: - Subviews
@@ -70,6 +96,16 @@ struct TVMediaCard: View {
             }
         }
         .frame(width: cardWidth, height: cardHeight)
+        .overlay {
+            // The `.ring` treatment supplies its own focus cue (the native
+            // halo is suppressed in TVPosterRingButtonStyle), matching the
+            // episode/cast cards.
+            if focusTreatment == .ring {
+                RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius)
+                    .stroke(Color.white.opacity(isFocused ? 0.9 : 0), lineWidth: isFocused ? 4 : 0)
+                    .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
+            }
+        }
     }
 
     // Plex-style: centered title with year directly underneath in a
@@ -115,6 +151,51 @@ private extension View {
         } else {
             self
         }
+    }
+
+    /// Binds the inner button to a parent rail's `@FocusState` so the rail can
+    /// route d-pad-entry default focus onto this specific card. No-op when the
+    /// rail doesn't manage focus. Mirrors `MediaCard.applyRowFocus`.
+    @ViewBuilder
+    func applyRailFocus(_ binding: FocusState<String?>.Binding?, contentId: String?) -> some View {
+        if let binding, let contentId {
+            self.focused(binding, equals: contentId)
+        } else {
+            self
+        }
+    }
+}
+
+/// Poster focus style matching the episode/cast cards: scale + drop shadow
+/// with the system halo suppressed. The white ring overlay on the poster
+/// (driven by `isFocused`) is the focus cue.
+private struct TVPosterRingButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        TVPosterRingButtonBody(configuration: configuration)
+    }
+}
+
+private struct TVPosterRingButtonBody: View {
+    let configuration: ButtonStyleConfiguration
+
+    @Environment(\.isFocused) private var isFocused
+
+    var body: some View {
+        configuration.label
+            .scaleEffect(scale)
+            .shadow(
+                color: .black.opacity(isFocused ? 0.45 : 0.0),
+                radius: isFocused ? 18 : 0,
+                y: isFocused ? 8 : 0
+            )
+            .focusEffectDisabled()
+            .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
+            .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: configuration.isPressed)
+    }
+
+    private var scale: CGFloat {
+        let base: CGFloat = isFocused ? 1.05 : 1.0
+        return configuration.isPressed ? base * 0.97 : base
     }
 }
 #endif

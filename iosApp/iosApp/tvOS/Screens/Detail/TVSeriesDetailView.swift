@@ -51,11 +51,9 @@ struct TVSeriesDetailView: View {
                         castSection(cast: cast)
                     }
                     detailsSection
-                        .focusable()
-                        .focusEffectDisabled()
+                        .readableFocusSection()
                     aboutSection
-                        .focusable()
-                        .focusEffectDisabled()
+                        .readableFocusSection()
                     similarSection
                 }
                 .padding(.horizontal, ContinuumTheme.safePadding)

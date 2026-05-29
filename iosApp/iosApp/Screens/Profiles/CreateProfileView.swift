@@ -103,12 +103,20 @@ struct CreateProfileView: View {
 
                 HStack(alignment: .top, spacing: 80) {
                     previewColumn
-                    pickerColumn
+
+                    // Scroll the control column so focus can reach the PIN field,
+                    // Child toggle, and Create button when they extend past the
+                    // safe area — the focus engine auto-scrolls focusable rows
+                    // into view inside a ScrollView.
+                    ScrollView(.vertical, showsIndicators: false) {
+                        pickerColumn
+                            .padding(.bottom, 40)
+                    }
+                    .scrollClipDisabled()
                 }
+                .frame(maxHeight: .infinity)
                 .padding(.horizontal, 80)
                 .padding(.top, 32)
-
-                Spacer(minLength: 0)
             }
         }
         .onExitCommand { dismiss() }
@@ -221,10 +229,14 @@ struct CreateProfileView: View {
             ChildProfileRow(isOn: $isChild)
 
             Button("Create Profile") {
+                guard !isLoading else { return }
                 Task { await createProfile() }
             }
             .buttonStyle(ContinuumPrimaryButtonStyle(isLoading: isLoading))
-            .disabled(isLoading || name.trimmingCharacters(in: .whitespaces).isEmpty)
+            // Gate validity via .disabled, but not the in-flight state: disabling
+            // the focused button mid-create bounces focus to a neighbour. The
+            // spinner label signals progress and re-entry is guarded above.
+            .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
             .padding(.top, 8)
         }
     }

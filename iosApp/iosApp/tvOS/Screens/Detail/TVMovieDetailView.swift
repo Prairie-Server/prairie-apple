@@ -30,6 +30,8 @@ struct TVMovieDetailView: View {
     let onNavigateToItem: (String) -> Void
     let onEpisodeTap: (String) -> Void
 
+    @Namespace private var detailFocusNamespace
+
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 48) {
@@ -55,11 +57,9 @@ struct TVMovieDetailView: View {
                         castSection(cast: cast)
                     }
                     detailsSection
-                        .focusable()
-                        .focusEffectDisabled()
+                        .readableFocusSection()
                     aboutSection
-                        .focusable()
-                        .focusEffectDisabled()
+                        .readableFocusSection()
                     if showsSimilarRail {
                         similarSection
                     }
@@ -69,6 +69,7 @@ struct TVMovieDetailView: View {
             }
         }
         .ignoresSafeArea()
+        .focusScope(detailFocusNamespace)
     }
 
     // MARK: - Hero actions
@@ -88,7 +89,9 @@ struct TVMovieDetailView: View {
             TVPrimaryPillButton(
                 icon: "play.fill",
                 title: primaryPlayLabel,
-                action: { onPlay(false) }
+                action: { onPlay(false) },
+                prefersDefaultFocus: true,
+                defaultFocusNamespace: detailFocusNamespace
             )
 
             if hasResumeProgress {

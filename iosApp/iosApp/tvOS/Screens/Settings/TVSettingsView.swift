@@ -104,7 +104,7 @@ struct TVSettingsView: View {
                 kind: .audioLanguage
             )
 
-            Toggle("Profile 7 HDR10 Fallback", isOn: Binding(
+            focusAwareToggle("Profile 7 HDR10 Fallback", isOn: Binding(
                 get: { viewModel.preferProfile7HDR10Fallback },
                 set: { value in
                     viewModel.preferProfile7HDR10Fallback = value
@@ -112,7 +112,7 @@ struct TVSettingsView: View {
                 }
             ))
 
-            Toggle("Auto-Play Next Episode", isOn: Binding(
+            focusAwareToggle("Auto-Play Next Episode", isOn: Binding(
                 get: { viewModel.autoPlayNext },
                 set: { value in
                     viewModel.autoPlayNext = value
@@ -125,14 +125,14 @@ struct TVSettingsView: View {
                 selection: String(viewModel.nextUpPromptSeconds),
                 kind: .nextUpPrompt
             )
-            Toggle("Skip Intros", isOn: Binding(
+            focusAwareToggle("Skip Intros", isOn: Binding(
                 get: { viewModel.skipIntros },
                 set: { value in
                     viewModel.skipIntros = value
                     Task { await viewModel.setSkipIntros(value) }
                 }
             ))
-            Toggle("Skip Credits", isOn: Binding(
+            focusAwareToggle("Skip Credits", isOn: Binding(
                 get: { viewModel.skipCredits },
                 set: { value in
                     viewModel.skipCredits = value
@@ -143,7 +143,7 @@ struct TVSettingsView: View {
             Button(role: .destructive) {
                 Task { await viewModel.resetPlaybackDeviceSettings() }
             } label: {
-                Text("Reset Playback Overrides")
+                FocusAwareRowLabel(title: "Reset Playback Overrides", isDestructive: true)
             }
         }
     }
@@ -166,9 +166,9 @@ struct TVSettingsView: View {
                 kind: .subtitleMode
             )
 
-            Toggle("Show Forced Subtitles", isOn: forcedSubtitlesBinding)
+            focusAwareToggle("Show Forced Subtitles", isOn: forcedSubtitlesBinding)
 
-            Toggle(
+            focusAwareToggle(
                 "Use Device Appearance Override",
                 isOn: Binding(
                     get: { viewModel.subtitleUsesDeviceAppearanceOverride },
@@ -196,7 +196,7 @@ struct TVSettingsView: View {
                 selection: viewModel.subtitleAppearance.fontColor.lowercased(),
                 kind: .subtitleFontColor
             )
-            Toggle("Text Outline", isOn: appearanceBoolBinding(\.textOutline))
+            focusAwareToggle("Text Outline", isOn: appearanceBoolBinding(\.textOutline))
             pickerRow(
                 title: "Outline Color",
                 options: Self.outlineColorOptions,
@@ -340,7 +340,15 @@ struct TVSettingsView: View {
         }
     }
 
-    // MARK: - Picker row + sheet plumbing
+    // MARK: - Rows
+
+    /// `Toggle` with a focus-aware label so its title flips to a dark
+    /// foreground on the white focus platter, matching the picker/button rows.
+    private func focusAwareToggle(_ title: String, isOn: Binding<Bool>) -> some View {
+        Toggle(isOn: isOn) {
+            FocusAwareRowLabel(title: title)
+        }
+    }
 
     private func pickerRow(
         title: String,
@@ -350,7 +358,7 @@ struct TVSettingsView: View {
     ) -> some View {
         let currentLabel = options.first(where: { $0.id == selection })?.label ?? "—"
         return Button { activePicker = kind } label: {
-            LabeledContent(title, value: currentLabel)
+            FocusAwareValueRow(title: title, value: currentLabel)
         }
     }
 
@@ -804,6 +812,55 @@ private struct FocusAwareLabel: View {
 
     var body: some View {
         Label(title, systemImage: systemImage)
+            .foregroundStyle(foreground)
+    }
+
+    private var foreground: Color {
+        if isFocused { return .continuumBackground }
+        return isDestructive ? .continuumError : .continuumOnSurface
+    }
+}
+
+/// Title + trailing value row for picker rows. Flips both pieces to a dark
+/// foreground on focus — like `FocusAwareLabel` — so the value rows match the
+/// button rows instead of inheriting the washed-out app-wide white tint on the
+/// focus platter.
+private struct FocusAwareValueRow: View {
+    let title: String
+    let value: String
+
+    @Environment(\.isFocused) private var isFocused
+
+    var body: some View {
+        LabeledContent {
+            Text(value).foregroundStyle(valueColor)
+        } label: {
+            Text(title).foregroundStyle(titleColor)
+        }
+    }
+
+    private var titleColor: Color {
+        isFocused ? .continuumBackground : .continuumOnSurface
+    }
+
+    private var valueColor: Color {
+        (isFocused ? Color.continuumBackground : Color.continuumOnSurface).opacity(0.6)
+    }
+}
+
+/// Focus-aware text label for icon-less Form rows (`Toggle`s and plain-text
+/// action buttons like "Reset Playback Overrides"). The label sits inside the
+/// focusable row, so `\.isFocused` flips it dark on the focus platter —
+/// matching every other row's contrast, including destructive rows which flip
+/// from red to the dark platter color exactly like `FocusAwareLabel`.
+private struct FocusAwareRowLabel: View {
+    let title: String
+    var isDestructive: Bool = false
+
+    @Environment(\.isFocused) private var isFocused
+
+    var body: some View {
+        Text(title)
             .foregroundStyle(foreground)
     }
 

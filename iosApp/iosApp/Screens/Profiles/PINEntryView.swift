@@ -8,6 +8,7 @@ struct PINEntryView: View {
 
     @State private var pin: String = ""
     @State private var isShaking: Bool = false
+    @Namespace private var padNamespace
     @Environment(\.dismiss) private var dismiss
 
     private let maxDigits = 4
@@ -120,7 +121,11 @@ struct PINEntryView: View {
     private var numberPad: some View {
         LazyVGrid(columns: padColumns, spacing: 16) {
             ForEach(1...9, id: \.self) { digit in
-                NumberPadButton(label: "\(digit)") {
+                NumberPadButton(
+                    label: "\(digit)",
+                    prefersDefaultFocus: digit == 1,
+                    defaultFocusNamespace: padNamespace
+                ) {
                     appendDigit("\(digit)")
                 }
             }
@@ -137,6 +142,9 @@ struct PINEntryView: View {
         }
         #if os(tvOS)
         .frame(width: 360)
+        // Seed first focus on the "1" key so the pad opens ready for input
+        // rather than letting the engine pick a key geometrically.
+        .focusScope(padNamespace)
         #endif
     }
 
@@ -182,6 +190,8 @@ struct PINEntryView: View {
 private struct NumberPadButton: View {
     let label: String
     var isSystemImage: Bool = false
+    var prefersDefaultFocus: Bool = false
+    var defaultFocusNamespace: Namespace.ID? = nil
     let action: () -> Void
     static var size: CGFloat {
         #if os(tvOS)
@@ -202,6 +212,9 @@ private struct NumberPadButton: View {
             }
         }
         .buttonStyle(NumberPadButtonStyle())
+        #if os(tvOS)
+        .modifier(NumberPadDefaultFocus(prefers: prefersDefaultFocus, namespace: defaultFocusNamespace))
+        #endif
     }
 
     private var symbolSize: CGFloat {
@@ -212,6 +225,24 @@ private struct NumberPadButton: View {
         #endif
     }
 }
+
+#if os(tvOS)
+/// Applies `prefersDefaultFocus` only when a namespace is supplied, so a single
+/// key (the "1") can claim initial focus on the PIN pad.
+private struct NumberPadDefaultFocus: ViewModifier {
+    let prefers: Bool
+    let namespace: Namespace.ID?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let namespace {
+            content.prefersDefaultFocus(prefers, in: namespace)
+        } else {
+            content
+        }
+    }
+}
+#endif
 
 private struct NumberPadButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
