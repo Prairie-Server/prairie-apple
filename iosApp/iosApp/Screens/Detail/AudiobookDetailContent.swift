@@ -147,7 +147,26 @@ struct AudiobookDetailContent: View {
         }
     }
 
+    @ViewBuilder
     private var actionRow: some View {
+        #if os(tvOS)
+        // The hero pills own their focus appearance — system bordered
+        // styles render white-on-white here because the tvOS root tints
+        // controls with `.continuumOnSurface`.
+        HStack(spacing: 24) {
+            TVPrimaryPillButton(icon: "play.fill", title: primaryPlayLabel) {
+                audioStore.play(
+                    contentId: detail.contentId,
+                    restart: false,
+                    startPosition: resumePosition
+                )
+            }
+
+            TVSecondaryPillButton(icon: "arrow.counterclockwise", title: "Start Over") {
+                audioStore.play(contentId: detail.contentId, restart: true)
+            }
+        }
+        #else
         HStack(spacing: 12) {
             Button {
                 audioStore.play(
@@ -167,6 +186,7 @@ struct AudiobookDetailContent: View {
             }
             .buttonStyle(.bordered)
         }
+        #endif
     }
 
     @ViewBuilder
@@ -213,19 +233,37 @@ struct AudiobookDetailContent: View {
                 .frame(width: 28)
             VStack(alignment: .leading, spacing: 2) {
                 Text(partTitle(part, fallbackIndex: fallbackIndex))
-                    .font(.headline)
+                    .font(rowTitleFont)
                     .lineLimit(1)
                 Text(partSubtitle(part))
-                    .font(.subheadline)
+                    .font(rowMetaFont)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer()
             Text(PlayerTimeFormatter.formatRuntime(partDuration(part)))
-                .font(.subheadline)
+                .font(rowMetaFont)
                 .foregroundStyle(.secondary)
         }
         .padding(.vertical, 4)
+    }
+
+    /// Row typography: tvOS uses the 10-foot scale instead of letting
+    /// iOS semantic fonts balloon at TV sizes.
+    private var rowTitleFont: Font {
+        #if os(tvOS)
+        return .continuumBody
+        #else
+        return .headline
+        #endif
+    }
+
+    private var rowMetaFont: Font {
+        #if os(tvOS)
+        return .continuumCaption
+        #else
+        return .subheadline
+        #endif
     }
 
     private func chapterRow(_ chapter: DisplayChapter) -> some View {
@@ -241,16 +279,25 @@ struct AudiobookDetailContent: View {
                     .foregroundStyle(.secondary)
                     .frame(width: 28)
                 Text(chapter.title)
-                    .font(.headline)
+                    .font(rowTitleFont)
                     .lineLimit(1)
                 Spacer()
                 Text(PlayerTimeFormatter.formatHMS(chapter.startSeconds))
-                    .font(.subheadline)
+                    .font(rowMetaFont)
+                    .monospacedDigit()
                     .foregroundStyle(.secondary)
             }
             .contentShape(Rectangle())
+            #if os(tvOS)
+            .padding(.horizontal, 28)
+            .padding(.vertical, 18)
+            #endif
         }
+        #if os(tvOS)
+        .buttonStyle(TVAudiobookRowStyle())
+        #else
         .buttonStyle(.plain)
+        #endif
     }
 
     private func relatedRail(items: [AudiobookRelatedItem]) -> some View {
@@ -427,7 +474,9 @@ struct AudiobookDetailContent: View {
     }
 
     private var relatedPosterHeight: CGFloat {
-        relatedPosterWidth * 1.55
+        // Audiobook covers are square — don't stretch them into the
+        // 2:3 poster shape the video rails use.
+        relatedPosterWidth
     }
 
     private var sectionSpacing: CGFloat {
@@ -501,3 +550,38 @@ private struct DisplayChapter: Identifiable, Hashable {
     let startSeconds: Double
     let partTitle: String
 }
+
+#if os(tvOS)
+/// Native list-row focus grammar for chapter rows (mirrors
+/// `TVLibraryPickerRowStyle`): white fill + black text on focus, faint
+/// resting fill, gentle scale — instead of the plain-style halo that
+/// blows a full-width row up into a giant white slab.
+private struct TVAudiobookRowStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        TVAudiobookRowBody(configuration: configuration)
+    }
+}
+
+private struct TVAudiobookRowBody: View {
+    let configuration: ButtonStyleConfiguration
+
+    @Environment(\.isFocused) private var isFocused
+
+    var body: some View {
+        configuration.label
+            .foregroundColor(isFocused ? .black : .white)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(isFocused ? Color.white : Color.white.opacity(0.06))
+            )
+            .shadow(
+                color: isFocused ? .black.opacity(0.4) : .clear,
+                radius: isFocused ? 18 : 0,
+                y: isFocused ? 8 : 0
+            )
+            .scaleEffect(isFocused ? 1.015 : 1.0)
+            .animation(.easeOut(duration: 0.15), value: isFocused)
+            .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
+    }
+}
+#endif

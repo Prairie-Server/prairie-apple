@@ -3,10 +3,12 @@ import SwiftUI
 /// Layout mode for a horizontal media row.
 /// Poster rows use tall (2:3) poster cards; thumbnail rows use wide 16:9
 /// episode stills — pick thumbnail for episode-centric sections like
-/// "Next Up" and for Continue Watching entries that are episodes.
+/// "Next Up" and for Continue Watching entries that are episodes. Square
+/// rows use 1:1 tiles for audiobook covers.
 enum MediaRowLayout {
     case poster
     case thumbnail
+    case square
 }
 
 /// A horizontal scrolling row of media cards with a title header.
@@ -87,7 +89,7 @@ struct MediaRow: View {
             LazyHStack(spacing: cardSpacing) {
                 ForEach(items) { item in
                     switch layout {
-                    case .poster:
+                    case .poster, .square:
                         MediaCard(
                             title: item.title,
                             posterUrl: item.posterUrl ?? "",
@@ -100,7 +102,8 @@ struct MediaRow: View {
                             focusedItemId: rowFocusBinding,
                             contentId: item.contentId,
                             onRemoveFromContinueWatching: continueWatchingRemovalAction(for: item),
-                            onSetWatched: watchedToggleAction(for: item)
+                            onSetWatched: watchedToggleAction(for: item),
+                            aspect: layout == .square ? .square : .poster
                         )
                     case .thumbnail:
                         EpisodeThumbCard(

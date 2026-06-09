@@ -1,5 +1,13 @@
 import SwiftUI
 
+/// Artwork shape for a `MediaCard`.
+enum MediaCardAspect {
+    /// 2:3 movie/series poster.
+    case poster
+    /// 1:1 tile for audiobook covers.
+    case square
+}
+
 /// A poster-style media card with title, year, and optional progress.
 /// On tvOS the card uses `.buttonStyle(.card)` which gives proper focus lift,
 /// parallax, and title reveal — no manual focus effects required.
@@ -25,12 +33,18 @@ struct MediaCard: View {
     var contentId: String? = nil
     var onRemoveFromContinueWatching: (() -> Void)? = nil
     var onSetWatched: ((Bool) -> Void)? = nil
+    var aspect: MediaCardAspect = .poster
 
     @State private var playedOverride: Bool?
     @EnvironmentObject private var overlayStore: OverlayPrefsStore
 
     private var cardWidth: CGFloat { ContinuumTheme.posterCardWidth }
-    private var cardHeight: CGFloat { ContinuumTheme.posterCardHeight }
+    private var cardHeight: CGFloat {
+        switch aspect {
+        case .poster: ContinuumTheme.posterCardHeight
+        case .square: ContinuumTheme.posterCardWidth
+        }
+    }
 
     var body: some View {
         #if os(tvOS)
