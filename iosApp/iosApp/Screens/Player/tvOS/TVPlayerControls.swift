@@ -76,13 +76,43 @@ struct TVPlayerControls: View {
             }
         }
         .onChange(of: viewModel.showIntroSkip) { _, visible in
-            focusedIntroAction = visible ? .skip : nil
+            if visible {
+                // The skip layer renders beneath the HUD, so claiming focus
+                // here while the HUD is up would yank the user out of it
+                // mid-navigation. The HUD-dismiss handler above re-seeds
+                // transport focus, and Skip stays reachable by direction.
+                if !isHUDPresented {
+                    focusedIntroAction = .skip
+                }
+            } else {
+                focusedIntroAction = nil
+                // Hand focus back to the transport when the Skip button
+                // disappears while controls are still up, instead of leaving
+                // nothing focused.
+                if viewModel.showControls && !isHUDPresented {
+                    isScrubberFocused = true
+                }
+            }
         }
         .onChange(of: viewModel.requestedTVHUDEntryPoint) { _, entryPoint in
             guard let entryPoint else { return }
             applyHUDEntryPoint(entryPoint)
             viewModel.consumeTVHUDEntryRequest()
         }
+        // Re-arm the auto-hide whenever focus moves between transport controls,
+        // so navigating the overlay doesn't let the fixed 5s timer hide it (and
+        // the user's focus) out from under them mid-interaction.
+        .onChange(of: isScrubberFocused) { _, focused in
+            if focused { rearmAutoHideOnFocusMove() }
+        }
+        .onChange(of: focusedTransportButton) { _, target in
+            if target != nil { rearmAutoHideOnFocusMove() }
+        }
+    }
+
+    private func rearmAutoHideOnFocusMove() {
+        guard viewModel.showControls, !isHUDPresented else { return }
+        viewModel.revealControls()
     }
 
     // MARK: - Idle overlay
@@ -101,7 +131,16 @@ struct TVPlayerControls: View {
         }
         .onAppear {
             focusedTransportButton = nil
-            isScrubberFocused = true
+            // When the intro-skip button is showing, let it own first focus
+            // instead of racing this scrubber seed — otherwise revealing the
+            // controls during the intro window lands focus nondeterministically
+            // on the scrubber or the Skip button.
+            if viewModel.showIntroSkip {
+                isScrubberFocused = false
+                focusedIntroAction = .skip
+            } else {
+                isScrubberFocused = true
+            }
         }
     }
 
@@ -158,6 +197,9 @@ struct TVPlayerControls: View {
             .padding(.horizontal, 80)
             .padding(.bottom, viewModel.showControls && !isHUDPresented ? 156 : 96)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+            // Group Skip + Cancel as their own focus region so the engine can
+            // move between them and the transport row below by direction.
+            .focusSection()
     }
 
     private var introSkipButton: some View {

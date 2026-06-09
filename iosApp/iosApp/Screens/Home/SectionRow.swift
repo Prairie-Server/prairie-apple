@@ -9,6 +9,10 @@ struct SectionRow: View {
     let onItemTap: (String) -> Void
     var onSeeAll: (() -> Void)? = nil
     var prefersDefaultFocusOnFirstItem: Bool = false
+    /// Programmatic focus kick forwarded to the underlying `MediaRow` — used
+    /// when an unrelated view (e.g. the tvOS top menu) hands focus down into
+    /// this row rather than the user d-padding into it.
+    var focusRequest: Int = 0
     var onMoveUp: (() -> Void)? = nil
 
     private var isContinueWatching: Bool {
@@ -48,6 +52,7 @@ struct SectionRow: View {
             icon: isContinueWatching ? "play.circle.fill" : nil,
             layout: layout,
             prefersDefaultFocusOnFirstItem: prefersDefaultFocusOnFirstItem,
+            focusRequest: focusRequest,
             onRemoveFromContinueWatching: isContinueWatching ? { removeFromContinueWatching($0) } : nil,
             onSetWatched: { setWatched($0, played: $1) },
             onMoveUp: onMoveUp

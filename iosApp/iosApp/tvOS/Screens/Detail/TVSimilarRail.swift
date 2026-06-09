@@ -17,6 +17,7 @@ struct TVSimilarRail: View {
     @State private var items: [SimilarPosterItem] = []
     @State private var isLoading = true
     @State private var loadedFor: String? = nil
+    @FocusState private var focusedItemId: String?
 
     private let cardSpacing: CGFloat = 32
     private let railVerticalPadding: CGFloat = 24
@@ -42,13 +43,19 @@ struct TVSimilarRail: View {
                         title: item.title,
                         posterUrl: item.posterUrl ?? "",
                         year: item.year,
-                        action: { onSelect(item.contentId) }
+                        action: { onSelect(item.contentId) },
+                        focusTreatment: .ring,
+                        focusBinding: $focusedItemId,
+                        focusContentId: item.contentId
                     )
                 }
             }
             .padding(.vertical, railVerticalPadding)
         }
         .focusSection()
+        // Land d-pad entry on the first card (like the cast/episode rails)
+        // instead of letting tvOS pick the geometrically-nearest middle card.
+        .applySimilarRailDefaultFocus(items.first?.contentId, binding: $focusedItemId)
         .scrollClipDisabled()
     }
 
@@ -107,6 +114,25 @@ struct TVSimilarRail: View {
             items = []
         }
         isLoading = false
+    }
+}
+
+private extension View {
+    /// When focus enters the Recommended rail, land on the first card rather
+    /// than the geometrically-nearest one. `.userInitiated` priority is what
+    /// makes `defaultFocus` win over geometric proximity on d-pad entry — the
+    /// same helper shape as `TVDetailCastRail.applyCastRailDefaultFocus`.
+    /// No-op while loading / empty (first id is nil).
+    @ViewBuilder
+    func applySimilarRailDefaultFocus(
+        _ firstContentId: String?,
+        binding: FocusState<String?>.Binding
+    ) -> some View {
+        if let firstContentId {
+            self.defaultFocus(binding, firstContentId, priority: .userInitiated)
+        } else {
+            self
+        }
     }
 }
 

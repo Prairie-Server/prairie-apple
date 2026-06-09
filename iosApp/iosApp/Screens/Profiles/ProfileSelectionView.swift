@@ -9,6 +9,7 @@ struct ProfileSelectionView: View {
     @State private var viewModel = ProfileSelectionViewModel()
     @State private var pinEntryContext: PINEntryContext?
     @State private var showCreateProfile: Bool = false
+    @Namespace private var profileFocusNamespace
 
     private enum PINEntryPurpose: String {
         case profileSelection
@@ -227,7 +228,11 @@ struct ProfileSelectionView: View {
             spacing: rowSpacing
         ) {
             ForEach(viewModel.profiles) { profile in
-                ProfileTile(profile: profile) {
+                ProfileTile(
+                    profile: profile,
+                    prefersDefaultFocus: profile.id == viewModel.profiles.first?.id,
+                    defaultFocusNamespace: profileFocusNamespace
+                ) {
                     handleProfileTap(profile)
                 }
             }
@@ -241,7 +246,9 @@ struct ProfileSelectionView: View {
         // the centered tile grid from a corner anchor and focus gets
         // stuck on Sign Out. Making the grid a focus section gives the
         // engine a guaranteed target below the header.
-        return grid.focusSection()
+        return grid
+            .focusScope(profileFocusNamespace)
+            .focusSection()
         #else
         return grid
         #endif

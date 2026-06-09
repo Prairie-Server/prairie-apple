@@ -28,17 +28,6 @@ struct TVPrimaryPillButton: View {
     }
 }
 
-private extension View {
-    @ViewBuilder
-    func applyDefaultFocusIfNeeded(_ prefersDefaultFocus: Bool, namespace: Namespace.ID?) -> some View {
-        if let namespace {
-            self.prefersDefaultFocus(prefersDefaultFocus, in: namespace)
-        } else {
-            self
-        }
-    }
-}
-
 // MARK: - Secondary pill
 
 /// Apple-TV-style dark secondary pill. Sits next to `TVPrimaryPillButton`

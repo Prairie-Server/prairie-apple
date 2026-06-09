@@ -310,12 +310,21 @@ private struct InfoPane: View {
     let viewModel: PlayerViewModel
     let onMoveToTabs: () -> Void
 
+    private static let topAnchor = "info.top"
+    private static let bottomAnchor = "info.bottom"
+
     var body: some View {
         HUDScrollablePane(
             accessibilityLabel: "Info details",
+            // Top/bottom anchors so Down can page a long overview to its end
+            // and Up returns to the top, then to the tabs. Without any targets
+            // the pane was a dead focus stop that couldn't scroll at all.
+            scrollTargetIDs: [Self.topAnchor, Self.bottomAnchor],
             onMoveToTabs: onMoveToTabs
         ) {
-            HStack(alignment: .top, spacing: 48) {
+            VStack(alignment: .leading, spacing: 0) {
+                Color.clear.frame(height: 0).id(Self.topAnchor)
+                HStack(alignment: .top, spacing: 48) {
                 PaneColumn("Title") {
                     if let series = viewModel.metadata.seriesTitle, !series.isEmpty {
                         Text(series.uppercased())
@@ -371,6 +380,8 @@ private struct InfoPane: View {
                         LabelValueRow(label: "Chapter", value: chapter)
                     }
                 }
+                }
+                Color.clear.frame(height: 0).id(Self.bottomAnchor)
             }
         }
     }
@@ -2123,12 +2134,12 @@ private struct HUDTrackRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(name)
                     .font(.system(size: 22, weight: .medium))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(isFocused ? .black : .white)
                     .lineLimit(1)
                 if let attributes {
                     Text(attributes)
                         .font(.system(size: 17))
-                        .foregroundStyle(.white.opacity(0.55))
+                        .foregroundStyle(isFocused ? .black.opacity(0.6) : .white.opacity(0.55))
                         .lineLimit(1)
                 }
             }
@@ -2136,14 +2147,17 @@ private struct HUDTrackRow: View {
             if isSelected {
                 Image(systemName: "checkmark")
                     .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(isFocused ? .black : .white)
             }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(isFocused ? Color.white.opacity(0.18) : Color.clear)
+                // Invert on focus (white fill + dark text) to match the strong
+                // focus grammar of the other HUD rows; the previous 18% wash
+                // read as barely-focused next to them.
+                .fill(isFocused ? Color.white : Color.clear)
         )
         .contentShape(Rectangle())
         .focusable(true)

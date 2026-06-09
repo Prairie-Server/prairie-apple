@@ -1036,7 +1036,7 @@ class PlayerViewModel {
             handleEndOfFile()
             return
         }
-        if isPlaybackSessionMissingMessage(message),
+        if isPlaybackSessionMissingMessage(message) || isLikelyExpiredSessionHTTP404(message),
            attemptStaleSessionRenewal(reason: "player_error", observedPosition: currentTime) {
             return
         }
@@ -1757,6 +1757,7 @@ class PlayerViewModel {
     ) async throws -> SourceProxyPreparation {
         guard plan.delivery == .direct,
               plan.engine != .avPlayerHLS,
+              plan.engine != .playerCoreDirect,
               ["http", "https"].contains(plan.sourceStreamRequest.url.scheme?.lowercased()) else {
             if plan.engine == .avPlayerLocalDVLoopback {
                 throw SourceProxyPreparationError.unsupportedSourceURL
@@ -2962,6 +2963,18 @@ class PlayerViewModel {
         let lowered = message.lowercased()
         return lowered.contains("playback_session_not_found")
             || lowered.contains("playback session not found")
+    }
+
+    /// The PlayerCore direct route talks to the origin without the source
+    /// proxy, so an expired playback session surfaces as a bare HTTP 404 from
+    /// FFmpeg ("Server returned 404 Not Found") — the server's
+    /// `playback_session_not_found` body that the proxy used to parse never
+    /// reaches the error message. Treat a 404 on that route as a stale
+    /// session. `attemptStaleSessionRenewal` fires at most once per session,
+    /// so a genuinely missing file still fails after a single renewal pass.
+    private func isLikelyExpiredSessionHTTP404(_ message: String) -> Bool {
+        guard activeRouteKind == .playerCoreDirect else { return false }
+        return message.contains("Server returned 404")
     }
 
     func loadAndPlay(

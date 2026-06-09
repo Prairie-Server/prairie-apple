@@ -24,6 +24,8 @@ struct TVLibrariesTabView: View {
     @Binding var selectedMode: TVLibraryLandingMode
     @Binding var headerContext: TVLibraryHeaderContext?
     let librarySelectionRequest: TVLibrarySelectionRequest?
+    var focusRequest: Int = 0
+    var isTopMenuFocused: Bool = false
     let onTopMenuFocusRequest: (() -> Void)?
 
     @State private var libraries: [Library] = []
@@ -76,6 +78,8 @@ struct TVLibrariesTabView: View {
         TVLibraryLandingView(
             library: activeLibrary,
             selectedMode: $selectedMode,
+            focusRequest: focusRequest,
+            isTopMenuFocused: isTopMenuFocused,
             onTopMenuFocusRequest: onTopMenuFocusRequest
         )
         // Re-create the landing page when switching libraries so its

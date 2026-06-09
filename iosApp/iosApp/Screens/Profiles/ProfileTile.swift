@@ -49,6 +49,8 @@ private let focusScale: CGFloat = 1.05
 /// tile lifts with a white ring and a colored halo matching its tint.
 struct ProfileTile: View {
     let profile: UserProfile
+    var prefersDefaultFocus: Bool = false
+    var defaultFocusNamespace: Namespace.ID? = nil
     let action: () -> Void
 
     @FocusState private var isFocused: Bool
@@ -89,6 +91,9 @@ struct ProfileTile: View {
         .focused($isFocused)
         .onTapGesture(perform: action)
         #if os(tvOS)
+        // Lets the first profile tile claim initial focus instead of the
+        // engine landing on the top-right Sign Out / Change Server chips.
+        .applyDefaultFocusIfNeeded(prefersDefaultFocus, namespace: defaultFocusNamespace)
         .focusEffectDisabled()
         #endif
         .accessibilityElement(children: .combine)

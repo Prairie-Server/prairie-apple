@@ -126,7 +126,11 @@ private struct EpisodeCardLabel: View {
                 Text(episode.title ?? "Episode \(episode.episodeNumber)")
                     .font(.system(size: 26, weight: .semibold))
                     .foregroundColor(titleColor)
-                    .lineLimit(2, reservesSpace: true)
+                    // Allow up to two lines for long titles, but don't reserve
+                    // the second line — a single-line title (the common case)
+                    // was leaving a full empty line of dead space above the
+                    // description.
+                    .lineLimit(2)
 
                 if let overview = episode.overview, !overview.isEmpty {
                     Text(overview)

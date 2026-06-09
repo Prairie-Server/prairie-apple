@@ -207,6 +207,7 @@ private struct PrimaryButtonBody: View {
     let configuration: ButtonStyle.Configuration
     let isLoading: Bool
     @Environment(\.isFocused) private var isFocused
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 8) {
@@ -245,7 +246,7 @@ private struct PrimaryButtonBody: View {
             }
             #endif
         }
-        .scaleEffect(isFocused ? 1.055 : 1.0)
+        .scaleEffect(isFocused && !reduceMotion ? 1.055 : 1.0)
         .shadow(
             color: isFocused ? Color.continuumOnSurface.opacity(0.48) : .clear,
             radius: isFocused ? 24 : 0,
@@ -270,6 +271,7 @@ struct ContinuumSecondaryButtonStyle: ButtonStyle {
 private struct SecondaryButtonBody: View {
     let configuration: ButtonStyle.Configuration
     @Environment(\.isFocused) private var isFocused
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         configuration.label
@@ -288,7 +290,7 @@ private struct SecondaryButtonBody: View {
                     lineWidth: isFocused ? 3 : 1.5
                 )
             )
-            .scaleEffect(isFocused ? 1.045 : 1.0)
+            .scaleEffect(isFocused && !reduceMotion ? 1.045 : 1.0)
             .shadow(
                 color: isFocused ? Color.continuumOnSurface.opacity(0.36) : .clear,
                 radius: isFocused ? 18 : 0,
@@ -385,3 +387,22 @@ private struct ContinuumTextFieldBody<Label: View>: View {
         #endif
     }
 }
+
+#if os(tvOS)
+extension View {
+    /// Applies `prefersDefaultFocus` only when a focus namespace is supplied,
+    /// so a single element (the first profile tile, the PIN pad's "1", a
+    /// rail's first card, the hero Play pill) can claim a scope's initial
+    /// focus while callers that don't manage focus pass `nil` and are
+    /// untouched. Shared by every tvOS component that takes an optional
+    /// `defaultFocusNamespace`.
+    @ViewBuilder
+    func applyDefaultFocusIfNeeded(_ prefersDefaultFocus: Bool, namespace: Namespace.ID?) -> some View {
+        if let namespace {
+            self.prefersDefaultFocus(prefersDefaultFocus, in: namespace)
+        } else {
+            self
+        }
+    }
+}
+#endif
