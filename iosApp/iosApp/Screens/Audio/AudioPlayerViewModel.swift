@@ -23,6 +23,12 @@ final class AudioPlayerViewModel {
     private(set) var currentTime: Double = 0
     private(set) var duration: Double = 0
     private(set) var isPlaying = false
+    /// Cover-derived colors for the player backdrop and control tint.
+    /// Stays on `.fallback` until sampling resolves so the UI never
+    /// blocks on image work.
+    private(set) var palette: AudioCoverPalette = .fallback
+
+    static let availableRates: [Double] = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]
 
     var playbackRate: Double = 1.0
     let sleepTimer = SleepTimer()
@@ -33,6 +39,13 @@ final class AudioPlayerViewModel {
     var posterUrl: String? { context?.posterUrl }
     var chapters: [AudioPlaybackChapter] { context?.chapters ?? [] }
     var tracks: [AudioPlaybackTrack] { context?.tracks ?? [] }
+
+    /// The chapter the playhead is currently inside, if any.
+    var currentChapter: AudioPlaybackChapter? {
+        chapters
+            .filter { $0.startSeconds <= currentTime }
+            .max { $0.startSeconds < $1.startSeconds }
+    }
 
     init() {
         engine.onTime = { [weak self] localTime in
@@ -62,6 +75,7 @@ final class AudioPlayerViewModel {
             duration = context.totalDurationSeconds
             currentTime = clampGlobal(startPosition ?? (restart ? 0 : context.resumePositionSeconds))
             attachNowPlaying()
+            loadPalette(posterUrl: context.posterUrl)
             if let artwork = await resolvedURL(context.posterUrl) {
                 nowPlaying.setArtworkURL(artwork)
             }
@@ -151,6 +165,7 @@ final class AudioPlayerViewModel {
         activeTrackIndex = nil
         currentTime = 0
         duration = 0
+        palette = .fallback
         if let closedContext {
             try? await ContinuumAPI.shared.syncProgress(
                 mediaItemId: closedContext.contentId,
@@ -220,6 +235,15 @@ final class AudioPlayerViewModel {
             hdr: false,
             disableProgressPersistence: true
         ))
+    }
+
+    private func loadPalette(posterUrl: String?) {
+        let contentId = context?.contentId
+        Task { [weak self] in
+            guard let sampled = await AudioCoverPaletteSampler.palette(for: posterUrl) else { return }
+            guard let self, self.context?.contentId == contentId else { return }
+            self.palette = sampled
+        }
     }
 
     private func retireActiveSession() {
