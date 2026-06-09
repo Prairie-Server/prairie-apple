@@ -25,6 +25,7 @@ struct TVMainTabView: View {
     /// first appear.
     @State private var contentFocusRequest = 1
     @Namespace private var tabContentNamespace
+    @Environment(AudioPlaybackStore.self) private var audioStore
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -57,7 +58,12 @@ struct TVMainTabView: View {
         }
         .ignoresSafeArea(edges: [.top, .horizontal])
         .tint(.continuumOnSurface)
-        .environment(router)
+        .fullScreenCover(isPresented: Binding(
+            get: { audioStore.isShowingFullPlayer },
+            set: { if !$0 { audioStore.dismissFullPlayer() } }
+        )) {
+            AudioFullPlayerView()
+        }
         .confirmationDialog(
             "Switch Server",
             isPresented: $showServerPicker,
@@ -75,6 +81,10 @@ struct TVMainTabView: View {
         } message: {
             Text("Choose a saved server to switch to.")
         }
+        // Outside the presentation modifiers so presented covers (audio
+        // player) inherit the router — ErrorView requires it and traps
+        // when it's absent.
+        .environment(router)
         .task {
             await loadCurrentProfile()
         }

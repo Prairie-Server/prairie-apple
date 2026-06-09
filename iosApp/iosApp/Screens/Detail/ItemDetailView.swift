@@ -57,7 +57,14 @@ private struct ItemDetailPhoneContent: View {
 
     @ViewBuilder
     private func content(for detail: ItemDetail) -> some View {
-        if detail.type == "season" {
+        if detail.isAudiobook {
+            AudiobookDetailContent(
+                detail: detail,
+                onNavigateToItem: { id in
+                    router.navigate(to: .itemDetail(contentId: id))
+                }
+            )
+        } else if detail.type == "season" {
             SeasonDetailContent(
                 detail: detail,
                 isFavorite: viewModel.isFavorite,

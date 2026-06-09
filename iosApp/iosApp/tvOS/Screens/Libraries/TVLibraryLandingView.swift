@@ -64,6 +64,7 @@ struct TVLibraryLandingView: View {
     @State private var heroBackdropThumbhash: String?
 
     @Environment(AppRouter.self) private var router
+    @Environment(AudioPlaybackStore.self) private var audioStore
     @Namespace private var collectionsFocusNamespace
 
     /// Re-seed counter bumped on mode switch and first data arrival. Added to
@@ -174,10 +175,14 @@ struct TVLibraryLandingView: View {
             FeaturedCarousel(
                 items: featured.items,
                 onItemTap: { router.navigate(to: .itemDetail(contentId: $0)) },
-                onPlayTap: {
+                onPlayTap: { item in
+                    if item.isAudiobook {
+                        audioStore.play(contentId: item.contentId)
+                        return
+                    }
                     router.navigate(
                         to: .player(
-                            contentId: $0,
+                            contentId: item.contentId,
                             startFromBeginning: false,
                             resumePosition: nil
                         )
@@ -316,11 +321,17 @@ struct TVLibraryLandingView: View {
 
     private var emptyHint: some View {
         EmptyStateView(
-            icon: library.type == "series" ? "tv" : "film.stack",
+            icon: emptyLibraryIcon,
             title: "\(library.name) is empty",
             subtitle: "Add media to this library on the server to see it here."
         )
         .frame(maxWidth: .infinity, minHeight: 400)
+    }
+
+    private var emptyLibraryIcon: String {
+        if library.isSeriesLibrary { return "tv" }
+        if library.isAudiobookLibrary { return "book.closed" }
+        return "film.stack"
     }
 
     // MARK: - Constants

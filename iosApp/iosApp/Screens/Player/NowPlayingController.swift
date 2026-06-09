@@ -47,6 +47,21 @@ final class NowPlayingController {
     /// a fetch is already in flight or has already published.
     private var currentArtworkURL: URL?
     private var artworkFetchTask: Task<Void, Never>?
+    private var preferredSkipInterval: TimeInterval = 10
+
+    enum MediaKind {
+        case video
+        case audio
+
+        var nowPlayingValue: NSNumber {
+            switch self {
+            case .video:
+                NSNumber(value: MPNowPlayingInfoMediaType.video.rawValue)
+            case .audio:
+                NSNumber(value: MPNowPlayingInfoMediaType.audio.rawValue)
+            }
+        }
+    }
 
     // MARK: - Lifecycle
 
@@ -81,22 +96,46 @@ final class NowPlayingController {
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
     }
 
+    func setPreferredSkipInterval(_ seconds: TimeInterval) {
+        preferredSkipInterval = max(1, seconds)
+        guard isActive else { return }
+        let center = MPRemoteCommandCenter.shared()
+        center.skipForwardCommand.preferredIntervals = [NSNumber(value: preferredSkipInterval)]
+        center.skipBackwardCommand.preferredIntervals = [NSNumber(value: preferredSkipInterval)]
+    }
+
     // MARK: - State updates
 
     /// Refresh the Now Playing dictionary. Call on file-loaded, on
     /// time-change (≤1 Hz — do not flood), and on pause change. `isPlaying`
     /// feeds the playback-rate field which the OS uses to animate the
     /// scrubber between time updates.
-    func update(title: String, duration: Double, position: Double, isPlaying: Bool) {
+    func update(
+        title: String,
+        duration: Double,
+        position: Double,
+        isPlaying: Bool,
+        mediaKind: MediaKind = .video,
+        artist: String? = nil,
+        albumTitle: String? = nil,
+        playbackRate: Double = 1.0
+    ) {
         guard isActive else { return }
         var info = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
         info[MPMediaItemPropertyTitle] = title
+        if let artist, !artist.isEmpty {
+            info[MPMediaItemPropertyArtist] = artist
+        }
+        if let albumTitle, !albumTitle.isEmpty {
+            info[MPMediaItemPropertyAlbumTitle] = albumTitle
+        }
         if duration > 0 {
             info[MPMediaItemPropertyPlaybackDuration] = duration
         }
         info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = position
-        info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
-        info[MPNowPlayingInfoPropertyMediaType] = MPNowPlayingInfoMediaType.video.rawValue
+        info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? playbackRate : 0.0
+        info[MPNowPlayingInfoPropertyDefaultPlaybackRate] = playbackRate
+        info[MPNowPlayingInfoPropertyMediaType] = mediaKind.nowPlayingValue
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
 
@@ -201,20 +240,22 @@ final class NowPlayingController {
             return .success
         }
 
-        center.skipForwardCommand.preferredIntervals = [10]
+        center.skipForwardCommand.preferredIntervals = [NSNumber(value: preferredSkipInterval)]
         center.skipForwardCommand.isEnabled = true
         center.skipForwardCommand.addTarget { [weak self] event in
             guard let h = self?.handlers else { return .commandFailed }
-            let skip = (event as? MPSkipIntervalCommandEvent)?.interval ?? 10
+            let fallback = self?.preferredSkipInterval ?? 10
+            let skip = (event as? MPSkipIntervalCommandEvent)?.interval ?? fallback
             h.seek(h.currentTime() + skip)
             return .success
         }
 
-        center.skipBackwardCommand.preferredIntervals = [10]
+        center.skipBackwardCommand.preferredIntervals = [NSNumber(value: preferredSkipInterval)]
         center.skipBackwardCommand.isEnabled = true
         center.skipBackwardCommand.addTarget { [weak self] event in
             guard let h = self?.handlers else { return .commandFailed }
-            let skip = (event as? MPSkipIntervalCommandEvent)?.interval ?? 10
+            let fallback = self?.preferredSkipInterval ?? 10
+            let skip = (event as? MPSkipIntervalCommandEvent)?.interval ?? fallback
             h.seek(max(0, h.currentTime() - skip))
             return .success
         }

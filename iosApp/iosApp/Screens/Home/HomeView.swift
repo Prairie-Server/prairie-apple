@@ -24,6 +24,7 @@ struct HomeView: View {
     @State private var pendingHomeFocusRequest: Int?
     #endif
     @Environment(AppRouter.self) private var router
+    @Environment(AudioPlaybackStore.self) private var audioStore
 
     /// How far the blurred page backdrop extends below the hero's
     /// visible bottom edge. The extra vertical room lets the image's
@@ -451,17 +452,22 @@ struct HomeView: View {
         router.navigate(to: .itemDetail(contentId: contentId))
     }
 
-    private func navigateToPlayer(_ contentId: String) {
+    private func navigateToPlayer(_ item: SectionItem) {
+        if item.isAudiobook {
+            audioStore.play(contentId: item.contentId)
+            return
+        }
+
         #if os(tvOS)
         router.navigate(
             to: .player(
-                contentId: contentId,
+                contentId: item.contentId,
                 startFromBeginning: false,
                 resumePosition: nil
             )
         )
         #else
-        router.presentPlayer(contentId: contentId)
+        router.presentPlayer(contentId: item.contentId)
         #endif
     }
 

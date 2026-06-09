@@ -217,6 +217,29 @@ struct SectionItem: Codable, Identifiable, Hashable {
     }
 }
 
+enum SiloMediaType {
+    static func isAudiobook(_ type: String) -> Bool {
+        switch type.lowercased() {
+        case "audiobook", "audiobooks", "book", "books":
+            return true
+        default:
+            return false
+        }
+    }
+
+    static func isSeries(_ type: String) -> Bool {
+        type.lowercased() == "series"
+    }
+}
+
+extension BrowseItem {
+    var isAudiobook: Bool { SiloMediaType.isAudiobook(type) }
+}
+
+extension SectionItem {
+    var isAudiobook: Bool { SiloMediaType.isAudiobook(type) }
+}
+
 struct ResolvedSection: Codable, Identifiable {
     let id: String
     let sectionType: String
@@ -331,6 +354,81 @@ struct ItemDetail: Codable {
     let intro: TimeRange?
     let credits: TimeRange?
     let overlaySummary: OverlaySummary?
+    let audiobook: AudiobookDetail?
+}
+
+extension ItemDetail {
+    var isAudiobook: Bool {
+        audiobook != nil || SiloMediaType.isAudiobook(type)
+    }
+}
+
+struct AudiobookDetail: Codable, Hashable {
+    let authors: [AudiobookPerson]
+    let narrators: [AudiobookPerson]
+    let publisher: String?
+    let totalDurationSeconds: Int?
+    let series: AudiobookSeriesGroup?
+    let otherNarrations: [AudiobookNarration]
+    let related: AudiobookRelatedContent?
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        authors = try c.decodeIfPresent([AudiobookPerson].self, forKey: .authors) ?? []
+        narrators = try c.decodeIfPresent([AudiobookPerson].self, forKey: .narrators) ?? []
+        publisher = try c.decodeIfPresent(String.self, forKey: .publisher)
+        totalDurationSeconds = try c.decodeIfPresent(Int.self, forKey: .totalDurationSeconds)
+        series = try c.decodeIfPresent(AudiobookSeriesGroup.self, forKey: .series)
+        otherNarrations = try c.decodeIfPresent([AudiobookNarration].self, forKey: .otherNarrations) ?? []
+        related = try c.decodeIfPresent(AudiobookRelatedContent.self, forKey: .related)
+    }
+}
+
+struct AudiobookPerson: Codable, Identifiable, Hashable {
+    let personId: String?
+    let name: String
+    let photoUrl: String?
+    let photoThumbhash: String?
+    var id: String { personId ?? name }
+}
+
+struct AudiobookSeriesGroup: Codable, Hashable {
+    let name: String?
+    let entries: [AudiobookRelatedItem]
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decodeIfPresent(String.self, forKey: .name)
+        entries = try c.decodeIfPresent([AudiobookRelatedItem].self, forKey: .entries) ?? []
+    }
+}
+
+struct AudiobookRelatedContent: Codable, Hashable {
+    let alsoByAuthor: [AudiobookRelatedItem]
+    let similar: [AudiobookRelatedItem]
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        alsoByAuthor = try c.decodeIfPresent([AudiobookRelatedItem].self, forKey: .alsoByAuthor) ?? []
+        similar = try c.decodeIfPresent([AudiobookRelatedItem].self, forKey: .similar) ?? []
+    }
+}
+
+struct AudiobookRelatedItem: Codable, Identifiable, Hashable {
+    let contentId: String
+    let title: String
+    let year: Int?
+    let posterUrl: String?
+    let seriesIndex: Int?
+    var id: String { contentId }
+}
+
+struct AudiobookNarration: Codable, Identifiable, Hashable {
+    let contentId: String
+    let title: String
+    let year: Int?
+    let narrators: [String]
+    var id: String { contentId }
 }
 
 struct CastMember: Codable, Identifiable, Hashable {
@@ -475,6 +573,10 @@ struct FileVersion: Codable, Identifiable, Hashable {
     let chapters: [VersionChapter]?
     let intro: TimeRange?
     let credits: TimeRange?
+    let presentationKind: String?
+    let presentationGroupKey: String?
+    let presentationPartIndex: Int?
+    let presentationPartTotal: Int?
     var id: Int { fileId }
 
     init(
@@ -493,7 +595,11 @@ struct FileVersion: Codable, Identifiable, Hashable {
         subtitleTracks: [SubtitleTrack]?,
         chapters: [VersionChapter]?,
         intro: TimeRange? = nil,
-        credits: TimeRange? = nil
+        credits: TimeRange? = nil,
+        presentationKind: String? = nil,
+        presentationGroupKey: String? = nil,
+        presentationPartIndex: Int? = nil,
+        presentationPartTotal: Int? = nil
     ) {
         self.fileId = fileId
         self.fileName = fileName
@@ -511,6 +617,10 @@ struct FileVersion: Codable, Identifiable, Hashable {
         self.chapters = chapters
         self.intro = intro
         self.credits = credits
+        self.presentationKind = presentationKind
+        self.presentationGroupKey = presentationGroupKey
+        self.presentationPartIndex = presentationPartIndex
+        self.presentationPartTotal = presentationPartTotal
     }
 
     init(from decoder: Decoder) throws {
@@ -531,6 +641,10 @@ struct FileVersion: Codable, Identifiable, Hashable {
         chapters = try c.decodeIfPresent([VersionChapter].self, forKey: .chapters)
         intro = try c.decodeIfPresent(TimeRange.self, forKey: .intro)
         credits = try c.decodeIfPresent(TimeRange.self, forKey: .credits)
+        presentationKind = try c.decodeIfPresent(String.self, forKey: .presentationKind)
+        presentationGroupKey = try c.decodeIfPresent(String.self, forKey: .presentationGroupKey)
+        presentationPartIndex = try c.decodeIfPresent(Int.self, forKey: .presentationPartIndex)
+        presentationPartTotal = try c.decodeIfPresent(Int.self, forKey: .presentationPartTotal)
     }
 }
 
@@ -860,10 +974,27 @@ struct Library: Codable, Identifiable, Hashable {
     let type: String
     let sortOrder: Int?
     let posterUrl: String?
+
+    var isAudiobookLibrary: Bool { SiloMediaType.isAudiobook(type) }
+    var isSeriesLibrary: Bool { SiloMediaType.isSeries(type) }
 }
 
 struct LibrariesResponse: Codable {
     let libraries: [Library]
+
+    init(libraries: [Library]) {
+        self.libraries = libraries
+    }
+
+    init(from decoder: Decoder) throws {
+        if let list = try? [Library](from: decoder) {
+            libraries = list
+            return
+        }
+
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        libraries = try c.decodeIfPresent([Library].self, forKey: .libraries) ?? []
+    }
 }
 
 /// Type of a library collection. Wire values are the plural forms
@@ -1036,6 +1167,10 @@ struct StartPlaybackRequest: Codable {
     let containers: [String]
     let maxResolution: String?
     let hdr: Bool
+    /// Audiobooks only: the session's file-local position must not overwrite
+    /// the book-level resume point, which the client reports separately via
+    /// `/api/v1/sync/progress` on the whole-book timeline.
+    var disableProgressPersistence: Bool?
 }
 
 struct TranscodeStartRequest: Codable {

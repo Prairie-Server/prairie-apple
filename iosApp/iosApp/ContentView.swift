@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @State private var router = AppRouter()
+    @State private var audioStore = AudioPlaybackStore()
     @State private var debugPlayContentId: String?
     @State private var didAttemptDebugAutoPlay = false
     @State private var didStartInitialStateCheck = false
@@ -67,6 +68,7 @@ struct ContentView: View {
                 #endif
             }
         }
+        .environment(audioStore)
         .environmentObject(overlayPrefs)
         .preferredColorScheme(.dark)
         #if os(macOS)
@@ -93,6 +95,7 @@ struct ContentView: View {
             handleDeepLink(url)
         }
         .onReceive(NotificationCenter.default.publisher(for: .continuumSessionExpired)) { _ in
+            Task { await audioStore.player.close() }
             router.expiredSession()
         }
         .task {
@@ -156,16 +159,31 @@ struct ContentView: View {
         case "item":
             router.navigate(to: .itemDetail(contentId: contentId))
         case "play":
-            router.navigate(
-                to: .player(
-                    contentId: contentId,
-                    startFromBeginning: false,
-                    resumePosition: nil
-                )
-            )
+            Task { await routePlayDeepLink(contentId: contentId) }
         default:
             break
         }
+    }
+
+    @MainActor
+    private func routePlayDeepLink(contentId: String) async {
+        do {
+            let detail = try await ContinuumAPI.shared.itemDetail(contentId: contentId)
+            if detail.isAudiobook {
+                audioStore.play(contentId: contentId)
+                return
+            }
+        } catch {
+            // Fall through to the existing video route when the type cannot be resolved.
+        }
+
+        router.navigate(
+            to: .player(
+                contentId: contentId,
+                startFromBeginning: false,
+                resumePosition: nil
+            )
+        )
     }
 
     @ViewBuilder
@@ -397,6 +415,7 @@ struct MainTabView: View {
     @Bindable var router: AppRouter
     @State private var selectedTab: AppTab = .home
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @Environment(AudioPlaybackStore.self) private var audioStore
     #if !os(macOS)
     @Environment(\.horizontalSizeClass) private var hSize
     #endif
@@ -410,8 +429,16 @@ struct MainTabView: View {
             }
         }
         .tint(.continuumOnSurface)
-        .environment(router)
         #if !os(macOS)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            AudioMiniPlayerView()
+        }
+        .fullScreenCover(isPresented: Binding(
+            get: { audioStore.isShowingFullPlayer },
+            set: { if !$0 { audioStore.dismissFullPlayer() } }
+        )) {
+            AudioFullPlayerView()
+        }
         .fullScreenCover(item: $router.presentedPlayer) { payload in
             PlayerView(
                 contentId: payload.contentId,
@@ -425,6 +452,10 @@ struct MainTabView: View {
             )
         }
         #endif
+        // Outside the presentation modifiers so presented covers (audio
+        // player, video player) inherit the router — ErrorView requires
+        // it and traps when it's absent.
+        .environment(router)
     }
 
     private var prefersSidebarLayout: Bool {

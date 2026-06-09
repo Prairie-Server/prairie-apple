@@ -74,7 +74,7 @@ struct TVLibraryGridView: View {
                     ErrorView(state: error, onRetry: { Task { await viewModel.loadInitial() } })
                 } else if viewModel.items.isEmpty {
                     EmptyStateView(
-                        icon: "film.stack",
+                        icon: emptyGridIcon,
                         title: "No titles match",
                         subtitle: "Try a different letter or filter."
                     )
@@ -98,6 +98,12 @@ struct TVLibraryGridView: View {
             }
             .padding(.bottom, 48)
         }
+    }
+
+    private var emptyGridIcon: String {
+        if SiloMediaType.isSeries(libraryType) { return "tv" }
+        if SiloMediaType.isAudiobook(libraryType) { return "book.closed" }
+        return "film.stack"
     }
 
     // MARK: - Header
