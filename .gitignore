@@ -40,3 +40,4 @@ logs/
 output/
 .DS_Store
 Thumbs.db
+.swiftpm/

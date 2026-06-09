@@ -25,12 +25,14 @@ packages:
   # FFmpeg xcframeworks (LGPL). Provides the Libavcodec / Libavformat /
   # Libavutil / Libswresample modules consumed by CoreMediaPlayerCore.
   # Smaller and cleaner than the old player dependency: ships only the
-  # FFmpeg libraries with no libmpv GPL surface. Upstream is archived but
-  # functional; pinned to the tip commit that includes the HLS seek fix
-  # landed after the 7.1.0 tag.
+  # FFmpeg libraries with no libmpv GPL surface. Vendored copy of
+  # mpvkit/ffmpeg-build at b38afaffe8a38c82c3922d36e044a915bf668f27 (tip of
+  # main, includes the post-7.1.0 HLS seek fix): upstream is archived, and
+  # the Libuavs3d 1.2.1 release asset it references was re-published with a
+  # new checksum on 2026-04-23, so the remote manifest can never resolve
+  # again. See Vendor/ffmpeg-build/Package.swift for details.
   FFmpeg:
-    url: https://github.com/mpvkit/ffmpeg-build
-    revision: b38afaffe8a38c82c3922d36e044a915bf668f27
+    path: Vendor/ffmpeg-build
   Nuke:
     url: https://github.com/kean/Nuke
     from: "12.8.0"
