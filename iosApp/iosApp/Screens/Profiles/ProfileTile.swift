@@ -91,7 +91,9 @@ struct ProfileTile: View {
         .focused($isFocused)
         .onTapGesture(perform: action)
         #if os(tvOS)
-        .modifier(ProfileTileDefaultFocus(prefers: prefersDefaultFocus, namespace: defaultFocusNamespace))
+        // Lets the first profile tile claim initial focus instead of the
+        // engine landing on the top-right Sign Out / Change Server chips.
+        .applyDefaultFocusIfNeeded(prefersDefaultFocus, namespace: defaultFocusNamespace)
         .focusEffectDisabled()
         #endif
         .accessibilityElement(children: .combine)
@@ -236,25 +238,6 @@ struct AddProfileTile: View {
         .accessibilityLabel("Add Profile")
     }
 }
-
-#if os(tvOS)
-/// Applies `prefersDefaultFocus` only when a namespace is supplied, letting the
-/// first profile tile claim initial focus instead of the engine landing on the
-/// top-right Sign Out / Change Server chips.
-private struct ProfileTileDefaultFocus: ViewModifier {
-    let prefers: Bool
-    let namespace: Namespace.ID?
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if let namespace {
-            content.prefersDefaultFocus(prefers, in: namespace)
-        } else {
-            content
-        }
-    }
-}
-#endif
 
 // MARK: - Avatar resolver (mirrors ProfileAvatarView's image/emoji logic)
 

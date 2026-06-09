@@ -2340,7 +2340,9 @@ final class PlayerCore: NSObject {
         av_dict_set(&options, "reconnect", "1", 0)
         av_dict_set(&options, "reconnect_streamed", "1", 0)
         av_dict_set(&options, "reconnect_on_network_error", "1", 0)
-        av_dict_set(&options, "reconnect_at_eof", "1", 0)
+        // reconnect_at_eof is deliberately NOT set: FFmpeg documents it for
+        // live/endless streams — it treats a finite file's natural EOF as an
+        // error and reconnects, which delays or breaks end-of-playback.
         av_dict_set(&options, "reconnect_on_http_error", "5xx", 0)
         av_dict_set(&options, "reconnect_delay_max", "5", 0)
         // Matroska over HTTP needs frequent small seeks during probing and

@@ -144,15 +144,6 @@ struct TVMediaCard: View {
 }
 
 private extension View {
-    @ViewBuilder
-    func applyDefaultFocusIfNeeded(_ prefersDefaultFocus: Bool, namespace: Namespace.ID?) -> some View {
-        if let namespace {
-            self.prefersDefaultFocus(prefersDefaultFocus, in: namespace)
-        } else {
-            self
-        }
-    }
-
     /// Binds the inner button to a parent rail's `@FocusState` so the rail can
     /// route d-pad-entry default focus onto this specific card. No-op when the
     /// rail doesn't manage focus. Mirrors `MediaCard.applyRowFocus`.
@@ -179,6 +170,7 @@ private struct TVPosterRingButtonBody: View {
     let configuration: ButtonStyleConfiguration
 
     @Environment(\.isFocused) private var isFocused
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         configuration.label
@@ -194,7 +186,7 @@ private struct TVPosterRingButtonBody: View {
     }
 
     private var scale: CGFloat {
-        let base: CGFloat = isFocused ? 1.05 : 1.0
+        let base: CGFloat = isFocused && !reduceMotion ? 1.05 : 1.0
         return configuration.isPressed ? base * 0.97 : base
     }
 }

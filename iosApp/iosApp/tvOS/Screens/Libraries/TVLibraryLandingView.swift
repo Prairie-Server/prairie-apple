@@ -44,6 +44,10 @@ struct TVLibraryLandingView: View {
     /// Active focus hand-down token from the shell (incremented when the
     /// Libraries root is selected).
     var focusRequest: Int = 0
+    /// Whether the top menu currently holds focus. The mode slider selects a
+    /// mode on focus, so kicks issued while the user is still in the menu
+    /// would yank focus down into the content mid-slide.
+    var isTopMenuFocused: Bool = false
     let onTopMenuFocusRequest: (() -> Void)?
 
     // MARK: - State
@@ -113,13 +117,24 @@ struct TVLibraryLandingView: View {
             guard collectionSections.isEmpty, !isLoadingCollections else { return }
             await loadCollections()
         }
-        // Re-seed focus when the mode is toggled (the whole subtree swaps while
-        // the remote sits in the top-menu slider) and when content first
+        // Re-seed focus when the mode is toggled and when content first
         // arrives (rows/cards mount after the async load, so the initial token
-        // would otherwise land before there is anything to focus).
-        .onChange(of: selectedMode) { _, _ in focusKickNonce += 1 }
-        .onChange(of: sections.isEmpty) { _, isEmpty in if !isEmpty { focusKickNonce += 1 } }
-        .onChange(of: collectionSections.isEmpty) { _, isEmpty in if !isEmpty { focusKickNonce += 1 } }
+        // would otherwise land before there is anything to focus). Each kick
+        // is gated on the top menu NOT holding focus: the mode slider selects
+        // a mode on focus alone, so an ungated kick would pull focus out of
+        // the menu while the user d-pads across Recommended/Collections,
+        // making the slider unusable. When the hand-off from the menu is
+        // active (root selection), menu focus is already suppressed and
+        // relinquished, so the kicks still fire.
+        .onChange(of: selectedMode) { _, _ in
+            if !isTopMenuFocused { focusKickNonce += 1 }
+        }
+        .onChange(of: sections.isEmpty) { _, isEmpty in
+            if !isEmpty, !isTopMenuFocused { focusKickNonce += 1 }
+        }
+        .onChange(of: collectionSections.isEmpty) { _, isEmpty in
+            if !isEmpty, !isTopMenuFocused { focusKickNonce += 1 }
+        }
     }
 
     // MARK: - Per-tab layouts
@@ -481,6 +496,11 @@ private struct TVCollectionCard: View {
     let action: () -> Void
 
     @FocusState private var isFocused: Bool
+    /// Last hand-down token applied, so each token claims focus exactly once.
+    /// The card lives in a `LazyVGrid`; without the guard, `onAppear` re-fires
+    /// when the first card is recycled back into view on scroll-up and would
+    /// yank focus away from the row the user was navigating.
+    @State private var lastAppliedFocusRequest = 0
 
     private let cardWidth: CGFloat = 220
     private var cardHeight: CGFloat { cardWidth * 1.5 } // 2:3 poster ratio
@@ -498,26 +518,18 @@ private struct TVCollectionCard: View {
     }
 
     private func applyFocusRequest(_ request: Int) {
-        guard request > 0 else { return }
+        guard request > 0, request != lastAppliedFocusRequest else { return }
+        lastAppliedFocusRequest = request
         isFocused = true
     }
 
-    @ViewBuilder
     private var collectionButton: some View {
-        if let defaultFocusNamespace {
-            Button(action: action) {
-                posterImage
-            }
-            .buttonStyle(.card)
-            .focused($isFocused)
-            .prefersDefaultFocus(prefersDefaultFocus, in: defaultFocusNamespace)
-        } else {
-            Button(action: action) {
-                posterImage
-            }
-            .buttonStyle(.card)
-            .focused($isFocused)
+        Button(action: action) {
+            posterImage
         }
+        .buttonStyle(.card)
+        .focused($isFocused)
+        .applyDefaultFocusIfNeeded(prefersDefaultFocus, namespace: defaultFocusNamespace)
     }
 
     private var posterImage: some View {

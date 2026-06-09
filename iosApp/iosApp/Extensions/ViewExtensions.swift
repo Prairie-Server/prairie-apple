@@ -387,3 +387,22 @@ private struct ContinuumTextFieldBody<Label: View>: View {
         #endif
     }
 }
+
+#if os(tvOS)
+extension View {
+    /// Applies `prefersDefaultFocus` only when a focus namespace is supplied,
+    /// so a single element (the first profile tile, the PIN pad's "1", a
+    /// rail's first card, the hero Play pill) can claim a scope's initial
+    /// focus while callers that don't manage focus pass `nil` and are
+    /// untouched. Shared by every tvOS component that takes an optional
+    /// `defaultFocusNamespace`.
+    @ViewBuilder
+    func applyDefaultFocusIfNeeded(_ prefersDefaultFocus: Bool, namespace: Namespace.ID?) -> some View {
+        if let namespace {
+            self.prefersDefaultFocus(prefersDefaultFocus, in: namespace)
+        } else {
+            self
+        }
+    }
+}
+#endif

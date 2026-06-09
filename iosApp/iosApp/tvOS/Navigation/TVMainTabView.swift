@@ -112,6 +112,7 @@ struct TVMainTabView: View {
                 headerContext: $libraryHeaderContext,
                 librarySelectionRequest: librarySelectionRequest,
                 focusRequest: contentFocusRequest,
+                isTopMenuFocused: isTopMenuFocused,
                 onTopMenuFocusRequest: focusTopMenuIfVisible
             )
         case .forYou:

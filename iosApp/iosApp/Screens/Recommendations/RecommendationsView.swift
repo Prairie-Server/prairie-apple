@@ -205,6 +205,11 @@ private struct SavedShortcutsRow: View {
 
     #if os(tvOS)
     @Namespace private var focusScope
+    /// Last hand-down token applied, so each token claims focus exactly once.
+    /// This row lives in a `LazyVStack`; without the guard, `onAppear` re-fires
+    /// when the row is recycled back into view on scroll-up and would yank
+    /// focus away from whatever the user was on.
+    @State private var lastAppliedFocusRequest = 0
     #endif
 
     var body: some View {
@@ -250,7 +255,8 @@ private struct SavedShortcutsRow: View {
 
     #if os(tvOS)
     private func applyFocusRequest(_ request: Int) {
-        guard request > 0 else { return }
+        guard request > 0, request != lastAppliedFocusRequest else { return }
+        lastAppliedFocusRequest = request
         focusedShortcut = .watchlist
     }
     #endif

@@ -77,7 +77,13 @@ struct TVPlayerControls: View {
         }
         .onChange(of: viewModel.showIntroSkip) { _, visible in
             if visible {
-                focusedIntroAction = .skip
+                // The skip layer renders beneath the HUD, so claiming focus
+                // here while the HUD is up would yank the user out of it
+                // mid-navigation. The HUD-dismiss handler above re-seeds
+                // transport focus, and Skip stays reachable by direction.
+                if !isHUDPresented {
+                    focusedIntroAction = .skip
+                }
             } else {
                 focusedIntroAction = nil
                 // Hand focus back to the transport when the Skip button

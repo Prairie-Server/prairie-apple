@@ -111,6 +111,7 @@ private struct OverlayCornerDot: View {
     let isPressed: Bool
 
     @Environment(\.isFocused) private var isFocused
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Circle()
@@ -146,7 +147,10 @@ private struct OverlayCornerDot: View {
     }
 
     private var scale: CGFloat {
-        let base: CGFloat = isFocused ? 1.3 : (selected ? 1.0 : 0.8)
+        // Under Reduce Motion the focus lift is dropped; the white fill +
+        // 3pt stroke still mark the focused dot.
+        let focusScale: CGFloat = reduceMotion ? 1.0 : 1.3
+        let base: CGFloat = isFocused ? focusScale : (selected ? 1.0 : 0.8)
         return isPressed ? base * 0.94 : base
     }
 }

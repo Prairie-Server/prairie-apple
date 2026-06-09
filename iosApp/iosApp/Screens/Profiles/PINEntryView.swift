@@ -213,7 +213,8 @@ private struct NumberPadButton: View {
         }
         .buttonStyle(NumberPadButtonStyle())
         #if os(tvOS)
-        .modifier(NumberPadDefaultFocus(prefers: prefersDefaultFocus, namespace: defaultFocusNamespace))
+        // Lets a single key (the "1") claim initial focus on the PIN pad.
+        .applyDefaultFocusIfNeeded(prefersDefaultFocus, namespace: defaultFocusNamespace)
         #endif
     }
 
@@ -225,24 +226,6 @@ private struct NumberPadButton: View {
         #endif
     }
 }
-
-#if os(tvOS)
-/// Applies `prefersDefaultFocus` only when a namespace is supplied, so a single
-/// key (the "1") can claim initial focus on the PIN pad.
-private struct NumberPadDefaultFocus: ViewModifier {
-    let prefers: Bool
-    let namespace: Namespace.ID?
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if let namespace {
-            content.prefersDefaultFocus(prefers, in: namespace)
-        } else {
-            content
-        }
-    }
-}
-#endif
 
 private struct NumberPadButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
