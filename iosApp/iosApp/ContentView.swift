@@ -552,6 +552,9 @@ struct MainTabView: View {
         case .recommendations:
             RecommendationsView()
 
+        case .calendar:
+            CalendarView()
+
         case .settings:
             SettingsView()
 

@@ -81,6 +81,9 @@ enum CacheKey {
     }
     static func collectionItems(_ collectionId: String) -> String { "collection:\(collectionId):items" }
     static func similar(_ contentId: String) -> String { "item:\(contentId):similar" }
+    static func calendarWeek(_ weekStart: String, filter: String) -> String {
+        "calendar:\(weekStart):\(filter)"
+    }
 
     /// Per-profile data that must be dropped on profile switch.
     static let perProfilePrefixes: [String] = [
@@ -90,5 +93,6 @@ enum CacheKey {
         "item:",
         "collection:",
         "collections:",
+        "calendar:",
     ]
 }

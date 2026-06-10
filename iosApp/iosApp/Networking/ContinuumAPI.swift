@@ -456,6 +456,26 @@ actor ContinuumAPI {
         return SectionsResponse(sections: resolved)
     }
 
+    // --- Calendar ---
+
+    /// Upcoming releases/airings grouped by viewer-local day. `start` /
+    /// `end` are inclusive "YYYY-MM-DD" bounds (the server caps the
+    /// window at 31 days); `timezone` is the viewer's IANA identifier
+    /// used for day grouping.
+    func calendarEvents(
+        start: String,
+        end: String,
+        filter: String,
+        timezone: String
+    ) async throws -> CalendarResponse {
+        try await http.get("/api/v1/calendar", query: [
+            "start": start,
+            "end": end,
+            "filter": filter,
+            "timezone": timezone,
+        ])
+    }
+
     // --- Catalog ---
 
     func catalog(query: [String: String]) async throws -> CatalogResponse {

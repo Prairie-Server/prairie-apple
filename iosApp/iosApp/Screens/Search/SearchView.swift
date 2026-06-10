@@ -16,6 +16,15 @@ struct SearchView: View {
                 if shouldShowFilters {
                     mediaTypePicker
                         .padding(.horizontal, ContinuumTheme.padding)
+                    #if os(tvOS)
+                        // The picker is a centered 760pt pill inside a
+                        // 1600pt column. Stretch its focus section across
+                        // the full row so up-moves from the grid's outer
+                        // columns land here instead of skipping straight
+                        // to the search field above.
+                        .frame(maxWidth: .infinity)
+                        .focusSection()
+                    #endif
                 }
 
                 content

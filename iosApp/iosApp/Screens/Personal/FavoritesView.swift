@@ -25,7 +25,13 @@ struct FavoritesView: View {
             } else if let error {
                 ErrorView(state: error, onRetry: { Task { await loadFavorites() } })
             } else if isLoading {
+                // tvOS: this is a pushed destination, so the top menu bar
+                // isn't there to hold focus — without a focusable element
+                // the remote goes dead until the grid renders.
                 Color.clear
+                #if os(tvOS)
+                    .focusable()
+                #endif
             } else {
                 EmptyStateView(
                     icon: "heart",
