@@ -12,7 +12,7 @@ extension Notification.Name {
 struct FeaturedCarousel: View {
     let items: [SectionItem]
     let onItemTap: (String) -> Void
-    let onPlayTap: (String) -> Void
+    let onPlayTap: (SectionItem) -> Void
     /// Optional extra inset for the active card's copy. Useful when the hero
     /// sits below overlaid chrome on tvOS and the content needs to clear it.
     var textLeadingInset: CGFloat = 0
@@ -465,7 +465,7 @@ struct FeaturedCarousel: View {
         }
         .onPlayPauseCommand {
             guard role.isActive, actionFocus == .heroCard else { return }
-            onPlayTap(item.contentId)
+            onPlayTap(item)
         }
         #endif
         #if !os(iOS) && !os(tvOS)

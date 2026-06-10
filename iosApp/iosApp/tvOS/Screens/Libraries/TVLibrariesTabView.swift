@@ -151,19 +151,19 @@ struct TVLibrariesTabView: View {
     }
 
     private func libraryTypeLabel(for library: Library) -> String {
-        switch library.type {
-        case "movies": return "Movies"
-        case "series": return "TV Shows"
-        default: return "Library"
-        }
+        if library.isAudiobookLibrary { return "Audiobooks" }
+        if library.isSeriesLibrary { return "TV Shows" }
+        if library.type == "movies" { return "Movies" }
+        if library.type == "music" { return "Music" }
+        return "Library"
     }
 
     private func libraryIconName(for library: Library) -> String {
-        switch library.type {
-        case "movies": return "film.fill"
-        case "series": return "tv.fill"
-        default: return "square.stack.3d.up.fill"
-        }
+        if library.isAudiobookLibrary { return "book.closed.fill" }
+        if library.isSeriesLibrary { return "tv.fill" }
+        if library.type == "movies" { return "film.fill" }
+        if library.type == "music" { return "music.note" }
+        return "square.stack.3d.up.fill"
     }
 }
 
@@ -277,19 +277,19 @@ private struct TVLibraryPickerRow: View {
     // MARK: - Copy
 
     private var icon: String {
-        switch library.type {
-        case "movies": return "film.fill"
-        case "series": return "tv.fill"
-        default: return "square.stack.3d.up.fill"
-        }
+        if library.isAudiobookLibrary { return "book.closed.fill" }
+        if library.isSeriesLibrary { return "tv.fill" }
+        if library.type == "movies" { return "film.fill" }
+        if library.type == "music" { return "music.note" }
+        return "square.stack.3d.up.fill"
     }
 
     private var typeLabel: String {
-        switch library.type {
-        case "movies": return "Movies library"
-        case "series": return "TV library"
-        default: return "Library"
-        }
+        if library.isAudiobookLibrary { return "Audiobooks library" }
+        if library.isSeriesLibrary { return "TV library" }
+        if library.type == "movies" { return "Movies library" }
+        if library.type == "music" { return "Music library" }
+        return "Library"
     }
 }
 

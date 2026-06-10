@@ -353,6 +353,7 @@ struct LibraryRecommendedView: View {
     @State private var refreshStartedAt: Date?
     @State private var refreshHideTask: Task<Void, Never>?
     @Environment(AppRouter.self) private var router
+    @Environment(AudioPlaybackStore.self) private var audioStore
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -396,10 +397,14 @@ struct LibraryRecommendedView: View {
                     FeaturedCarousel(
                         items: featured.items,
                         onItemTap: { router.navigate(to: .itemDetail(contentId: $0)) },
-                        onPlayTap: {
+                        onPlayTap: { item in
+                            if item.isAudiobook {
+                                audioStore.play(contentId: item.contentId)
+                                return
+                            }
                             router.navigate(
                                 to: .player(
-                                    contentId: $0,
+                                    contentId: item.contentId,
                                     startFromBeginning: false,
                                     resumePosition: nil
                                 )

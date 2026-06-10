@@ -8,16 +8,19 @@ final class CompressedVideoPipeline {
         let submission: VideoToolboxVideoDecoder.SubmissionResult
         let pts: CMTime
         let rawPacketSize: Int
+        let decoderResetApplied: Bool
     }
 
     private var hasLoggedCompressedSampleTimingMode = false
     private var hasLoggedCompressedVideoPacketFormat = false
     private var compressedVideoPacketDiagnosticCount = 0
+    private var decoderResetWaitDiagnosticCount = 0
 
     func resetDiagnostics() {
         hasLoggedCompressedSampleTimingMode = false
         hasLoggedCompressedVideoPacketFormat = false
         compressedVideoPacketDiagnosticCount = 0
+        decoderResetWaitDiagnosticCount = 0
     }
 
     func submitPacket(
@@ -30,19 +33,12 @@ final class CompressedVideoPipeline {
         preferredLengthSize: Int,
         isH264: Bool,
         resetDecoderBeforeDecoding: Bool,
+        requiresRandomAccessForDecoderReset: Bool,
         decoder: VideoToolboxVideoDecoder,
         isCancelled: @escaping () -> Bool,
         outputHandler: @escaping (OSStatus, VTDecodeInfoFlags, CVImageBuffer?, CMTime, Int) -> Void
     ) -> SubmitOutcome? {
         guard size > 0 else { return nil }
-        if isH264 {
-            logH264PacketDiagnosticsIfNeeded(
-                data: data,
-                size: size,
-                preferredLengthSize: preferredLengthSize
-            )
-        }
-
         let pts = packetPTS(packet, timeBase: timeBase)
         let timing = sampleTiming(packet, pts: pts, timeBase: timeBase)
         let compressedSampleTiming: CMSampleTimingInfo? = useUntimedSamples ? nil : timing
@@ -57,13 +53,40 @@ final class CompressedVideoPipeline {
             preferredLengthSize: preferredLengthSize,
             isH264: isH264
         )
+        let h264Info = isH264
+            ? CompressedVideoPacketDiagnostics.h264PacketInfo(
+                data: data,
+                size: size,
+                packetFormat: packetFormat
+            )
+            : nil
+        if isH264 {
+            logH264PacketDiagnosticsIfNeeded(
+                packet: packet,
+                pts: pts,
+                data: data,
+                size: size,
+                preferredLengthSize: preferredLengthSize
+            )
+        }
         if shouldSkipH264PacketBeforeVideoToolbox(
-            data: data,
-            size: size,
+            info: h264Info,
             packetFormat: packetFormat,
             pts: pts,
             isH264: isH264
         ) {
+            return nil
+        }
+
+        if resetDecoderBeforeDecoding,
+           requiresRandomAccessForDecoderReset,
+           !isRandomAccessPacket(packet: packet, isH264: isH264, h264Info: h264Info) {
+            logDeferredDecoderResetIfNeeded(
+                packet: packet,
+                pts: pts,
+                isH264: isH264,
+                h264Info: h264Info
+            )
             return nil
         }
 
@@ -94,7 +117,12 @@ final class CompressedVideoPipeline {
                 outputHandler(status, infoFlags, imageBuffer, pts, rawPacketSize)
             }
         )
-        return SubmitOutcome(submission: submission, pts: pts, rawPacketSize: rawPacketSize)
+        return SubmitOutcome(
+            submission: submission,
+            pts: pts,
+            rawPacketSize: rawPacketSize,
+            decoderResetApplied: resetDecoderBeforeDecoding
+        )
     }
 
     private func packetPTS(
@@ -135,6 +163,8 @@ final class CompressedVideoPipeline {
     }
 
     private func logH264PacketDiagnosticsIfNeeded(
+        packet: UnsafeMutablePointer<AVPacket>,
+        pts: CMTime,
         data: UnsafeMutablePointer<UInt8>,
         size: Int,
         preferredLengthSize: Int
@@ -146,7 +176,11 @@ final class CompressedVideoPipeline {
             size: size,
             preferredLengthSize: preferredLengthSize
         )
-        print("[CMP-H264-PACKET] index=\(compressedVideoPacketDiagnosticCount) \(summary)")
+        print(
+            "[CMP-H264-PACKET] index=\(compressedVideoPacketDiagnosticCount) "
+            + "pts=\(formatSeconds(pts.seconds))s key=\(Self.isKeyPacket(packet) ? 1 : 0) "
+            + "\(summary)"
+        )
     }
 
     private func compressedVideoPacketFormat(
@@ -179,25 +213,55 @@ final class CompressedVideoPipeline {
     }
 
     private func shouldSkipH264PacketBeforeVideoToolbox(
-        data: UnsafeMutablePointer<UInt8>,
-        size: Int,
+        info: CompressedVideoPacketDiagnostics.H264PacketInfo?,
         packetFormat: CompressedVideoPacketFormat,
         pts: CMTime,
         isH264: Bool
     ) -> Bool {
         guard isH264 else { return false }
-        let info = CompressedVideoPacketDiagnostics.h264PacketInfo(
-            data: data,
-            size: size,
-            packetFormat: packetFormat
-        )
+        guard let info else { return false }
         guard info.isNonVCLOnly else { return false }
-        let ptsText = pts.seconds.isFinite ? String(format: "%.3f", pts.seconds) : "nan"
         print(
             "[CMP-H264-PACKET] action=skip_non_vcl format=\(packetFormat.label) "
-            + "pts=\(ptsText)s nals=\(info.nalCount) types=\(info.typeList) "
+            + "pts=\(formatSeconds(pts.seconds))s nals=\(info.nalCount) types=\(info.typeList) "
             + "sps=\(info.hasSPS ? 1 : 0) pps=\(info.hasPPS ? 1 : 0)"
         )
         return true
+    }
+
+    private func isRandomAccessPacket(
+        packet: UnsafeMutablePointer<AVPacket>,
+        isH264: Bool,
+        h264Info: CompressedVideoPacketDiagnostics.H264PacketInfo?
+    ) -> Bool {
+        let packetIsKey = Self.isKeyPacket(packet)
+        guard isH264 else { return packetIsKey }
+        guard let h264Info, h264Info.valid else { return packetIsKey }
+        return h264Info.hasIDR || (packetIsKey && h264Info.hasVCL)
+    }
+
+    private func logDeferredDecoderResetIfNeeded(
+        packet: UnsafeMutablePointer<AVPacket>,
+        pts: CMTime,
+        isH264: Bool,
+        h264Info: CompressedVideoPacketDiagnostics.H264PacketInfo?
+    ) {
+        guard decoderResetWaitDiagnosticCount < 8 else { return }
+        decoderResetWaitDiagnosticCount += 1
+        let typeText = isH264 ? (h264Info?.typeList ?? "unknown") : "n/a"
+        let idrText = isH264 ? "\((h264Info?.hasIDR ?? false) ? 1 : 0)" : "n/a"
+        print(
+            "[CMP] VT decoder reset deferred pts=\(formatSeconds(pts.seconds))s "
+            + "key=\(Self.isKeyPacket(packet) ? 1 : 0) h264=\(isH264 ? 1 : 0) "
+            + "idr=\(idrText) types=\(typeText)"
+        )
+    }
+
+    private static func isKeyPacket(_ packet: UnsafeMutablePointer<AVPacket>) -> Bool {
+        (packet.pointee.flags & 0x1) != 0
+    }
+
+    private func formatSeconds(_ seconds: Double) -> String {
+        seconds.isFinite ? String(format: "%.3f", seconds) : "nan"
     }
 }

@@ -395,6 +395,12 @@ final class PlayerCore: NSObject {
     /// permanent A/V drift.
     private var postDiscontinuityWallDeadline: CFTimeInterval = 0
     private static let postDiscontinuityWindowSeconds: CFTimeInterval = 5.0
+    private static let postDiscontinuityPrerollTimeoutSeconds: CFTimeInterval = 3.0
+    private static let postDiscontinuityMinimumAudioBufferSeconds: Double = 0.25
+    private static let postDiscontinuityMinimumDecodedVideoFrames = 1
+    /// Main-thread token used to cancel stale post-seek/post-track-switch
+    /// preroll waiters when another discontinuity supersedes them.
+    private var playbackRestartGeneration: UInt64 = 0
     private var audioEnqueueCount: UInt64 = 0
     // Count of audio-feed wakeups and the last observed audio-output status.
     // If `audRdy=1` but `aEnq=+0` persists across DIAG ticks, we want to know
@@ -742,6 +748,58 @@ final class PlayerCore: NSObject {
         CMTime(seconds: currentPlaybackTimeSeconds(), preferredTimescale: 600)
     }
 
+    private func invalidatePlaybackRestartWaiters() {
+        if Thread.isMainThread {
+            playbackRestartGeneration &+= 1
+        } else {
+            DispatchQueue.main.sync {
+                playbackRestartGeneration &+= 1
+            }
+        }
+    }
+
+    @discardableResult
+    private func seekFormatContext(
+        _ context: UnsafeMutablePointer<AVFormatContext>,
+        to seconds: Double,
+        logContext: String
+    ) -> Int32 {
+        let target = max(0, seconds)
+        if videoStreamIndex >= 0,
+           let videoTimestamp = streamTimestamp(seconds: target, timeBase: videoTimeBase) {
+            let result = avformat_seek_file(
+                context,
+                videoStreamIndex,
+                Int64.min,
+                videoTimestamp,
+                Int64.max,
+                AVSEEK_FLAG_BACKWARD
+            )
+            if result >= 0 { return result }
+            Self.logger.warning(
+                "[CMP-SEEK] \(logContext, privacy: .public) video-stream seek failed result=\(result, privacy: .public); falling back to global seek"
+            )
+        }
+
+        let timestamp = Int64(target * Double(AV_TIME_BASE))
+        let result = avformat_seek_file(
+            context, -1, Int64.min, timestamp, Int64.max, AVSEEK_FLAG_BACKWARD
+        )
+        if result >= 0 { return result }
+        return avformat_seek_file(context, -1, Int64.min, timestamp, Int64.max, 0)
+    }
+
+    private func streamTimestamp(seconds: Double, timeBase: AVRational) -> Int64? {
+        guard seconds.isFinite, timeBase.num > 0, timeBase.den > 0 else { return nil }
+        let timestamp = seconds * Double(timeBase.den) / Double(timeBase.num)
+        guard timestamp.isFinite,
+              timestamp >= Double(Int64.min),
+              timestamp <= Double(Int64.max) else {
+            return nil
+        }
+        return Int64(timestamp)
+    }
+
     private func handleRenderedAudioTime(_ renderedTime: CMTime) {
         updateAudioClock(to: renderedTime)
         setPlaybackTimeline(time: renderedTime, rate: playbackClock.rate)
@@ -942,6 +1000,7 @@ final class PlayerCore: NSObject {
         // `requestMediaDataWhenReady` closures execute, so we must wait for
         // them to exit before tearing down decode state. `videoDecodeQueue`
         // and `audioDecodeQueue` are not where the closures actually run.
+        invalidatePlaybackRestartWaiters()
         markCancelled()
         // Drain the packet queues FIRST to broadcast on the condition
         // variables, waking any demux enqueue that's blocked on a full
@@ -1074,6 +1133,62 @@ final class PlayerCore: NSObject {
         }
     }
 
+    private func beginPlaybackAfterDiscontinuityWhenPrimed(
+        initial: CMTime,
+        rate: Float,
+        deadline: CFTimeInterval,
+        generation: UInt64,
+        reason: String
+    ) {
+        guard rate != 0 else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  !self.isDisposed,
+                  !self.isCancelled,
+                  self.playbackRestartGeneration == generation else {
+                return
+            }
+
+            let audioReady = self.audioStreamIndex < 0
+                || self.audioOutput.bufferedDurationSeconds >= Self.postDiscontinuityMinimumAudioBufferSeconds
+            let videoReady = self.videoStreamIndex < 0
+                || self.decodedVideoFrameCount() >= Self.postDiscontinuityMinimumDecodedVideoFrames
+            let timedOut = CACurrentMediaTime() >= deadline
+            guard audioReady && videoReady || timedOut else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self] in
+                    self?.beginPlaybackAfterDiscontinuityWhenPrimed(
+                        initial: initial,
+                        rate: rate,
+                        deadline: deadline,
+                        generation: generation,
+                        reason: reason
+                    )
+                }
+                return
+            }
+
+            self.recoverDisplayLayerIfFailed(reason: "\(reason) preroll")
+            self.setPlaybackTimeline(time: initial, rate: rate)
+            self.audioOutput.setRate(rate)
+            if self.audioStreamIndex >= 0 {
+                self.audioOutput.play()
+            }
+            if let tb = self.controlTimebase {
+                CMTimebaseSetTime(tb, time: initial)
+                CMTimebaseSetRate(tb, rate: 1.0)
+            }
+            self.updateAudioClock(to: initial)
+            self.postDiscontinuityWallDeadline =
+                CACurrentMediaTime() + Self.postDiscontinuityWindowSeconds
+            self.setVideoDisplayTickPaused(false)
+            print(String(format:
+                "[CMP] discontinuity playback resume reason=%@ time=%.3f rate=%.2f audioAhead=%.2f videoReady=%d timedOut=%d",
+                reason, initial.seconds, Double(rate),
+                self.audioOutput.bufferedDurationSeconds,
+                videoReady ? 1 : 0, timedOut ? 1 : 0))
+        }
+    }
+
     private func decodedVideoFrameCount() -> Int {
         videoFrameScheduler.count
     }
@@ -1179,21 +1294,14 @@ final class PlayerCore: NSObject {
         skippedPreTargetVideoFrames = 0
         skippedPreTargetAudioFrames = 0
         shouldResyncClockOnFirstAudio = audioStreamIndex >= 0
+        compressedVideoPipeline.resetDiagnostics()
 
-        let timestamp = Int64(target * Double(AV_TIME_BASE))
-        let result = avformat_seek_file(
-            formatCtx, -1, Int64.min, timestamp, Int64.max, AVSEEK_FLAG_BACKWARD
-        )
+        let result = seekFormatContext(formatCtx, to: target, logContext: "seek")
         if result < 0 {
-            let r2 = avformat_seek_file(
-                formatCtx, -1, Int64.min, timestamp, Int64.max, 0
-            )
-            if r2 < 0 {
-                // Log but fall through to the workers-restart tail below:
-                // even on seek failure we want demux running, otherwise a
-                // subsequent `seek(to:)` would find no loop to replace.
-                Self.logger.error("avformat_seek_file failed: \(result)")
-            }
+            // Log but fall through to the workers-restart tail below:
+            // even on seek failure we want demux running, otherwise a
+            // subsequent `seek(to:)` would find no loop to replace.
+            Self.logger.error("avformat_seek_file failed: \(result)")
         }
         demuxLastProgressWall = CACurrentMediaTime()
 
@@ -1204,22 +1312,24 @@ final class PlayerCore: NSObject {
         // Display layer + audio backend flush and playback clock reset must
         // run on main (those are main-thread objects). Synchronous so
         // the new timeline is in place before we restart the feeds.
+        var restartRate: Float = 0
+        var restartGeneration: UInt64 = 0
+        let seekTime = CMTime(seconds: target, preferredTimescale: 600)
         DispatchQueue.main.sync {
+            self.audioOutput.pause()
+            self.setVideoDisplayTickPaused(true)
             self.displayLayer?.sampleBufferRenderer.flush(removingDisplayedImage: true) { }
             self.audioOutput.flush()
-            let seekTime = CMTime(seconds: target, preferredTimescale: 600)
             // Preserve the user's rate setting. If we were paused (rate==0),
             // the seek's new anchor should remain paused; if we were playing,
             // keep the user-requested `currentRate` (which may not be 1.0).
             let previousRate = self.playbackClock.rate
             let newRate: Float = previousRate == 0 ? 0 : self.currentRate
-            self.setPlaybackTimeline(time: seekTime, rate: newRate)
+            restartRate = newRate
+            self.playbackRestartGeneration &+= 1
+            restartGeneration = self.playbackRestartGeneration
+            self.setPlaybackTimeline(time: seekTime, rate: 0)
             self.audioOutput.setRate(self.currentRate)
-            if newRate == 0 {
-                self.audioOutput.pause()
-            } else {
-                self.audioOutput.play()
-            }
 
             // Anchor the control timebase at the seek target. `timescale: 600`
             // must match the playback timeline above — any lower timescale truncates
@@ -1227,8 +1337,9 @@ final class PlayerCore: NSObject {
             if let tb = self.controlTimebase {
                 CMTimebaseSetTime(
                     tb,
-                    time: CMTime(seconds: target, preferredTimescale: 600)
+                    time: seekTime
                 )
+                CMTimebaseSetRate(tb, rate: 1.0)
             }
             // Re-seed the audio clock so the first post-seek display tick
             // doesn't drop frames before the engine reports its first
@@ -1253,6 +1364,13 @@ final class PlayerCore: NSObject {
         demuxQueue.async { [weak self] in
             self?.runDemuxLoop()
         }
+        beginPlaybackAfterDiscontinuityWhenPrimed(
+            initial: seekTime,
+            rate: restartRate,
+            deadline: CACurrentMediaTime() + Self.postDiscontinuityPrerollTimeoutSeconds,
+            generation: restartGeneration,
+            reason: "seek"
+        )
 
         if #available(iOS 15.0, tvOS 15.0, *) {
             os_signpost(.end, log: Self.signpostLog, name: "Seek",
@@ -1736,6 +1854,7 @@ final class PlayerCore: NSObject {
         // doesn't broadcast on the condition variable). Both subtitle
         // slots drain because either can be the one the demux is
         // blocked on when the secondary track is active.
+        wakeVideoToolboxDecodeWaiters()
         videoPacketQueue.drain()
         audioPacketQueue.drain()
         embeddedSubtitlePipeline.drainQueues()
@@ -1753,9 +1872,10 @@ final class PlayerCore: NSObject {
         // re-registers it.
         //
         // For video: pause the display link so the push path stops emitting
-        // frames while we rebuild the audio decoder. `startVideoFeed()` below
-        // will flip it back on. (The video feed queue is now a decode-only
-        // loop that exits when it sees `isCancelled`.)
+        // frames while we rebuild the audio decoder. The preroll gate below
+        // flips it back on once post-switch audio and video are both ready.
+        // The video feed queue is now a decode-only loop that exits when it
+        // sees `isCancelled`.
         audioOutput.stopRequestingMediaData()
         DispatchQueue.main.async { [weak self] in
             self?.setVideoDisplayTickPaused(true)
@@ -1786,6 +1906,7 @@ final class PlayerCore: NSObject {
         // feed from the current position, so VT's DPB state is stale
         // relative to the re-fed packets.
         nextSampleNeedsDecoderReset = true
+        compressedVideoPipeline.resetDiagnostics()
         if let audio = audioCodecCtx {
             avcodec_flush_buffers(audio)
         }
@@ -1814,12 +1935,13 @@ final class PlayerCore: NSObject {
         }
 
         let resumeSeconds = max(0, currentPlaybackTimeSeconds())
-        let ts = Int64(resumeSeconds * Double(AV_TIME_BASE))
-        let seekR = avformat_seek_file(
-            formatCtx, -1, Int64.min, ts, Int64.max, AVSEEK_FLAG_BACKWARD
-        )
+        pendingSkipBelowPTS = resumeSeconds
+        skippedPreTargetVideoFrames = 0
+        skippedPreTargetAudioFrames = 0
+        shouldResyncClockOnFirstAudio = audioStreamIndex >= 0
+        let seekR = seekFormatContext(formatCtx, to: resumeSeconds, logContext: "audio-track-switch")
         if seekR < 0 {
-            _ = avformat_seek_file(formatCtx, -1, Int64.min, ts, Int64.max, 0)
+            Self.logger.error("setAudioTrack: seek failed after stream switch result=\(seekR)")
         }
 
         // Drop stale decoded frames so the post-switch display link doesn't
@@ -1827,26 +1949,29 @@ final class PlayerCore: NSObject {
         // arriving.
         videoFrameScheduler.removeAll(keepingCapacity: true)
 
+        var restartRate: Float = 0
+        var restartGeneration: UInt64 = 0
+        let resumeTime = CMTime(seconds: resumeSeconds, preferredTimescale: 600)
         DispatchQueue.main.sync {
+            self.audioOutput.pause()
+            self.setVideoDisplayTickPaused(true)
             self.displayLayer?.sampleBufferRenderer.flush(removingDisplayedImage: true) { }
             self.audioOutput.flush()
-            let resumeTime = CMTime(seconds: resumeSeconds, preferredTimescale: 600)
             let previousRate = self.playbackClock.rate
             let newRate: Float = previousRate == 0 ? 0 : self.currentRate
-            self.setPlaybackTimeline(time: resumeTime, rate: newRate)
+            restartRate = newRate
+            self.playbackRestartGeneration &+= 1
+            restartGeneration = self.playbackRestartGeneration
+            self.setPlaybackTimeline(time: resumeTime, rate: 0)
             self.audioOutput.setRate(self.currentRate)
-            if newRate == 0 {
-                self.audioOutput.pause()
-            } else {
-                self.audioOutput.play()
-            }
 
             // Video control timebase follows the new position. Rate stays 1.0.
             if let tb = self.controlTimebase {
                 CMTimebaseSetTime(
                     tb,
-                    time: CMTimeMake(value: Int64(resumeSeconds), timescale: 1)
+                    time: resumeTime
                 )
+                CMTimebaseSetRate(tb, rate: 1.0)
             }
             self.updateAudioClock(to: resumeTime)
             self.postDiscontinuityWallDeadline =
@@ -1864,11 +1989,19 @@ final class PlayerCore: NSObject {
         // Restart demux + feeds.
         clearEndOfFileFlag()
         resetCancellation()
-        startVideoFeed()
+        startVideoFeed(resumeDisplayLink: false)
         startAudioFeed()
+        startEmbeddedSubtitleFeeds()
         demuxQueue.async { [weak self] in
             self?.runDemuxLoop()
         }
+        beginPlaybackAfterDiscontinuityWhenPrimed(
+            initial: resumeTime,
+            rate: restartRate,
+            deadline: CACurrentMediaTime() + Self.postDiscontinuityPrerollTimeoutSeconds,
+            generation: restartGeneration,
+            reason: "audioTrack"
+        )
     }
 
     // MARK: - Buffering monitor
@@ -2484,16 +2617,13 @@ final class PlayerCore: NSObject {
         // Audio-less content has nothing to re-anchor on; skip the dance.
         shouldResyncClockOnFirstAudio = audioStreamIndex >= 0
         if startTime > 0 {
-            let ts = Int64(startTime * Double(AV_TIME_BASE))
-            if avformat_seek_file(ctx, -1, Int64.min, ts, Int64.max, AVSEEK_FLAG_BACKWARD) < 0 {
-                _ = avformat_seek_file(ctx, -1, Int64.min, ts, Int64.max, 0)
-            }
+            _ = seekFormatContext(ctx, to: startTime, logContext: "open")
         }
 
         // Start decode feed loops before starting the clocks. Very high bitrate
         // direct files can otherwise underrun audio immediately, which stops the
         // audio engine and drops the shared playback timeline back to rate 0.
-        startVideoFeed()
+        startVideoFeed(resumeDisplayLink: false)
         startAudioFeed()
         startEmbeddedSubtitleFeeds()
 
@@ -3249,9 +3379,11 @@ final class PlayerCore: NSObject {
     // working — draining `videoFeedQueue.sync {}` still blocks until the
     // decode loop exits.
 
-    private func startVideoFeed() {
-        DispatchQueue.main.async { [weak self] in
-            self?.setVideoDisplayTickPaused(false)
+    private func startVideoFeed(resumeDisplayLink: Bool = true) {
+        if resumeDisplayLink {
+            DispatchQueue.main.async { [weak self] in
+                self?.setVideoDisplayTickPaused(false)
+            }
         }
         // Spin up the packet-consuming decode loop. Self-reschedules nothing;
         // runs until cancel or EOF sentinel.
@@ -3319,9 +3451,6 @@ final class PlayerCore: NSObject {
         guard size > 0 else { return }
 
         let resetDecoderBeforeDecoding = nextSampleNeedsDecoderReset
-        if resetDecoderBeforeDecoding {
-            nextSampleNeedsDecoderReset = false
-        }
         let outcome = compressedVideoPipeline.submitPacket(
             packet: pkt,
             data: data,
@@ -3332,6 +3461,7 @@ final class PlayerCore: NSObject {
             preferredLengthSize: lengthSize,
             isH264: currentVideoCodecIsH264(),
             resetDecoderBeforeDecoding: resetDecoderBeforeDecoding,
+            requiresRandomAccessForDecoderReset: currentVideoCodecRequiresRandomAccessForDecoderReset(),
             decoder: videoToolboxDecoder,
             isCancelled: { [weak self] in self?.isCancelled ?? true },
             outputHandler: { [weak self] status, infoFlags, imageBuffer, pts, rawPacketSize in
@@ -3362,6 +3492,9 @@ final class PlayerCore: NSObject {
                 self.handleDecodedVideoFrame(imageBuffer, pts: pts)
             })
         guard let outcome else { return }
+        if outcome.decoderResetApplied {
+            nextSampleNeedsDecoderReset = false
+        }
         if case .submitFailed(let status) = outcome.submission {
             Self.logger.error("VTDecompressionSessionDecodeFrame failed: \(status)")
             totalDecodeErrors &+= 1
@@ -3632,6 +3765,23 @@ final class PlayerCore: NSObject {
             return false
         }
         return codecpar.pointee.codec_id == AV_CODEC_ID_H264
+    }
+
+    private func currentVideoCodecRequiresRandomAccessForDecoderReset() -> Bool {
+        if let fd = videoFormatDescription {
+            let subtype = CMFormatDescriptionGetMediaSubType(fd)
+            if subtype == kCMVideoCodecType_H264 || subtype == kCMVideoCodecType_HEVC {
+                return true
+            }
+        }
+        guard let formatCtx,
+              videoStreamIndex >= 0,
+              let stream = formatCtx.pointee.streams?[Int(videoStreamIndex)],
+              let codecpar = stream.pointee.codecpar else {
+            return false
+        }
+        let codecId = codecpar.pointee.codec_id
+        return codecId == AV_CODEC_ID_H264 || codecId == AV_CODEC_ID_HEVC
     }
 
     private func currentVideoCodecIsProRes() -> Bool {

@@ -34,8 +34,17 @@ struct SectionRow: View {
         return false
     }
 
+    /// Audiobook covers are square, so rows made entirely of audiobooks
+    /// (Continue Listening, audiobook library rails) use 1:1 tiles
+    /// instead of stretching the cover into a 2:3 poster.
+    private var isAudiobookRow: Bool {
+        !section.items.isEmpty && section.items.allSatisfy(\.isAudiobook)
+    }
+
     private var layout: MediaRowLayout {
-        isEpisodeRow ? .thumbnail : .poster
+        if isEpisodeRow { return .thumbnail }
+        if isAudiobookRow { return .square }
+        return .poster
     }
 
     private var showProgress: Bool {

@@ -64,7 +64,14 @@ struct TVItemDetailView: View {
 
     @ViewBuilder
     private func content(for detail: ItemDetail) -> some View {
-        if detail.type == "season" {
+        if detail.isAudiobook {
+            AudiobookDetailContent(
+                detail: detail,
+                onNavigateToItem: { id in
+                    router.navigate(to: .itemDetail(contentId: id))
+                }
+            )
+        } else if detail.type == "season" {
             TVSeasonDetailView(
                 detail: detail,
                 isFavorite: viewModel.isFavorite,
@@ -528,7 +535,8 @@ struct TVItemDetailView: View {
                 subtitles: watchDetail.subtitles,
                 intro: watchDetail.intro,
                 credits: watchDetail.credits,
-                overlaySummary: item.overlaySummary
+                overlaySummary: item.overlaySummary,
+                audiobook: item.audiobook
             )
         } catch {
             return item
