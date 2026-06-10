@@ -194,9 +194,12 @@ struct EpisodeThumbCard: View {
     }
 
     private var progressValue: Double? {
+        // Watched items store position 0 server-side (the watched latch and
+        // the resume point are independent), so a nonzero position is always
+        // a live resume point — including a rewatch of a played episode.
         guard let pos = item.positionSeconds,
               let dur = item.durationSeconds,
-              dur > 0 else { return nil }
+              dur > 0, pos > 0 else { return nil }
         return pos / dur
     }
 
