@@ -130,6 +130,11 @@ struct TVMainTabView: View {
                 focusRequest: contentFocusRequest,
                 onTopMenuFocusRequest: focusTopMenuIfVisible
             )
+        case .calendar:
+            CalendarView(
+                focusRequest: contentFocusRequest,
+                onTopMenuFocusRequest: focusTopMenuIfVisible
+            )
         }
     }
 

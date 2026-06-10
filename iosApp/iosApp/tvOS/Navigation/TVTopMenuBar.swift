@@ -13,6 +13,7 @@ enum TVTopMenuLayout {
     static let homeButtonWidth: CGFloat = 136
     static let librariesButtonWidth: CGFloat = 196
     static let forYouButtonWidth: CGFloat = 164
+    static let calendarButtonWidth: CGFloat = 186
     static let librarySwitcherWidth: CGFloat = 218
     static let librarySwitcherHeight: CGFloat = 46
     static let librarySwitcherFocusPadding: CGFloat = 14
@@ -28,6 +29,7 @@ enum TVRootDestination: String, CaseIterable, Identifiable, Hashable {
     case search = "Search"
     case libraries = "Libraries"
     case forYou = "For You"
+    case calendar = "Calendar"
 
     var id: String { rawValue }
 }
@@ -87,6 +89,8 @@ struct TVTopMenuBar: View {
                 rootButton(.libraries)
 
                 rootButton(.forYou)
+
+                rootButton(.calendar)
             }
             .frame(height: TVTopMenuLayout.primaryRowHeight, alignment: .top)
             .padding(.top, TVTopMenuLayout.primaryTopInset)
@@ -295,6 +299,8 @@ struct TVTopMenuBar: View {
             return TVTopMenuLayout.librariesButtonWidth
         case .forYou:
             return TVTopMenuLayout.forYouButtonWidth
+        case .calendar:
+            return TVTopMenuLayout.calendarButtonWidth
         }
     }
 

@@ -565,6 +565,11 @@ private struct TVOverlayDetailSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.horizontal, 40)
+        // Full-width focus section per settings row: the visibility /
+        // position / icon clusters are narrow and left-aligned, so
+        // without this, vertical moves from the wide accent grid (or
+        // from right-side position buttons) skip past them.
+        .focusSection()
     }
 
     private func setEnabled(_ enabled: Bool) {

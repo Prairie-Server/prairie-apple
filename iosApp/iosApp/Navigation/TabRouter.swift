@@ -11,6 +11,7 @@ enum AppTab: String, CaseIterable, Identifiable {
     case search = "Search"
     case libraries = "Libraries"
     case recommendations = "For You"
+    case calendar = "Calendar"
     case settings = "Settings"
     case switchProfile = "Profile"
     case switchServer = "Server"
@@ -28,7 +29,7 @@ enum AppTab: String, CaseIterable, Identifiable {
         #if os(tvOS)
         return [.home, .libraries, .search, .recommendations, .settings, .switchProfile, .switchServer]
         #else
-        return [.home, .libraries, .recommendations, .settings]
+        return [.home, .libraries, .recommendations, .calendar, .settings]
         #endif
     }
 
@@ -39,6 +40,7 @@ enum AppTab: String, CaseIterable, Identifiable {
         case .libraries: return "rectangle.stack"
         case .search: return "magnifyingglass"
         case .recommendations: return "sparkles"
+        case .calendar: return "calendar"
         case .settings: return "gearshape"
         case .switchProfile: return "person.crop.circle"
         case .switchServer: return "server.rack"
@@ -52,6 +54,7 @@ enum AppTab: String, CaseIterable, Identifiable {
         case .libraries: return "rectangle.stack.fill"
         case .search: return "magnifyingglass"
         case .recommendations: return "sparkles"
+        case .calendar: return "calendar"
         case .settings: return "gearshape.fill"
         case .switchProfile: return "person.crop.circle.fill"
         case .switchServer: return "server.rack"
