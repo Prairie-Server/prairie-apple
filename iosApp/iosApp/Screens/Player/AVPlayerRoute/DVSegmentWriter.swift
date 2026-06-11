@@ -70,16 +70,18 @@ final class DVSegmentWriter {
     /// slightly larger runway; starting earlier can show one frame and then
     /// trip AVPlayer's buffering state while the writer catches up.
     let minimumStartupMediaDuration: Double
-    /// EVENT playlists need enough visible fragments before AVPlayer attaches.
-    /// If we publish after only one or two long-GOP fragments, AVPlayer reads
-    /// the head of the playlist, drains those fragments, then waits roughly one
-    /// target-duration refresh before it asks for the newly-written tail. This
-    /// source has ~13s fragments, so that looks like a long blank startup even
-    /// though the writer is already far ahead. Publish once the initial window
-    /// includes the segment run AVPlayer has been observed to require before
-    /// declaring `readyToPlay`.
-    private static let minimumStartupPlaylistTargetDurations = 1.0
-    private static let minimumStartupPlaylistSegments = 7
+    /// EVENT playlists need enough visible runway before AVPlayer attaches.
+    /// If we publish too early, AVPlayer reads the head of the playlist,
+    /// drains those fragments, then waits roughly one target-duration refresh
+    /// before it asks for the newly-written tail — a stall right after the
+    /// first frame. AVPlayer treats the growing playlist like a live stream,
+    /// so the initial window follows the HLS live-start rule of three target
+    /// durations, plus one fragment of reload slack. The window is media
+    /// time, not a segment count, so it tracks the source's keyframe
+    /// cadence: short-GOP sources publish after a few seconds while long-GOP
+    /// sources still wait for a safe run of fragments.
+    private static let startupLiveEdgeTargetDurations = 3.0
+    private static let minimumStartupPlaylistSegments = 3
     private static let maximumGeneratedAheadSeconds: Double = 150
     /// Keep the local EVENT playlist moving while backpressured. AVPlayer can
     /// stop polling a live playlist after seeing it unchanged for too many
@@ -2969,10 +2971,10 @@ final class DVSegmentWriter {
               !segmentEntries.isEmpty else { return }
         let startupReason = force ? "forced" : "minimum_runway"
         let longestSegmentDuration = segmentEntries.map(\.duration).max() ?? targetSegmentDuration
-        let playlistTargetDuration = ceil(max(targetSegmentDuration, longestSegmentDuration))
+        let playlistTargetDuration = Double(playlistTargetDurationForEmit())
         let minimumPlayableWindow = max(
             minimumStartupMediaDuration,
-            playlistTargetDuration * Self.minimumStartupPlaylistTargetDurations
+            playlistTargetDuration * Self.startupLiveEdgeTargetDurations + longestSegmentDuration
         )
         let hasEnoughSegments = segmentEntries.count >= Self.minimumStartupPlaylistSegments
         guard force || (hasEnoughSegments && totalMediaDuration >= minimumPlayableWindow) else {
@@ -2995,6 +2997,22 @@ final class DVSegmentWriter {
 
     // MARK: - Playlist
 
+    /// Largest EXT-X-TARGETDURATION published so far. Derived from observed
+    /// fragment durations (the spec requires TARGETDURATION >= every
+    /// segment's duration rounded to the nearest integer) so AVPlayer's
+    /// live-edge window and playlist-reload cadence track the source's real
+    /// keyframe cadence instead of the configured hint. Monotonic: the tag
+    /// must never shrink while a client is reloading the playlist, including
+    /// after the sliding window evicts the longest head segment.
+    private var publishedPlaylistTargetDuration = 0
+
+    private func playlistTargetDurationForEmit() -> Int {
+        let observed = segmentEntries.map { max(1, Int($0.duration.rounded())) }.max()
+        let fallback = max(1, Int(targetSegmentDuration.rounded()))
+        publishedPlaylistTargetDuration = max(publishedPlaylistTargetDuration, observed ?? fallback)
+        return publishedPlaylistTargetDuration
+    }
+
     private func emitPlaylists(isFinal: Bool) {
         emitMediaPlaylist(isFinal: isFinal)
         emitMasterPlaylist()
@@ -3006,9 +3024,7 @@ final class DVSegmentWriter {
         lines.append("#EXT-X-VERSION:7")
         lines.append("#EXT-X-INDEPENDENT-SEGMENTS")
         lines.append("#EXT-X-START:TIME-OFFSET=0,PRECISE=YES")
-        let longestSegmentDuration = segmentEntries.map(\.duration).max() ?? targetSegmentDuration
-        let target = Int(ceil(max(targetSegmentDuration, longestSegmentDuration)))
-        lines.append("#EXT-X-TARGETDURATION:\(target)")
+        lines.append("#EXT-X-TARGETDURATION:\(playlistTargetDurationForEmit())")
         lines.append("#EXT-X-MEDIA-SEQUENCE:\(firstMediaSequence)")
         // Use EVENT (append-only, growable) until we've written the final
         // segment — AVPlayer refetches EVENT playlists. Flipping to VOD only
