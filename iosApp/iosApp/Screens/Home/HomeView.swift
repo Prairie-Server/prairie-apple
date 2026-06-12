@@ -4,21 +4,27 @@ extension Notification.Name {
     static let homeSectionsShouldRefresh = Notification.Name("homeSectionsShouldRefresh")
 }
 
-/// Main home screen with featured carousel and section rows.
+/// Main home screen. iOS/macOS keep the featured carousel above the
+/// section rows; tvOS replaced it with the Skyline focus marquee (§5.4) —
+/// a passive billboard previewing whichever card holds focus.
 struct HomeView: View {
     var homeFocusRequest: Int = 0
+    /// tvOS-only: whether the custom top menu holds focus. Deferred entry
+    /// claims are dropped while the user is up in the menu so late data
+    /// loads never yank focus.
+    var isTopMenuFocused: Bool = false
     var onTopMenuFocusRequest: (() -> Void)? = nil
 
     @State private var viewModel = HomeViewModel()
-    @State private var heroTintColor: Color = .continuumBackground
-    @State private var heroBackdropURL: String?
-    @State private var heroBackdropThumbhash: String?
     #if os(tvOS)
     /// Skyline folded the For You root into Home (§4.1): its rows render
     /// after Continue Watching, reusing the recommendations data source.
     @State private var recommendationsViewModel = RecommendationsViewModel()
     #endif
     #if !os(tvOS)
+    @State private var heroTintColor: Color = .continuumBackground
+    @State private var heroBackdropURL: String?
+    @State private var heroBackdropThumbhash: String?
     @State private var currentProfile: UserProfile?
     @State private var homeScrollOffset: CGFloat = 0
     @State private var isRefreshing = false
@@ -26,48 +32,51 @@ struct HomeView: View {
     @State private var refreshHideTask: Task<Void, Never>?
     private let chromeFadeDistance: CGFloat = 72
     #else
+    /// Entry tokens that arrived before any row existed to claim them —
+    /// sections mount async, so the initial hand-down would land on nothing.
     @State private var pendingHomeFocusRequest: Int?
+    /// Token handed to row 1 so its first card claims focus on entry.
+    @State private var rowFocusToken = 0
+    /// Debounced focused-card state driving the marquee + backdrop.
+    @State private var marqueeModel = TVFocusMarqueeModel()
     #endif
     @Environment(AppRouter.self) private var router
     @Environment(AudioPlaybackStore.self) private var audioStore
 
+    #if !os(tvOS)
     /// How far the blurred page backdrop extends below the hero's
     /// visible bottom edge. The extra vertical room lets the image's
     /// mask finish its fade well after the carousel's cards end, so
     /// there's no seam where the poster stops and the rest of the
     /// page begins.
-    private var heroBackdropFadeExtension: CGFloat {
-        #if os(tvOS)
-        return 420
-        #else
-        return 260
-        #endif
-    }
+    private let heroBackdropFadeExtension: CGFloat = 260
 
-    private var heroBackdropHorizontalBleed: CGFloat {
-        #if os(tvOS)
-        return 320
-        #else
-        return 0
-        #endif
-    }
+    private let heroBackdropHorizontalBleed: CGFloat = 0
+    #endif
 
     var body: some View {
         // On iOS the top bar overlays the hero backdrop — the scroll content
         // extends behind the status bar and the header floats on top with a
-        // semi-transparent fill. On tvOS the app-level sidebar (owned by
-        // `TVMainTabView`) handles profile + utility actions, so Home just
-        // renders content.
+        // semi-transparent fill. On tvOS the app-level top bar (owned by
+        // `TVMainTabView`) handles profile + utility actions; Home renders
+        // the focus marquee over rows, with the backdrop tracking whichever
+        // card holds focus (§5.4).
         #if os(tvOS)
         ZStack(alignment: .top) {
             TVRootHeroBackdrop(
-                tintColor: heroTintColor,
-                artworkURL: heroBackdropURL,
-                artworkThumbhash: heroBackdropThumbhash
+                tintColor: marqueeModel.tintColor,
+                artworkURL: marqueeModel.content?.backdropUrl,
+                artworkThumbhash: marqueeModel.content?.backdropThumbhash,
+                isVisible: marqueeModel.content != nil,
+                crossfadeDuration: ContinuumTheme.Skyline.marqueeCrossfadeDuration
             )
 
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            // Above the rows so the billboard always reads at the top of
+            // the screen; never focusable and never hit-testable.
+            TVFocusMarquee(content: marqueeModel.content, scale: .home)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task {
@@ -158,6 +167,7 @@ struct HomeView: View {
         #endif
     }
 
+    #if !os(tvOS)
     /// Plex-style page-level gradient. Starts at the sampled dominant
     /// color of the active featured backdrop and fades into the OLED
     /// black base. Because this layer sits behind the scroll view the
@@ -251,15 +261,12 @@ struct HomeView: View {
     /// backdrop image knows how tall to draw before the fade region
     /// starts. Keep these in sync.
     private var computedHeroHeight: CGFloat {
-        #if os(tvOS)
-        return 760
-        #else
         let screenWidth = PlatformScreen.mainBounds.width
         let screenHeight = PlatformScreen.mainBounds.height
         let widthDriven = max(420, min(screenWidth * 1.16, 580))
         return min(widthDriven, screenHeight * 0.72)
-        #endif
     }
+    #endif
 
     // MARK: - Content
 
@@ -276,72 +283,93 @@ struct HomeView: View {
         }
     }
 
+    #if os(tvOS)
+    /// Rows-only scroll under the fixed marquee (§6.1): no carousel, no
+    /// dots, no hero buttons. The viewport starts at the §5.7 row slot so
+    /// rows scrolling up disappear beneath the marquee instead of
+    /// colliding with its text.
+    private var scrollContent: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            LazyVStack(spacing: sectionSpacing, pinnedViews: []) {
+                ForEach(Array(displayedSections.enumerated()), id: \.element.id) { index, section in
+                    SectionRow(
+                        section: section,
+                        onItemTap: { navigateToDetail($0) },
+                        prefersDefaultFocusOnFirstItem: index == 0,
+                        focusRequest: index == 0 ? rowFocusToken : 0,
+                        onMoveUp: index == 0 ? onTopMenuFocusRequest : nil,
+                        onItemFocus: { item in
+                            marqueeModel.preview(TVMarqueeContent(item: item, rowTitle: section.title))
+                        }
+                    )
+                    // Identity stays keyed on the section id alone so
+                    // late-arriving rows (the folded recommendations)
+                    // can insert above without rebuilding — and
+                    // potentially defocusing — the rows already on
+                    // screen.
+                    .id(HomeFocusTarget.row(section.id))
+                }
+            }
+            .padding(.bottom, ContinuumTheme.largePadding)
+        }
+        .padding(.top, ContinuumTheme.Skyline.homeFirstRowTop)
+        .onAppear {
+            requestHomeFocus(homeFocusRequest)
+        }
+        .onChange(of: homeFocusRequest) { _, request in
+            requestHomeFocus(request)
+        }
+        .onChange(of: viewModel.sections.map(\.id)) { _, _ in
+            guard let request = pendingHomeFocusRequest else { return }
+            requestHomeFocus(request)
+        }
+    }
+    #else
     private var scrollContent: some View {
         GeometryReader { geometry in
-            ScrollViewReader { proxy in
-                ScrollView(.vertical, showsIndicators: false) {
-                    LazyVStack(spacing: sectionSpacing, pinnedViews: []) {
-                        // Featured carousel
-                        if let featured = viewModel.featuredSection {
-                            FeaturedCarousel(
-                                items: featured.items,
-                                onItemTap: { navigateToDetail($0) },
-                                onPlayTap: { navigateToPlayer($0) },
-                                prefersDefaultFocus: true,
-                                onBackdropTintChange: { heroTintColor = $0 },
-                                onBackdropArtworkChange: { url, thumbhash in
-                                    withAnimation(.easeInOut(duration: 0.65)) {
-                                        heroBackdropURL = url
-                                        heroBackdropThumbhash = thumbhash
-                                    }
-                                },
-                                rendersAmbientBackdrop: false,
-                                prefersTightTVOSLayout: true,
-                                focusRequest: homeFocusRequest,
-                                onMoveUp: onTopMenuFocusRequest
-                            )
-                            .id(HomeFocusTarget.featured)
-                        } else {
-                            // No hero → reserve enough runway for the floating
-                            // Home header so the first row doesn't slide under
-                            // the status bar chrome on phones.
-                            Color.clear.frame(height: noFeaturedTopSpacing(topSafeAreaInset: geometry.safeAreaInsets.top))
-                                .id(HomeFocusTarget.noFeaturedTopSpacer)
-                        }
-
-                        // Regular sections
-                        ForEach(Array(displayedSections.enumerated()), id: \.element.id) { index, section in
-                            SectionRow(
-                                section: section,
-                                onItemTap: { navigateToDetail($0) },
-                                prefersDefaultFocusOnFirstItem: index == 0,
-                                onMoveUp: viewModel.featuredSection == nil && index == 0 ? onTopMenuFocusRequest : nil
-                            )
-                            // Identity stays keyed on the section id alone so
-                            // late-arriving rows (the folded recommendations)
-                            // can insert above without rebuilding — and
-                            // potentially defocusing — the rows already on
-                            // screen.
-                            .id(HomeFocusTarget.row(section.id))
-                        }
+            ScrollView(.vertical, showsIndicators: false) {
+                LazyVStack(spacing: sectionSpacing, pinnedViews: []) {
+                    // Featured carousel
+                    if let featured = viewModel.featuredSection {
+                        FeaturedCarousel(
+                            items: featured.items,
+                            onItemTap: { navigateToDetail($0) },
+                            onPlayTap: { navigateToPlayer($0) },
+                            prefersDefaultFocus: true,
+                            onBackdropTintChange: { heroTintColor = $0 },
+                            onBackdropArtworkChange: { url, thumbhash in
+                                withAnimation(.easeInOut(duration: 0.65)) {
+                                    heroBackdropURL = url
+                                    heroBackdropThumbhash = thumbhash
+                                }
+                            },
+                            rendersAmbientBackdrop: false,
+                            focusRequest: homeFocusRequest,
+                            onMoveUp: onTopMenuFocusRequest
+                        )
+                        .id(HomeFocusTarget.featured)
+                    } else {
+                        // No hero → reserve enough runway for the floating
+                        // Home header so the first row doesn't slide under
+                        // the status bar chrome on phones.
+                        Color.clear.frame(height: noFeaturedTopSpacing(topSafeAreaInset: geometry.safeAreaInsets.top))
+                            .id(HomeFocusTarget.noFeaturedTopSpacer)
                     }
-                    .padding(.bottom, ContinuumTheme.largePadding)
+
+                    // Regular sections
+                    ForEach(Array(displayedSections.enumerated()), id: \.element.id) { index, section in
+                        SectionRow(
+                            section: section,
+                            onItemTap: { navigateToDetail($0) },
+                            prefersDefaultFocusOnFirstItem: index == 0,
+                            onMoveUp: viewModel.featuredSection == nil && index == 0 ? onTopMenuFocusRequest : nil
+                        )
+                        .id(HomeFocusTarget.row(section.id))
+                    }
                 }
-                #if os(tvOS)
-                .onAppear {
-                    requestHomeFocus(homeFocusRequest, proxy: proxy)
-                }
-                .onChange(of: homeFocusRequest) { _, request in
-                    requestHomeFocus(request, proxy: proxy)
-                }
-                .onChange(of: viewModel.sections.map(\.id)) { _, _ in
-                    guard let request = pendingHomeFocusRequest else { return }
-                    requestHomeFocus(request, proxy: proxy)
-                }
-                #endif
+                .padding(.bottom, ContinuumTheme.largePadding)
             }
         }
-        #if !os(tvOS)
         // Keep the overlay chrome transparent at rest, then fade in a subtle
         // glass surface once content has moved underneath it.
         .onScrollGeometryChange(for: CGFloat.self) { geometry in
@@ -349,8 +377,8 @@ struct HomeView: View {
         } action: { _, newValue in
             homeScrollOffset = max(0, newValue)
         }
-        #endif
     }
+    #endif
 
     private enum HomeFocusTarget: Hashable {
         case featured
@@ -398,20 +426,23 @@ struct HomeView: View {
     }
 
     #if os(tvOS)
-    private func requestHomeFocus(_ request: Int, proxy: ScrollViewProxy) {
+    /// Entry focus → the first card of the first row (§6.1) — typically
+    /// Continue Watching — which the marquee previews immediately.
+    /// Tokens that arrive before the rows exist wait for the section
+    /// load; deferred claims are dropped if the user has meanwhile moved
+    /// up into the menu, so a late fetch never steals focus.
+    private func requestHomeFocus(_ request: Int) {
         guard request > 0 else { return }
-        guard !viewModel.sections.isEmpty else {
+        guard !displayedSections.isEmpty else {
             pendingHomeFocusRequest = request
             return
         }
 
+        let wasDeferred = pendingHomeFocusRequest != nil
         pendingHomeFocusRequest = nil
-        let target: HomeFocusTarget = viewModel.featuredSection == nil ? .noFeaturedTopSpacer : .featured
-        withAnimation(ContinuumTheme.springAnimation) {
-            proxy.scrollTo(target, anchor: .top)
-        }
+        if wasDeferred, isTopMenuFocused { return }
+        rowFocusToken += 1
     }
-
     #endif
 
     #if !os(tvOS)
@@ -502,24 +533,18 @@ struct HomeView: View {
         router.navigate(to: .itemDetail(contentId: contentId))
     }
 
+    #if !os(tvOS)
+    /// Hero-card play action. tvOS has no carousel anymore — pressing a
+    /// focused card opens it via `onItemTap`, and resume lives on detail.
     private func navigateToPlayer(_ item: SectionItem) {
         if item.isAudiobook {
             audioStore.play(contentId: item.contentId)
             return
         }
 
-        #if os(tvOS)
-        router.navigate(
-            to: .player(
-                contentId: item.contentId,
-                startFromBeginning: false,
-                resumePosition: nil
-            )
-        )
-        #else
         router.presentPlayer(contentId: item.contentId)
-        #endif
     }
+    #endif
 
     private var sectionSpacing: CGFloat {
         #if os(tvOS)
@@ -529,12 +554,10 @@ struct HomeView: View {
         #endif
     }
 
+    #if !os(tvOS)
     private func noFeaturedTopSpacing(topSafeAreaInset: CGFloat) -> CGFloat {
-        #if os(tvOS)
-        return TVTopMenuLayout.contentTopInset
-        #else
         let headerContentHeight: CGFloat = 40 + (ContinuumTheme.smallPadding * 2)
         return topSafeAreaInset + headerContentHeight + ContinuumTheme.largePadding + ContinuumTheme.smallPadding
-        #endif
     }
+    #endif
 }

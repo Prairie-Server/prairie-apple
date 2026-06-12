@@ -127,6 +127,7 @@ struct TVMainTabView: View {
         case .home:
             HomeView(
                 homeFocusRequest: contentFocusRequest,
+                isTopMenuFocused: isTopMenuFocused,
                 onTopMenuFocusRequest: focusTopMenuIfVisible
             )
         case .libraryType(let type):
