@@ -12,6 +12,9 @@ struct TVMainTabView: View {
     @Bindable var router: AppRouter
     @State private var selectedRoot: TVRootDestination = .home
     @State private var currentProfile: UserProfile?
+    /// Server-side admin flag for the signed-in user; gates the profile
+    /// dropdown's Admin Dashboard row.
+    @State private var isAdmin = false
     @State private var showServerPicker = false
     @State private var registry = ServerRegistry.shared
     /// Visible libraries for the active profile; drives which type tabs
@@ -47,6 +50,7 @@ struct TVMainTabView: View {
                     roots: visibleRoots,
                     selectedRoot: selectedRoot,
                     currentProfile: currentProfile,
+                    isAdmin: isAdmin,
                     isMenuFocused: $isTopMenuFocused,
                     isFocusSuppressed: isTopMenuFocusSuppressed,
                     focusRequest: topMenuFocusRequest,
@@ -54,7 +58,11 @@ struct TVMainTabView: View {
                     onSearch: { router.navigate(to: .search) },
                     onSwitchProfile: switchProfile,
                     onSwitchServer: { showServerPicker = true },
+                    onWatchlist: { router.navigate(to: .watchlist) },
+                    onFavorites: { router.navigate(to: .favorites) },
+                    onHistory: { router.navigate(to: .history) },
                     onSettings: { router.navigate(to: .settings) },
+                    onAdminDashboard: { router.navigate(to: .admin) },
                     onSignOut: { router.signOutAndReset() },
                     onExit: selectedRoot == .home ? nil : returnToHomeInMenu
                 )
@@ -92,7 +100,8 @@ struct TVMainTabView: View {
         .task {
             async let profileTask: Void = loadCurrentProfile()
             async let librariesTask: Void = loadLibraries()
-            _ = await (profileTask, librariesTask)
+            async let adminTask: Void = loadAdminFlag()
+            _ = await (profileTask, librariesTask, adminTask)
         }
     }
 
@@ -265,6 +274,11 @@ struct TVMainTabView: View {
         }
     }
 
+    private func loadAdminFlag() async {
+        let user: UserInfo? = try? await ContinuumAPI.shared.get("/api/v1/user/me")
+        isAdmin = user?.isAdmin == true
+    }
+
     private func serverButtonLabel(_ entry: ServerEntry) -> String {
         entry.id == registry.activeServerId
             ? "\(entry.displayName) (Current)"
@@ -283,12 +297,14 @@ struct TVMainTabView: View {
                 currentProfile = nil
                 libraries = []
                 pillSelections = [:]
+                isAdmin = false
                 refreshAuthState()
             }
             if AuthService.shared.hasProfile {
                 async let profileTask: Void = loadCurrentProfile()
                 async let librariesTask: Void = loadLibraries()
-                _ = await (profileTask, librariesTask)
+                async let adminTask: Void = loadAdminFlag()
+                _ = await (profileTask, librariesTask, adminTask)
             }
         }
     }

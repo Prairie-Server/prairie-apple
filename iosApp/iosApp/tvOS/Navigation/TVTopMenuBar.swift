@@ -59,6 +59,9 @@ struct TVTopMenuBar: View {
     let roots: [TVRootDestination]
     let selectedRoot: TVRootDestination
     let currentProfile: UserProfile?
+    /// Whether the signed-in user is a server admin — gates the Admin
+    /// Dashboard row in the profile dropdown.
+    let isAdmin: Bool
     @Binding var isMenuFocused: Bool
     let isFocusSuppressed: Bool
     let focusRequest: Int
@@ -66,7 +69,11 @@ struct TVTopMenuBar: View {
     let onSearch: () -> Void
     let onSwitchProfile: () -> Void
     let onSwitchServer: () -> Void
+    let onWatchlist: () -> Void
+    let onFavorites: () -> Void
+    let onHistory: () -> Void
     let onSettings: () -> Void
+    let onAdminDashboard: () -> Void
     let onSignOut: () -> Void
     var onExit: (() -> Void)? = nil
 
@@ -241,8 +248,14 @@ struct TVTopMenuBar: View {
         TVProfileDropdown(
             profileName: currentProfile?.name ?? "Profile",
             avatar: currentProfile?.avatarEmoji,
+            serverHost: ServerRegistry.shared.activeServer?.displayName,
+            isAdmin: isAdmin,
             onSwitchProfile: { dismissProfileMenu(then: onSwitchProfile) },
+            onWatchlist: { dismissProfileMenu(then: onWatchlist) },
+            onFavorites: { dismissProfileMenu(then: onFavorites) },
+            onHistory: { dismissProfileMenu(then: onHistory) },
             onSettings: { dismissProfileMenu(then: onSettings) },
+            onAdminDashboard: { dismissProfileMenu(then: onAdminDashboard) },
             onSwitchServer: { dismissProfileMenu(then: onSwitchServer) },
             onSignOut: { dismissProfileMenu(then: onSignOut) },
             onDismiss: { showsProfileActions = false }
@@ -312,7 +325,11 @@ private struct TVTopMenuExitHandler: ViewModifier {
 
 private enum TVProfileAction: Hashable {
     case switchProfile
+    case watchlist
+    case favorites
+    case history
     case settings
+    case adminDashboard
     case switchServer
     case signOut
 }
@@ -322,8 +339,16 @@ private enum TVProfileAction: Hashable {
 private struct TVProfileDropdown: View {
     let profileName: String
     let avatar: String?
+    /// Display name of the active server, shown under the profile name in
+    /// the §5.8 mono header style.
+    let serverHost: String?
+    let isAdmin: Bool
     let onSwitchProfile: () -> Void
+    let onWatchlist: () -> Void
+    let onFavorites: () -> Void
+    let onHistory: () -> Void
     let onSettings: () -> Void
+    let onAdminDashboard: () -> Void
     let onSwitchServer: () -> Void
     let onSignOut: () -> Void
     let onDismiss: () -> Void
@@ -349,10 +374,19 @@ private struct TVProfileDropdown: View {
             header
 
             actionButton("Switch Profile", systemImage: "person.2.fill", id: .switchProfile, action: onSwitchProfile)
+            actionButton("Watchlist", systemImage: "bookmark.fill", id: .watchlist, action: onWatchlist)
+            actionButton("Favorites", systemImage: "heart.fill", id: .favorites, action: onFavorites)
+            actionButton("History", systemImage: "clock.fill", id: .history, action: onHistory)
 
             divider
 
             actionButton("Settings", systemImage: "gearshape.fill", id: .settings, action: onSettings)
+            if isAdmin {
+                actionButton("Admin Dashboard", systemImage: "slider.horizontal.3", id: .adminDashboard, action: onAdminDashboard)
+            }
+            // The guide marks Switch Server as Android-only (§5.8), but tvOS
+            // already ships multi-server switching — dropping it here would
+            // regress existing users.
             actionButton("Switch Server", systemImage: "server.rack", id: .switchServer, action: onSwitchServer)
             actionButton("Sign Out", systemImage: "rectangle.portrait.and.arrow.right", id: .signOut, isDestructive: true, action: onSignOut)
 
@@ -396,10 +430,20 @@ private struct TVProfileDropdown: View {
                 textColor: .white
             )
 
-            Text(profileName)
-                .font(.system(size: 24, weight: .semibold))
-                .foregroundStyle(.white)
-                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(profileName)
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+
+                if let serverHost, !serverHost.isEmpty {
+                    Text(serverHost.uppercased())
+                        .font(.system(size: ContinuumTheme.Skyline.dropdownHeaderSize, design: .monospaced))
+                        .tracking(1.4)
+                        .foregroundStyle(Color.white.opacity(0.38))
+                        .lineLimit(1)
+                }
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
