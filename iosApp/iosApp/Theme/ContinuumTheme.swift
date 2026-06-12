@@ -169,6 +169,47 @@ struct ContinuumTheme {
         static let dropdownHeaderSize: CGFloat = 14
         /// Panel top offset — anchored just under the bar.
         static let dropdownTopInset: CGFloat = 132
+
+        // MARK: Focus marquee (§5.4/§5.5)
+
+        /// Marquee content block top — Home (full-bleed) scale.
+        static let marqueeTopHome: CGFloat = 218
+        /// Marquee content block top — library (compact) scale.
+        static let marqueeTopLibrary: CGFloat = 246
+        /// Marquee content block width.
+        static let marqueeContentWidth: CGFloat = 880
+        static let marqueeEyebrowSizeHome: CGFloat = 17
+        static let marqueeEyebrowSizeLibrary: CGFloat = 16
+        static let marqueeTitleSizeHome: CGFloat = 84
+        static let marqueeTitleSizeLibrary: CGFloat = 66
+        static let marqueeMetaSizeHome: CGFloat = 20
+        static let marqueeMetaSizeLibrary: CGFloat = 19
+        static let marqueeSynopsisSize: CGFloat = 22
+        /// Synopsis column cap (§4.1) — narrower than the content block.
+        static let marqueeSynopsisMaxWidth: CGFloat = 780
+        /// `marquee.tick` dash before the eyebrow (§4): 26×3, r 2.
+        static let marqueeTickSize = CGSize(width: 26, height: 3)
+        static let marqueeTickCornerRadius: CGFloat = 2
+        /// Cached server logo art cap in the marquee title slot.
+        static let marqueeLogoMaxSize = CGSize(width: 880, height: 200)
+        /// Codec/HDR badge chip label size (§4.1).
+        static let marqueeBadgeSize: CGFloat = 15
+        /// Focus must rest this long before the marquee swaps (§4.2) —
+        /// rolling through cards never thrashes backdrops.
+        static let marqueeRestDebounceMilliseconds = 150
+        /// Marquee text + backdrop crossfade duration (§4.2).
+        static let marqueeCrossfadeDuration: Double = 0.24
+
+        // MARK: Row rhythm under the marquee (§5.7)
+
+        /// First content row top on Home — marquee above, second row
+        /// peeking at the fold.
+        static let homeFirstRowTop: CGFloat = 545
+        /// First content row top on a library Browse landing.
+        static let libraryFirstRowTop: CGFloat = 510
+        /// Dense poster card (§5.6) used on Browse landing rows so two
+        /// rows + marquee fit above the fold.
+        static let densePosterCardWidth: CGFloat = 208
     }
     #endif
 }

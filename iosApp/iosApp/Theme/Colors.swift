@@ -56,6 +56,9 @@ extension Color {
     /// Page scrim behind anchored dropdowns — `scrim.dropdown`, black @ 55%
     static let continuumDropdownScrim = Color.black.opacity(0.55)
 
+    /// Dash before the focus-marquee eyebrow — `marquee.tick`, white @ 85%
+    static let continuumMarqueeTick = Color.white.opacity(0.85)
+
     // MARK: - Semantic Aliases
 
     /// Outline/border color — white at 12%
