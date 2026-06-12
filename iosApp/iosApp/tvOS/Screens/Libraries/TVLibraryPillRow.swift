@@ -4,7 +4,7 @@ import SwiftUI
 /// Sub-destinations of a Skyline library-type tab (§3, §5.2). Peer
 /// destinations under the top bar — never hidden modes.
 enum TVLibraryPill: String, Hashable, CaseIterable {
-    case featured
+    case browse
     case collections
     case genres
     case aToZ
@@ -12,7 +12,7 @@ enum TVLibraryPill: String, Hashable, CaseIterable {
 
     var title: String {
         switch self {
-        case .featured: return "Featured"
+        case .browse: return "Browse"
         case .collections: return "Collections"
         case .genres: return "Genres"
         case .aToZ: return "A–Z"
@@ -20,22 +20,22 @@ enum TVLibraryPill: String, Hashable, CaseIterable {
         }
     }
 
-    /// Per-type pill sets. `Featured` is always first and the landing
+    /// Per-type pill sets. `Browse` is always first and the landing
     /// default; sets stay ≤5 by design so the row never scrolls.
     static func set(for type: TVLibraryTabType) -> [TVLibraryPill] {
         switch type {
         case .movies, .series:
-            return [.featured, .collections, .genres, .aToZ, .recentlyAdded]
+            return [.browse, .collections, .genres, .aToZ, .recentlyAdded]
         case .music:
-            // Skyline Phase 2/3: guide §3 wants Featured · Artists · Albums ·
-            // Playlists · Genres, but artist/album/playlist browse surfaces
-            // don't exist on this client yet.
-            return [.featured, .collections]
+            // Guide §3 wants Browse · Artists · Albums · Playlists ·
+            // Genres, but artist/album/playlist browse surfaces don't
+            // exist on this client yet.
+            return [.browse, .collections]
         case .audiobooks:
-            // Skyline Phase 3: guide §3 wants Featured · Authors · Series ·
-            // Collections · A–Z, but author/book-series browse surfaces
-            // don't exist on this client yet.
-            return [.featured, .collections, .aToZ]
+            // Guide §3 wants Browse · Authors · Series · Collections ·
+            // A–Z, but author/book-series browse surfaces don't exist on
+            // this client yet.
+            return [.browse, .collections, .aToZ]
         }
     }
 }
@@ -47,8 +47,8 @@ enum TVLibraryPill: String, Hashable, CaseIterable {
 struct TVLibraryPillRow: View {
     let pills: [TVLibraryPill]
     let selected: TVLibraryPill
-    /// Right-aligned tertiary scope caption (the active library's name in
-    /// Phase 1; item count + freshness arrive with the Phase 2 scopes).
+    /// Right-aligned tertiary scope caption (the active library's name
+    /// for now; item count + freshness arrive with the Phase 3 scopes).
     let caption: String?
     /// Imperative focus kick: when this changes, focus jumps to the
     /// selected pill (tab entry on grid pills, hand-up fallback).

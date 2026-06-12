@@ -18,7 +18,7 @@ struct TVLibraryTypeTabView: View {
     /// Libraries of `type` visible to this profile, ordered by `sortOrder`.
     let libraries: [Library]
     /// Pill selection lives in the shell so it survives tab switches
-    /// within a session (§8); cold start always lands on Featured.
+    /// within a session (§8); cold start always lands on Browse.
     @Binding var selectedPill: TVLibraryPill
     var focusRequest: Int = 0
     var isTopMenuFocused: Bool = false
@@ -28,7 +28,7 @@ struct TVLibraryTypeTabView: View {
     /// restored, and the content zone's boundary hand-up.
     @State private var pillRowFocusRequest = 0
 
-    // Skyline Phase 2: scope dropdown — until the anchored dropdown and
+    // Skyline Phase 3: scope dropdown — until the cascading selector and
     // the merged `All <Type>` scope land, a type with multiple libraries
     // scopes to the first one by sortOrder.
     private var activeLibrary: Library? { libraries.first }
@@ -68,8 +68,8 @@ struct TVLibraryTypeTabView: View {
         .onChange(of: focusRequest) { _, request in routeEntryFocus(request) }
     }
 
-    /// Phase 1 scope caption: the active library's name. Item count and
-    /// freshness join with the Phase 2 scope work.
+    /// Scope caption: the active library's name. Item count and
+    /// freshness join with the Phase 3 scope work.
     private var scopeCaption: String? {
         activeLibrary?.name
     }
@@ -77,8 +77,8 @@ struct TVLibraryTypeTabView: View {
     @ViewBuilder
     private func pillContent(for library: Library) -> some View {
         switch selectedPill {
-        case .featured:
-            TVLibraryFeaturedView(
+        case .browse:
+            TVLibraryBrowseView(
                 library: library,
                 focusRequest: contentEntryFocusRequest,
                 isTopMenuFocused: isTopMenuFocused,
@@ -132,12 +132,12 @@ struct TVLibraryTypeTabView: View {
     }
 
     /// Shell entry tokens land on the selected pill's natural target:
-    /// Featured/Collections claim their first content item; the grid and
+    /// Browse/Collections claim their first content item; the grid and
     /// genre pills park focus on the pill row (their cards have no
     /// imperative-claim plumbing, and the row is never empty).
     private var contentEntryFocusRequest: Int {
         switch selectedPill {
-        case .featured, .collections: return focusRequest
+        case .browse, .collections: return focusRequest
         case .genres, .aToZ, .recentlyAdded: return 0
         }
     }
@@ -145,7 +145,7 @@ struct TVLibraryTypeTabView: View {
     private func routeEntryFocus(_ request: Int) {
         guard request > 0 else { return }
         switch selectedPill {
-        case .featured, .collections:
+        case .browse, .collections:
             break // content claims via its own forwarded token
         case .genres, .aToZ, .recentlyAdded:
             pillRowFocusRequest += 1

@@ -21,7 +21,7 @@ struct TVMainTabView: View {
     /// exist and which library each type tab scopes to.
     @State private var libraries: [Library] = []
     /// Per-type pill selection, session-only (§8): it survives tab
-    /// switches but cold start always lands on Featured.
+    /// switches but cold start always lands on Browse.
     @State private var pillSelections: [TVLibraryTabType: TVLibraryPill] = [:]
     @State private var isTopMenuFocused = false
     @State private var isTopMenuFocusSuppressed = true
@@ -175,7 +175,7 @@ struct TVMainTabView: View {
 
     private func pillSelection(for type: TVLibraryTabType) -> Binding<TVLibraryPill> {
         Binding(
-            get: { pillSelections[type] ?? .featured },
+            get: { pillSelections[type] ?? .browse },
             set: { pillSelections[type] = $0 }
         )
     }

@@ -6,7 +6,7 @@ import SwiftUI
 /// after row 1. The server's featured hero section is ignored on TV
 /// surfaces (§9) — there is no carousel; the marquee passively previews
 /// whichever card holds focus.
-struct TVLibraryFeaturedView: View {
+struct TVLibraryBrowseView: View {
     let library: Library
     /// Focus hand-down token from the shell — claims the first card of
     /// row 1 on tab entry.

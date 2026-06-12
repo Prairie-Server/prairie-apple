@@ -190,7 +190,7 @@ private struct TVCollectionCard: View {
     /// entered by the engine.
     var focusRequest: Int = 0
     /// Supplied only to the first collection card: Up returns focus to the
-    /// pill row — the Collections analogue of the Featured layout's first-row
+    /// pill row — the Collections analogue of the Browse layout's first-row
     /// hand-up. Attached to this card alone so Up from lower grid rows still
     /// moves to the row above instead of jumping to the chrome.
     var onMoveUp: (() -> Void)? = nil
