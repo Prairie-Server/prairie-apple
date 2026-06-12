@@ -41,6 +41,9 @@ struct MediaRow: View {
     /// focus leaving the row (nil) is deliberately not reported so the
     /// marquee retains the last previewed item while focus is in chrome.
     var onItemFocus: ((SectionItem) -> Void)? = nil
+    /// Optional width for poster/square cards — Skyline's dense landing
+    /// rows (§5.6) pass 208. Episode thumbs are unaffected.
+    var cardWidth: CGFloat? = nil
 
     @FocusState private var focusedItemId: String?
 
@@ -113,7 +116,8 @@ struct MediaRow: View {
                             contentId: item.contentId,
                             onRemoveFromContinueWatching: continueWatchingRemovalAction(for: item),
                             onSetWatched: watchedToggleAction(for: item),
-                            aspect: layout == .square ? .square : .poster
+                            aspect: layout == .square ? .square : .poster,
+                            cardWidthOverride: cardWidth
                         )
                     case .thumbnail:
                         EpisodeThumbCard(

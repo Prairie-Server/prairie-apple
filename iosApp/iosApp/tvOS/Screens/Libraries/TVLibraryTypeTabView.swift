@@ -82,7 +82,8 @@ struct TVLibraryTypeTabView: View {
                 library: library,
                 focusRequest: contentEntryFocusRequest,
                 isTopMenuFocused: isTopMenuFocused,
-                onMoveUp: focusPillRow
+                onMoveUp: focusPillRow,
+                onSelectCollectionsPill: jumpToCollectionsPill
             )
         case .collections:
             TVLibraryCollectionsView(
@@ -152,6 +153,15 @@ struct TVLibraryTypeTabView: View {
     }
 
     private func focusPillRow() {
+        pillRowFocusRequest += 1
+    }
+
+    /// The Browse landing's trailing `See All` card commits the
+    /// Collections pill (§6.2). The pressed card disappears with the
+    /// content swap, so focus is explicitly parked on the pill row —
+    /// the stable "you are here" chrome — rather than left to the engine.
+    private func jumpToCollectionsPill() {
+        selectPill(.collections)
         pillRowFocusRequest += 1
     }
 }

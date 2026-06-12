@@ -17,6 +17,9 @@ struct SectionRow: View {
     /// tvOS-only: card-focus reports forwarded from `MediaRow` so hosts
     /// can drive the Skyline focus marquee with `(item, row title)`.
     var onItemFocus: ((SectionItem) -> Void)? = nil
+    /// Optional poster/square card width forwarded to `MediaRow` —
+    /// Skyline's dense landing rows (§5.6) pass 208.
+    var cardWidth: CGFloat? = nil
 
     private var isContinueWatching: Bool {
         section.sectionType == "continue_watching" || section.sectionType == "in_progress"
@@ -68,7 +71,8 @@ struct SectionRow: View {
             onRemoveFromContinueWatching: isContinueWatching ? { removeFromContinueWatching($0) } : nil,
             onSetWatched: { setWatched($0, played: $1) },
             onMoveUp: onMoveUp,
-            onItemFocus: onItemFocus
+            onItemFocus: onItemFocus,
+            cardWidth: cardWidth
         )
     }
 
