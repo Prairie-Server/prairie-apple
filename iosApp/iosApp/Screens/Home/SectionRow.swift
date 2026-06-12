@@ -14,6 +14,9 @@ struct SectionRow: View {
     /// this row rather than the user d-padding into it.
     var focusRequest: Int = 0
     var onMoveUp: (() -> Void)? = nil
+    /// tvOS-only: card-focus reports forwarded from `MediaRow` so hosts
+    /// can drive the Skyline focus marquee with `(item, row title)`.
+    var onItemFocus: ((SectionItem) -> Void)? = nil
 
     private var isContinueWatching: Bool {
         section.sectionType == "continue_watching" || section.sectionType == "in_progress"
@@ -64,7 +67,8 @@ struct SectionRow: View {
             focusRequest: focusRequest,
             onRemoveFromContinueWatching: isContinueWatching ? { removeFromContinueWatching($0) } : nil,
             onSetWatched: { setWatched($0, played: $1) },
-            onMoveUp: onMoveUp
+            onMoveUp: onMoveUp,
+            onItemFocus: onItemFocus
         )
     }
 

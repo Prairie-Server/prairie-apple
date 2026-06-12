@@ -36,6 +36,11 @@ struct MediaRow: View {
     var onRemoveFromContinueWatching: ((SectionItem) -> Void)? = nil
     var onSetWatched: ((SectionItem, Bool) -> Void)? = nil
     var onMoveUp: (() -> Void)? = nil
+    /// tvOS-only: reports which of the row's items holds card focus —
+    /// the Skyline focus marquee mirrors it. Fires on focus gain only;
+    /// focus leaving the row (nil) is deliberately not reported so the
+    /// marquee retains the last previewed item while focus is in chrome.
+    var onItemFocus: ((SectionItem) -> Void)? = nil
 
     @FocusState private var focusedItemId: String?
 
@@ -51,6 +56,11 @@ struct MediaRow: View {
         .onChange(of: focusRequest) { _, request in
             guard request > 0, let firstId = items.first?.contentId else { return }
             focusedItemId = firstId
+        }
+        .onChange(of: focusedItemId) { _, newValue in
+            guard let newValue,
+                  let item = items.first(where: { $0.contentId == newValue }) else { return }
+            onItemFocus?(item)
         }
         #endif
     }
