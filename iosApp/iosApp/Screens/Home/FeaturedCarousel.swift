@@ -56,6 +56,7 @@ struct FeaturedCarousel: View {
     @State private var lastSampledTintURL: String?
     @Namespace private var heroGlassNamespace
     @EnvironmentObject private var overlayStore: OverlayPrefsStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     #if os(tvOS)
     @Namespace private var heroActionFocusNamespace
@@ -120,6 +121,9 @@ struct FeaturedCarousel: View {
                     requestHeroFocus(focusRequest)
                     #endif
                 }
+                .onChange(of: reduceMotion) { _, _ in
+                    restartAutoAdvanceIfNeeded()
+                }
                 .onDisappear {
                     stopAutoAdvance()
                     cancelPendingStageTransition()
@@ -179,7 +183,10 @@ struct FeaturedCarousel: View {
 
     private var preferredHeroHeight: CGFloat {
         #if os(tvOS)
-        return 760
+        // Hosts that overlay extra chrome above the hero (the Skyline pill
+        // row on library tabs) grow the hero by the same amount so the card
+        // deck keeps its full height below the chrome.
+        return 760 + extraTopInset
         #else
         let screenWidth = PlatformScreen.mainBounds.width
         let screenHeight = PlatformScreen.mainBounds.height
@@ -876,7 +883,9 @@ struct FeaturedCarousel: View {
     }
 
     private func restartAutoAdvanceIfNeeded() {
-        guard autoAdvanceEnabled, items.count > 1 else {
+        // Reduce Motion disables the hero carousel's auto-advance; manual
+        // paging stays available.
+        guard autoAdvanceEnabled, items.count > 1, !reduceMotion else {
             stopAutoAdvance()
             return
         }
@@ -1241,7 +1250,7 @@ private struct FeaturedCarouselMetrics {
     var backdropHeight: CGFloat { max(containerSize.height + 420, 1080) }
     var backdropBlurRadius: CGFloat { 26 }
     var backdropScale: CGFloat { 1.12 }
-    var topInset: CGFloat { prefersTightTVOSLayout ? 128 : 112 }
+    var topInset: CGFloat { (prefersTightTVOSLayout ? 128 : 112) + extraTopInset }
     var cardWidth: CGFloat {
         prefersTightTVOSLayout
             ? min(containerSize.width * 0.82, 1560)
@@ -1249,7 +1258,7 @@ private struct FeaturedCarouselMetrics {
     }
     var cardHeight: CGFloat {
         prefersTightTVOSLayout
-            ? min(containerSize.height * 0.75, 600)
+            ? min((containerSize.height - extraTopInset) * 0.75, 600)
             : min(containerSize.height * 0.82, 660)
     }
     var cardSpacing: CGFloat { 28 }

@@ -17,6 +17,9 @@ struct TVMainTabView: View {
     /// Visible libraries for the active profile; drives which type tabs
     /// exist and which library each type tab scopes to.
     @State private var libraries: [Library] = []
+    /// Per-type pill selection, session-only (§8): it survives tab
+    /// switches but cold start always lands on Featured.
+    @State private var pillSelections: [TVLibraryTabType: TVLibraryPill] = [:]
     @State private var isTopMenuFocused = false
     @State private var isTopMenuFocusSuppressed = true
     @State private var topMenuFocusRequest = 0
@@ -121,12 +124,14 @@ struct TVMainTabView: View {
             TVLibraryTypeTabView(
                 type: type,
                 libraries: libraries(of: type),
+                selectedPill: pillSelection(for: type),
                 focusRequest: contentFocusRequest,
                 isTopMenuFocused: isTopMenuFocused,
                 onTopMenuFocusRequest: focusTopMenuIfVisible
             )
             // Re-create the tab body when the type changes so per-type
-            // section fetches and pill state reset cleanly.
+            // section fetches reset cleanly (pill selection survives in
+            // pillSelections).
             .id(type)
         case .calendar:
             CalendarView(
@@ -156,6 +161,13 @@ struct TVMainTabView: View {
             .sorted {
                 ($0.sortOrder ?? Int.max, $0.id) < ($1.sortOrder ?? Int.max, $1.id)
             }
+    }
+
+    private func pillSelection(for type: TVLibraryTabType) -> Binding<TVLibraryPill> {
+        Binding(
+            get: { pillSelections[type] ?? .featured },
+            set: { pillSelections[type] = $0 }
+        )
     }
 
     private func loadLibraries() async {
@@ -270,6 +282,7 @@ struct TVMainTabView: View {
                 selectedRoot = .home
                 currentProfile = nil
                 libraries = []
+                pillSelections = [:]
                 refreshAuthState()
             }
             if AuthService.shared.hasProfile {

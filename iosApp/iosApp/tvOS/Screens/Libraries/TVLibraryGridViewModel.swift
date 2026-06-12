@@ -46,7 +46,7 @@ final class TVLibraryGridViewModel {
     // MARK: - Private state
 
     private let libraryId: Int
-    private let mediaType: String
+    private let mediaType: String?
     private let pageSize: Int = 100
 
     /// Server-returned snapshot timestamp. Captured from the first page and
@@ -91,11 +91,18 @@ final class TVLibraryGridViewModel {
     }
 
     /// Map server library `type` ("movies" / "series") to the catalog
-    /// endpoint's `type` param ("movie" / "series").
-    private static func mediaTypeFor(libraryType: String) -> String {
+    /// endpoint's `type` param ("movie" / "series"). Audiobook and music
+    /// libraries omit the param entirely — `library_id` already scopes the
+    /// query, and the catalog's `type` vocabulary only covers video (this
+    /// matches the iOS browse path, which never sends `type`).
+    private static func mediaTypeFor(libraryType: String) -> String? {
         switch libraryType {
         case "series", "shows", "tv": return "series"
-        default: return "movie"
+        default:
+            if SiloMediaType.isAudiobook(libraryType) || libraryType == "music" {
+                return nil
+            }
+            return "movie"
         }
     }
 
@@ -180,11 +187,11 @@ final class TVLibraryGridViewModel {
         var query: [String: String] = [
             "source": "query",
             "library_id": String(libraryId),
-            "type": mediaType,
             "offset": String(nextOffset),
             "limit": String(pageSize),
             "sort": filter.sort,
         ]
+        if let mediaType { query["type"] = mediaType }
         if let namePrefix = filter.namePrefix { query["name_prefix"] = namePrefix }
         if let genre = filter.genre { query["genre"] = genre }
         if let yearMin = filter.yearMin { query["year_min"] = String(yearMin) }

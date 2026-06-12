@@ -13,6 +13,16 @@ struct TVLibraryGridView: View {
     let libraryType: String
     let initialFilter: TVLibraryFilter
     let subtitle: String?
+    /// Pushed full-screen entries render the big library header; Skyline
+    /// pill embeds hide it — the top bar + pill row already say where the
+    /// user is.
+    let showsHeader: Bool
+    /// The A–Z jump rail only makes sense for title-sorted browsing; the
+    /// Recently Added pill turns it off.
+    let showsAlphabetRail: Bool
+    /// Top inset before the first content. Pushed entries keep the compact
+    /// default; pill embeds pass the Skyline chrome clearance.
+    let topContentInset: CGFloat
 
     @State private var viewModel: TVLibraryGridViewModel
     @State private var selectedPrefix: String? = nil
@@ -24,13 +34,19 @@ struct TVLibraryGridView: View {
         libraryName: String,
         libraryType: String,
         initialFilter: TVLibraryFilter = .none,
-        subtitle: String? = nil
+        subtitle: String? = nil,
+        showsHeader: Bool = true,
+        showsAlphabetRail: Bool = true,
+        topContentInset: CGFloat = ContinuumTheme.smallPadding
     ) {
         self.libraryId = libraryId
         self.libraryName = libraryName
         self.libraryType = libraryType
         self.initialFilter = initialFilter
         self.subtitle = subtitle
+        self.showsHeader = showsHeader
+        self.showsAlphabetRail = showsAlphabetRail
+        self.topContentInset = topContentInset
         _viewModel = State(initialValue: TVLibraryGridViewModel(
             libraryId: libraryId,
             libraryType: libraryType,
@@ -45,10 +61,12 @@ struct TVLibraryGridView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .focusSection()
 
-            TVAlphabetRail(selected: $selectedPrefix) { prefix in
-                Task { await viewModel.jumpToPrefix(prefix) }
+            if showsAlphabetRail {
+                TVAlphabetRail(selected: $selectedPrefix) { prefix in
+                    Task { await viewModel.jumpToPrefix(prefix) }
+                }
+                .padding(.trailing, 32)
             }
-            .padding(.trailing, 32)
         }
         .continuumBackground()
         .task {
@@ -63,9 +81,14 @@ struct TVLibraryGridView: View {
     private var gridColumn: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 32) {
-                header
-                    .padding(.horizontal, ContinuumTheme.safePadding)
-                    .padding(.top, ContinuumTheme.smallPadding)
+                if showsHeader {
+                    header
+                        .padding(.horizontal, ContinuumTheme.safePadding)
+                        .padding(.top, topContentInset)
+                } else {
+                    Color.clear
+                        .frame(height: topContentInset)
+                }
 
                 if viewModel.items.isEmpty && viewModel.isLoading {
                     Color.clear
