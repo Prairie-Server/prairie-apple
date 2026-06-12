@@ -1,19 +1,22 @@
 #if os(tvOS)
 import SwiftUI
 
-/// Root tvOS shell. Owns a custom Netflix-style top menu instead of relying on
+/// Root tvOS shell. Owns a custom Skyline top bar instead of relying on
 /// `TabView(.sidebarAdaptable)`, so content can use horizontal remote
 /// navigation without the system sidebar claiming leftward focus.
+///
+/// Tabs are content-type-first (Skyline §3.1): `Home · Movies · Series ·
+/// Music · Audiobooks · Calendar`, where each library-type tab appears only
+/// if the profile can see at least one library of that type.
 struct TVMainTabView: View {
     @Bindable var router: AppRouter
     @State private var selectedRoot: TVRootDestination = .home
     @State private var currentProfile: UserProfile?
     @State private var showServerPicker = false
     @State private var registry = ServerRegistry.shared
-    @State private var libraryMode: TVLibraryLandingMode = .recommended
-    @State private var libraryHeaderContext: TVLibraryHeaderContext?
-    @State private var librarySelectionRequest: TVLibrarySelectionRequest?
-    @State private var librarySelectionRequestToken = 0
+    /// Visible libraries for the active profile; drives which type tabs
+    /// exist and which library each type tab scopes to.
+    @State private var libraries: [Library] = []
     @State private var isTopMenuFocused = false
     @State private var isTopMenuFocusSuppressed = true
     @State private var topMenuFocusRequest = 0
@@ -38,16 +41,14 @@ struct TVMainTabView: View {
 
             if router.path.isEmpty {
                 TVTopMenuBar(
+                    roots: visibleRoots,
                     selectedRoot: selectedRoot,
                     currentProfile: currentProfile,
-                    libraryHeaderContext: libraryHeaderContext,
-                    libraryMode: libraryMode,
                     isMenuFocused: $isTopMenuFocused,
                     isFocusSuppressed: isTopMenuFocusSuppressed,
                     focusRequest: topMenuFocusRequest,
                     onSelectRoot: selectRoot(_:),
-                    onSelectLibraryMode: selectLibraryMode(_:),
-                    onSelectLibrary: requestLibrarySelection(_:),
+                    onSearch: { router.navigate(to: .search) },
                     onSwitchProfile: switchProfile,
                     onSwitchServer: { showServerPicker = true },
                     onSettings: { router.navigate(to: .settings) },
@@ -86,7 +87,9 @@ struct TVMainTabView: View {
         // when it's absent.
         .environment(router)
         .task {
-            await loadCurrentProfile()
+            async let profileTask: Void = loadCurrentProfile()
+            async let librariesTask: Void = loadLibraries()
+            _ = await (profileTask, librariesTask)
         }
     }
 
@@ -114,22 +117,17 @@ struct TVMainTabView: View {
                 homeFocusRequest: contentFocusRequest,
                 onTopMenuFocusRequest: focusTopMenuIfVisible
             )
-        case .search:
-            SearchView()
-        case .libraries:
-            TVLibrariesTabView(
-                selectedMode: $libraryMode,
-                headerContext: $libraryHeaderContext,
-                librarySelectionRequest: librarySelectionRequest,
+        case .libraryType(let type):
+            TVLibraryTypeTabView(
+                type: type,
+                libraries: libraries(of: type),
                 focusRequest: contentFocusRequest,
                 isTopMenuFocused: isTopMenuFocused,
                 onTopMenuFocusRequest: focusTopMenuIfVisible
             )
-        case .forYou:
-            RecommendationsView(
-                focusRequest: contentFocusRequest,
-                onTopMenuFocusRequest: focusTopMenuIfVisible
-            )
+            // Re-create the tab body when the type changes so per-type
+            // section fetches and pill state reset cleanly.
+            .id(type)
         case .calendar:
             CalendarView(
                 focusRequest: contentFocusRequest,
@@ -138,20 +136,72 @@ struct TVMainTabView: View {
         }
     }
 
-    private func selectRoot(_ root: TVRootDestination) {
-        router.popToRoot()
-        if root == .search {
-            router.navigate(to: .search)
-            return
+    // MARK: - Tab derivation
+
+    /// Fixed root order (Skyline §3.1): Home, then one tab per library
+    /// type the profile can see, then Calendar.
+    private var visibleRoots: [TVRootDestination] {
+        var roots: [TVRootDestination] = [.home]
+        for type in TVLibraryTabType.allCases
+        where libraries.contains(where: { type.matches($0) }) {
+            roots.append(.libraryType(type))
+        }
+        roots.append(.calendar)
+        return roots
+    }
+
+    private func libraries(of type: TVLibraryTabType) -> [Library] {
+        libraries
+            .filter { type.matches($0) }
+            .sorted {
+                ($0.sortOrder ?? Int.max, $0.id) < ($1.sortOrder ?? Int.max, $1.id)
+            }
+    }
+
+    private func loadLibraries() async {
+        if libraries.isEmpty,
+           let cached: LibrariesResponse = ResponseCache.shared.get(CacheKey.userLibraries) {
+            libraries = cached.libraries
         }
 
+        do {
+            let response: LibrariesResponse = try await ContinuumAPI.shared.get("/api/v1/user/libraries")
+            ResponseCache.shared.set(response, for: CacheKey.userLibraries)
+            libraries = response.libraries
+            ensureSelectedRootIsVisible()
+        } catch {
+            // Keep whatever tabs we already have (cached or none) — Home
+            // and Calendar always stay reachable, so a transient failure
+            // never strands the user.
+        }
+    }
+
+    /// A library refresh can remove the type the user is parked on (e.g.
+    /// profile permissions changed). Snap back to Home rather than leaving
+    /// a tab-less content view on screen.
+    private func ensureSelectedRootIsVisible() {
+        guard case .libraryType(let type) = selectedRoot else { return }
+        if !libraries.contains(where: { type.matches($0) }) {
+            selectedRoot = .home
+            contentFocusRequest += 1
+        }
+    }
+
+    // MARK: - Root selection & focus
+
+    private func selectRoot(_ root: TVRootDestination) {
+        router.popToRoot()
+
         suppressTopMenuFocusForContentHandoff()
-        selectedRoot = root
+        withAnimation(.easeInOut(duration: ContinuumTheme.normalDuration)) {
+            // Tab content switches crossfade (§4.2); the outgoing view never
+            // owns focus here because selection happens from the bar.
+            selectedRoot = root
+        }
         // Push focus into whichever root content is swapping in. Suppressing
         // the menu relinquishes its focus (TVTopMenuBar.onChange(isFocusSuppressed)),
         // so without an active hand-down the new content never claims focus and
-        // the remote goes dead until the user blindly swipes. Home always had
-        // this; Libraries and For You now share it.
+        // the remote goes dead until the user blindly swipes.
         contentFocusRequest += 1
     }
 
@@ -182,20 +232,6 @@ struct TVMainTabView: View {
     private func suppressTopMenuFocusForContentHandoff() {
         isTopMenuFocused = false
         isTopMenuFocusSuppressed = true
-    }
-
-    private func selectLibraryMode(_ mode: TVLibraryLandingMode) {
-        withAnimation(ContinuumTheme.springAnimation) {
-            libraryMode = mode
-        }
-    }
-
-    private func requestLibrarySelection(_ libraryID: Int) {
-        librarySelectionRequestToken += 1
-        librarySelectionRequest = TVLibrarySelectionRequest(
-            libraryID: libraryID,
-            token: librarySelectionRequestToken
-        )
     }
 
     private func switchProfile() {
@@ -233,10 +269,13 @@ struct TVMainTabView: View {
             await MainActor.run {
                 selectedRoot = .home
                 currentProfile = nil
+                libraries = []
                 refreshAuthState()
             }
             if AuthService.shared.hasProfile {
-                await loadCurrentProfile()
+                async let profileTask: Void = loadCurrentProfile()
+                async let librariesTask: Void = loadLibraries()
+                _ = await (profileTask, librariesTask)
             }
         }
     }
@@ -309,11 +348,11 @@ struct TVMainTabView: View {
         case .serverList:
             ServerListView()
         case .serverSetup:
-            // Pushed from the sidebar server switcher's "Add Server…"
-            // button — staying on the nav stack means the tvOS back button
-            // returns to the previous active server instead of dropping
-            // the authenticated tree entirely. Successful `connect()` flips
-            // authState to `.needsLogin` and replaces this view tree.
+            // Pushed from the profile menu's "Add Server…" button — staying
+            // on the nav stack means the tvOS back button returns to the
+            // previous active server instead of dropping the authenticated
+            // tree entirely. Successful `connect()` flips authState to
+            // `.needsLogin` and replaces this view tree.
             TVServerSetupView(router: router)
         case .tvLibraryGrid(let libraryId, let libraryName, let libraryType, let payload, let subtitle):
             TVLibraryGridView(

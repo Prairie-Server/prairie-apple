@@ -36,6 +36,26 @@ extension Color {
     /// Warning amber (ratings stars)
     static let continuumWarning = Color(hex: "#FFC107")
 
+    // MARK: - Skyline chrome (guide §4)
+
+    /// Selected-but-unfocused tab/pill capsule fill — `chrome.selected`, white @ 14%
+    static let continuumChromeSelectedFill = Color.white.opacity(0.14)
+
+    /// Inner border of the selected capsule — white @ 10%
+    static let continuumChromeSelectedBorder = Color.white.opacity(0.10)
+
+    /// Resting pill/chip fill — `chrome.unfocused-bg`, white @ 7%
+    static let continuumChromeRestingFill = Color.white.opacity(0.07)
+
+    /// Hairline border on resting pills/chips — white @ 9%
+    static let continuumChromeRestingBorder = Color.white.opacity(0.09)
+
+    /// Anchored dropdown panel fill — `glass.strong`, #16171B @ 86% over blur
+    static let continuumGlassStrong = Color(hex: "#16171B").opacity(0.86)
+
+    /// Page scrim behind anchored dropdowns — `scrim.dropdown`, black @ 55%
+    static let continuumDropdownScrim = Color.black.opacity(0.55)
+
     // MARK: - Semantic Aliases
 
     /// Outline/border color — white at 12%

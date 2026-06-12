@@ -117,4 +117,58 @@ struct ContinuumTheme {
 
     /// Standard spring animation
     static let springAnimation = Animation.spring(response: 0.35, dampingFraction: 0.85)
+
+    #if os(tvOS)
+    // MARK: - Skyline chrome metrics (tvOS)
+
+    /// Skyline navigation chrome tokens (design guide §4–§5). Values are
+    /// mockup pixels at 1920×1080, which render 1:1 as points on tvOS.
+    enum Skyline {
+        /// Root horizontal inset for chrome and content — `safeArea.x`.
+        static let safeAreaX: CGFloat = 88
+        /// Top bar offset from the screen's top edge — `safeArea.top`.
+        static let barTopInset: CGFloat = 56
+        /// Top bar row height.
+        static let barHeight: CGFloat = 64
+        /// Gap between tab capsules in the bar's center cluster.
+        static let tabSpacing: CGFloat = 8
+        static let tabLabelSize: CGFloat = 23
+        static let tabPaddingHorizontal: CGFloat = 26
+        static let tabPaddingVertical: CGFloat = 11
+        /// Square hit target of the search button and the profile avatar.
+        static let barIconSize: CGFloat = 52
+        /// Gap between the search button and the avatar.
+        static let barTrailingSpacing: CGFloat = 22
+        static let wordmarkSize: CGFloat = 26
+        /// Wordmark letter tracking — +0.34 em.
+        static let wordmarkTracking: CGFloat = 26 * 0.34
+        /// Bar opacity while focus is down in the content zone (§5.1).
+        static let barDimmedOpacity: Double = 0.7
+
+        /// Pill row offset from the screen top — 30 below the bar (§5.2).
+        static let pillRowTopInset: CGFloat = 150
+        static let pillSpacing: CGFloat = 12
+        static let pillLabelSize: CGFloat = 19
+        static let pillPaddingHorizontal: CGFloat = 22
+        static let pillPaddingVertical: CGFloat = 9
+        /// Right-aligned scope caption in the pill row.
+        static let pillCaptionSize: CGFloat = 18
+
+        /// Top inset for library-tab content that has no hero of its own
+        /// (grids, chip clouds): clears the bar and the pill row.
+        static let libraryContentTopInset: CGFloat = 216
+        /// Extra top inset the featured hero needs on library tabs so its
+        /// card deck starts below the pill row instead of under it.
+        static let libraryHeroExtraTopInset: CGFloat = 88
+
+        /// Anchored dropdown panel (§5.3/§5.8).
+        static let dropdownWidth: CGFloat = 460
+        static let dropdownCornerRadius: CGFloat = 22
+        static let dropdownPadding: CGFloat = 14
+        static let dropdownRowTextSize: CGFloat = 22
+        static let dropdownHeaderSize: CGFloat = 14
+        /// Panel top offset — anchored just under the bar.
+        static let dropdownTopInset: CGFloat = 132
+    }
+    #endif
 }
