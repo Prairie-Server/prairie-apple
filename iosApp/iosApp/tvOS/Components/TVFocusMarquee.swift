@@ -271,13 +271,7 @@ struct TVFocusMarquee: View {
             if let content {
                 TVMarqueeBlock(content: content, scale: scale)
                     .id(content.id)
-                    .transition(
-                        reduceMotion
-                            ? .identity
-                            : .opacity.animation(
-                                .easeInOut(duration: ContinuumTheme.Skyline.marqueeCrossfadeDuration)
-                            )
-                    )
+                    .transition(.opacity)
             }
         }
         .frame(
@@ -290,6 +284,13 @@ struct TVFocusMarquee: View {
         .ignoresSafeArea(edges: [.top, .horizontal])
         .allowsHitTesting(false)
         .focusEffectDisabled()
+        // The model swaps `content` outside any animation transaction, so
+        // the crossfade is driven here, keyed on the item id (§4.2 240 ms).
+        // Reduce Motion drops the animation entirely → the swap snaps.
+        .animation(
+            reduceMotion ? nil : .easeInOut(duration: ContinuumTheme.Skyline.marqueeCrossfadeDuration),
+            value: content?.id
+        )
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityDescription)
         .accessibilityAddTraits(.updatesFrequently)
