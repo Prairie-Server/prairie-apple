@@ -34,7 +34,6 @@ struct TVSettingsView: View {
             playbackSection
             subtitlesSection
             cardOverlaysSection
-            librarySection
             accountActionsSection
             aboutSection
         }
@@ -274,25 +273,6 @@ struct TVSettingsView: View {
                     title: "Customize Overlays",
                     systemImage: "rectangle.stack.badge.plus"
                 )
-            }
-        }
-    }
-
-    // MARK: - Library
-
-    private var librarySection: some View {
-        Section("Library") {
-            Button { router.navigate(to: .watchlist) } label: {
-                FocusAwareLabel(title: "Watchlist", systemImage: "bookmark.fill")
-            }
-            Button { router.navigate(to: .favorites) } label: {
-                FocusAwareLabel(title: "Favorites", systemImage: "heart.fill")
-            }
-            Button { router.navigate(to: .history) } label: {
-                FocusAwareLabel(title: "Watch History", systemImage: "clock.fill")
-            }
-            Button { router.navigate(to: .collections) } label: {
-                FocusAwareLabel(title: "Collections", systemImage: "square.stack.fill")
             }
         }
     }
