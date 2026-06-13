@@ -190,8 +190,14 @@ struct ContinuumTheme {
         /// `marquee.tick` dash before the eyebrow (§4): 26×3, r 2.
         static let marqueeTickSize = CGSize(width: 26, height: 3)
         static let marqueeTickCornerRadius: CGFloat = 2
-        /// Cached server logo art cap in the marquee title slot.
-        static let marqueeLogoMaxSize = CGSize(width: 880, height: 200)
+        /// Cached server logo art caps in the marquee title slot. The
+        /// guide's 880×200 cap (§5.4) overflows the §5.7 row slot once
+        /// the meta line and synopsis stack under a full-height logo, so
+        /// each scale caps the logo at its 2-line text-title height and
+        /// the synopsis clamps to 1 line while a logo is shown.
+        static let marqueeLogoMaxWidth: CGFloat = 880
+        static let marqueeLogoMaxHeightHome: CGFloat = 165
+        static let marqueeLogoMaxHeightLibrary: CGFloat = 120
         /// Codec/HDR badge chip label size (§4.1).
         static let marqueeBadgeSize: CGFloat = 15
         /// Focus must rest this long before the marquee swaps (§4.2) —

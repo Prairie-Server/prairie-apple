@@ -259,6 +259,15 @@ struct TVFocusMarquee: View {
             case .library: ContinuumTheme.Skyline.marqueeMetaSizeLibrary
             }
         }
+
+        /// Logo art height cap — the 2-line text-title equivalent for the
+        /// scale, so a logo never pushes the block past the row slot.
+        var logoMaxHeight: CGFloat {
+            switch self {
+            case .home: ContinuumTheme.Skyline.marqueeLogoMaxHeightHome
+            case .library: ContinuumTheme.Skyline.marqueeLogoMaxHeightLibrary
+            }
+        }
     }
 
     let content: TVMarqueeContent?
@@ -348,7 +357,9 @@ private struct TVMarqueeBlock: View {
                     .font(.system(size: ContinuumTheme.Skyline.marqueeSynopsisSize, weight: .regular))
                     .lineSpacing(6)
                     .foregroundStyle(Color.continuumSecondaryText)
-                    .lineLimit(titleWrapsTwoLines ? 1 : 2)
+                    // A displayed logo fills the 2-line-title budget, so it
+                    // clamps the synopsis exactly like a wrapped title does.
+                    .lineLimit(titleWrapsTwoLines || logoImage != nil ? 1 : 2)
                     .frame(maxWidth: ContinuumTheme.Skyline.marqueeSynopsisMaxWidth, alignment: .leading)
             }
         }
@@ -384,8 +395,8 @@ private struct TVMarqueeBlock: View {
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .frame(
-                    maxWidth: ContinuumTheme.Skyline.marqueeLogoMaxSize.width,
-                    maxHeight: ContinuumTheme.Skyline.marqueeLogoMaxSize.height,
+                    maxWidth: ContinuumTheme.Skyline.marqueeLogoMaxWidth,
+                    maxHeight: scale.logoMaxHeight,
                     alignment: .leading
                 )
                 .transition(reduceMotion ? .identity : .opacity.animation(.easeInOut(duration: 0.2)))
