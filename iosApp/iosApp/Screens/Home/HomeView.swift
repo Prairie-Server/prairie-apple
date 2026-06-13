@@ -71,11 +71,23 @@ struct HomeView: View {
                 crossfadeDuration: ContinuumTheme.Skyline.marqueeCrossfadeDuration
             )
 
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // The rows live in a frame that begins at the §5.7 row slot, so
+            // the scroll view and the marquee never share a coordinate
+            // space — focusing the first card can't overscroll the row up
+            // under the marquee (a top inset/padding doesn't constrain the
+            // focus engine's scroll-to-visible; a separate frame does). The
+            // top spacer is non-interactive and just shows the backdrop
+            // through to the marquee band.
+            VStack(spacing: 0) {
+                Color.clear
+                    .frame(height: ContinuumTheme.Skyline.homeFirstRowTop)
+                    .allowsHitTesting(false)
 
-            // Above the rows so the billboard always reads at the top of
-            // the screen; never focusable and never hit-testable.
+                content
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+
+            // Floats over the reserved band; never focusable or hit-testable.
             TVFocusMarquee(content: marqueeModel.content, scale: .home)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -298,9 +310,9 @@ struct HomeView: View {
 
     #if os(tvOS)
     /// Rows-only scroll under the fixed marquee (§6.1): no carousel, no
-    /// dots, no hero buttons. The viewport starts at the §5.7 row slot so
-    /// rows scrolling up disappear beneath the marquee instead of
-    /// colliding with its text.
+    /// dots, no hero buttons. The enclosing VStack places this scroll
+    /// view in a frame that starts at the §5.7 row slot, so row 1 rests
+    /// just below the marquee and the focus engine can't pull it higher.
     private var scrollContent: some View {
         ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(spacing: sectionSpacing, pinnedViews: []) {
@@ -325,7 +337,6 @@ struct HomeView: View {
             }
             .padding(.bottom, ContinuumTheme.largePadding)
         }
-        .padding(.top, ContinuumTheme.Skyline.homeFirstRowTop)
     }
     #else
     private var scrollContent: some View {

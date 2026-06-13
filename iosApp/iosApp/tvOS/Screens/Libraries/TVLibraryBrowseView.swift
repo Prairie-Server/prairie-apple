@@ -64,10 +64,23 @@ struct TVLibraryBrowseView: View {
                 crossfadeDuration: ContinuumTheme.Skyline.marqueeCrossfadeDuration
             )
 
-            rowsContent
+            // The rows live in a frame that begins at the §5.7 row slot, so
+            // the scroll view and the marquee never share a coordinate
+            // space — focusing the first card can't overscroll the row up
+            // under the marquee (a top inset/padding doesn't constrain the
+            // focus engine's scroll-to-visible; a separate frame does). The
+            // top spacer is non-interactive and just shows the backdrop
+            // through to the marquee band and the pill row.
+            VStack(spacing: 0) {
+                Color.clear
+                    .frame(height: ContinuumTheme.Skyline.libraryFirstRowTop)
+                    .allowsHitTesting(false)
 
-            // Above the rows so the billboard always reads at the top of
-            // the screen; never focusable and never hit-testable.
+                rowsContent
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+
+            // Floats over the reserved band; never focusable or hit-testable.
             TVFocusMarquee(content: marqueeModel.content, scale: .library)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -85,9 +98,10 @@ struct TVLibraryBrowseView: View {
 
     // MARK: - Layout
 
-    /// Rows scroll in a viewport that starts at the §5.7 row slot (~510)
-    /// so rows scrolling up disappear beneath the marquee instead of
-    /// colliding with its text. The pill row floats above both.
+    /// Rows-only scroll under the fixed marquee and pill row. The enclosing
+    /// VStack places this scroll view in a frame that starts at the §5.7
+    /// row slot, so row 1 rests just below the marquee and the focus engine
+    /// can't pull it higher.
     private var rowsContent: some View {
         ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(spacing: 30, pinnedViews: []) {
@@ -104,7 +118,6 @@ struct TVLibraryBrowseView: View {
             }
             .padding(.bottom, ContinuumTheme.largePadding)
         }
-        .padding(.top, ContinuumTheme.Skyline.libraryFirstRowTop)
     }
 
     @ViewBuilder
