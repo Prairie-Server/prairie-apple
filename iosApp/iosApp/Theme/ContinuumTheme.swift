@@ -262,6 +262,36 @@ struct ContinuumTheme {
         /// Dense poster card (§5.6) used on Browse landing rows so two
         /// rows + marquee fit above the fold.
         static let densePosterCardWidth: CGFloat = 208
+
+        // MARK: Collection fan card (§5.6 / §6.2 / §6.3)
+
+        /// Fan card outer dimensions and radius (§5.6).
+        static let fanCardWidth: CGFloat = 430
+        static let fanCardHeight: CGFloat = 234
+        static let fanCardCornerRadius: CGFloat = 16
+        /// One of the three fanned mini posters (left cluster).
+        static let fanMiniPosterWidth: CGFloat = 104
+        static let fanMiniPosterHeight: CGFloat = 156
+        static let fanMiniPosterCornerRadius: CGFloat = 10
+        /// Rotations (degrees) of the back → front mini posters.
+        static let fanMiniPosterRotations: [Double] = [-8, -1, 7]
+        /// Horizontal step between fanned posters so the cluster reads as
+        /// a deck rather than a stack.
+        static let fanMiniPosterHorizontalStep: CGFloat = 26
+        /// Surface gradient opacity (§5.6, ~90%).
+        static let fanCardSurfaceOpacity: Double = 0.9
+        /// Right-block name and count type (§5.6).
+        static let fanCardNameSize: CGFloat = 25
+        static let fanCardCountSize: CGFloat = 17
+        /// Count caps tracking (§4.1 caps grammar).
+        static let fanCardCountTracking: CGFloat = 17 * 0.06
+        /// Focus border width on the fan card surface (§5.6, 2 px white).
+        static let fanCardFocusBorderWidth: CGFloat = 2
+
+        /// Collections pill grid (§6.3): 3 columns at the fan-card width,
+        /// 26 px gap, within the safe area.
+        static let fanGridColumnCount = 3
+        static let fanGridGap: CGFloat = 26
     }
     #endif
 }

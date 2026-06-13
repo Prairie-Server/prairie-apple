@@ -59,6 +59,12 @@ extension Color {
     /// Page scrim behind anchored dropdowns — `scrim.dropdown`, black @ 55%
     static let continuumDropdownScrim = Color.black.opacity(0.55)
 
+    /// Collection fan card surface — top of the vertical gradient (§5.6, `#2E3036`).
+    static let continuumFanCardSurfaceTop = Color(hex: "#2E3036")
+
+    /// Collection fan card surface — bottom of the vertical gradient (§5.6, `#121316`).
+    static let continuumFanCardSurfaceBottom = Color(hex: "#121316")
+
     // MARK: - Semantic Aliases
 
     /// Outline/border color — white at 12%
