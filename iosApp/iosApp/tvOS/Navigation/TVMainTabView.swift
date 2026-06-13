@@ -1,5 +1,9 @@
 #if os(tvOS)
 import SwiftUI
+import os // TVFOCUS-DEBUG: temporary focus tracing
+
+// TVFOCUS-DEBUG: temporary focus tracing (strip before finalizing)
+private let tvFocusLog = Logger(subsystem: "com.silo.tvfocus", category: "host")
 
 /// Root tvOS shell. Owns a custom Skyline top bar instead of relying on
 /// `TabView(.sidebarAdaptable)`, so content can use horizontal remote
@@ -146,14 +150,26 @@ struct TVMainTabView: View {
                 .id(selectedRoot)
                 .transition(reduceMotion ? .identity : .opacity)
                 .focusScope(tabContentNamespace)
-                // Only pull page cards out of the focus graph once focus is
-                // actually IN the panel (panelHasFocus). Disabling this big
-                // subtree the instant a *preview* opens forces tvOS to
-                // re-resolve focus, which drops the focused tab and repairs to
-                // the Home tab — the flash. A preview keeps focus on the bar,
-                // so the page can stay enabled; the explicit d-pad-down enter
-                // (openPanelAndEnter) disables it as it claims a panel row.
-                .disabled(panelHasFocus)
+                // Pull page cards out of the focus graph the moment ANY panel
+                // is open — preview included — not just once focus is in it.
+                // Why: while a cascade preview is showing, d-pad-down to enter
+                // it is a geometric focus *move*. The page's pill row sits at
+                // pillRowTopInset (150) — closer to the bar than the dropdown's
+                // first row (below dropdownTopInset 132 + its header) — so the
+                // engine lands focus on a pill for a frame before the cascade's
+                // @FocusState claim pulls it back: the visible "focus bounces
+                // through the section rows" jump. Disabling the page removes
+                // that competing target, so the only place down can land is the
+                // dropdown row the host claims.
+                //
+                // This previously caused a Home-tab flash (tvOS re-resolving
+                // focus when the big subtree goes inert on preview-open). That's
+                // now absorbed by the bar's spurious-nil re-pin
+                // (TVTopMenuBar.onChange(focusedItem) / spuriousFromOpenPreview),
+                // which keeps focus on the dwelled tab. Focus is never in the
+                // page when a panel opens (panels open from the bar), so this
+                // never rips focus out of page content.
+                .disabled(openPanel != nil)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea(edges: [.top, .horizontal])
@@ -358,6 +374,7 @@ struct TVMainTabView: View {
     /// panel row so the move has a destination.
     private func openPanelPreview(_ panel: TVTopMenuPanel) {
         guard panel != openPanel else { return }
+        tvFocusLog.debug("host.openPanelPreview \(String(describing: panel), privacy: .public)")
 
         panelEntersFocus = false
         panelHasFocus = false
@@ -383,6 +400,7 @@ struct TVMainTabView: View {
     /// the matching panel is already open.
     private func enterOpenPanel() {
         guard openPanel != nil else { return }
+        tvFocusLog.debug("host.enterOpenPanel openPanel=\(String(describing: self.openPanel), privacy: .public)")
         panelEntersFocus = true
         panelHasFocus = true
         panelFocusEntryToken += 1
@@ -412,6 +430,7 @@ struct TVMainTabView: View {
     /// transition. This is reserved for explicit entry gestures, not dwell,
     /// so hover-open menus never trap horizontal tab navigation.
     private func openPanelAndEnter(_ panel: TVTopMenuPanel) {
+        tvFocusLog.debug("host.openPanelAndEnter \(String(describing: panel), privacy: .public)")
         panelEntersFocus = true
         panelHasFocus = true
         panelFocusEntryToken += 1

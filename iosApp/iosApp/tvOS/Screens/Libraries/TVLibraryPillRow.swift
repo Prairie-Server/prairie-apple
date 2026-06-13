@@ -1,5 +1,9 @@
 #if os(tvOS)
 import SwiftUI
+import os // TVFOCUS-DEBUG: temporary focus tracing
+
+// TVFOCUS-DEBUG: temporary focus tracing (strip before finalizing)
+private let tvFocusPillLog = Logger(subsystem: "com.silo.tvfocus", category: "pillrow")
 
 /// Sub-destinations of a Skyline library-type tab (§3, §5.2). Peer
 /// destinations under the top bar — never hidden modes.
@@ -106,6 +110,10 @@ struct TVLibraryPillRow: View {
         }
         .onAppear { applyFocusRequest(focusRequest) }
         .onChange(of: focusRequest) { _, request in applyFocusRequest(request) }
+        // TVFOCUS-DEBUG: this firing during a d-pad-down-into-cascade is the bug.
+        .onChange(of: focusedPill) { _, newValue in
+            tvFocusPillLog.debug("pillrow.focusedPill -> \(String(describing: newValue), privacy: .public)")
+        }
     }
 
     private func pillButton(_ pill: TVLibraryPill, index: Int) -> some View {

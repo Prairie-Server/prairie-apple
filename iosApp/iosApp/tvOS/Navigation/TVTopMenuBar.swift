@@ -1,5 +1,9 @@
 #if os(tvOS)
 import SwiftUI
+import os // TVFOCUS-DEBUG: temporary focus tracing
+
+// TVFOCUS-DEBUG: temporary focus tracing (strip before finalizing)
+private let tvFocusBarLog = Logger(subsystem: "com.silo.tvfocus", category: "bar")
 
 enum TVTopMenuLayout {
     /// Vertical clearance needed when a root tvOS page does not render a
@@ -197,6 +201,7 @@ struct TVTopMenuBar: View {
             isMenuFocused = focusedItem != nil && !newValue
         }
         .onChange(of: focusedItem) { _, newValue in
+            tvFocusBarLog.debug("bar.focusedItem -> \(String(describing: newValue), privacy: .public) (openPanel=\(String(describing: self.openPanel), privacy: .public), panelHasFocus=\(self.panelHasFocus), refocusAfterClose=\(self.refocusAfterClose))")
             if let newValue {
                 lastBarFocus = newValue
                 refocusAfterClose = false

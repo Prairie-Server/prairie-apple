@@ -1,5 +1,9 @@
 #if os(tvOS)
 import SwiftUI
+import os // TVFOCUS-DEBUG: temporary focus tracing
+
+// TVFOCUS-DEBUG: temporary focus tracing (strip before finalizing)
+private let tvFocusCascadeLog = Logger(subsystem: "com.silo.tvfocus", category: "cascade")
 
 /// The Skyline cascading library selector (§5.3, mockups `a3`/`a6`).
 ///
@@ -343,7 +347,11 @@ struct TVCascadeSelector: View {
     // MARK: - Focus plumbing
 
     private func applyEntryToken(_ token: Int) {
-        guard entersPanel, token > 0, token != lastAppliedEntryToken else { return }
+        guard entersPanel, token > 0, token != lastAppliedEntryToken else {
+            tvFocusCascadeLog.debug("cascade.applyEntryToken SKIP token=\(token) entersPanel=\(self.entersPanel) lastApplied=\(self.lastAppliedEntryToken)")
+            return
+        }
+        tvFocusCascadeLog.debug("cascade.applyEntryToken APPLY token=\(token) single=\(self.isSingleLibrary) scope=\(String(describing: self.currentScopeId), privacy: .public)")
         lastAppliedEntryToken = token
         if isSingleLibrary, let library = libraries.first {
             // Single-level: land on the first section (§5.3).
@@ -359,6 +367,7 @@ struct TVCascadeSelector: View {
     }
 
     private func handleFocusChange(_ newValue: Focus?) {
+        tvFocusCascadeLog.debug("cascade.focus -> \(String(describing: newValue), privacy: .public)")
         onPanelFocusChanged(newValue != nil)
         guard let newValue else { return }
         switch newValue {
