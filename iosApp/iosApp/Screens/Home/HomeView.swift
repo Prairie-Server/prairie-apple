@@ -95,6 +95,19 @@ struct HomeView: View {
         .onReceive(NotificationCenter.default.publisher(for: .homeSectionsShouldRefresh)) { _ in
             Task { await viewModel.loadSections() }
         }
+        // Entry-focus routing lives on the always-mounted root, not the
+        // scroll content — rows mount only after the section load, and a
+        // token that arrives before then must wait as a pending claim.
+        .onAppear {
+            requestHomeFocus(homeFocusRequest)
+        }
+        .onChange(of: homeFocusRequest) { _, request in
+            requestHomeFocus(request)
+        }
+        .onChange(of: displayedSections.map(\.id)) { _, _ in
+            guard let request = pendingHomeFocusRequest else { return }
+            requestHomeFocus(request)
+        }
         #else
         ZStack(alignment: .top) {
             heroTintBackground
@@ -313,16 +326,6 @@ struct HomeView: View {
             .padding(.bottom, ContinuumTheme.largePadding)
         }
         .padding(.top, ContinuumTheme.Skyline.homeFirstRowTop)
-        .onAppear {
-            requestHomeFocus(homeFocusRequest)
-        }
-        .onChange(of: homeFocusRequest) { _, request in
-            requestHomeFocus(request)
-        }
-        .onChange(of: viewModel.sections.map(\.id)) { _, _ in
-            guard let request = pendingHomeFocusRequest else { return }
-            requestHomeFocus(request)
-        }
     }
     #else
     private var scrollContent: some View {
@@ -433,7 +436,10 @@ struct HomeView: View {
     /// up into the menu, so a late fetch never steals focus.
     private func requestHomeFocus(_ request: Int) {
         guard request > 0 else { return }
-        guard !displayedSections.isEmpty else {
+        // Rows mount only once the home sections themselves have loaded
+        // (`content` gates on viewModel.sections) AND produced visible
+        // rows — a claim issued before that lands on nothing.
+        guard !viewModel.sections.isEmpty, !displayedSections.isEmpty else {
             pendingHomeFocusRequest = request
             return
         }
