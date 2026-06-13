@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Skyline — Home (focus marquee, no Featured carousel)</title>
+<link rel="stylesheet" href="tv.css">
+<style>
+  /* ============ SKYLINE a4: Featured carousel removed ============
+     The top of the screen is a passive "marquee" that always previews
+     whatever card is focused below. No curated hero, no auto-advance,
+     no dots, no hero buttons — rows are the only focus zone under the
+     bar, and pressing the focused card opens/resumes it. */
+
+  .topbar {
+    position: absolute; z-index: 30;
+    left: var(--safe-x); right: var(--safe-x); top: var(--safe-y);
+    display: flex; align-items: center; gap: 28px;
+    height: 64px;
+  }
+  .wordmark {
+    font-weight: 800; font-size: 26px; letter-spacing: 0.34em;
+    padding-right: 6px;
+  }
+  .tabs { display: flex; align-items: center; gap: 8px; margin: 0 auto; }
+  .tab {
+    font-size: 23px; font-weight: 600; letter-spacing: 0.015em;
+    color: var(--ink-2);
+    padding: 11px 26px; border-radius: var(--r-pill);
+  }
+  .tab.selected {
+    color: #fff;
+    background: rgba(255,255,255,0.14);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10);
+  }
+  .top-right { display: flex; align-items: center; gap: 22px; }
+  .iconbtn {
+    width: 52px; height: 52px; border-radius: 50%;
+    display: grid; place-items: center;
+    color: var(--ink-2);
+  }
+  .avatar {
+    width: 52px; height: 52px; border-radius: 50%;
+    display: grid; place-items: center;
+    font-weight: 700; font-size: 21px; color: #0c0c0c;
+    background: linear-gradient(160deg, #e8e2d4 0%, #b8ac90 100%);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.4);
+  }
+
+  /* ---------- focus marquee (replaces the hero) ---------- */
+  .marquee {
+    position: absolute; z-index: 20;
+    left: var(--safe-x); top: 218px; width: 880px;
+  }
+  .marquee .eyebrow {
+    display: flex; align-items: center; gap: 14px;
+    font-size: 17px; font-weight: 700; letter-spacing: 0.30em;
+    color: var(--ink-2);
+  }
+  .marquee .eyebrow::before { /* tick = "bound to focus" signature */
+    content: ""; width: 26px; height: 3px; border-radius: 2px;
+    background: rgba(255,255,255,0.85); flex: none;
+  }
+  .marquee .title {
+    font-size: 84px; font-weight: 800; letter-spacing: 0.012em; line-height: 0.98;
+    margin-top: 18px;
+    text-shadow: 0 4px 38px rgba(0,0,0,0.6);
+  }
+  .marquee .meta {
+    display: flex; align-items: center; margin-top: 20px;
+    font-size: 20px; color: var(--ink-2); font-weight: 500;
+  }
+  .marquee .meta .badge { margin-right: 10px; }
+  .marquee .syn {
+    margin-top: 18px; font-size: 22px; line-height: 1.45; color: var(--ink-2);
+    max-width: 780px;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+
+  /* ---------- rows (focus lives here) ---------- */
+  .rows {
+    position: absolute; z-index: 20; left: var(--safe-x); right: 0; top: 545px;
+  }
+  .rows .row-title { margin-bottom: 20px; }
+  .cards { display: flex; gap: 24px; }
+  .cw { width: 372px; flex: none; }
+  .cw .meta { display:flex; justify-content: space-between; align-items: baseline; margin-top: 12px; padding: 0 4px; }
+  .cw .t { font-size: 20px; font-weight: 600; }
+  .cw .s { font-size: 17px; color: var(--ink-3); font-weight: 500; }
+  .thumb .tt {
+    position: relative; z-index: 3; padding: 0 16px 26px; width: 100%;
+    font-size: 15px; font-weight: 700; letter-spacing: 0.22em; color: rgba(255,255,255,0.85);
+  }
+
+  /* next row peeks at the fold to signal vertical scroll */
+  .peek { position: absolute; z-index: 20; left: var(--safe-x); right: 0; top: 884px; }
+  .peek .row-title { margin-bottom: 20px; }
+  .peek .cards { display: flex; gap: 24px; }
+  .peek .poster { width: 208px; height: 312px; flex: none; }
+</style>
+</head>
+<body>
+<div class="stage">
+
+  <!-- backdrop follows the FOCUSED item (Severance card below) -->
+  <div class="scene scene-severance"></div>
+
+  <!-- top bar -->
+  <div class="topbar">
+    <div class="wordmark">SILO</div>
+    <nav class="tabs">
+      <div class="tab selected">Home</div>
+      <div class="tab">Movies</div>
+      <div class="tab">Series</div>
+      <div class="tab">Music</div>
+      <div class="tab">Audiobooks</div>
+      <div class="tab">Calendar</div>
+    </nav>
+    <div class="top-right">
+      <div class="iconbtn">
+        <svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
+          <circle cx="11" cy="11" r="7"/><path d="M21 21l-4.5-4.5"/>
+        </svg>
+      </div>
+      <div class="avatar">A</div>
+    </div>
+  </div>
+
+  <!-- focus marquee : eyebrow names the row the focused item came from -->
+  <div class="marquee">
+    <div class="eyebrow">CONTINUE WATCHING</div>
+    <div class="title">SEVERANCE</div>
+    <div class="meta">
+      <span class="badge">4K</span><span class="badge">DOLBY VISION</span><span class="badge">ATMOS</span>
+      <span class="dotsep">·</span>S2 E7<span class="dotsep">·</span>Chikhai Bardo<span class="dotsep">·</span>23 min left
+    </div>
+    <div class="syn">Gemma's past comes into focus as the true purpose of the severed floor begins to surface — and Mark edges closer to a reunion Lumon will do anything to prevent.</div>
+  </div>
+
+  <!-- row 1 : first card holds focus, marquee mirrors it -->
+  <div class="rows">
+    <div class="row-title">Continue Watching</div>
+    <div class="cards">
+      <div class="cw">
+        <div class="thumb p-teal geo-bars focus-ring"><div class="tt">SEVERANCE</div><div class="prog"><i style="width:62%"></i></div></div>
+        <div class="meta"><span class="t">Severance</span><span class="s">S2 · E7 · 23m left</span></div>
+      </div>
+      <div class="cw">
+        <div class="thumb p-gold geo-diag"><div class="tt">THE BEAR</div><div class="prog"><i style="width:18%"></i></div></div>
+        <div class="meta"><span class="t">The Bear</span><span class="s">S3 · E2 · 24m left</span></div>
+      </div>
+      <div class="cw">
+        <div class="thumb p-indigo geo-orb"><div class="tt">INTERSTELLAR</div><div class="prog"><i style="width:81%"></i></div></div>
+        <div class="meta"><span class="t">Interstellar</span><span class="s">31m left</span></div>
+      </div>
+      <div class="cw">
+        <div class="thumb p-steel geo-horizon"><div class="tt">ANDOR</div><div class="prog"><i style="width:35%"></i></div></div>
+        <div class="meta"><span class="t">Andor</span><span class="s">S2 · E4 · 29m left</span></div>
+      </div>
+      <div class="cw">
+        <div class="thumb p-crimson geo-eclipse"><div class="tt">OPPENHEIMER</div><div class="prog"><i style="width:48%"></i></div></div>
+        <div class="meta"><span class="t">Oppenheimer</span><span class="s">1h 34m left</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- row 2 peeks above the fold (freed by removing the carousel) -->
+  <div class="peek">
+    <div class="row-title">Recently Added in Movies</div>
+    <div class="cards">
+      <div class="poster p-amber geo-orb"><div class="pt">Dune<small>PART TWO</small></div></div>
+      <div class="poster p-dusk geo-diag"><div class="pt">Poor Things<small>2023</small></div></div>
+      <div class="poster p-ice geo-horizon"><div class="pt">The Holdovers<small>2023</small></div></div>
+      <div class="poster p-coral geo-diag"><div class="pt">Past Lives<small>2023</small></div></div>
+      <div class="poster p-rust geo-eclipse"><div class="pt">Killers of the Flower Moon<small>2023</small></div></div>
+      <div class="poster p-mono geo-grid"><div class="pt">The Zone of Interest<small>2023</small></div></div>
+      <div class="poster p-steel geo-bars"><div class="pt">Anatomy of a Fall<small>2023</small></div></div>
+      <div class="poster p-sand geo-horizon"><div class="pt">Aftersun<small>2022</small></div></div>
+    </div>
+  </div>
+
+  <div class="grain"></div>
+</div>
+</body>
+</html>

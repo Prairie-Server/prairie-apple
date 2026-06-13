@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Skyline — Movies landing (focus marquee, no Spotlight/Featured hero)</title>
+<link rel="stylesheet" href="tv.css">
+<style>
+  /* ============ SKYLINE a5: library landing, Featured hero removed ============
+     Same marquee pattern as a4 at library scale: the band under the pill
+     row previews the focused card. Entry focus drops straight to the first
+     card of row 1, so the marquee is always live. */
+
+  .topbar {
+    position: absolute; z-index: 30;
+    left: var(--safe-x); right: var(--safe-x); top: var(--safe-y);
+    display: flex; align-items: center; gap: 28px; height: 64px;
+  }
+  .wordmark { font-weight: 800; font-size: 26px; letter-spacing: 0.34em; padding-right: 6px; }
+  .tabs { display: flex; align-items: center; gap: 8px; margin: 0 auto; }
+  .tab {
+    font-size: 23px; font-weight: 600; color: var(--ink-2);
+    padding: 11px 26px; border-radius: var(--r-pill);
+  }
+  .tab.selected { color: #fff; background: rgba(255,255,255,0.14); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10); }
+  .top-right { display: flex; align-items: center; gap: 22px; }
+  .iconbtn { width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center; color: var(--ink-2); }
+  .avatar {
+    width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center;
+    font-weight: 700; font-size: 21px; color: #0c0c0c;
+    background: linear-gradient(160deg, #e8e2d4 0%, #b8ac90 100%);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.4);
+  }
+
+  /* ---------- sub-destination pills ---------- */
+  .subnav {
+    position: absolute; z-index: 30;
+    left: var(--safe-x); right: var(--safe-x); top: 150px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .pill {
+    font-size: 19px; font-weight: 600; color: var(--ink-2);
+    padding: 9px 22px; border-radius: var(--r-pill);
+    background: rgba(255,255,255,0.07);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.09);
+    backdrop-filter: blur(16px);
+  }
+  .pill.selected { background: #fff; color: #000; box-shadow: 0 14px 36px rgba(0,0,0,0.5); }
+  .scope { margin-left: auto; font-size: 18px; font-weight: 500; color: var(--ink-3); letter-spacing: 0.04em; }
+
+  /* ---------- focus marquee (replaces the curated Spotlight) ---------- */
+  .marquee {
+    position: absolute; z-index: 20; left: var(--safe-x); top: 246px; width: 880px;
+  }
+  .marquee .eyebrow {
+    display: flex; align-items: center; gap: 14px;
+    font-size: 16px; font-weight: 700; letter-spacing: 0.30em; color: var(--ink-2);
+  }
+  .marquee .eyebrow::before {
+    content: ""; width: 26px; height: 3px; border-radius: 2px;
+    background: rgba(255,255,255,0.85); flex: none;
+  }
+  .marquee .title { font-size: 66px; font-weight: 800; line-height: 1.02; margin-top: 14px; text-shadow: 0 4px 30px rgba(0,0,0,0.6); }
+  .marquee .meta { display: flex; align-items: center; margin-top: 16px; font-size: 19px; color: var(--ink-2); font-weight: 500; }
+  .marquee .meta .badge { margin-right: 10px; }
+  .marquee .syn {
+    margin-top: 16px; font-size: 22px; line-height: 1.45; color: var(--ink-2);
+    max-width: 780px;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+
+  /* ---------- row 1 : dense posters, holds entry focus ---------- */
+  .rows { position: absolute; z-index: 20; left: var(--safe-x); right: 0; top: 510px; }
+  .rows .row-title { margin-bottom: 20px; }
+  .rows .cards { display: flex; gap: 24px; }
+  .rows .poster { width: 208px; height: 312px; flex: none; }
+
+  /* ---------- collections fan row peeking at the fold ---------- */
+  .peek { position: absolute; z-index: 20; left: var(--safe-x); right: 0; top: 910px; }
+  .peek .row-title { margin-bottom: 20px; }
+  .fanrow { display: flex; gap: 26px; }
+  .fan {
+    position: relative; flex: none;
+    width: 430px; height: 234px; border-radius: 16px;
+    background: linear-gradient(170deg, rgba(46,48,54,0.85) 0%, rgba(18,19,22,0.92) 100%);
+    box-shadow: 0 18px 44px rgba(0,0,0,0.55), inset 0 0 0 1px rgba(255,255,255,0.09);
+    display: flex; align-items: center;
+  }
+  .fan .stack { position: relative; width: 200px; height: 100%; flex: none; }
+  .fan .stack .poster {
+    position: absolute; width: 104px; height: 156px; top: 38px;
+    box-shadow: 0 12px 30px rgba(0,0,0,0.6), inset 0 0 0 1px rgba(255,255,255,0.10);
+  }
+  .fan .stack .poster::after { display: none; }
+  .fan .stack .s1 { left: 22px;  transform: rotate(-8deg); z-index: 1; }
+  .fan .stack .s2 { left: 56px;  transform: rotate(-1deg); z-index: 2; top: 32px; }
+  .fan .stack .s3 { left: 92px;  transform: rotate(7deg);  z-index: 3; }
+  .fan .info { padding: 0 28px 0 16px; }
+  .fan .info .n { font-size: 25px; font-weight: 700; line-height: 1.2; }
+  .fan .info .c { font-size: 17px; font-weight: 500; color: var(--ink-3); margin-top: 8px; letter-spacing: 0.06em; }
+</style>
+</head>
+<body>
+<div class="stage">
+
+  <!-- backdrop follows the FOCUSED poster (Blade Runner 2049 below) -->
+  <div class="scene scene-br2049"></div>
+
+  <!-- top bar -->
+  <div class="topbar">
+    <div class="wordmark">SILO</div>
+    <nav class="tabs">
+      <div class="tab">Home</div>
+      <div class="tab selected">Movies</div>
+      <div class="tab">Series</div>
+      <div class="tab">Music</div>
+      <div class="tab">Audiobooks</div>
+      <div class="tab">Calendar</div>
+    </nav>
+    <div class="top-right">
+      <div class="iconbtn">
+        <svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
+          <circle cx="11" cy="11" r="7"/><path d="M21 21l-4.5-4.5"/>
+        </svg>
+      </div>
+      <div class="avatar">A</div>
+    </div>
+  </div>
+
+  <!-- sub-destinations -->
+  <div class="subnav">
+    <div class="pill selected">Featured</div>
+    <div class="pill">Collections</div>
+    <div class="pill">Genres</div>
+    <div class="pill">A–Z</div>
+    <div class="pill">Recently Added</div>
+    <div class="scope">1,284 films&nbsp;&nbsp;·&nbsp;&nbsp;updated 2h ago</div>
+  </div>
+
+  <!-- focus marquee : eyebrow names the row the focused item came from -->
+  <div class="marquee">
+    <div class="eyebrow">NEW THIS WEEK</div>
+    <div class="title">Blade Runner 2049</div>
+    <div class="meta">
+      <span class="badge">4K</span><span class="badge">HDR10+</span>
+      <span class="dotsep">·</span>2017<span class="dotsep">·</span>Sci-Fi<span class="dotsep">·</span>2h 44m<span class="dotsep">·</span>★ 8.0
+    </div>
+    <div class="syn">A young blade runner's discovery of a long-buried secret leads him to track down Rick Deckard, a former blade runner who has been missing for thirty years.</div>
+  </div>
+
+  <!-- row 1 : entry focus lands on the first poster -->
+  <div class="rows">
+    <div class="row-title">New This Week</div>
+    <div class="cards">
+      <div class="poster p-rust geo-horizon focus-ring"><div class="pt">Blade Runner<small>2049</small></div></div>
+      <div class="poster p-fire geo-eclipse"><div class="pt">Oppenheimer<small>2023</small></div></div>
+      <div class="poster p-teal geo-orb"><div class="pt">Arrival<small>2016</small></div></div>
+      <div class="poster p-mono geo-bars"><div class="pt">Parasite<small>2019</small></div></div>
+      <div class="poster p-amber geo-orb"><div class="pt">Mad Max<small>FURY ROAD</small></div></div>
+      <div class="poster p-coral geo-diag"><div class="pt">Her<small>2013</small></div></div>
+      <div class="poster p-navy geo-grid"><div class="pt">The Batman<small>2022</small></div></div>
+      <div class="poster p-dusk geo-orb"><div class="pt">Everything<small>EVERYWHERE</small></div></div>
+    </div>
+  </div>
+
+  <!-- collections row peeks at the fold -->
+  <div class="peek">
+    <div class="row-title">Collections <span class="count">24</span></div>
+    <div class="fanrow">
+      <div class="fan">
+        <div class="stack">
+          <div class="poster p-noir s1"></div>
+          <div class="poster p-fire s2"></div>
+          <div class="poster p-indigo s3"></div>
+        </div>
+        <div class="info"><div class="n">Christopher Nolan</div><div class="c">11 FILMS</div></div>
+      </div>
+      <div class="fan">
+        <div class="stack">
+          <div class="poster p-coral s1"></div>
+          <div class="poster p-moss s2"></div>
+          <div class="poster p-dusk s3"></div>
+        </div>
+        <div class="info"><div class="n">A24</div><div class="c">38 FILMS</div></div>
+      </div>
+      <div class="fan">
+        <div class="stack">
+          <div class="poster p-gold s1"></div>
+          <div class="poster p-teal s2"></div>
+          <div class="poster p-crimson s3"></div>
+        </div>
+        <div class="info"><div class="n">Criterion Collection</div><div class="c">52 FILMS</div></div>
+      </div>
+      <div class="fan">
+        <div class="stack">
+          <div class="poster p-ice s1"></div>
+          <div class="poster p-sand s2"></div>
+          <div class="poster p-moss s3"></div>
+        </div>
+        <div class="info"><div class="n">Studio Ghibli</div><div class="c">21 FILMS</div></div>
+      </div>
+      <div class="fan">
+        <div class="stack">
+          <div class="poster p-crimson s1"></div>
+          <div class="poster p-navy s2"></div>
+          <div class="poster p-steel s3"></div>
+        </div>
+        <div class="info"><div class="n">Marvel Saga</div><div class="c">33 FILMS</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grain"></div>
+</div>
+</body>
+</html>
