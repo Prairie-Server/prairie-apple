@@ -20,8 +20,14 @@ struct TVRootHeroBackdrop: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let fadeExtension: CGFloat = 420
-    private let horizontalBleed: CGFloat = 320
+    private let horizontalBleed: CGFloat = 380
     private let heroHeight: CGFloat = 760
+    /// How far the blurred art is pushed toward the trailing edge so its
+    /// focal mass sits right of the marquee text column (§5.4). Paired with
+    /// `leadingReadabilityScrim`, which keeps the leading half dark so the
+    /// title/meta/synopsis stay legible regardless of the focused art's
+    /// colors. The bleed above absorbs the shift so no gap opens on the left.
+    private let artHorizontalShift: CGFloat = 150
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -73,6 +79,9 @@ struct TVRootHeroBackdrop: View {
                             .frame(width: paintedWidth, height: totalHeight, alignment: .top)
                             .scaleEffect(1.04)
                             .blur(radius: 22)
+                            // Push the focal mass off the leading text column;
+                            // the bleed leaves the left edge covered.
+                            .offset(x: artHorizontalShift)
                             .transition(
                                 reduceMotion
                                     ? .identity
@@ -89,6 +98,13 @@ struct TVRootHeroBackdrop: View {
                                 endPoint: .bottom
                             )
                             .frame(width: paintedWidth, height: 140, alignment: .top)
+
+                            // Leading readability scrim. Visible-width (not
+                            // the bled paint width) so the leading→trailing
+                            // ramp maps to the screen: the marquee text column
+                            // stays dark, the art breathes on the trailing side.
+                            leadingReadabilityScrim
+                                .frame(width: visibleWidth, height: totalHeight)
                         }
                     }
                     .frame(width: paintedWidth, height: totalHeight, alignment: .top)
@@ -101,6 +117,26 @@ struct TVRootHeroBackdrop: View {
         .frame(height: totalHeight, alignment: .top)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .ignoresSafeArea(edges: [.top, .horizontal])
+    }
+
+    /// Horizontal dark-to-clear ramp behind the marquee's leading text
+    /// column (§5.4). The text spans roughly the leading half (safeArea.x
+    /// 88 → synopsis cap 780), so the scrim holds full strength through the
+    /// midline, then falls to clear by ~0.9 so the trailing art reads at the
+    /// base 34% dim only. Stacks on that flat dim, so the leading edge lands
+    /// near ~0.8 effective — a stable bed for white title + secondary text.
+    private var leadingReadabilityScrim: some View {
+        LinearGradient(
+            stops: [
+                .init(color: .black.opacity(0.72), location: 0.0),
+                .init(color: .black.opacity(0.6), location: 0.3),
+                .init(color: .black.opacity(0.34), location: 0.52),
+                .init(color: .black.opacity(0.08), location: 0.72),
+                .init(color: .clear, location: 0.9),
+            ],
+            startPoint: .leading,
+            endPoint: .trailing
+        )
     }
 
     private var fadeMask: some View {
