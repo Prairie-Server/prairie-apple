@@ -121,10 +121,12 @@ struct TVTopMenuBar: View {
     /// A bar element rested under focus for the dwell interval, or focus
     /// left every dwellable element (`nil` → close any open panel). §5.3.
     let onDwell: (TVTopMenuPanel?) -> Void
-    /// D-pad down on a dwell-open element: hand focus into its panel (§5.3).
-    let onEnterPanel: () -> Void
-    /// Press on the profile avatar — opens the profile panel immediately
-    /// (the host treats press and dwell identically for the avatar, §5.8).
+    /// D-pad down on a panel-bearing element (library tab or avatar): the
+    /// host opens its panel if needed and hands focus in (§5.3). Takes the
+    /// element so the host routes to the right panel.
+    let onEnterPanel: (TVTopMenuPanel) -> Void
+    /// Press on the profile avatar opens the profile panel and enters it
+    /// immediately; dwell only previews it.
     let onProfilePressed: () -> Void
     var onExit: (() -> Void)? = nil
 
@@ -132,6 +134,12 @@ struct TVTopMenuBar: View {
     /// Dwell timer keyed on the focused element; cancelled on every focus
     /// move so bar sweeps never open a panel (§5.3, Open-Q5/Q7).
     @State private var dwellTask: Task<Void, Never>?
+    /// The last bar element focus actually settled on. Used to restore focus
+    /// when opening/closing the dropdown overlay transiently drops it.
+    @State private var lastBarFocus: TVTopMenuFocus?
+    /// Set when a sideways move closes the open panel: the overlay removal
+    /// perturbs focus, so the next nil-drop is spurious and must be re-pinned.
+    @State private var refocusAfterClose = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -152,18 +160,19 @@ struct TVTopMenuBar: View {
         .padding(.top, ContinuumTheme.Skyline.barTopInset)
         .frame(maxWidth: .infinity, alignment: .top)
         .ignoresSafeArea(edges: [.top, .horizontal])
-        .opacity(isMenuFocused ? 1.0 : ContinuumTheme.Skyline.barDimmedOpacity)
+        // The bar dims only while focus is down in the content zone (§5.1).
+        // An open panel keeps it fully lit — focus has merely descended into
+        // the dropdown, and dimming the bar there greys out the panel's own
+        // anchor tab and reads as a heavy "everything went dark" state.
+        .opacity(isMenuFocused || openPanel != nil ? 1.0 : ContinuumTheme.Skyline.barDimmedOpacity)
         // Reduce Motion snaps the bar dim/restore as focus enters/leaves
         // the content zone (§5.1; §4.2 acceptance: no drift animations).
         .animation(reduceMotion ? nil : .easeInOut(duration: ContinuumTheme.normalDuration), value: isMenuFocused)
         .focusSection()
         .disabled(isFocusSuppressed)
-        // Menu while a panel is dwell-open (focus still on the tab/avatar)
-        // closes the panel instead of exiting the page — without this, a tab
-        // whose page is Home (so `onExit` is nil) would let Menu fall through
-        // to the system. Once focus is *inside* the panel, the overlay's own
-        // `onExitCommand` catches Menu first, so this only handles the
-        // focus-on-bar case.
+        // Menu while a panel is opening from the bar closes the panel
+        // instead of exiting the page. Once focus is inside the panel, the
+        // overlay's own `onExitCommand` catches Menu first.
         .modifier(TVTopMenuExitHandler(onExit: barExitAction))
         .onChange(of: isFocusSuppressed) { _, newValue in
             if newValue {
@@ -174,13 +183,45 @@ struct TVTopMenuBar: View {
             requestMenuFocus()
         }
         .onChange(of: isMenuFocused) { _, newValue in
-            if !newValue {
+            // Don't release the bar's own focus when the *panel* is what's
+            // taking it (panelHasFocus): the panel claims focus through its
+            // own @FocusState and the system clears ours. Nulling here first
+            // leaves a frame with nothing focused, which tvOS repairs to the
+            // Home tab — the flash / focus reset. Content hand-off still nulls
+            // via the isFocusSuppressed handler above.
+            if !newValue && !panelHasFocus {
                 focusedItem = nil
             }
         }
+        .onChange(of: panelHasFocus) { _, newValue in
+            isMenuFocused = focusedItem != nil && !newValue
+        }
         .onChange(of: focusedItem) { _, newValue in
-            isMenuFocused = newValue != nil
-            scheduleDwell(for: newValue)
+            if let newValue {
+                lastBarFocus = newValue
+                refocusAfterClose = false
+                isMenuFocused = !panelHasFocus
+                scheduleDwell(for: newValue)
+                return
+            }
+            // Focus dropped to nil. Opening OR closing the dropdown overlay
+            // perturbs the focus graph and makes tvOS drop the bar's
+            // @FocusState, repairing to the Home tab (the flash). When that's
+            // why we lost focus — a preview panel is open, or a sideways move
+            // just closed one — re-pin to the tab the user is actually on.
+            // A legit leave (down into the page, Menu out) has neither flag,
+            // so it falls through and focus is allowed to go.
+            let spuriousFromOpenPreview = openPanel != nil && !panelHasFocus
+            if (spuriousFromOpenPreview || refocusAfterClose), let target = lastBarFocus {
+                refocusAfterClose = false
+                DispatchQueue.main.async {
+                    guard focusedItem == nil, !panelHasFocus else { return }
+                    focusedItem = target
+                }
+                return
+            }
+            isMenuFocused = false
+            scheduleDwell(for: nil)
         }
         .onDisappear { dwellTask?.cancel() }
     }
@@ -217,10 +258,10 @@ struct TVTopMenuBar: View {
     // MARK: - Tabs
 
     private func rootButton(_ root: TVRootDestination, index: Int, count: Int) -> some View {
-        let hasFocus = focusedItem == .root(root)
         // While its panel owns focus the tab reads as selected, not focused
         // (§5.1) — the inverted look transfers to the panel row.
         let panelOwnsFocus = panelHasFocus && openPanel == .root(root)
+        let hasFocus = focusedItem == .root(root) && !panelHasFocus
         let isFocused = hasFocus && !panelOwnsFocus
         let isSelected = selectedRoot == root || panelOwnsFocus
 
@@ -237,11 +278,16 @@ struct TVTopMenuBar: View {
         }
         .buttonStyle(.continuumFlat)
         .focused($focusedItem, equals: .root(root))
-        // Down hands focus into an open cascade panel for this tab (§5.3).
-        // Fires only when the engine can't move focus within the bar — i.e.
-        // the bar is a single row, so down always reaches here.
-        .modifier(TVTopMenuDownHandler(isActive: openPanel == .root(root)) {
-            onEnterPanel()
+        // Down opens this tab's cascade panel (if a dwell hasn't already)
+        // and hands focus straight into it, so the move never escapes to the
+        // page content behind the bar. Fires only when the engine can't move
+        // focus within the bar — i.e. the bar is a single row, so down
+        // always reaches here.
+        // `canOpenPanel` is keyed on the tab *kind* (a library tab always
+        // can; Home/Calendar never can) — invariant, so opening a panel
+        // never restructures this focused button (which dropped focus).
+        .modifier(TVTopMenuDownHandler(canOpenPanel: libraryRoot(root) != nil) {
+            onEnterPanel(.root(root))
         })
         // Library tabs publish their bounds so the shell can center the
         // cascade panel under them (§5.3); other tabs have no panel.
@@ -283,7 +329,7 @@ struct TVTopMenuBar: View {
     // MARK: - Search
 
     private var searchButton: some View {
-        let isFocused = focusedItem == .search
+        let isFocused = focusedItem == .search && !panelHasFocus
 
         return Button(action: onSearch) {
             Image(systemName: "magnifyingglass")
@@ -307,10 +353,10 @@ struct TVTopMenuBar: View {
         // and focus is still on the avatar; once focus descends into the
         // panel the ring drops (the panel rows carry focus then, §5.8).
         let panelOwnsFocus = panelHasFocus && openPanel == .profile
-        let isFocused = focusedItem == .profile && !panelOwnsFocus
+        let isFocused = focusedItem == .profile && !panelHasFocus && !panelOwnsFocus
 
         return Button {
-            // Press opens immediately (§5.8) — identical outcome to dwell.
+            // Press opens and enters immediately (§5.8); dwell only previews.
             onProfilePressed()
         } label: {
             ProfileAvatarView(
@@ -331,8 +377,8 @@ struct TVTopMenuBar: View {
         }
         .buttonStyle(.continuumFlat)
         .focused($focusedItem, equals: .profile)
-        .modifier(TVTopMenuDownHandler(isActive: openPanel == .profile) {
-            onEnterPanel()
+        .modifier(TVTopMenuDownHandler(canOpenPanel: true) {
+            onEnterPanel(.profile)
         })
         .modifier(TVTopMenuAnchorPublisher(panel: .profile))
         .accessibilityLabel("Profile")
@@ -361,12 +407,14 @@ struct TVTopMenuBar: View {
         // Moving focus to a *different bar element* — another tab, or the
         // search button — closes the open panel right away (§5.3: "moving
         // sideways to another tab closes it"), so it doesn't linger during
-        // the new element's dwell. Critically, a `nil` item (focus left the
-        // bar entirely) does NOT close: on a root page that only happens
-        // when the panel claims focus on d-pad down, and closing then would
-        // shut the panel the instant focus enters it.
-        if let openPanel, let item, !item.matches(panel: openPanel) {
+        // the new element's dwell. Once the panel is expected to own focus,
+        // ignore top-bar repairs: tvOS may briefly re-home to Home while
+        // the panel row focus claim is being applied.
+        if let openPanel, !panelHasFocus, let item, !item.matches(panel: openPanel) {
             onDwell(nil)
+            // Closing the panel removes its overlay, which perturbs focus and
+            // drops the tab we just moved to; flag it so the nil-drop re-pins.
+            refocusAfterClose = true
         }
 
         guard let target = dwellTarget(for: item) else { return }
@@ -455,6 +503,50 @@ private struct TVTopMenuCapsuleChrome: ViewModifier {
     }
 }
 
+/// Shared surface for every Skyline anchored menu (§5.3 cascade + flyout,
+/// §5.8 profile) so they read as one family. A frosted material base under
+/// a near-opaque vertical tint — lighter at the top, as if lit from above —
+/// finished with a gradient hairline that brightens along the top lip and a
+/// two-layer shadow (a tight contact shadow under a broad ambient one) so
+/// the panel floats over the page on its own depth rather than needing a
+/// page scrim to darken everything behind it.
+struct TVSkylinePanelChrome: ViewModifier {
+    var cornerRadius: CGFloat = ContinuumTheme.Skyline.dropdownCornerRadius
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        return content
+            .background(shape.fill(.regularMaterial))
+            .background(
+                shape.fill(
+                    LinearGradient(
+                        colors: [
+                            Color(hex: "#23252C").opacity(0.92),
+                            Color(hex: "#141519").opacity(0.95),
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+            )
+            .overlay {
+                shape.strokeBorder(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.22),
+                            Color.white.opacity(0.05),
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    ),
+                    lineWidth: 1
+                )
+            }
+            .shadow(color: .black.opacity(0.35), radius: 8, y: 4)
+            .shadow(color: .black.opacity(0.55), radius: 40, y: 24)
+    }
+}
+
 private struct TVTopMenuExitHandler: ViewModifier {
     let onExit: (() -> Void)?
 
@@ -468,17 +560,20 @@ private struct TVTopMenuExitHandler: ViewModifier {
     }
 }
 
-/// Hands d-pad **down** on a dwell-open bar element into its panel (§5.3).
-/// The handler is attached only while a panel is open for the element so a
-/// normal down-press (no panel) still falls through to the page's content
-/// zone via the shell's existing focus hand-down.
+/// Hands d-pad **down** on a panel-bearing bar element (library tab or
+/// avatar) to the host, which opens the element's panel if needed and moves
+/// focus into it (§5.3). Attachment is keyed on the element's *kind*
+/// (`canOpenPanel`, invariant) — never on whether its panel is currently
+/// open. Toggling the attachment on a *focused* button rebuilds its subtree
+/// and drops `@FocusState`, which bounced focus back to the Home tab; keeping
+/// it invariant fixes that. The live open/enter decision is in the closure.
 private struct TVTopMenuDownHandler: ViewModifier {
-    let isActive: Bool
+    let canOpenPanel: Bool
     let onDown: () -> Void
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if isActive {
+        if canOpenPanel {
             content.onMoveCommand { direction in
                 if direction == .down { onDown() }
             }
@@ -522,8 +617,7 @@ private enum TVProfileAction: Hashable {
 /// Anchored profile dropdown panel (§5.8): the same `glass.strong` level-1
 /// panel as the cascade, hosted by the shell under the avatar. The shell
 /// owns the scrim and Menu-to-close; this view owns only its rows and the
-/// dwell focus hand-off (focus stays on the avatar until the host bumps
-/// `focusEntryToken` on d-pad down, then lands on the first row).
+/// focus hand-off when the host bumps `focusEntryToken`.
 struct TVProfileDropdown: View {
     let profileName: String
     let avatar: String?
@@ -531,7 +625,7 @@ struct TVProfileDropdown: View {
     /// the §5.8 mono header style.
     let serverHost: String?
     let isAdmin: Bool
-    /// Whether focus has entered the panel (host flips on d-pad down).
+    /// Whether focus has entered the panel.
     let entersPanel: Bool
     /// Bumped by the host when focus should enter — lands on the first row.
     let focusEntryToken: Int
@@ -552,10 +646,8 @@ struct TVProfileDropdown: View {
 
     var body: some View {
         panel
-            // Inert until the host hands focus in on d-pad down (§5.8) — the
-            // avatar keeps focus while the menu is merely open, and the down
-            // press reaches the avatar's `onMoveCommand` instead of the
-            // engine grabbing a row first.
+            // Inert until the host hands focus in. Dwell previews can keep
+            // focus on the avatar; avatar press or d-pad down enters rows.
             .disabled(!entersPanel)
             .onChange(of: focusEntryToken) { _, token in applyEntryToken(token) }
             .onChange(of: focusedAction) { _, newValue in
@@ -608,19 +700,7 @@ struct TVProfileDropdown: View {
         }
         .padding(ContinuumTheme.Skyline.dropdownPadding)
         .frame(width: ContinuumTheme.Skyline.dropdownWidth, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: ContinuumTheme.Skyline.dropdownCornerRadius, style: .continuous)
-                .fill(.regularMaterial)
-        )
-        .background(
-            RoundedRectangle(cornerRadius: ContinuumTheme.Skyline.dropdownCornerRadius, style: .continuous)
-                .fill(Color.continuumGlassStrong)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: ContinuumTheme.Skyline.dropdownCornerRadius, style: .continuous)
-                .strokeBorder(Color.continuumOutline, lineWidth: 1)
-        }
-        .shadow(color: .black.opacity(0.45), radius: 34, y: 18)
+        .modifier(TVSkylinePanelChrome())
         .focusSection()
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Profile menu")

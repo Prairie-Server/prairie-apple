@@ -82,7 +82,7 @@ struct TVMainTabView: View {
                     onSelectRoot: selectRoot(_:),
                     onSearch: { router.navigate(to: .search) },
                     onDwell: handleDwell(_:),
-                    onEnterPanel: enterOpenPanel,
+                    onEnterPanel: enterPanelFor,
                     onProfilePressed: openProfilePanelImmediately,
                     onExit: selectedRoot == .home ? nil : returnToHomeInMenu
                 )
@@ -146,12 +146,14 @@ struct TVMainTabView: View {
                 .id(selectedRoot)
                 .transition(reduceMotion ? .identity : .opacity)
                 .focusScope(tabContentNamespace)
-                // While a panel is open the page is scrimmed and inert, so
-                // its cards must not be focusable: otherwise d-pad down from
-                // a dwell-open tab would jump to a card beneath the scrim
-                // instead of firing the tab's `onMoveCommand(.down)` to
-                // enter the panel. Re-enables the instant the panel closes.
-                .disabled(openPanel != nil)
+                // Only pull page cards out of the focus graph once focus is
+                // actually IN the panel (panelHasFocus). Disabling this big
+                // subtree the instant a *preview* opens forces tvOS to
+                // re-resolve focus, which drops the focused tab and repairs to
+                // the Home tab — the flash. A preview keeps focus on the bar,
+                // so the page can stay enabled; the explicit d-pad-down enter
+                // (openPanelAndEnter) disables it as it claims a panel row.
+                .disabled(panelHasFocus)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea(edges: [.top, .horizontal])
@@ -215,13 +217,12 @@ struct TVMainTabView: View {
                     proxy: proxy
                 )
 
+                // No page scrim: the menu floats over the page on its own
+                // layered shadow (`TVSkylinePanelChrome`) instead of darkening
+                // everything behind it. The page is still inert via
+                // `.disabled` while the panel is visible, so nothing behind it
+                // is reachable.
                 ZStack(alignment: .topLeading) {
-                    // Page scrim (§4.2). tvOS has no pointer, so the panel
-                    // closes via Menu/Back (`onExitCommand` below) or by
-                    // moving focus off the bar — not a tap.
-                    Color.continuumDropdownScrim
-                        .ignoresSafeArea()
-
                     panelBody(for: panel)
                         .modifier(TVPanelOpenTransition(
                             anchorX: panelTransitionAnchorX(panel: panel, anchors: anchors, proxy: proxy, leading: leading),
@@ -337,62 +338,93 @@ struct TVMainTabView: View {
 
     // MARK: - Panel control (§5.3 / §5.8)
 
-    /// Open (or switch) the anchored panel after a bar element's dwell, or
-    /// close it when the bar reports focus left every dwellable element.
-    /// Focus stays on the bar element until `enterOpenPanel` — opening only
-    /// reveals the panel + scrim (§5.3).
+    /// Open (or switch) the anchored panel as a passive preview after dwell.
+    /// Focus intentionally stays on the bar element so left/right navigation
+    /// can continue across library tabs. D-pad-down or profile press uses
+    /// `openPanelAndEnter` to move focus into the rows.
     private func handleDwell(_ panel: TVTopMenuPanel?) {
         guard let panel else {
             closePanel()
             return
         }
+        openPanelPreview(panel)
+    }
+
+    /// Open (or switch to) an anchored panel as a passive preview: it fades
+    /// in below the bar but focus stays on the tab/avatar. This is the dwell
+    /// (focus-rest) path — opening on a *settled* focus, with no in-flight
+    /// move command, is what lets the tab keep its focus ring without a focus
+    /// escape. D-pad-down instead uses `openPanelAndEnter`, which claims a
+    /// panel row so the move has a destination.
+    private func openPanelPreview(_ panel: TVTopMenuPanel) {
         guard panel != openPanel else { return }
 
-        // Switching panels (sideways across the bar) re-arms focus-on-the-bar
-        // for the new one. Prefetch counts for a cascade so the count column
-        // and caption have data by the time the user rolls the list.
+        panelEntersFocus = false
+        panelHasFocus = false
+        // Prefetch counts for a cascade so the count column and caption
+        // have data by the time the user rolls the list.
         withAnimation(reduceMotion ? nil : .easeOut(duration: ContinuumTheme.Skyline.cascadeScrimDuration)) {
             openPanel = panel
         }
-        panelEntersFocus = false
-        panelHasFocus = false
-        if case .root(.libraryType(let type)) = panel {
-            Task { await loadItemCounts(for: type) }
-        }
+        prefetchPanelData(panel)
     }
 
     /// A deliberate **press** on the avatar (§5.8) opens the profile menu
-    /// *and* moves focus straight into it — unlike dwell, which reveals the
-    /// panel but leaves focus on the avatar until d-pad down. This matches
-    /// the prior press-to-open behavior so the menu is immediately usable.
+    /// and moves focus straight into it.
     private func openProfilePanelImmediately() {
-        withAnimation(reduceMotion ? nil : .easeOut(duration: ContinuumTheme.Skyline.cascadeScrimDuration)) {
-            openPanel = .profile
+        if openPanel != .profile {
+            openPanelAndEnter(.profile)
+            return
         }
-        // Reset entry state in case a cascade panel was open and focused —
-        // the fresh profile panel must hand focus in cleanly via the async
-        // enter below, not inherit the prior panel's entered state.
-        panelEntersFocus = false
-        panelHasFocus = false
-        // Hand focus in on the next runloop so the panel has mounted and
-        // enabled its rows before the imperative `@FocusState` claim lands.
-        DispatchQueue.main.async {
-            guard openPanel == .profile else { return }
-            enterOpenPanel()
-        }
+        enterOpenPanel()
     }
 
-    /// D-pad down on the dwell-open element: hand focus into the panel
-    /// (§5.3). Enabling + bumping the entry token makes the panel claim a
-    /// row via its own `@FocusState`, which moves system focus off the bar
-    /// tab (nulling the bar's focus) without a manual relinquish — avoiding
-    /// the race where forcing the bar's focus off would close the panel as
-    /// it opens. The tab drops to its selected look via `panelHasFocus`.
+    /// Manually refresh panel row focus, used when d-pad-down arrives while
+    /// the matching panel is already open.
     private func enterOpenPanel() {
         guard openPanel != nil else { return }
         panelEntersFocus = true
         panelHasFocus = true
         panelFocusEntryToken += 1
+    }
+
+    /// Route a d-pad-down on a panel-bearing bar element (§5.3): open its
+    /// panel if it isn't already, then move focus into it. The bar no longer
+    /// toggles the down handler on `openPanel`, so this can't run while the
+    /// focused tab is being rebuilt.
+    private func enterPanelFor(_ panel: TVTopMenuPanel) {
+        // A d-pad-down is a focus *move* — the engine must send focus
+        // somewhere. So down opens the panel (if a dwell hasn't already) AND
+        // hands focus into a row in one motion: claiming a panel row via
+        // @FocusState gives the move a destination, which stops focus from
+        // escaping down into the page content behind it (which is still Home
+        // — focusing a tab doesn't switch the page). The bar's
+        // `!panelHasFocus` release-guard keeps the tab's focus from emptying
+        // out mid-handoff, so this lands cleanly with no Home flash.
+        if openPanel != panel {
+            openPanelAndEnter(panel)
+            return
+        }
+        enterOpenPanel()
+    }
+
+    /// Open an anchored panel and hand focus into it in the same state
+    /// transition. This is reserved for explicit entry gestures, not dwell,
+    /// so hover-open menus never trap horizontal tab navigation.
+    private func openPanelAndEnter(_ panel: TVTopMenuPanel) {
+        panelEntersFocus = true
+        panelHasFocus = true
+        panelFocusEntryToken += 1
+        withAnimation(reduceMotion ? nil : .easeOut(duration: ContinuumTheme.Skyline.cascadeScrimDuration)) {
+            openPanel = panel
+        }
+        prefetchPanelData(panel)
+    }
+
+    private func prefetchPanelData(_ panel: TVTopMenuPanel) {
+        if case .root(.libraryType(let type)) = panel {
+            Task { await loadItemCounts(for: type) }
+        }
     }
 
     /// Close the panel without changing scope (Menu/Back, scrim tap, or

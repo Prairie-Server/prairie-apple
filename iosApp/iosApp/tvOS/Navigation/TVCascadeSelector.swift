@@ -18,9 +18,9 @@ import SwiftUI
 ///   and never steals focus.
 ///
 /// Focus contract (the hard part — see §5.3/§7):
-/// - The host (`TVMainTabView`) keeps focus on the *tab* until d-pad
-///   **down**, then flips `entersPanel` true and bumps `focusEntryToken`
-///   to hand focus to the current-scope library row.
+/// - The host (`TVMainTabView`) keeps focus on the *tab* while dwell only
+///   previews the panel. D-pad **down** flips `entersPanel` true and bumps
+///   `focusEntryToken`, landing on the current-scope library row.
 /// - **Up/down** rolls libraries; the flyout follows. **Right** enters the
 ///   flyout (first section); **left** returns to the library row.
 /// - **Press** on a library row commits that scope → Browse landing.
@@ -40,7 +40,7 @@ struct TVCascadeSelector: View {
     /// library id. Absent ids render no count (the model carries no count,
     /// so this is best-effort from loaded grids — §G).
     let counts: [Int: Int]
-    /// Whether focus has entered the panel (host flips this on d-pad down).
+    /// Whether focus has entered the panel.
     let entersPanel: Bool
     /// Bumped by the host the moment focus should enter the panel — lands
     /// on the current-scope library row.
@@ -52,8 +52,7 @@ struct TVCascadeSelector: View {
     /// Close without changing scope (Menu/Back, or focus left the bar).
     let onClose: () -> Void
     /// Reports whether any panel row currently holds focus, so the host can
-    /// drop the tab's focused look once focus descends (§5.1) regardless of
-    /// whether entry came via the explicit down hand-off or the engine.
+    /// drop the tab's focused look once focus descends (§5.1).
     var onPanelFocusChanged: (Bool) -> Void = { _ in }
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -91,11 +90,9 @@ struct TVCascadeSelector: View {
                 twoLevelPanel
             }
         }
-        // Rows are inert until the host hands focus in on d-pad down. This
-        // keeps focus on the tab while the panel is merely open (§5.3) and —
-        // critically — stops the focus engine from grabbing a row on its own
-        // when the user presses down, so the tab's `onMoveCommand(.down)`
-        // fires and entry lands deterministically on the current-scope row.
+        // Rows stay inert until the host hands focus in on d-pad down. This
+        // keeps dwell-open menus as previews and lets left/right continue
+        // across the top bar.
         .disabled(!entersPanel)
         .onChange(of: focusEntryToken) { _, token in applyEntryToken(token) }
         .onChange(of: focus) { _, newValue in handleFocusChange(newValue) }
@@ -159,7 +156,7 @@ struct TVCascadeSelector: View {
         }
         .padding(ContinuumTheme.Skyline.dropdownPadding)
         .frame(width: ContinuumTheme.Skyline.dropdownWidth, alignment: .leading)
-        .modifier(TVCascadePanelChrome(
+        .modifier(TVSkylinePanelChrome(
             cornerRadius: ContinuumTheme.Skyline.dropdownCornerRadius
         ))
         .accessibilityElement(children: .contain)
@@ -234,7 +231,7 @@ struct TVCascadeSelector: View {
         }
         .padding(ContinuumTheme.Skyline.dropdownPadding)
         .frame(width: ContinuumTheme.Skyline.dropdownWidth, alignment: .leading)
-        .modifier(TVCascadePanelChrome(
+        .modifier(TVSkylinePanelChrome(
             cornerRadius: ContinuumTheme.Skyline.dropdownCornerRadius
         ))
         .fixedSize()
@@ -259,7 +256,7 @@ struct TVCascadeSelector: View {
             }
             .padding(ContinuumTheme.Skyline.flyoutPadding)
             .frame(width: ContinuumTheme.Skyline.flyoutWidth, alignment: .leading)
-            .modifier(TVCascadePanelChrome(
+            .modifier(TVSkylinePanelChrome(
                 cornerRadius: ContinuumTheme.Skyline.flyoutCornerRadius
             ))
             .fixedSize()
@@ -493,32 +490,6 @@ private struct TVCascadeSectionRowLabel: View {
         .focusEffectDisabled()
         // Reduce Motion snaps the flyout row inversion (§4.2 acceptance).
         .animation(reduceMotion ? nil : ContinuumTheme.springAnimation, value: isFocused)
-    }
-}
-
-// MARK: - Panel chrome
-
-/// Shared `glass.strong` panel backing for the level-1 panel and the
-/// flyout — material blur under the tinted glass fill, hairline border,
-/// drop shadow. Matches `TVProfileDropdown`'s panel treatment.
-private struct TVCascadePanelChrome: ViewModifier {
-    let cornerRadius: CGFloat
-
-    func body(content: Content) -> some View {
-        content
-            .background(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(.regularMaterial)
-            )
-            .background(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(Color.continuumGlassStrong)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(Color.continuumOutline, lineWidth: 1)
-            }
-            .shadow(color: .black.opacity(0.45), radius: 34, y: 18)
     }
 }
 
