@@ -158,6 +158,10 @@ struct ContinuumTheme {
         /// content"). Paired with the shared 200 ms `normalDuration`.
         static let pillDriftY: CGFloat = 12
 
+        /// A–Z alphabet rail letter size when expanded (§6.4: "mono 15").
+        /// Rendered monospaced; the collapsed edge peek uses a smaller frame.
+        static let alphabetRailLetterSize: CGFloat = 15
+
         /// Top inset for library-tab content that has no hero of its own
         /// (grids, chip clouds): clears the bar and the pill row.
         static let libraryContentTopInset: CGFloat = 216

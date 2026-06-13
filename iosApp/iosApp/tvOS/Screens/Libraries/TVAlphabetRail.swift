@@ -95,10 +95,18 @@ private struct LetterButton: View {
     var body: some View {
         Button(action: action) {
             Text(letter)
-                .font(.system(size: isExpanded ? 24 : 10, weight: .semibold))
+                // Monospaced per §6.4 ("mono 15"): SF Mono at the spec size
+                // when expanded, a slim mono peek when collapsed. Mono keeps
+                // every letter the same advance width so the column reads as
+                // an even rail rather than a ragged proportional list.
+                .font(.system(
+                    size: isExpanded ? ContinuumTheme.Skyline.alphabetRailLetterSize : 10,
+                    weight: .semibold,
+                    design: .monospaced
+                ))
                 .frame(
-                    width: isExpanded ? 56 : 10,
-                    height: isExpanded ? 56 : 10
+                    width: isExpanded ? 38 : 10,
+                    height: isExpanded ? 38 : 10
                 )
                 .opacity(isExpanded ? 1 : 0.35)
         }
@@ -124,8 +132,14 @@ private struct LetterButtonBody: View {
     var body: some View {
         configuration.label
             .foregroundColor(foreground)
-            .background(background)
-            .clipShape(Capsule())
+            .background(
+                // §6.4: the current/selected letter is a white rounded chip,
+                // and the focused letter inverts the same way. A rounded
+                // rectangle (not a capsule) gives the "chip" read; both
+                // states fill white so each reads clearly.
+                RoundedRectangle(cornerRadius: ContinuumTheme.smallCornerRadius, style: .continuous)
+                    .fill(background)
+            )
             .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
             // Reduce Motion snaps the focus/press treatment (§4.2 acceptance).
             .animation(reduceMotion ? nil : .easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
@@ -133,14 +147,16 @@ private struct LetterButtonBody: View {
     }
 
     private var foreground: Color {
-        if isFocused { return .continuumBackground }
-        if isSelected { return .continuumOnSurface }
+        // White-chip states (focused or current) take a dark label so the
+        // letter stays legible on the inverted fill.
+        if isFocused || isSelected { return .continuumBackground }
         return .continuumSecondaryText
     }
 
     private var background: Color {
-        if isFocused { return .continuumOnSurface }
-        if isSelected { return .continuumOnSurface.opacity(0.15) }
+        // Current letter inverts to a solid white chip (§6.4); the focused
+        // letter inverts identically. Everything else is bare.
+        if isFocused || isSelected { return .continuumOnSurface }
         return .clear
     }
 }
