@@ -7,6 +7,21 @@ enum TVTopMenuLayout {
     static let contentTopInset: CGFloat = 188
 }
 
+/// Publishes the on-screen bounds of each panel-bearing bar element so the
+/// shell can anchor the cascade / profile panel under it (§5.3 "centered
+/// under the tab", §5.8 "under the avatar"). One `Anchor` per element; the
+/// shell resolves the open panel's anchor in its own coordinate space.
+struct TVTopMenuAnchorKey: PreferenceKey {
+    static let defaultValue: [TVTopMenuPanel: Anchor<CGRect>] = [:]
+
+    static func reduce(
+        value: inout [TVTopMenuPanel: Anchor<CGRect>],
+        nextValue: () -> [TVTopMenuPanel: Anchor<CGRect>]
+    ) {
+        value.merge(nextValue()) { _, new in new }
+    }
+}
+
 /// A library content type that can surface as a root tab (Skyline §3.1).
 /// Tabs represent types, not server libraries — a type's tab appears only
 /// if the profile can see at least one library of that type.
@@ -22,6 +37,29 @@ enum TVLibraryTabType: String, CaseIterable, Hashable {
         case .series: return "Series"
         case .music: return "Music"
         case .audiobooks: return "Audiobooks"
+        }
+    }
+
+    /// SF Symbol for a library row of this type in the cascade level-1
+    /// panel (§5.3). Per-library art isn't fetched there — the icon is a
+    /// quiet type cue, mirroring the empty-state glyphs elsewhere.
+    var systemImage: String {
+        switch self {
+        case .movies: return "film.stack"
+        case .series: return "tv"
+        case .music: return "music.note"
+        case .audiobooks: return "book.closed"
+        }
+    }
+
+    /// Mono section header for the cascade level-1 panel (§5.3), e.g.
+    /// `MOVIE LIBRARIES`.
+    var librariesHeader: String {
+        switch self {
+        case .movies: return "MOVIE LIBRARIES"
+        case .series: return "SERIES LIBRARIES"
+        case .music: return "MUSIC LIBRARIES"
+        case .audiobooks: return "AUDIOBOOK LIBRARIES"
         }
     }
 
@@ -65,20 +103,35 @@ struct TVTopMenuBar: View {
     @Binding var isMenuFocused: Bool
     let isFocusSuppressed: Bool
     let focusRequest: Int
+    /// Bar element to focus on the next `focusRequest` bump, overriding the
+    /// default of the selected tab. The shell sets this so Menu-ing out of a
+    /// panel returns focus to the *panel's* tab/avatar (§7), not whatever
+    /// root happens to be selected.
+    var focusRequestTarget: TVTopMenuPanel? = nil
+    /// Which bar element currently has an anchored panel open (the host
+    /// owns the panel; the bar only drives the dwell + hand-off). When set
+    /// to the focused element, its capsule drops from inverted to
+    /// `chrome.selected` once focus descends into the panel.
+    let openPanel: TVTopMenuPanel?
+    /// True once focus has descended from the bar into the open panel —
+    /// the tab/avatar then reads as selected, not focused (§5.1).
+    let panelHasFocus: Bool
     let onSelectRoot: (TVRootDestination) -> Void
     let onSearch: () -> Void
-    let onSwitchProfile: () -> Void
-    let onSwitchServer: () -> Void
-    let onWatchlist: () -> Void
-    let onFavorites: () -> Void
-    let onHistory: () -> Void
-    let onSettings: () -> Void
-    let onAdminDashboard: () -> Void
-    let onSignOut: () -> Void
+    /// A bar element rested under focus for the dwell interval, or focus
+    /// left every dwellable element (`nil` → close any open panel). §5.3.
+    let onDwell: (TVTopMenuPanel?) -> Void
+    /// D-pad down on a dwell-open element: hand focus into its panel (§5.3).
+    let onEnterPanel: () -> Void
+    /// Press on the profile avatar — opens the profile panel immediately
+    /// (the host treats press and dwell identically for the avatar, §5.8).
+    let onProfilePressed: () -> Void
     var onExit: (() -> Void)? = nil
 
-    @State private var showsProfileActions = false
     @FocusState private var focusedItem: TVTopMenuFocus?
+    /// Dwell timer keyed on the focused element; cancelled on every focus
+    /// move so bar sweeps never open a panel (§5.3, Open-Q5/Q7).
+    @State private var dwellTask: Task<Void, Never>?
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -101,7 +154,13 @@ struct TVTopMenuBar: View {
         .animation(.easeInOut(duration: ContinuumTheme.normalDuration), value: isMenuFocused)
         .focusSection()
         .disabled(isFocusSuppressed)
-        .modifier(TVTopMenuExitHandler(onExit: onExit))
+        // Menu while a panel is dwell-open (focus still on the tab/avatar)
+        // closes the panel instead of exiting the page — without this, a tab
+        // whose page is Home (so `onExit` is nil) would let Menu fall through
+        // to the system. Once focus is *inside* the panel, the overlay's own
+        // `onExitCommand` catches Menu first, so this only handles the
+        // focus-on-bar case.
+        .modifier(TVTopMenuExitHandler(onExit: barExitAction))
         .onChange(of: isFocusSuppressed) { _, newValue in
             if newValue {
                 focusedItem = nil
@@ -117,11 +176,9 @@ struct TVTopMenuBar: View {
         }
         .onChange(of: focusedItem) { _, newValue in
             isMenuFocused = newValue != nil
+            scheduleDwell(for: newValue)
         }
-        .fullScreenCover(isPresented: $showsProfileActions) {
-            profileMenuPresentation
-                .presentationBackground(.clear)
-        }
+        .onDisappear { dwellTask?.cancel() }
     }
 
     // MARK: - Clusters
@@ -156,8 +213,12 @@ struct TVTopMenuBar: View {
     // MARK: - Tabs
 
     private func rootButton(_ root: TVRootDestination, index: Int, count: Int) -> some View {
-        let isFocused = focusedItem == .root(root)
-        let isSelected = selectedRoot == root
+        let hasFocus = focusedItem == .root(root)
+        // While its panel owns focus the tab reads as selected, not focused
+        // (§5.1) — the inverted look transfers to the panel row.
+        let panelOwnsFocus = panelHasFocus && openPanel == .root(root)
+        let isFocused = hasFocus && !panelOwnsFocus
+        let isSelected = selectedRoot == root || panelOwnsFocus
 
         return Button {
             selectRootFromMenu(root)
@@ -172,8 +233,23 @@ struct TVTopMenuBar: View {
         }
         .buttonStyle(.continuumFlat)
         .focused($focusedItem, equals: .root(root))
+        // Down hands focus into an open cascade panel for this tab (§5.3).
+        // Fires only when the engine can't move focus within the bar — i.e.
+        // the bar is a single row, so down always reaches here.
+        .modifier(TVTopMenuDownHandler(isActive: openPanel == .root(root)) {
+            onEnterPanel()
+        })
+        // Library tabs publish their bounds so the shell can center the
+        // cascade panel under them (§5.3); other tabs have no panel.
+        .modifier(TVTopMenuAnchorPublisher(panel: libraryRoot(root) != nil ? .root(root) : nil))
         .accessibilityLabel("\(root.title), tab, \(index + 1) of \(count)")
+        .accessibilityHint(libraryRoot(root) != nil ? "Rest to choose a library" : "")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    private func libraryRoot(_ root: TVRootDestination) -> TVLibraryTabType? {
+        if case .libraryType(let type) = root { return type }
+        return nil
     }
 
     private func tabForeground(isSelected: Bool, isFocused: Bool) -> Color {
@@ -192,7 +268,11 @@ struct TVTopMenuBar: View {
     private func requestMenuFocus() {
         DispatchQueue.main.async {
             guard !isFocusSuppressed else { return }
-            focusedItem = .root(selectedRoot)
+            switch focusRequestTarget {
+            case .root(let root): focusedItem = .root(root)
+            case .profile: focusedItem = .profile
+            case .none: focusedItem = .root(selectedRoot)
+            }
         }
     }
 
@@ -219,10 +299,15 @@ struct TVTopMenuBar: View {
     // MARK: - Profile
 
     private var profileButton: some View {
-        let isFocused = focusedItem == .profile
+        // The avatar keeps its focus ring while the profile panel is open
+        // and focus is still on the avatar; once focus descends into the
+        // panel the ring drops (the panel rows carry focus then, §5.8).
+        let panelOwnsFocus = panelHasFocus && openPanel == .profile
+        let isFocused = focusedItem == .profile && !panelOwnsFocus
 
         return Button {
-            showsProfileActions = true
+            // Press opens immediately (§5.8) — identical outcome to dwell.
+            onProfilePressed()
         } label: {
             ProfileAvatarView(
                 avatar: currentProfile?.avatarEmoji,
@@ -241,39 +326,93 @@ struct TVTopMenuBar: View {
         }
         .buttonStyle(.continuumFlat)
         .focused($focusedItem, equals: .profile)
+        .modifier(TVTopMenuDownHandler(isActive: openPanel == .profile) {
+            onEnterPanel()
+        })
+        .modifier(TVTopMenuAnchorPublisher(panel: .profile))
         .accessibilityLabel("Profile")
+        .accessibilityHint("Rest or press to open the profile menu")
     }
 
-    private var profileMenuPresentation: some View {
-        TVProfileDropdown(
-            profileName: currentProfile?.name ?? "Profile",
-            avatar: currentProfile?.avatarEmoji,
-            serverHost: ServerRegistry.shared.activeServer?.displayName,
-            isAdmin: isAdmin,
-            onSwitchProfile: { dismissProfileMenu(then: onSwitchProfile) },
-            onWatchlist: { dismissProfileMenu(then: onWatchlist) },
-            onFavorites: { dismissProfileMenu(then: onFavorites) },
-            onHistory: { dismissProfileMenu(then: onHistory) },
-            onSettings: { dismissProfileMenu(then: onSettings) },
-            onAdminDashboard: { dismissProfileMenu(then: onAdminDashboard) },
-            onSwitchServer: { dismissProfileMenu(then: onSwitchServer) },
-            onSignOut: { dismissProfileMenu(then: onSignOut) },
-            onDismiss: { showsProfileActions = false }
-        )
+    /// Menu handler for the bar: closes a dwell-open panel first (§5.3
+    /// "Menu closes"), otherwise the page-level exit (Home / system).
+    private var barExitAction: (() -> Void)? {
+        if openPanel != nil {
+            return { onDwell(nil) }
+        }
+        return onExit
     }
 
-    private func dismissProfileMenu(then action: @escaping () -> Void) {
-        showsProfileActions = false
-        DispatchQueue.main.async {
-            action()
+    // MARK: - Dwell (§5.3, §5.8)
+
+    /// Restart the dwell timer whenever focus settles on a new bar
+    /// element. A library tab or the profile avatar opens its panel after
+    /// the dwell interval; any other element (or losing focus) closes any
+    /// open panel immediately. Cancelled on every focus move so a sweep
+    /// across the bar never opens a panel (Open-Q5/Q7).
+    private func scheduleDwell(for item: TVTopMenuFocus?) {
+        dwellTask?.cancel()
+
+        // Moving focus to a *different bar element* — another tab, or the
+        // search button — closes the open panel right away (§5.3: "moving
+        // sideways to another tab closes it"), so it doesn't linger during
+        // the new element's dwell. Critically, a `nil` item (focus left the
+        // bar entirely) does NOT close: on a root page that only happens
+        // when the panel claims focus on d-pad down, and closing then would
+        // shut the panel the instant focus enters it.
+        if let openPanel, let item, !item.matches(panel: openPanel) {
+            onDwell(nil)
+        }
+
+        guard let target = dwellTarget(for: item) else { return }
+
+        dwellTask = Task { @MainActor in
+            try? await Task.sleep(
+                nanoseconds: ContinuumTheme.Skyline.cascadeDwellMilliseconds * 1_000_000
+            )
+            guard !Task.isCancelled else { return }
+            // Confirm focus is still on the same element before opening —
+            // a late move that didn't cancel in time must not fire.
+            guard focusedItem == item else { return }
+            onDwell(target)
         }
     }
+
+    /// Maps a focused bar element to the panel it should dwell-open, or
+    /// `nil` for elements with no panel (wordmark/search/non-library tabs).
+    private func dwellTarget(for item: TVTopMenuFocus?) -> TVTopMenuPanel? {
+        switch item {
+        case .root(let root):
+            guard case .libraryType = root else { return nil }
+            return .root(root)
+        case .profile:
+            return .profile
+        case .search, .none:
+            return nil
+        }
+    }
+}
+
+/// Which bar element an anchored panel is attached to (§5.3/§5.8).
+enum TVTopMenuPanel: Hashable {
+    case root(TVRootDestination)
+    case profile
 }
 
 private enum TVTopMenuFocus: Hashable {
     case root(TVRootDestination)
     case search
     case profile
+
+    /// Whether this focused element is the anchor of the given open panel —
+    /// i.e. focus is still "on" that panel's tab/avatar, not a sibling.
+    func matches(panel: TVTopMenuPanel) -> Bool {
+        switch (self, panel) {
+        case let (.root(a), .root(b)): return a == b
+        case (.profile, .profile): return true
+        default: return false
+        }
+    }
 }
 
 /// Capsule chrome for top-bar tabs and the search button (§5.1):
@@ -321,6 +460,44 @@ private struct TVTopMenuExitHandler: ViewModifier {
     }
 }
 
+/// Hands d-pad **down** on a dwell-open bar element into its panel (§5.3).
+/// The handler is attached only while a panel is open for the element so a
+/// normal down-press (no panel) still falls through to the page's content
+/// zone via the shell's existing focus hand-down.
+private struct TVTopMenuDownHandler: ViewModifier {
+    let isActive: Bool
+    let onDown: () -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isActive {
+            content.onMoveCommand { direction in
+                if direction == .down { onDown() }
+            }
+        } else {
+            content
+        }
+    }
+}
+
+/// Publishes a bar element's bounds into `TVTopMenuAnchorKey` so the shell
+/// can anchor its panel. A `nil` panel publishes nothing (elements with no
+/// panel).
+private struct TVTopMenuAnchorPublisher: ViewModifier {
+    let panel: TVTopMenuPanel?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let panel {
+            content.anchorPreference(key: TVTopMenuAnchorKey.self, value: .bounds) {
+                [panel: $0]
+            }
+        } else {
+            content
+        }
+    }
+}
+
 // MARK: - Profile dropdown
 
 private enum TVProfileAction: Hashable {
@@ -334,15 +511,25 @@ private enum TVProfileAction: Hashable {
     case signOut
 }
 
-/// Anchored profile dropdown (§5.8): glass panel under the avatar,
-/// right-aligned to `safeArea.x`, over a page scrim. Menu/Back closes.
-private struct TVProfileDropdown: View {
+/// Anchored profile dropdown panel (§5.8): the same `glass.strong` level-1
+/// panel as the cascade, hosted by the shell under the avatar. The shell
+/// owns the scrim and Menu-to-close; this view owns only its rows and the
+/// dwell focus hand-off (focus stays on the avatar until the host bumps
+/// `focusEntryToken` on d-pad down, then lands on the first row).
+struct TVProfileDropdown: View {
     let profileName: String
     let avatar: String?
     /// Display name of the active server, shown under the profile name in
     /// the §5.8 mono header style.
     let serverHost: String?
     let isAdmin: Bool
+    /// Whether focus has entered the panel (host flips on d-pad down).
+    let entersPanel: Bool
+    /// Bumped by the host when focus should enter — lands on the first row.
+    let focusEntryToken: Int
+    /// Reports whether any row currently holds focus, so the host can drop
+    /// the avatar's focus ring once focus descends (§5.8).
+    let onPanelFocusChanged: (Bool) -> Void
     let onSwitchProfile: () -> Void
     let onWatchlist: () -> Void
     let onFavorites: () -> Void
@@ -351,22 +538,33 @@ private struct TVProfileDropdown: View {
     let onAdminDashboard: () -> Void
     let onSwitchServer: () -> Void
     let onSignOut: () -> Void
-    let onDismiss: () -> Void
 
     @FocusState private var focusedAction: TVProfileAction?
+    @State private var lastAppliedEntryToken = 0
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            Color.continuumDropdownScrim
-                .ignoresSafeArea()
+        panel
+            // Inert until the host hands focus in on d-pad down (§5.8) — the
+            // avatar keeps focus while the menu is merely open, and the down
+            // press reaches the avatar's `onMoveCommand` instead of the
+            // engine grabbing a row first.
+            .disabled(!entersPanel)
+            .onChange(of: focusEntryToken) { _, token in applyEntryToken(token) }
+            .onChange(of: focusedAction) { _, newValue in
+                onPanelFocusChanged(newValue != nil)
+            }
+            .onChange(of: entersPanel) { _, entered in
+                if !entered { focusedAction = nil }
+            }
+            .onAppear {
+                if entersPanel { applyEntryToken(focusEntryToken) }
+            }
+    }
 
-            panel
-                .padding(.trailing, ContinuumTheme.Skyline.safeAreaX)
-                .padding(.top, ContinuumTheme.Skyline.dropdownTopInset)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-        .ignoresSafeArea()
-        .onExitCommand(perform: onDismiss)
+    private func applyEntryToken(_ token: Int) {
+        guard entersPanel, token > 0, token != lastAppliedEntryToken else { return }
+        lastAppliedEntryToken = token
+        focusedAction = .switchProfile
     }
 
     private var panel: some View {
@@ -398,6 +596,7 @@ private struct TVProfileDropdown: View {
                 .foregroundStyle(Color.white.opacity(0.38))
                 .padding(.horizontal, 16)
                 .padding(.bottom, 4)
+                .accessibilityHidden(true)
         }
         .padding(ContinuumTheme.Skyline.dropdownPadding)
         .frame(width: ContinuumTheme.Skyline.dropdownWidth, alignment: .leading)
@@ -415,9 +614,8 @@ private struct TVProfileDropdown: View {
         }
         .shadow(color: .black.opacity(0.45), radius: 34, y: 18)
         .focusSection()
-        .onAppear {
-            focusedAction = .switchProfile
-        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Profile menu")
     }
 
     private var header: some View {

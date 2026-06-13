@@ -20,6 +20,18 @@ enum TVLibraryPill: String, Hashable, CaseIterable {
         }
     }
 
+    /// SF Symbol shown beside the section name in the cascade flyout
+    /// (§5.3). The pill row itself stays text-only per the mockups.
+    var systemImage: String {
+        switch self {
+        case .browse: return "rectangle.stack"
+        case .collections: return "square.stack.3d.up"
+        case .genres: return "theatermasks"
+        case .aToZ: return "textformat.abc"
+        case .recentlyAdded: return "clock.arrow.circlepath"
+        }
+    }
+
     /// Per-type pill sets. `Browse` is always first and the landing
     /// default; sets stay ≤5 by design so the row never scrolls.
     static func set(for type: TVLibraryTabType) -> [TVLibraryPill] {

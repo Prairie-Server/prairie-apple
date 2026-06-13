@@ -17,9 +17,16 @@ struct TVLibraryTypeTabView: View {
     let type: TVLibraryTabType
     /// Libraries of `type` visible to this profile, ordered by `sortOrder`.
     let libraries: [Library]
+    /// The library this tab is currently scoped to (§3.1). Resolved by the
+    /// shell from the persisted per-profile scope, or the first library on
+    /// cold start. The cascade selector (§5.3) switches it.
+    let activeLibrary: Library?
     /// Pill selection lives in the shell so it survives tab switches
     /// within a session (§8); cold start always lands on Browse.
     @Binding var selectedPill: TVLibraryPill
+    /// Item count for the scoped library, if the shell could resolve one
+    /// (the `Library` model carries none — §G). Drives the caption suffix.
+    var scopeItemCount: Int? = nil
     var focusRequest: Int = 0
     var isTopMenuFocused: Bool = false
     let onTopMenuFocusRequest: (() -> Void)?
@@ -27,11 +34,6 @@ struct TVLibraryTypeTabView: View {
     /// Imperative kick into the pill row: tab entry while a grid pill is
     /// restored, and the content zone's boundary hand-up.
     @State private var pillRowFocusRequest = 0
-
-    // Skyline Phase 3: scope dropdown — until the cascading selector and
-    // the merged `All <Type>` scope land, a type with multiple libraries
-    // scopes to the first one by sortOrder.
-    private var activeLibrary: Library? { libraries.first }
 
     private var pills: [TVLibraryPill] { TVLibraryPill.set(for: type) }
 
@@ -68,10 +70,27 @@ struct TVLibraryTypeTabView: View {
         .onChange(of: focusRequest) { _, request in routeEntryFocus(request) }
     }
 
-    /// Scope caption: the active library's name. Item count and
-    /// freshness join with the Phase 3 scope work.
+    /// Scope caption (§5.2): the active library's name, plus an item-count
+    /// suffix when the shell could resolve one (e.g. `Theatrical · 1,284
+    /// films`). The `Library` model carries no count, so the suffix is
+    /// best-effort from the loaded grid total and is omitted — never
+    /// fabricated — when unavailable (§G). No freshness timestamp exists in
+    /// the models, so none is shown.
     private var scopeCaption: String? {
-        activeLibrary?.name
+        guard let name = activeLibrary?.name else { return nil }
+        guard let count = scopeItemCount, count > 0 else { return name }
+        return "\(name) · \(count.formatted(.number)) \(countNoun(count))"
+    }
+
+    /// Type-appropriate noun for the count suffix.
+    private func countNoun(_ count: Int) -> String {
+        let plural = count != 1
+        switch type {
+        case .movies: return plural ? "films" : "film"
+        case .series: return plural ? "shows" : "show"
+        case .music: return plural ? "albums" : "album"
+        case .audiobooks: return plural ? "books" : "book"
+        }
     }
 
     @ViewBuilder
