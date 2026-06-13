@@ -72,6 +72,8 @@ struct TVLibraryPillRow: View {
     @FocusState private var focusedPill: TVLibraryPill?
     @State private var lastAppliedFocusRequest = 0
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     private var rowHasFocus: Bool { focusedPill != nil }
 
     var body: some View {
@@ -134,7 +136,8 @@ struct TVLibraryPillRow: View {
                     )
                 }
                 .focusEffectDisabled()
-                .animation(ContinuumTheme.springAnimation, value: isInverted)
+                // Reduce Motion snaps the pill inversion (§4.2 acceptance).
+                .animation(reduceMotion ? nil : ContinuumTheme.springAnimation, value: isInverted)
         }
         .buttonStyle(.continuumFlat)
         .focused($focusedPill, equals: pill)

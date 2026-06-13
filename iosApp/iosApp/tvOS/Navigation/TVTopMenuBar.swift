@@ -133,6 +133,8 @@ struct TVTopMenuBar: View {
     /// move so bar sweeps never open a panel (§5.3, Open-Q5/Q7).
     @State private var dwellTask: Task<Void, Never>?
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         ZStack(alignment: .top) {
             tabCluster
@@ -151,7 +153,9 @@ struct TVTopMenuBar: View {
         .frame(maxWidth: .infinity, alignment: .top)
         .ignoresSafeArea(edges: [.top, .horizontal])
         .opacity(isMenuFocused ? 1.0 : ContinuumTheme.Skyline.barDimmedOpacity)
-        .animation(.easeInOut(duration: ContinuumTheme.normalDuration), value: isMenuFocused)
+        // Reduce Motion snaps the bar dim/restore as focus enters/leaves
+        // the content zone (§5.1; §4.2 acceptance: no drift animations).
+        .animation(reduceMotion ? nil : .easeInOut(duration: ContinuumTheme.normalDuration), value: isMenuFocused)
         .focusSection()
         .disabled(isFocusSuppressed)
         // Menu while a panel is dwell-open (focus still on the tab/avatar)
@@ -320,9 +324,10 @@ struct TVTopMenuBar: View {
                 Circle()
                     .strokeBorder(Color.white, lineWidth: isFocused ? 3 : 0)
             }
-            .scaleEffect(isFocused ? 1.05 : 1.0)
+            // Reduce Motion drops the focus scale so the avatar snaps (§4.2).
+            .scaleEffect(isFocused && !reduceMotion ? 1.05 : 1.0)
             .focusEffectDisabled()
-            .animation(ContinuumTheme.springAnimation, value: isFocused)
+            .animation(reduceMotion ? nil : ContinuumTheme.springAnimation, value: isFocused)
         }
         .buttonStyle(.continuumFlat)
         .focused($focusedItem, equals: .profile)
@@ -423,6 +428,8 @@ private struct TVTopMenuCapsuleChrome: ViewModifier {
     let isSelected: Bool
     let isFocused: Bool
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     func body(content: Content) -> some View {
         content
             .background(Capsule().fill(fillColor))
@@ -430,8 +437,9 @@ private struct TVTopMenuCapsuleChrome: ViewModifier {
                 Capsule().strokeBorder(borderColor, lineWidth: 1)
             }
             .focusEffectDisabled()
-            .animation(ContinuumTheme.springAnimation, value: isFocused)
-            .animation(.easeInOut(duration: 0.18), value: isSelected)
+            // Reduce Motion snaps the tab/search capsule inversion (§4.2).
+            .animation(reduceMotion ? nil : ContinuumTheme.springAnimation, value: isFocused)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: isSelected)
     }
 
     private var fillColor: Color {
@@ -695,6 +703,7 @@ private struct TVProfileMenuButtonBody: View {
     let isDestructive: Bool
 
     @Environment(\.isFocused) private var isFocused
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         configuration.label
@@ -707,8 +716,9 @@ private struct TVProfileMenuButtonBody: View {
             )
             .opacity(configuration.isPressed ? 0.75 : 1.0)
             .focusEffectDisabled()
-            .animation(ContinuumTheme.springAnimation, value: isFocused)
-            .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: configuration.isPressed)
+            // Reduce Motion snaps the profile-menu row inversion (§4.2).
+            .animation(reduceMotion ? nil : ContinuumTheme.springAnimation, value: isFocused)
+            .animation(reduceMotion ? nil : .easeOut(duration: ContinuumTheme.fastDuration), value: configuration.isPressed)
     }
 
     private var foregroundColor: Color {

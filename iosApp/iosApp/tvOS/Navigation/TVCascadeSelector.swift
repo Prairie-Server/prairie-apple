@@ -420,6 +420,8 @@ private struct TVCascadeLibraryRowLabel: View {
     let trailingGlyph: String
     let isFocused: Bool
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         HStack(spacing: 14) {
             Image(systemName: systemImage)
@@ -451,7 +453,8 @@ private struct TVCascadeLibraryRowLabel: View {
                 .fill(isFocused ? Color.white : Color.clear)
         )
         .focusEffectDisabled()
-        .animation(ContinuumTheme.springAnimation, value: isFocused)
+        // Reduce Motion snaps the cascade row inversion (§4.2 acceptance).
+        .animation(reduceMotion ? nil : ContinuumTheme.springAnimation, value: isFocused)
     }
 
     private var foreground: Color {
@@ -465,6 +468,8 @@ private struct TVCascadeSectionRowLabel: View {
     let title: String
     let systemImage: String
     let isFocused: Bool
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 12) {
@@ -486,7 +491,8 @@ private struct TVCascadeSectionRowLabel: View {
                 .fill(isFocused ? Color.white : Color.clear)
         )
         .focusEffectDisabled()
-        .animation(ContinuumTheme.springAnimation, value: isFocused)
+        // Reduce Motion snaps the flyout row inversion (§4.2 acceptance).
+        .animation(reduceMotion ? nil : ContinuumTheme.springAnimation, value: isFocused)
     }
 }
 

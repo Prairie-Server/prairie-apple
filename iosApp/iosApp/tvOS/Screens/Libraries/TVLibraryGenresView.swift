@@ -108,6 +108,7 @@ private struct TVGenreChipButtonBody: View {
     let configuration: ButtonStyleConfiguration
 
     @Environment(\.isFocused) private var isFocused
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         configuration.label
@@ -121,11 +122,13 @@ private struct TVGenreChipButtonBody: View {
                     lineWidth: 1
                 )
             }
-            .scaleEffect(isFocused ? 1.05 : 1.0)
+            // Reduce Motion drops the focus scale entirely so the chip
+            // inversion snaps (§4.2 acceptance: no drift animations).
+            .scaleEffect(isFocused && !reduceMotion ? 1.05 : 1.0)
             .opacity(configuration.isPressed ? 0.8 : 1.0)
             .focusEffectDisabled()
-            .animation(ContinuumTheme.springAnimation, value: isFocused)
-            .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: configuration.isPressed)
+            .animation(reduceMotion ? nil : ContinuumTheme.springAnimation, value: isFocused)
+            .animation(reduceMotion ? nil : .easeOut(duration: ContinuumTheme.fastDuration), value: configuration.isPressed)
     }
 }
 #endif

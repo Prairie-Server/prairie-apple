@@ -21,6 +21,8 @@ struct TVAlphabetRail: View {
     /// letter flips this non-nil and the rail expands.
     @FocusState private var focusedLetter: String?
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     private var isExpanded: Bool { focusedLetter != nil }
 
     private let letters: [String] = {
@@ -69,7 +71,9 @@ struct TVAlphabetRail: View {
         }
         .frame(width: isExpanded ? 96 : 18)
         .frame(maxHeight: .infinity)
-        .animation(.easeOut(duration: 0.18), value: isExpanded)
+        // Reduce Motion snaps the collapse/expand instead of sliding the
+        // rail width (§4.2 acceptance: no drift animations).
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: isExpanded)
         .focusSection()
     }
 
@@ -115,6 +119,7 @@ private struct LetterButtonBody: View {
     let isSelected: Bool
 
     @Environment(\.isFocused) private var isFocused
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         configuration.label
@@ -122,8 +127,9 @@ private struct LetterButtonBody: View {
             .background(background)
             .clipShape(Capsule())
             .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
-            .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
-            .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: configuration.isPressed)
+            // Reduce Motion snaps the focus/press treatment (§4.2 acceptance).
+            .animation(reduceMotion ? nil : .easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
+            .animation(reduceMotion ? nil : .easeOut(duration: ContinuumTheme.fastDuration), value: configuration.isPressed)
     }
 
     private var foreground: Color {

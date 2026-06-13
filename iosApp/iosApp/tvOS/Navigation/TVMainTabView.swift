@@ -557,7 +557,7 @@ struct TVMainTabView: View {
         panelReturnFocus = target
         guard !isTopMenuFocused else { return }
 
-        withAnimation(ContinuumTheme.springAnimation) {
+        withAnimation(reduceMotion ? nil : ContinuumTheme.springAnimation) {
             isTopMenuFocusSuppressed = false
             topMenuFocusRequest += 1
         }
@@ -566,7 +566,7 @@ struct TVMainTabView: View {
     private func returnToHomeInMenu() {
         selectedRoot = .home
         panelReturnFocus = nil
-        withAnimation(ContinuumTheme.springAnimation) {
+        withAnimation(reduceMotion ? nil : ContinuumTheme.springAnimation) {
             // Un-suppress before requesting focus: requestMenuFocus drops the
             // request while the menu is suppressed, which could leave the
             // Home button unfocused after the exit-to-home gesture.
