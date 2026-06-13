@@ -20,6 +20,8 @@ struct SectionRow: View {
     /// Optional poster/square card width forwarded to `MediaRow` —
     /// Skyline's dense landing rows (§5.6) pass 208.
     var cardWidth: CGFloat? = nil
+    /// Down at the row boundary — forwarded to `MediaRow` for the section pager.
+    var onMoveDown: (() -> Void)? = nil
 
     private var isContinueWatching: Bool {
         section.sectionType == "continue_watching" || section.sectionType == "in_progress"
@@ -72,7 +74,8 @@ struct SectionRow: View {
             onSetWatched: { setWatched($0, played: $1) },
             onMoveUp: onMoveUp,
             onItemFocus: onItemFocus,
-            cardWidth: cardWidth
+            cardWidth: cardWidth,
+            onMoveDown: onMoveDown
         )
     }
 

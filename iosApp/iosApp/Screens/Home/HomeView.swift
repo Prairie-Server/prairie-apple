@@ -35,10 +35,17 @@ struct HomeView: View {
     /// Entry tokens that arrived before any row existed to claim them —
     /// sections mount async, so the initial hand-down would land on nothing.
     @State private var pendingHomeFocusRequest: Int?
-    /// Token handed to row 1 so its first card claims focus on entry.
+    /// Token handed to the visible section row so its first card claims
+    /// focus on entry and on every page change.
     @State private var rowFocusToken = 0
+    /// The section currently shown in the bottom band. Skyline pages one
+    /// section at a time (§6.1, revised) rather than scrolling, so the
+    /// focus engine never scrolls the row and it stays put while moving
+    /// across cards.
+    @State private var sectionIndex = 0
     /// Debounced focused-card state driving the marquee + backdrop.
     @State private var marqueeModel = TVFocusMarqueeModel()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     #endif
     @Environment(AppRouter.self) private var router
     @Environment(AudioPlaybackStore.self) private var audioStore
@@ -71,23 +78,14 @@ struct HomeView: View {
                 crossfadeDuration: ContinuumTheme.Skyline.marqueeCrossfadeDuration
             )
 
-            // The rows live in a frame that begins at the §5.7 row slot, so
-            // the scroll view and the marquee never share a coordinate
-            // space — focusing the first card can't overscroll the row up
-            // under the marquee (a top inset/padding doesn't constrain the
-            // focus engine's scroll-to-visible; a separate frame does). The
-            // top spacer is non-interactive and just shows the backdrop
-            // through to the marquee band.
-            VStack(spacing: 0) {
-                Color.clear
-                    .frame(height: ContinuumTheme.Skyline.homeFirstRowTop)
-                    .allowsHitTesting(false)
+            // One section at a time, pinned to the bottom band. Because
+            // there is no scroll view, the focus engine never scrolls the
+            // row — it stays put while moving across cards. Up/Down page
+            // sections explicitly (see scrollContent).
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                content
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-
-            // Floats over the reserved band; never focusable or hit-testable.
+            // Floats over the band above the row; never focusable or hit-testable.
             TVFocusMarquee(
                 content: marqueeModel.content,
                 enrichment: marqueeModel.enrichment,
@@ -313,40 +311,39 @@ struct HomeView: View {
     }
 
     #if os(tvOS)
-    /// Rows-only scroll under the fixed marquee (§6.1): no carousel, no
-    /// dots, no hero buttons. Each row fills one viewport-sized slot,
-    /// bottom-aligned, so the focused section sits at the bottom of the
-    /// screen and exactly one section shows at a time — moving focus
-    /// down pages the next section in with a single smooth scroll.
+    /// One section at a time (§6.1, revised): only the section at
+    /// `sectionIndex` renders, pinned to the bottom band. No scroll view,
+    /// so the focus engine can't move the row when navigating across
+    /// cards — it stays put. Up/Down page sections explicitly and the
+    /// swap crossfades.
+    @ViewBuilder
     private var scrollContent: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            LazyVStack(spacing: 0, pinnedViews: []) {
-                ForEach(Array(displayedSections.enumerated()), id: \.element.id) { index, section in
-                    SectionRow(
-                        section: section,
-                        onItemTap: { navigateToDetail($0) },
-                        prefersDefaultFocusOnFirstItem: index == 0,
-                        focusRequest: index == 0 ? rowFocusToken : 0,
-                        onMoveUp: index == 0 ? onTopMenuFocusRequest : nil,
-                        onItemFocus: { item in
-                            marqueeModel.preview(TVMarqueeContent(item: item, rowTitle: section.title))
-                        },
-                        cardWidth: ContinuumTheme.Skyline.densePosterCardWidth
-                    )
-                    // Natural height first — without it the slot proposal
-                    // stretches the row's inner scroll view and strands the
-                    // header far above its cards.
-                    .fixedSize(horizontal: false, vertical: true)
-                    .containerRelativeFrame(.vertical, alignment: .bottom)
-                    // Identity stays keyed on the section id alone so
-                    // late-arriving rows (the folded recommendations)
-                    // can insert above without rebuilding — and
-                    // potentially defocusing — the rows already on
-                    // screen.
-                    .id(HomeFocusTarget.row(section.id))
-                }
+        let sections = displayedSections
+        ZStack(alignment: .bottom) {
+            if sections.indices.contains(sectionIndex) {
+                let section = sections[sectionIndex]
+                SectionRow(
+                    section: section,
+                    onItemTap: { navigateToDetail($0) },
+                    prefersDefaultFocusOnFirstItem: true,
+                    focusRequest: rowFocusToken,
+                    onMoveUp: sectionIndex == 0 ? onTopMenuFocusRequest : { pageSections(by: -1) },
+                    onItemFocus: { item in
+                        marqueeModel.preview(TVMarqueeContent(item: item, rowTitle: section.title))
+                    },
+                    cardWidth: ContinuumTheme.Skyline.densePosterCardWidth,
+                    onMoveDown: { pageSections(by: 1) }
+                )
+                .padding(.bottom, ContinuumTheme.Skyline.rowBandBottomInset)
+                .id(section.id)
+                .transition(.opacity)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .animation(
+            reduceMotion ? nil : .easeInOut(duration: ContinuumTheme.normalDuration),
+            value: sectionIndex
+        )
     }
     #else
     private var scrollContent: some View {
@@ -468,6 +465,19 @@ struct HomeView: View {
         let wasDeferred = pendingHomeFocusRequest != nil
         pendingHomeFocusRequest = nil
         if wasDeferred, isTopMenuFocused { return }
+        // Re-entry always lands on the first section's first card.
+        sectionIndex = 0
+        rowFocusToken += 1
+    }
+
+    /// Page the visible section by ±1 (§6.1 paging). Clamps at the ends;
+    /// Up past the first section is handled by the row's onMoveUp (to the
+    /// top bar), so this only fires for in-range moves. Each page hands
+    /// focus to the new section's first card via the focus token.
+    private func pageSections(by delta: Int) {
+        let target = sectionIndex + delta
+        guard displayedSections.indices.contains(target) else { return }
+        sectionIndex = target
         rowFocusToken += 1
     }
     #endif

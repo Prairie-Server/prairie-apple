@@ -211,6 +211,10 @@ struct ContinuumTheme {
         static let homeFirstRowTop: CGFloat = 535
         /// Top of the row band on a library Browse landing.
         static let libraryFirstRowTop: CGFloat = 510
+        /// Bottom inset for the row band so the focused row's card
+        /// captions clear the tvOS bottom overscan instead of clipping
+        /// at the screen edge. The rows bottom-align to this line.
+        static let rowBandBottomInset: CGFloat = 90
         /// Dense poster card (§5.6) used on Browse landing rows so two
         /// rows + marquee fit above the fold.
         static let densePosterCardWidth: CGFloat = 208

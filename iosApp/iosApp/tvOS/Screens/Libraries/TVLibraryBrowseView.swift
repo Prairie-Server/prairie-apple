@@ -37,15 +37,39 @@ struct TVLibraryBrowseView: View {
     /// would otherwise land on nothing.
     @State private var hasPendingFocusClaim = false
     @State private var lastShellFocusRequest = 0
-    /// Token handed to the primary row so its first card claims focus.
+    /// Token handed to the visible row so its first card claims focus on
+    /// entry and on every page change.
     @State private var contentFocusToken = 0
+    /// The page currently shown in the bottom band. Browse pages one
+    /// section at a time (no scroll view), so the focus engine never
+    /// scrolls the row and it stays put while moving across cards.
+    @State private var pageIndex = 0
 
     @Environment(AppRouter.self) private var router
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     // MARK: - Derived
 
     private var contentSections: [ResolvedSection] {
         sections.filter { !$0.isFeatured && !$0.items.isEmpty }
+    }
+
+    /// One entry per swipeable page: the item rows (§6.2 puts the items
+    /// row first) followed by the inline Collections shelf when present.
+    private enum BrowsePage {
+        case section(ResolvedSection)
+        case collections
+    }
+
+    private var pages: [BrowsePage] {
+        var pages = contentSections.map(BrowsePage.section)
+        if !rowCollections.isEmpty {
+            // §6.2: Collections follows the first items row; with no item
+            // rows it leads.
+            let insertAt = pages.isEmpty ? 0 : 1
+            pages.insert(.collections, at: insertAt)
+        }
+        return pages
     }
 
     private var hasFocusableContent: Bool {
@@ -102,71 +126,65 @@ struct TVLibraryBrowseView: View {
 
     // MARK: - Layout
 
-    /// Rows-only scroll under the fixed marquee and pill row. Each row
-    /// fills one viewport-sized slot, bottom-aligned, so the focused
-    /// section sits at the bottom of the screen and exactly one section
-    /// shows at a time — moving focus down pages the next section in
-    /// with a single smooth scroll.
+    /// One page at a time, pinned to the bottom band. No scroll view, so
+    /// the focus engine never scrolls the row when moving across cards.
+    /// Up/Down page sections explicitly and the swap crossfades.
+    @ViewBuilder
     private var rowsContent: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            LazyVStack(spacing: 0, pinnedViews: []) {
-                if isLoadingSections && sections.isEmpty {
-                    Color.clear
-                        .frame(maxWidth: .infinity, minHeight: 300)
-                } else if let error = sectionsError, sections.isEmpty {
-                    ErrorView(state: error, onRetry: { Task { await loadContent() } })
-                } else if !hasFocusableContent {
-                    emptyHint
-                } else {
-                    rows
-                }
-            }
+        if isLoadingSections && sections.isEmpty {
+            Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let error = sectionsError, sections.isEmpty {
+            ErrorView(state: error, onRetry: { Task { await loadContent() } })
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if !hasFocusableContent {
+            emptyHint
+        } else {
+            pagedRows
         }
     }
 
     @ViewBuilder
-    private var rows: some View {
-        ForEach(Array(contentSections.enumerated()), id: \.element.id) { index, section in
-            // Row 1 is always an items row (§6.2) so entry focus gives the
-            // marquee something rich to preview; it takes the imperative
-            // entry kick and the boundary hand-up to the pill row.
+    private var pagedRows: some View {
+        let pages = pages
+        ZStack(alignment: .bottom) {
+            if pages.indices.contains(pageIndex) {
+                pageRow(for: pages[pageIndex])
+                    .padding(.bottom, ContinuumTheme.Skyline.rowBandBottomInset)
+                    .id(pageKey(pages[pageIndex]))
+                    .transition(.opacity)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .animation(
+            reduceMotion ? nil : .easeInOut(duration: ContinuumTheme.normalDuration),
+            value: pageIndex
+        )
+    }
+
+    @ViewBuilder
+    private func pageRow(for page: BrowsePage) -> some View {
+        switch page {
+        case .section(let section):
+            // Row 1 is an items row (§6.2) so entry focus gives the
+            // marquee something rich to preview.
             SectionRow(
                 section: section,
                 onItemTap: { router.navigate(to: .itemDetail(contentId: $0)) },
-                prefersDefaultFocusOnFirstItem: index == 0,
-                focusRequest: index == 0 ? contentFocusToken : 0,
-                onMoveUp: index == 0 ? onMoveUp : nil,
+                prefersDefaultFocusOnFirstItem: true,
+                focusRequest: contentFocusToken,
+                onMoveUp: pageIndex == 0 ? onMoveUp : { pageRows(by: -1) },
                 onItemFocus: { item in
                     marqueeModel.preview(TVMarqueeContent(item: item, rowTitle: section.title))
                 },
-                cardWidth: ContinuumTheme.Skyline.densePosterCardWidth
+                cardWidth: ContinuumTheme.Skyline.densePosterCardWidth,
+                onMoveDown: { pageRows(by: 1) }
             )
-            // Natural height first — without it the slot proposal
-            // stretches the row's inner scroll view and strands the
-            // header far above its cards.
-            .fixedSize(horizontal: false, vertical: true)
-            .containerRelativeFrame(.vertical, alignment: .bottom)
-            .id(section.id)
-
-            if index == 0 {
-                collectionsRow(isPrimary: false)
-            }
-        }
-
-        // No item rows at all → the collections row leads and takes the
-        // entry focus claim instead.
-        if contentSections.isEmpty {
-            collectionsRow(isPrimary: true)
-        }
-    }
-
-    @ViewBuilder
-    private func collectionsRow(isPrimary: Bool) -> some View {
-        if !rowCollections.isEmpty {
+        case .collections:
             TVLibraryCollectionsRow(
                 collections: rowCollections,
-                focusRequest: isPrimary ? contentFocusToken : 0,
-                onMoveUp: isPrimary ? onMoveUp : nil,
+                focusRequest: contentFocusToken,
+                onMoveUp: pageIndex == 0 ? onMoveUp : { pageRows(by: -1) },
+                onMoveDown: { pageRows(by: 1) },
                 onOpen: { collection in
                     router.navigate(to: .libraryCollection(
                         libraryId: library.id,
@@ -180,9 +198,23 @@ struct TVLibraryBrowseView: View {
                     marqueeModel.preview(TVMarqueeContent(collection: collection, rowTitle: "Collections"))
                 }
             )
-            .fixedSize(horizontal: false, vertical: true)
-            .containerRelativeFrame(.vertical, alignment: .bottom)
         }
+    }
+
+    private func pageKey(_ page: BrowsePage) -> String {
+        switch page {
+        case .section(let section): return "section:\(section.id)"
+        case .collections: return "collections"
+        }
+    }
+
+    /// Page the visible row by ±1. Clamps at the ends; Up past the first
+    /// page is handled by the row's onMoveUp (to the pill row).
+    private func pageRows(by delta: Int) {
+        let target = pageIndex + delta
+        guard pages.indices.contains(target) else { return }
+        pageIndex = target
+        contentFocusToken += 1
     }
 
     private var emptyHint: some View {
@@ -221,6 +253,8 @@ struct TVLibraryBrowseView: View {
             return
         }
         hasPendingFocusClaim = false
+        // Entry always lands on the first page.
+        pageIndex = 0
         contentFocusToken += 1
     }
 
@@ -264,13 +298,18 @@ private struct TVLibraryCollectionsRow: View {
     /// Programmatic focus kick for the rare collections-only library —
     /// mirrors `MediaRow.focusRequest`.
     var focusRequest: Int = 0
-    /// Boundary hand-up, supplied only when this row is the primary row.
+    /// Boundary hand-up to the previous page / pill row.
     var onMoveUp: (() -> Void)? = nil
+    /// Boundary hand-down to the next page.
+    var onMoveDown: (() -> Void)? = nil
     let onOpen: (LibraryCollection) -> Void
     let onSeeAll: (() -> Void)?
     let onItemFocus: ((LibraryCollection) -> Void)?
 
     @FocusState private var focusedCardId: String?
+    /// Applied once per token so a freshly-mounted row (page swap) claims
+    /// focus on appear, not only on a `focusRequest` change.
+    @State private var lastAppliedFocusRequest = 0
 
     private let seeAllCardId = "see-all"
 
@@ -301,16 +340,21 @@ private struct TVLibraryCollectionsRow: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .focusSection()
-        .modifier(TVCollectionsRowMoveUpHandler(onMoveUp: onMoveUp))
-        .onChange(of: focusRequest) { _, request in
-            guard request > 0, let firstId = collections.first?.id else { return }
-            focusedCardId = firstId
-        }
+        .modifier(TVCollectionsRowMoveHandler(onMoveUp: onMoveUp, onMoveDown: onMoveDown))
+        .onAppear { applyFocusRequest(focusRequest) }
+        .onChange(of: focusRequest) { _, request in applyFocusRequest(request) }
         .onChange(of: focusedCardId) { _, newValue in
             guard let newValue,
                   let collection = collections.first(where: { $0.id == newValue }) else { return }
             onItemFocus?(collection)
         }
+    }
+
+    private func applyFocusRequest(_ request: Int) {
+        guard request > 0, request != lastAppliedFocusRequest,
+              let firstId = collections.first?.id else { return }
+        lastAppliedFocusRequest = request
+        focusedCardId = firstId
     }
 
     private var seeAllCard: some View {
@@ -347,18 +391,21 @@ private struct TVLibraryCollectionsRow: View {
     }
 }
 
-/// Attaches an Up-move handler only when one is supplied so a row that
-/// shouldn't hand focus up (anything but the primary row) never consumes
-/// the Up command the focus engine needs for row-to-row movement.
-private struct TVCollectionsRowMoveUpHandler: ViewModifier {
+/// Bridges the collections row's boundary up/down move commands to the
+/// host (page change), attaching `onMoveCommand` only when a handler is
+/// supplied.
+private struct TVCollectionsRowMoveHandler: ViewModifier {
     let onMoveUp: (() -> Void)?
+    let onMoveDown: (() -> Void)?
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if let onMoveUp {
+        if onMoveUp != nil || onMoveDown != nil {
             content.onMoveCommand { direction in
-                if direction == .up {
-                    onMoveUp()
+                switch direction {
+                case .up: onMoveUp?()
+                case .down: onMoveDown?()
+                default: break
                 }
             }
         } else {
