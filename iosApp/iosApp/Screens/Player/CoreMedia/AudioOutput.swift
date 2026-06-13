@@ -77,6 +77,11 @@ final class AudioEngineAudioOutput {
     private var requestHandler: (() -> Void)?
     private var feedScheduled = false
     private var outputLatency: Double = 0
+    /// Whether playback is *supposed* to be running, independent of
+    /// `engine.isRunning` (which the system can flip to false behind our
+    /// back on an output-configuration change). Guarded by `stateLock`.
+    private var intendedRunning = false
+    private var configurationChangeObserver: NSObjectProtocol?
 
     private(set) var lastErrorDescription: String?
 
@@ -97,6 +102,40 @@ final class AudioEngineAudioOutput {
         #endif
         if let audioUnit = engine.outputNode.audioUnit {
             addRenderNotify(audioUnit: audioUnit)
+        }
+        configurationChangeObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleEngineConfigurationChange()
+        }
+    }
+
+    deinit {
+        if let token = configurationChangeObserver {
+            NotificationCenter.default.removeObserver(token)
+        }
+    }
+
+    /// `AVAudioEngine` stops and uninitializes itself when the output
+    /// hardware reconfigures (device swap, channel-count or sample-rate
+    /// renegotiation), then posts this notification. Without a rebuild the
+    /// engine stays silently stopped until the next stream-format change
+    /// happens to force a re-prepare. The `isRunning` guard makes this
+    /// idempotent: a legit change always arrives with the engine stopped,
+    /// so an echo posted after our own rebuild+resume is a no-op.
+    private func handleEngineConfigurationChange() {
+        guard !engine.isRunning else { return }
+        stateLock.lock()
+        let format = sourceNodeAudioFormat
+        sourceNodeAudioFormat = nil // force prepare() to rebuild the graph
+        let resume = intendedRunning
+        stateLock.unlock()
+        guard let format else { return }
+        prepare(audioFormat: format)
+        if resume {
+            play()
         }
     }
 
@@ -201,6 +240,9 @@ final class AudioEngineAudioOutput {
     }
 
     func play() {
+        stateLock.lock()
+        intendedRunning = true
+        stateLock.unlock()
         if !engine.isRunning {
             do {
                 try engine.start()
@@ -219,6 +261,9 @@ final class AudioEngineAudioOutput {
     }
 
     func pause() {
+        stateLock.lock()
+        intendedRunning = false
+        stateLock.unlock()
         if engine.isRunning {
             engine.pause()
         }
@@ -238,6 +283,9 @@ final class AudioEngineAudioOutput {
     }
 
     func stop() {
+        stateLock.lock()
+        intendedRunning = false
+        stateLock.unlock()
         stopRequestingMediaData()
         flush()
         engine.pause()

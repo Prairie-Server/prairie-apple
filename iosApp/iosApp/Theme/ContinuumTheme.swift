@@ -178,8 +178,6 @@ struct ContinuumTheme {
         static let marqueeTopLibrary: CGFloat = 246
         /// Marquee content block width.
         static let marqueeContentWidth: CGFloat = 880
-        static let marqueeEyebrowSizeHome: CGFloat = 17
-        static let marqueeEyebrowSizeLibrary: CGFloat = 16
         static let marqueeTitleSizeHome: CGFloat = 84
         static let marqueeTitleSizeLibrary: CGFloat = 66
         static let marqueeMetaSizeHome: CGFloat = 20
@@ -187,17 +185,15 @@ struct ContinuumTheme {
         static let marqueeSynopsisSize: CGFloat = 22
         /// Synopsis column cap (§4.1) — narrower than the content block.
         static let marqueeSynopsisMaxWidth: CGFloat = 780
-        /// `marquee.tick` dash before the eyebrow (§4): 26×3, r 2.
-        static let marqueeTickSize = CGSize(width: 26, height: 3)
-        static let marqueeTickCornerRadius: CGFloat = 2
-        /// Cached server logo art caps in the marquee title slot. The
-        /// guide's 880×200 cap (§5.4) overflows the §5.7 row slot once
-        /// the meta line and synopsis stack under a full-height logo, so
-        /// each scale caps the logo at its 2-line text-title height and
-        /// the synopsis clamps to 1 line while a logo is shown.
+        /// Cached server logo art caps in the marquee title slot. With
+        /// rows paging one section at a time along the bottom of the
+        /// screen, Home affords the full §5.4 cap; the library scale
+        /// stays tighter because the pill row eats into its band. While
+        /// a logo is shown the synopsis drops a line, like a wrapped
+        /// title.
         static let marqueeLogoMaxWidth: CGFloat = 880
-        static let marqueeLogoMaxHeightHome: CGFloat = 165
-        static let marqueeLogoMaxHeightLibrary: CGFloat = 120
+        static let marqueeLogoMaxHeightHome: CGFloat = 200
+        static let marqueeLogoMaxHeightLibrary: CGFloat = 150
         /// Codec/HDR badge chip label size (§4.1).
         static let marqueeBadgeSize: CGFloat = 15
         /// Focus must rest this long before the marquee swaps (§4.2) —
@@ -206,12 +202,14 @@ struct ContinuumTheme {
         /// Marquee text + backdrop crossfade duration (§4.2).
         static let marqueeCrossfadeDuration: Double = 0.24
 
-        // MARK: Row rhythm under the marquee (§5.7)
+        // MARK: Row band under the marquee (§5.7, revised)
 
-        /// First content row top on Home — marquee above, second row
-        /// peeking at the fold.
-        static let homeFirstRowTop: CGFloat = 545
-        /// First content row top on a library Browse landing.
+        /// Top of the row band on Home. Rows page one section at a time
+        /// in viewport-sized slots, bottom-aligned so the focused row
+        /// sits at the bottom of the screen; the band must be tall
+        /// enough for the tallest row (a full poster row ≈ 585).
+        static let homeFirstRowTop: CGFloat = 535
+        /// Top of the row band on a library Browse landing.
         static let libraryFirstRowTop: CGFloat = 510
         /// Dense poster card (§5.6) used on Browse landing rows so two
         /// rows + marquee fit above the fold.

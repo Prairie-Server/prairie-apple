@@ -81,7 +81,11 @@ struct TVLibraryBrowseView: View {
             }
 
             // Floats over the reserved band; never focusable or hit-testable.
-            TVFocusMarquee(content: marqueeModel.content, scale: .library)
+            TVFocusMarquee(
+                content: marqueeModel.content,
+                enrichment: marqueeModel.enrichment,
+                scale: .library
+            )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task {
@@ -98,13 +102,14 @@ struct TVLibraryBrowseView: View {
 
     // MARK: - Layout
 
-    /// Rows-only scroll under the fixed marquee and pill row. The enclosing
-    /// VStack places this scroll view in a frame that starts at the §5.7
-    /// row slot, so row 1 rests just below the marquee and the focus engine
-    /// can't pull it higher.
+    /// Rows-only scroll under the fixed marquee and pill row. Each row
+    /// fills one viewport-sized slot, bottom-aligned, so the focused
+    /// section sits at the bottom of the screen and exactly one section
+    /// shows at a time — moving focus down pages the next section in
+    /// with a single smooth scroll.
     private var rowsContent: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            LazyVStack(spacing: 30, pinnedViews: []) {
+            LazyVStack(spacing: 0, pinnedViews: []) {
                 if isLoadingSections && sections.isEmpty {
                     Color.clear
                         .frame(maxWidth: .infinity, minHeight: 300)
@@ -116,7 +121,6 @@ struct TVLibraryBrowseView: View {
                     rows
                 }
             }
-            .padding(.bottom, ContinuumTheme.largePadding)
         }
     }
 
@@ -137,6 +141,12 @@ struct TVLibraryBrowseView: View {
                 },
                 cardWidth: ContinuumTheme.Skyline.densePosterCardWidth
             )
+            // Natural height first — without it the slot proposal
+            // stretches the row's inner scroll view and strands the
+            // header far above its cards.
+            .fixedSize(horizontal: false, vertical: true)
+            .containerRelativeFrame(.vertical, alignment: .bottom)
+            .id(section.id)
 
             if index == 0 {
                 collectionsRow(isPrimary: false)
@@ -170,6 +180,8 @@ struct TVLibraryBrowseView: View {
                     marqueeModel.preview(TVMarqueeContent(collection: collection, rowTitle: "Collections"))
                 }
             )
+            .fixedSize(horizontal: false, vertical: true)
+            .containerRelativeFrame(.vertical, alignment: .bottom)
         }
     }
 

@@ -88,7 +88,11 @@ struct HomeView: View {
             }
 
             // Floats over the reserved band; never focusable or hit-testable.
-            TVFocusMarquee(content: marqueeModel.content, scale: .home)
+            TVFocusMarquee(
+                content: marqueeModel.content,
+                enrichment: marqueeModel.enrichment,
+                scale: .home
+            )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task {
@@ -310,12 +314,13 @@ struct HomeView: View {
 
     #if os(tvOS)
     /// Rows-only scroll under the fixed marquee (§6.1): no carousel, no
-    /// dots, no hero buttons. The enclosing VStack places this scroll
-    /// view in a frame that starts at the §5.7 row slot, so row 1 rests
-    /// just below the marquee and the focus engine can't pull it higher.
+    /// dots, no hero buttons. Each row fills one viewport-sized slot,
+    /// bottom-aligned, so the focused section sits at the bottom of the
+    /// screen and exactly one section shows at a time — moving focus
+    /// down pages the next section in with a single smooth scroll.
     private var scrollContent: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            LazyVStack(spacing: sectionSpacing, pinnedViews: []) {
+            LazyVStack(spacing: 0, pinnedViews: []) {
                 ForEach(Array(displayedSections.enumerated()), id: \.element.id) { index, section in
                     SectionRow(
                         section: section,
@@ -325,8 +330,14 @@ struct HomeView: View {
                         onMoveUp: index == 0 ? onTopMenuFocusRequest : nil,
                         onItemFocus: { item in
                             marqueeModel.preview(TVMarqueeContent(item: item, rowTitle: section.title))
-                        }
+                        },
+                        cardWidth: ContinuumTheme.Skyline.densePosterCardWidth
                     )
+                    // Natural height first — without it the slot proposal
+                    // stretches the row's inner scroll view and strands the
+                    // header far above its cards.
+                    .fixedSize(horizontal: false, vertical: true)
+                    .containerRelativeFrame(.vertical, alignment: .bottom)
                     // Identity stays keyed on the section id alone so
                     // late-arriving rows (the folded recommendations)
                     // can insert above without rebuilding — and
@@ -335,7 +346,6 @@ struct HomeView: View {
                     .id(HomeFocusTarget.row(section.id))
                 }
             }
-            .padding(.bottom, ContinuumTheme.largePadding)
         }
     }
     #else
@@ -563,15 +573,11 @@ struct HomeView: View {
     }
     #endif
 
+    #if !os(tvOS)
     private var sectionSpacing: CGFloat {
-        #if os(tvOS)
-        return 30
-        #else
-        return ContinuumTheme.largePadding
-        #endif
+        ContinuumTheme.largePadding
     }
 
-    #if !os(tvOS)
     private func noFeaturedTopSpacing(topSafeAreaInset: CGFloat) -> CGFloat {
         let headerContentHeight: CGFloat = 40 + (ContinuumTheme.smallPadding * 2)
         return topSafeAreaInset + headerContentHeight + ContinuumTheme.largePadding + ContinuumTheme.smallPadding

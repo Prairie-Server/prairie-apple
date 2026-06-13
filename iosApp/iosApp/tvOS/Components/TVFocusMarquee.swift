@@ -10,19 +10,23 @@ import Nuke
 /// block on a per-item detail fetch.
 struct TVMarqueeContent: Equatable {
     /// Crossfade identity. Includes the source row so the same item
-    /// focused from a different row still swaps (the eyebrow changes).
+    /// focused from a different row still reads as a swap.
     let id: String
-    /// The source row's title (`CONTINUE WATCHING`), preceded by the
-    /// `marquee.tick` dash when rendered.
+    /// The previewed item's content id — keys the low-priority detail
+    /// enrichment (§9 backfill). `nil` for collections.
+    let contentId: String?
+    /// The source row's title (`Continue Watching`). Not rendered — the
+    /// row's own header names the source — but kept for the VoiceOver
+    /// description and crossfade identity.
     let eyebrow: String
     let title: String
     /// Optional server logo art that may replace the text title once
     /// cached — the title always renders as text first.
     let logoUrl: String?
-    /// Codec/HDR badge chips, display-formatted (`4K · DOLBY VISION · ATMOS`).
+    /// Codec/HDR + content-rating chips (`4K · DOLBY VISION · ATMOS · TV-MA`).
     let badges: [String]
     /// Dot-joined meta tokens after the badges: year · genre · runtime,
-    /// or `S2 E7 · episode title · 23 min left` for episodic items.
+    /// or `S2 E7 · episode title · 45 min · 23 min left` for episodes.
     let metaParts: [String]
     let synopsis: String?
     let backdropUrl: String?
@@ -39,26 +43,35 @@ extension TVMarqueeContent {
                 meta.append(token)
             }
             meta.append(item.title)
+            if let length = Self.lengthText(runtimeMinutes: item.runtime, durationSeconds: item.durationSeconds) {
+                meta.append(length)
+            }
             if let timeLeft = Self.timeLeftText(position: item.positionSeconds, duration: item.durationSeconds) {
                 meta.append(timeLeft)
-            } else if let runtime = Self.runtimeText(minutes: item.runtime) {
-                meta.append(runtime)
             }
         } else {
             if let year = item.year, year > 0 { meta.append(String(year)) }
             if let genre = item.genres?.first(where: { !$0.isEmpty }) { meta.append(genre) }
-            if let runtime = Self.runtimeText(minutes: item.runtime) { meta.append(runtime) }
+            if let length = Self.lengthText(runtimeMinutes: item.runtime, durationSeconds: item.durationSeconds) {
+                meta.append(length)
+            }
             if let rating = item.ratingImdb { meta.append(String(format: "%.1f", rating)) }
+        }
+
+        var badges = Self.badges(from: item.overlaySummary)
+        if let contentRating = Self.nonEmpty(item.contentRating) {
+            badges.append(contentRating.uppercased())
         }
 
         self.init(
             id: "\(rowTitle)#\(item.contentId)",
+            contentId: item.contentId,
             eyebrow: rowTitle,
             // Episodes headline with their series (`SEVERANCE`); the
             // episode itself moves to the meta line per §5.4.
             title: isEpisode ? (item.seriesTitle ?? item.title) : item.title,
             logoUrl: item.logoUrl,
-            badges: Self.badges(from: item.overlaySummary),
+            badges: badges,
             metaParts: meta,
             synopsis: item.overview,
             backdropUrl: Self.nonEmpty(item.backdropUrl) ?? item.posterUrl,
@@ -80,6 +93,7 @@ extension TVMarqueeContent {
 
         self.init(
             id: "\(rowTitle)#collection:\(collection.id)",
+            contentId: nil,
             eyebrow: rowTitle,
             title: collection.name,
             logoUrl: nil,
@@ -142,6 +156,14 @@ extension TVMarqueeContent {
         return "\(remaining) min left"
     }
 
+    /// Episode/movie length: the metadata runtime when present, else
+    /// derived from the file duration the payload already carries.
+    private static func lengthText(runtimeMinutes: Int?, durationSeconds: Double?) -> String? {
+        if let text = runtimeText(minutes: runtimeMinutes) { return text }
+        guard let durationSeconds, durationSeconds > 0 else { return nil }
+        return runtimeText(minutes: Int((durationSeconds / 60).rounded()))
+    }
+
     private static func runtimeText(minutes: Int?) -> String? {
         guard let minutes, minutes > 0 else { return nil }
         if minutes >= 60 {
@@ -155,6 +177,42 @@ extension TVMarqueeContent {
     private static func nonEmpty(_ value: String?) -> String? {
         guard let value, !value.isEmpty else { return nil }
         return value
+    }
+}
+
+// MARK: - Detail enrichment
+
+/// Fields the marquee wants but section payloads don't carry yet (§9:
+/// air date, cast) — backfilled from a cached, low-priority item-detail
+/// fetch that never blocks or delays the marquee itself.
+struct TVMarqueeEnrichment: Equatable {
+    /// `Aired Mar 12, 2026 · Pedro Pascal, Bella Ramsey, Anna Torv`
+    let detailLine: String?
+
+    init(detail: ItemDetail) {
+        var parts: [String] = []
+        if let airDate = Self.airDateText(detail.airDate) {
+            parts.append("Aired \(airDate)")
+        }
+        let cast = (detail.cast ?? [])
+            .sorted { ($0.order ?? Int.max) < ($1.order ?? Int.max) }
+            .prefix(3)
+            .map(\.name)
+            .filter { !$0.isEmpty }
+        if !cast.isEmpty {
+            parts.append(cast.joined(separator: ", "))
+        }
+        detailLine = parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// Mirrors PlayerView's air-date formatting, with a date-only
+    /// fallback for the server's `yyyy-MM-dd` strings.
+    private static func airDateText(_ raw: String?) -> String? {
+        guard let raw, !raw.isEmpty else { return nil }
+        let date = (try? Date(raw, strategy: .iso8601))
+            ?? (try? Date(raw, strategy: .iso8601.year().month().day()))
+        guard let date else { return nil }
+        return date.formatted(date: .abbreviated, time: .omitted)
     }
 }
 
@@ -172,13 +230,20 @@ final class TVFocusMarqueeModel {
     /// The rested, currently-displayed content. `nil` until the first
     /// row reports focus — the marquee region stays scrim-only (§8).
     private(set) var content: TVMarqueeContent?
+    /// Detail backfill (§9: air date, cast) for the displayed content.
+    /// Arrives after a low-priority fetch and fades in; `nil` until then.
+    private(set) var enrichment: TVMarqueeEnrichment?
     /// Dominant-color wash behind the backdrop, sampled per displayed
     /// backdrop (same palette pipeline the hero carousel used).
     private(set) var tintColor: Color = .continuumBackground
 
     private var debounceTask: Task<Void, Never>?
     private var tintTask: Task<Void, Never>?
+    private var enrichTask: Task<Void, Never>?
     private var lastSampledTintURL: String?
+    /// Per-item enrichment cache so scrubbing back over a row never
+    /// refetches details.
+    private var enrichmentCache: [String: TVMarqueeEnrichment] = [:]
 
     /// Report card focus. Cancels any pending swap and schedules a new
     /// one at +150 ms; reporting the already-displayed content is a no-op.
@@ -195,6 +260,34 @@ final class TVFocusMarqueeModel {
     private func display(_ candidate: TVMarqueeContent) {
         content = candidate
         sampleTintIfNeeded(for: candidate.backdropUrl)
+        loadEnrichment(for: candidate)
+    }
+
+    /// The §9 backfill: fields the section payload doesn't carry (air
+    /// date, cast) come from the item-detail endpoint after the marquee
+    /// has already displayed — never blocking it, cached per item, and
+    /// rate-limited by the rest debounce upstream.
+    private func loadEnrichment(for candidate: TVMarqueeContent) {
+        enrichTask?.cancel()
+        guard let contentId = candidate.contentId else {
+            enrichment = nil
+            return
+        }
+        if let cached = enrichmentCache[contentId] {
+            enrichment = cached
+            return
+        }
+
+        enrichment = nil
+        enrichTask = Task { [weak self] in
+            guard let detail = try? await ContinuumAPI.shared.itemDetail(contentId: contentId) else { return }
+            guard !Task.isCancelled, let self else { return }
+            let enrichment = TVMarqueeEnrichment(detail: detail)
+            self.enrichmentCache[contentId] = enrichment
+            if self.content?.contentId == contentId {
+                self.enrichment = enrichment
+            }
+        }
     }
 
     private func sampleTintIfNeeded(for urlString: String?) {
@@ -239,13 +332,6 @@ struct TVFocusMarquee: View {
             }
         }
 
-        var eyebrowSize: CGFloat {
-            switch self {
-            case .home: ContinuumTheme.Skyline.marqueeEyebrowSizeHome
-            case .library: ContinuumTheme.Skyline.marqueeEyebrowSizeLibrary
-            }
-        }
-
         var titleSize: CGFloat {
             switch self {
             case .home: ContinuumTheme.Skyline.marqueeTitleSizeHome
@@ -271,6 +357,7 @@ struct TVFocusMarquee: View {
     }
 
     let content: TVMarqueeContent?
+    var enrichment: TVMarqueeEnrichment? = nil
     let scale: Scale
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -278,7 +365,7 @@ struct TVFocusMarquee: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             if let content {
-                TVMarqueeBlock(content: content, scale: scale)
+                TVMarqueeBlock(content: content, enrichment: enrichment, scale: scale)
                     .id(content.id)
                     .transition(.opacity)
             }
@@ -300,6 +387,11 @@ struct TVFocusMarquee: View {
             reduceMotion ? nil : .easeInOut(duration: ContinuumTheme.Skyline.marqueeCrossfadeDuration),
             value: content?.id
         )
+        // The §9 detail line lands after the block; fade it in on its own.
+        .animation(
+            reduceMotion ? nil : .easeInOut(duration: ContinuumTheme.Skyline.marqueeCrossfadeDuration),
+            value: enrichment?.detailLine
+        )
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityDescription)
         .accessibilityAddTraits(.updatesFrequently)
@@ -311,7 +403,10 @@ struct TVFocusMarquee: View {
 
     private var accessibilityDescription: String {
         guard let content else { return "" }
-        return ([content.eyebrow, content.title] + content.metaParts + [content.synopsis ?? ""])
+        let parts = [content.eyebrow, content.title]
+            + content.metaParts
+            + [content.synopsis ?? "", enrichment?.detailLine ?? ""]
+        return parts
             .filter { !$0.isEmpty }
             .joined(separator: ", ")
     }
@@ -327,11 +422,15 @@ struct TVFocusMarquee: View {
 
 // MARK: - Content block
 
-/// One marquee "frame": eyebrow, title (text first, cached logo art may
-/// swap in), badge + meta line, synopsis. Identity is keyed on the
-/// content id by the parent so a content change crossfades whole blocks.
+/// One marquee "frame": title (text first, cached logo art may swap
+/// in), badge + meta line, synopsis. The §5.4 eyebrow (source-row title)
+/// was dropped by design revision — the row's own header already names
+/// the source, and the marquee leads with the title. Identity is keyed
+/// on the content id by the parent so a content change crossfades whole
+/// blocks.
 private struct TVMarqueeBlock: View {
     let content: TVMarqueeContent
+    var enrichment: TVMarqueeEnrichment? = nil
     let scale: TVFocusMarquee.Scale
 
     /// Server logo art, swapped in only once decoded — the text title
@@ -346,8 +445,6 @@ private struct TVMarqueeBlock: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            eyebrow
-
             titleSlot
 
             metaLine
@@ -357,11 +454,13 @@ private struct TVMarqueeBlock: View {
                     .font(.system(size: ContinuumTheme.Skyline.marqueeSynopsisSize, weight: .regular))
                     .lineSpacing(6)
                     .foregroundStyle(Color.continuumSecondaryText)
-                    // A displayed logo fills the 2-line-title budget, so it
-                    // clamps the synopsis exactly like a wrapped title does.
-                    .lineLimit(titleWrapsTwoLines || logoImage != nil ? 1 : 2)
+                    // A displayed logo (or a wrapped text title) fills part
+                    // of the synopsis budget, dropping it from 3 lines to 2.
+                    .lineLimit(titleWrapsTwoLines || logoImage != nil ? 2 : 3)
                     .frame(maxWidth: ContinuumTheme.Skyline.marqueeSynopsisMaxWidth, alignment: .leading)
             }
+
+            detailLine
         }
         .frame(maxWidth: ContinuumTheme.Skyline.marqueeContentWidth, alignment: .leading)
         .onAppear { loadLogoIfCached() }
@@ -371,20 +470,17 @@ private struct TVMarqueeBlock: View {
         }
     }
 
-    private var eyebrow: some View {
-        HStack(spacing: 12) {
-            RoundedRectangle(cornerRadius: ContinuumTheme.Skyline.marqueeTickCornerRadius)
-                .fill(Color.continuumMarqueeTick)
-                .frame(
-                    width: ContinuumTheme.Skyline.marqueeTickSize.width,
-                    height: ContinuumTheme.Skyline.marqueeTickSize.height
-                )
-
-            Text(content.eyebrow.uppercased())
-                .font(.system(size: scale.eyebrowSize, weight: .bold))
-                .tracking(scale.eyebrowSize * 0.30)
-                .foregroundStyle(Color.white.opacity(0.85))
+    /// Air date + top-billed cast (§9 backfill). Fades in once the
+    /// detail fetch lands; absent until then so the marquee never waits.
+    @ViewBuilder
+    private var detailLine: some View {
+        if let line = enrichment?.detailLine, !line.isEmpty {
+            Text(line)
+                .font(.system(size: scale.metaSize, weight: .medium))
+                .foregroundStyle(Color.continuumOnSurface.opacity(0.5))
                 .lineLimit(1)
+                .frame(maxWidth: ContinuumTheme.Skyline.marqueeSynopsisMaxWidth, alignment: .leading)
+                .transition(reduceMotion ? .identity : .opacity)
         }
     }
 
