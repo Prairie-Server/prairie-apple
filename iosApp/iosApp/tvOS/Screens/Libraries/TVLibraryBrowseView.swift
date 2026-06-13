@@ -293,9 +293,9 @@ struct TVLibraryBrowseView: View {
 // MARK: - Inline collections row
 
 /// Horizontal `Collections` shelf on the Browse landing (§6.2): up to 8
-/// collections by item count, a trailing `See All` card that jumps to the
-/// Collections pill, and marquee previews on focus. Fan cards arrive in
-/// Phase 4 — these reuse the dense poster geometry of row 1.
+/// collections by item count rendered as fan cards (§5.6), a trailing
+/// `See All` card that jumps to the Collections pill, and marquee previews
+/// on focus.
 private struct TVLibraryCollectionsRow: View {
     let collections: [LibraryCollection]
     /// Programmatic focus kick for the rare collections-only library —
@@ -324,12 +324,14 @@ private struct TVLibraryCollectionsRow: View {
                 .padding(.horizontal, ContinuumTheme.safePadding)
 
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 40) {
+                LazyHStack(spacing: ContinuumTheme.Skyline.fanGridGap) {
                     ForEach(collections) { collection in
-                        TVCollectionsRowCard(collection: collection) {
-                            onOpen(collection)
-                        }
-                        .focused($focusedCardId, equals: collection.id)
+                        TVCollectionFanCard(
+                            collection: collection,
+                            action: { onOpen(collection) },
+                            focusBinding: $focusedCardId,
+                            focusContentId: collection.id
+                        )
                     }
 
                     if onSeeAll != nil {
@@ -360,14 +362,32 @@ private struct TVLibraryCollectionsRow: View {
         focusedCardId = firstId
     }
 
+    /// Trailing card that jumps to the Collections pill. Sized to the
+    /// fan-card row height (§6.2) so it lines up with its neighbours, and
+    /// it borrows the fan card's surface + focus grammar to read as one
+    /// family.
     private var seeAllCard: some View {
-        let width = ContinuumTheme.Skyline.densePosterCardWidth
-        let height = width * 1.5
+        let width = ContinuumTheme.Skyline.fanCardWidth
+        let height = ContinuumTheme.Skyline.fanCardHeight
+        let radius = ContinuumTheme.Skyline.fanCardCornerRadius
 
-        return VStack(alignment: .leading, spacing: 16) {
-            Button {
-                onSeeAll?()
-            } label: {
+        return Button {
+            onSeeAll?()
+        } label: {
+            ZStack {
+                RoundedRectangle(cornerRadius: radius)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color.continuumFanCardSurfaceTop,
+                                Color.continuumFanCardSurfaceBottom,
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .opacity(ContinuumTheme.Skyline.fanCardSurfaceOpacity)
+
                 VStack(spacing: 14) {
                     Image(systemName: "square.grid.2x2")
                         .font(.system(size: 44, weight: .semibold))
@@ -377,20 +397,55 @@ private struct TVLibraryCollectionsRow: View {
                         .font(.system(size: 24, weight: .semibold))
                         .foregroundColor(.continuumOnSurface)
                 }
-                .frame(width: width, height: height)
-                .background(Color.continuumSurfaceElevated)
-                .clipShape(RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius))
             }
-            .buttonStyle(.card)
-            .focused($focusedCardId, equals: seeAllCardId)
-            .accessibilityLabel("See all collections")
-
-            // Caption spacer keeps the card top-aligned with its siblings.
-            Text(" ")
-                .font(.continuumSubheadline)
-                .lineLimit(2, reservesSpace: true)
+            .frame(width: width, height: height)
+            .clipShape(RoundedRectangle(cornerRadius: radius))
+            .overlay {
+                RoundedRectangle(cornerRadius: radius)
+                    .strokeBorder(
+                        seeAllFocused ? Color.white : Color.continuumOutline,
+                        lineWidth: seeAllFocused ? ContinuumTheme.Skyline.fanCardFocusBorderWidth : 1
+                    )
+            }
         }
-        .frame(width: width)
+        .buttonStyle(TVFanSeeAllButtonStyle())
+        .focused($focusedCardId, equals: seeAllCardId)
+        .accessibilityLabel("See all collections")
+    }
+
+    private var seeAllFocused: Bool { focusedCardId == seeAllCardId }
+}
+
+/// Matches `TVCollectionFanCard`'s focus motion for the trailing See All
+/// card (scale 1.05 + drop shadow, no system halo).
+private struct TVFanSeeAllButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        TVFanSeeAllButtonBody(configuration: configuration)
+    }
+}
+
+private struct TVFanSeeAllButtonBody: View {
+    let configuration: ButtonStyleConfiguration
+
+    @Environment(\.isFocused) private var isFocused
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        configuration.label
+            .scaleEffect(scale)
+            .shadow(
+                color: .black.opacity(isFocused ? 0.5 : 0.0),
+                radius: isFocused ? 20 : 0,
+                y: isFocused ? 10 : 0
+            )
+            .focusEffectDisabled()
+            .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
+            .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: configuration.isPressed)
+    }
+
+    private var scale: CGFloat {
+        let base: CGFloat = isFocused && !reduceMotion ? 1.05 : 1.0
+        return configuration.isPressed ? base * 0.97 : base
     }
 }
 
@@ -417,78 +472,4 @@ private struct TVCollectionsRowMoveHandler: ViewModifier {
     }
 }
 
-/// Dense poster-geometry collection card for the inline row. Matches the
-/// caption grammar of `MediaCard` so the shelf reads as the same family
-/// as row 1.
-private struct TVCollectionsRowCard: View {
-    let collection: LibraryCollection
-    let action: () -> Void
-
-    @FocusState private var isFocused: Bool
-
-    private let cardWidth = ContinuumTheme.Skyline.densePosterCardWidth
-    private var cardHeight: CGFloat { cardWidth * 1.5 }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Button(action: action) {
-                artwork
-            }
-            .buttonStyle(.card)
-            .focused($isFocused)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(collection.name)
-                    .font(.continuumSubheadline)
-                    .foregroundColor(isFocused ? .continuumOnSurface : .continuumOnSurface.opacity(0.85))
-                    .lineLimit(2, reservesSpace: true)
-                    .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
-
-                if let count = collection.itemCount, count > 0 {
-                    Text("\(count) \(count == 1 ? "item" : "items")")
-                        .font(.continuumCaption)
-                        .foregroundColor(.continuumSecondaryText)
-                }
-            }
-            .frame(width: cardWidth, alignment: .leading)
-        }
-        .frame(width: cardWidth)
-    }
-
-    private var artwork: some View {
-        Group {
-            if let posterUrl = collection.posterUrl, !posterUrl.isEmpty {
-                AsyncImageView(
-                    url: posterUrl,
-                    thumbhash: collection.posterThumbhash,
-                    targetSize: CGSize(width: cardWidth, height: cardHeight),
-                    contentMode: .fill
-                )
-            } else {
-                ZStack {
-                    LinearGradient(
-                        colors: [
-                            Color(hue: hue, saturation: 0.55, brightness: 0.45),
-                            Color(hue: hue, saturation: 0.35, brightness: 0.25),
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                    Image(systemName: "square.stack.fill")
-                        .font(.system(size: 48, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.85))
-                }
-            }
-        }
-        .frame(width: cardWidth, height: cardHeight)
-        .clipShape(RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius))
-    }
-
-    private var hue: Double {
-        var hasher = Hasher()
-        hasher.combine(collection.id)
-        let raw = UInt(bitPattern: hasher.finalize())
-        return Double(raw % 360) / 360.0
-    }
-}
 #endif

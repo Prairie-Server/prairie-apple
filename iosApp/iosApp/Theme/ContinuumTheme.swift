@@ -292,6 +292,9 @@ struct ContinuumTheme {
         /// 26 px gap, within the safe area.
         static let fanGridColumnCount = 3
         static let fanGridGap: CGFloat = 26
+        /// Mono group-header size for the collections grid (§6.3, mono
+        /// header style — the dropdown mono grammar at grid scale).
+        static let fanGridGroupHeaderSize: CGFloat = 22
     }
     #endif
 }

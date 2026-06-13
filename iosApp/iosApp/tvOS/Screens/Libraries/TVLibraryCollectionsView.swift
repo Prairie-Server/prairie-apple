@@ -77,18 +77,29 @@ struct TVLibraryCollectionsView: View {
                 ForEach(collectionSections) { section in
                     VStack(alignment: .leading, spacing: 20) {
                         if !section.name.isEmpty {
-                            Text(section.name)
-                                .font(.system(size: 28, weight: .semibold))
-                                .foregroundColor(.continuumOnSurface)
+                            // §6.3 mono group header — same grammar as the
+                            // cascade/dropdown section headers, at grid scale.
+                            Text(section.name.uppercased())
+                                .font(.system(
+                                    size: ContinuumTheme.Skyline.fanGridGroupHeaderSize,
+                                    design: .monospaced
+                                ))
+                                .tracking(ContinuumTheme.Skyline.fanGridGroupHeaderSize * 0.26)
+                                .foregroundColor(.continuumOnSurface.opacity(0.38))
+                                .lineLimit(1)
                                 .padding(.leading, ContinuumTheme.safePadding)
                         }
                         LazyVGrid(
                             columns: Array(
-                                repeating: GridItem(.flexible(), spacing: 40),
-                                count: 6
+                                repeating: GridItem(
+                                    .fixed(ContinuumTheme.Skyline.fanCardWidth),
+                                    spacing: ContinuumTheme.Skyline.fanGridGap,
+                                    alignment: .leading
+                                ),
+                                count: ContinuumTheme.Skyline.fanGridColumnCount
                             ),
                             alignment: .leading,
-                            spacing: 60
+                            spacing: ContinuumTheme.Skyline.fanGridGap
                         ) {
                             ForEach(section.collections) { collection in
                                 let isFirstOverall =
@@ -176,10 +187,10 @@ private struct TVCollectionCardMoveUpHandler: ViewModifier {
     }
 }
 
-/// Vertical poster card for a collection. Matches the dimensions and
-/// caption grammar of `TVMediaCard` so a collections grid reads as the
-/// same visual family as the library's movie/show grid — just with
-/// "items" replacing "year" under the title.
+/// Grid wrapper around `TVCollectionFanCard` (§6.3) that carries the
+/// Collections pill's focus machinery: the programmatic entry kick, the
+/// first-card hand-up to the pill row, and the recycle guard. The visual
+/// is the shared fan card; this struct owns only focus plumbing.
 private struct TVCollectionCard: View {
     let collection: LibraryCollection
     var prefersDefaultFocus: Bool = false
@@ -196,23 +207,25 @@ private struct TVCollectionCard: View {
     var onMoveUp: (() -> Void)? = nil
     let action: () -> Void
 
-    @FocusState private var isFocused: Bool
+    /// Drives the programmatic entry kick through the fan card's external
+    /// focus binding. A single-card binding keyed on the collection id is
+    /// enough — only the first card is ever handed a non-zero token.
+    @FocusState private var focusedId: String?
     /// Last hand-down token applied, so each token claims focus exactly once.
     /// The card lives in a `LazyVGrid`; without the guard, `onAppear` re-fires
     /// when the first card is recycled back into view on scroll-up and would
     /// yank focus away from the row the user was navigating.
     @State private var lastAppliedFocusRequest = 0
 
-    private let cardWidth: CGFloat = 220
-    private var cardHeight: CGFloat { cardWidth * 1.5 } // 2:3 poster ratio
-
     var body: some View {
-        VStack(spacing: 16) {
-            collectionButton
-
-            caption
-        }
-        .frame(width: cardWidth)
+        TVCollectionFanCard(
+            collection: collection,
+            action: action,
+            prefersDefaultFocus: prefersDefaultFocus,
+            defaultFocusNamespace: defaultFocusNamespace,
+            focusBinding: $focusedId,
+            focusContentId: collection.id
+        )
         .onAppear { applyFocusRequest(focusRequest) }
         .onChange(of: focusRequest) { _, request in applyFocusRequest(request) }
         .modifier(TVCollectionCardMoveUpHandler(onMoveUp: onMoveUp))
@@ -221,74 +234,7 @@ private struct TVCollectionCard: View {
     private func applyFocusRequest(_ request: Int) {
         guard request > 0, request != lastAppliedFocusRequest else { return }
         lastAppliedFocusRequest = request
-        isFocused = true
-    }
-
-    private var collectionButton: some View {
-        Button(action: action) {
-            posterImage
-        }
-        .buttonStyle(.card)
-        .focused($isFocused)
-        .applyDefaultFocusIfNeeded(prefersDefaultFocus, namespace: defaultFocusNamespace)
-    }
-
-    private var posterImage: some View {
-        Group {
-            if let posterUrl = collection.posterUrl, !posterUrl.isEmpty {
-                CachedAsyncImage(
-                    url: posterUrl,
-                    targetSize: CGSize(width: cardWidth, height: cardHeight),
-                    contentMode: .fill
-                )
-            } else {
-                ZStack {
-                    LinearGradient(
-                        colors: [
-                            Color(hue: hue, saturation: 0.55, brightness: 0.45),
-                            Color(hue: hue, saturation: 0.35, brightness: 0.25),
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                    Image(systemName: "square.stack.fill")
-                        .font(.system(size: 56, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.85))
-                }
-            }
-        }
-        .frame(width: cardWidth, height: cardHeight)
-        .clipShape(RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius))
-    }
-
-    private var caption: some View {
-        VStack(spacing: 4) {
-            Text(collection.name)
-                .font(.system(size: 22, weight: .semibold))
-                .foregroundColor(isFocused ? .continuumOnSurface : .continuumOnSurface.opacity(0.92))
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
-
-            if collection.kind == .userCollections {
-                Text("User collection")
-                    .font(.system(size: 18, weight: .regular))
-                    .foregroundColor(.continuumSecondaryText)
-            } else if let count = collection.itemCount, count > 0 {
-                Text("\(count) \(count == 1 ? "item" : "items")")
-                    .font(.system(size: 18, weight: .regular))
-                    .foregroundColor(.continuumSecondaryText)
-            }
-        }
-        .multilineTextAlignment(.center)
-        .frame(width: cardWidth, alignment: .center)
-    }
-
-    private var hue: Double {
-        var hasher = Hasher()
-        hasher.combine(collection.id)
-        let raw = UInt(bitPattern: hasher.finalize())
-        return Double(raw % 360) / 360.0
+        focusedId = collection.id
     }
 }
 #endif
