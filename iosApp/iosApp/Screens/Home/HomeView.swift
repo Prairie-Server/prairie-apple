@@ -334,6 +334,10 @@ struct HomeView: View {
                     cardWidth: ContinuumTheme.Skyline.densePosterCardWidth,
                     onMoveDown: { pageSections(by: 1) }
                 )
+                // Natural height so the row hugs its header and bottom-aligns
+                // in the band; without it the full-height container stretches
+                // the row and floats the header up into the marquee.
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.bottom, ContinuumTheme.Skyline.rowBandBottomInset)
                 .id(section.id)
                 .transition(.opacity)

@@ -149,6 +149,9 @@ struct TVLibraryBrowseView: View {
         ZStack(alignment: .bottom) {
             if pages.indices.contains(pageIndex) {
                 pageRow(for: pages[pageIndex])
+                    // Natural height so the row hugs its header and
+                    // bottom-aligns in the band rather than stretching.
+                    .fixedSize(horizontal: false, vertical: true)
                     .padding(.bottom, ContinuumTheme.Skyline.rowBandBottomInset)
                     .id(pageKey(pages[pageIndex]))
                     .transition(.opacity)
