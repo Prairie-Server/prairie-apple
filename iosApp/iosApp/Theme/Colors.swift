@@ -53,6 +53,9 @@ extension Color {
     /// Anchored dropdown panel fill — `glass.strong`, #16171B @ 86% over blur
     static let continuumGlassStrong = Color(hex: "#16171B").opacity(0.86)
 
+    /// Shelf/base dropdown fill — `glass.regular`, black @ 55% over blur.
+    static let continuumGlassRegular = Color.black.opacity(0.55)
+
     /// Page scrim behind anchored dropdowns — `scrim.dropdown`, black @ 55%
     static let continuumDropdownScrim = Color.black.opacity(0.55)
 

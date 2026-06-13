@@ -170,6 +170,50 @@ struct ContinuumTheme {
         /// Panel top offset — anchored just under the bar.
         static let dropdownTopInset: CGFloat = 132
 
+        // MARK: Cascading library selector (§5.3)
+
+        /// Focus-dwell before a library tab (or the profile avatar) opens
+        /// its anchored panel. Sweeping across the bar never opens it;
+        /// resting this long does. Tuned per Open-Q5/Q7 on device.
+        static let cascadeDwellMilliseconds: UInt64 = 250
+        /// Cascade open scale-up start (§4.2: 0.96 → 1.0).
+        static let cascadeOpenScale: CGFloat = 0.96
+        /// Cascade panel scale/fade duration (§4.2, 180 ms).
+        static let cascadeOpenDuration: Double = 0.18
+        /// Scrim fade duration behind the cascade (§4.2, 150 ms).
+        static let cascadeScrimDuration: Double = 0.15
+        /// Width of the notch tab pointing from a panel to its anchor.
+        static let cascadeNotchWidth: CGFloat = 20
+        /// Height the notch protrudes toward its anchor.
+        static let cascadeNotchHeight: CGFloat = 10
+
+        /// Level-1 library row metrics (§5.3).
+        static let cascadeRowTextSize: CGFloat = 22
+        static let cascadeRowPaddingHorizontal: CGFloat = 18
+        static let cascadeRowPaddingVertical: CGFloat = 16
+        static let cascadeRowCornerRadius: CGFloat = 14
+        static let cascadeRowIconSize: CGFloat = 30
+        /// Library rows visible before the level-1 list scrolls internally.
+        static let cascadeMaxVisibleRows = 6
+
+        /// Sections flyout (§5.3, level 2).
+        static let flyoutWidth: CGFloat = 300
+        static let flyoutCornerRadius: CGFloat = 18
+        static let flyoutPadding: CGFloat = 10
+        /// Gap between the level-1 panel's right edge and the flyout.
+        static let flyoutGap: CGFloat = 18
+        static let flyoutRowTextSize: CGFloat = 20
+        static let flyoutRowPaddingHorizontal: CGFloat = 16
+        static let flyoutRowPaddingVertical: CGFloat = 13
+        static let flyoutRowCornerRadius: CGFloat = 12
+        static let flyoutHeaderSize: CGFloat = 13
+        /// Open scale-up for the flyout (§4.2, 0.97 → 1.0).
+        static let flyoutOpenScale: CGFloat = 0.97
+        static let flyoutOpenDuration: Double = 0.16
+        /// Rest debounce before the flyout follows focus to a new library
+        /// row (§5.3) — rolling the list never thrashes the flyout.
+        static let flyoutFollowDebounceMilliseconds: UInt64 = 150
+
         // MARK: Focus marquee (§5.4/§5.5)
 
         /// Marquee content block top — Home (full-bleed) scale.
