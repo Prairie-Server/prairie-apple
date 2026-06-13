@@ -153,6 +153,10 @@ struct ContinuumTheme {
         static let pillPaddingVertical: CGFloat = 9
         /// Right-aligned scope caption in the pill row.
         static let pillCaptionSize: CGFloat = 18
+        /// Upward drift of incoming sub-pill content on a pill switch
+        /// (§4.2: "200 ms crossfade + 12 px upward drift of incoming
+        /// content"). Paired with the shared 200 ms `normalDuration`.
+        static let pillDriftY: CGFloat = 12
 
         /// Top inset for library-tab content that has no hero of its own
         /// (grids, chip clouds): clears the bar and the pill row.

@@ -35,6 +35,8 @@ struct TVLibraryTypeTabView: View {
     /// restored, and the content zone's boundary hand-up.
     @State private var pillRowFocusRequest = 0
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     private var pills: [TVLibraryPill] { TVLibraryPill.set(for: type) }
 
     var body: some View {
@@ -43,6 +45,13 @@ struct TVLibraryTypeTabView: View {
                 ZStack(alignment: .top) {
                     pillContent(for: activeLibrary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        // §4.2 sub-pill content switch: 200 ms crossfade
+                        // (the `selectPill` withAnimation) + a 12 px upward
+                        // drift of the incoming content. Keyed on the pill so
+                        // a switch inserts the new content and removes the
+                        // old; Reduce Motion drops the drift to opacity only.
+                        .id(selectedPill)
+                        .transition(pillContentTransition)
 
                     TVLibraryPillRow(
                         pills: pills,
@@ -138,6 +147,18 @@ struct TVLibraryTypeTabView: View {
 
     // MARK: - Selection & focus routing
 
+    /// Asymmetric transition for the pill content swap (§4.2). Incoming
+    /// content fades in while drifting 12 px upward into place; outgoing
+    /// content fades out without sliding. Reduce Motion → opacity only, no
+    /// drift (the §4.2 acceptance "no drift animations").
+    private var pillContentTransition: AnyTransition {
+        guard !reduceMotion else { return .opacity }
+        return .asymmetric(
+            insertion: .opacity.combined(with: .offset(y: ContinuumTheme.Skyline.pillDriftY)),
+            removal: .opacity
+        )
+    }
+
     /// Pills commit on press. Content below crossfades (§4.2) while focus
     /// stays on the pressed pill — the fresh content's own default-focus
     /// makes its first item the d-pad entry target, satisfying §7's
@@ -145,7 +166,9 @@ struct TVLibraryTypeTabView: View {
     /// moving focus mid-transition.
     private func selectPill(_ pill: TVLibraryPill) {
         guard pill != selectedPill else { return }
-        withAnimation(.easeInOut(duration: ContinuumTheme.normalDuration)) {
+        // 200 ms crossfade (§4.2); Reduce Motion snaps with no crossfade or
+        // drift (the transition collapses to identity with a nil animation).
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: ContinuumTheme.normalDuration)) {
             selectedPill = pill
         }
     }

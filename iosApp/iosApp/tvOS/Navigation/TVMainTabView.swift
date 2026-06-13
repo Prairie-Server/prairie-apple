@@ -138,6 +138,13 @@ struct TVMainTabView: View {
 
             selectedRootContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // §4.2 tab content switch: an explicit 200 ms opacity
+                // crossfade keyed on the selected root, so the incoming page
+                // fades in and the outgoing one fades out in place (it never
+                // slides). The crossfade animation is supplied by `selectRoot`;
+                // Reduce Motion snaps via the `.identity` transition.
+                .id(selectedRoot)
+                .transition(reduceMotion ? .identity : .opacity)
                 .focusScope(tabContentNamespace)
                 // While a panel is open the page is scrimmed and inert, so
                 // its cards must not be focusable: otherwise d-pad down from
@@ -532,9 +539,10 @@ struct TVMainTabView: View {
         router.popToRoot()
 
         suppressTopMenuFocusForContentHandoff()
-        withAnimation(.easeInOut(duration: ContinuumTheme.normalDuration)) {
-            // Tab content switches crossfade (§4.2); the outgoing view never
-            // owns focus here because selection happens from the bar.
+        // Tab content switches crossfade over 200 ms (§4.2); the outgoing
+        // view never owns focus here because selection happens from the bar.
+        // Reduce Motion snaps (the `.identity` transition + nil animation).
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: ContinuumTheme.normalDuration)) {
             selectedRoot = root
         }
         // Push focus into whichever root content is swapping in. Suppressing
