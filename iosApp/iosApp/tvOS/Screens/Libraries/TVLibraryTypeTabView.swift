@@ -2,17 +2,17 @@
 import SwiftUI
 
 /// Body of a Skyline library-type tab (Movies / Series / Music /
-/// Audiobooks): the sub-destination pill row plus the selected pill's
-/// content. Receives the profile's libraries of its type from the shell.
+/// Audiobooks): the selected sub-destination's content, with the
+/// Recommended landing as the default. Receives the profile's libraries of
+/// its type from the shell.
 ///
-/// This replaced the old "Libraries is a place" tab: there is no longer a
-/// full-screen library picker — the type tab *is* the library, and the
-/// pill row is the §5.2 replacement for the Recommended/Collections mode
-/// slider. Pills commit on press, never on focus.
+/// The on-page pill row was removed — the tab lands on Recommended with no
+/// chrome over the hero. The other sub-destinations (Collections · Browse)
+/// stay reachable from the top-bar cascade dropdown (§5.3), which commits
+/// `selectedPill`.
 ///
-/// Focus zones (§7), top to bottom: top bar → pill row → content. The
-/// pill row hands Up to the bar; content reaches the pill row either
-/// geometrically or through the boundary hand-up fallback.
+/// Focus zones (§7), top to bottom: top bar → content. Content now hands
+/// Up straight to the bar, since nothing sits between them.
 struct TVLibraryTypeTabView: View {
     let type: TVLibraryTabType
     /// Libraries of `type` visible to this profile, ordered by `sortOrder`.
@@ -21,23 +21,16 @@ struct TVLibraryTypeTabView: View {
     /// shell from the persisted per-profile scope, or the first library on
     /// cold start. The cascade selector (§5.3) switches it.
     let activeLibrary: Library?
-    /// Pill selection lives in the shell so it survives tab switches
-    /// within a session (§8); cold start always lands on Browse.
+    /// Selected sub-destination, owned by the shell so it survives tab
+    /// switches within a session (§8); cold start always lands on
+    /// Recommended. The on-page pill row is gone, so this is written only by
+    /// the cascade dropdown.
     @Binding var selectedPill: TVLibraryPill
-    /// Item count for the scoped library, if the shell could resolve one
-    /// (the `Library` model carries none — §G). Drives the caption suffix.
-    var scopeItemCount: Int? = nil
     var focusRequest: Int = 0
     var isTopMenuFocused: Bool = false
     let onTopMenuFocusRequest: (() -> Void)?
 
-    /// Imperative kick into the pill row: tab entry while a grid pill is
-    /// restored, and the content zone's boundary hand-up.
-    @State private var pillRowFocusRequest = 0
-
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private var pills: [TVLibraryPill] { TVLibraryPill.set(for: type) }
 
     var body: some View {
         Group {
@@ -45,22 +38,13 @@ struct TVLibraryTypeTabView: View {
                 ZStack(alignment: .top) {
                     pillContent(for: activeLibrary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        // §4.2 sub-pill content switch: 200 ms crossfade
-                        // (the `selectPill` withAnimation) + a 12 px upward
-                        // drift of the incoming content. Keyed on the pill so
-                        // a switch inserts the new content and removes the
-                        // old; Reduce Motion drops the drift to opacity only.
+                        // §4.2 sub-destination content switch: the cascade
+                        // dropdown commits a new `selectedPill`, and selecting
+                        // the tab crossfades the swap. Keyed on the pill so a
+                        // switch inserts the new content and removes the old;
+                        // Reduce Motion drops the drift to opacity only.
                         .id(selectedPill)
                         .transition(pillContentTransition)
-
-                    TVLibraryPillRow(
-                        pills: pills,
-                        selected: selectedPill,
-                        caption: scopeCaption,
-                        focusRequest: pillRowFocusRequest,
-                        onSelect: selectPill(_:),
-                        onMoveUp: onTopMenuFocusRequest
-                    )
                 }
                 // Re-create the tab body when the scoped library changes so
                 // section fetches and grid state reset cleanly.
@@ -75,54 +59,26 @@ struct TVLibraryTypeTabView: View {
             }
         }
         .continuumBackground()
-        .onAppear { routeEntryFocus(focusRequest) }
-        .onChange(of: focusRequest) { _, request in routeEntryFocus(request) }
-    }
-
-    /// Scope caption (§5.2): the active library's name, plus an item-count
-    /// suffix when the shell could resolve one (e.g. `Theatrical · 1,284
-    /// films`). The `Library` model carries no count, so the suffix is
-    /// best-effort from the loaded grid total and is omitted — never
-    /// fabricated — when unavailable (§G). No freshness timestamp exists in
-    /// the models, so none is shown.
-    private var scopeCaption: String? {
-        guard let name = activeLibrary?.name else { return nil }
-        guard let count = scopeItemCount, count > 0 else { return name }
-        return "\(name) · \(count.formatted(.number)) \(countNoun(count))"
-    }
-
-    /// Type-appropriate noun for the count suffix.
-    private func countNoun(_ count: Int) -> String {
-        let plural = count != 1
-        switch type {
-        case .movies: return plural ? "films" : "film"
-        case .series: return plural ? "shows" : "show"
-        case .music: return plural ? "albums" : "album"
-        case .audiobooks: return plural ? "books" : "book"
-        }
     }
 
     @ViewBuilder
     private func pillContent(for library: Library) -> some View {
         switch selectedPill {
-        case .browse:
+        case .recommended:
             TVLibraryBrowseView(
                 library: library,
-                focusRequest: contentEntryFocusRequest,
+                focusRequest: focusRequest,
                 isTopMenuFocused: isTopMenuFocused,
-                onMoveUp: focusPillRow,
-                onSelectCollectionsPill: jumpToCollectionsPill
+                onMoveUp: onTopMenuFocusRequest
             )
         case .collections:
             TVLibraryCollectionsView(
                 library: library,
-                focusRequest: contentEntryFocusRequest,
+                focusRequest: focusRequest,
                 isTopMenuFocused: isTopMenuFocused,
-                onMoveUp: focusPillRow
+                onMoveUp: onTopMenuFocusRequest
             )
-        case .genres:
-            TVLibraryGenresView(library: library)
-        case .aToZ:
+        case .browse:
             TVLibraryGridView(
                 libraryId: library.id,
                 libraryName: library.name,
@@ -132,79 +88,21 @@ struct TVLibraryTypeTabView: View {
                 showsAlphabetRail: true,
                 topContentInset: ContinuumTheme.Skyline.libraryContentTopInset
             )
-        case .recentlyAdded:
-            TVLibraryGridView(
-                libraryId: library.id,
-                libraryName: library.name,
-                libraryType: library.type,
-                initialFilter: TVLibraryFilter(sort: "added"),
-                showsHeader: false,
-                showsAlphabetRail: false,
-                topContentInset: ContinuumTheme.Skyline.libraryContentTopInset
-            )
         }
     }
 
     // MARK: - Selection & focus routing
 
-    /// Asymmetric transition for the pill content swap (§4.2). Incoming
-    /// content fades in while drifting 12 px upward into place; outgoing
-    /// content fades out without sliding. Reduce Motion → opacity only, no
-    /// drift (the §4.2 acceptance "no drift animations").
+    /// Asymmetric transition for the sub-destination content swap (§4.2).
+    /// Incoming content fades in while drifting 12 px upward into place;
+    /// outgoing content fades out without sliding. Reduce Motion → opacity
+    /// only, no drift (the §4.2 acceptance "no drift animations").
     private var pillContentTransition: AnyTransition {
         guard !reduceMotion else { return .opacity }
         return .asymmetric(
             insertion: .opacity.combined(with: .offset(y: ContinuumTheme.Skyline.pillDriftY)),
             removal: .opacity
         )
-    }
-
-    /// Pills commit on press. Content below crossfades (§4.2) while focus
-    /// stays on the pressed pill — the fresh content's own default-focus
-    /// makes its first item the d-pad entry target, satisfying §7's
-    /// "switching pill resets content focus to the first item" without
-    /// moving focus mid-transition.
-    private func selectPill(_ pill: TVLibraryPill) {
-        guard pill != selectedPill else { return }
-        // 200 ms crossfade (§4.2); Reduce Motion snaps with no crossfade or
-        // drift (the transition collapses to identity with a nil animation).
-        withAnimation(reduceMotion ? nil : .easeInOut(duration: ContinuumTheme.normalDuration)) {
-            selectedPill = pill
-        }
-    }
-
-    /// Shell entry tokens land on the selected pill's natural target:
-    /// Browse/Collections claim their first content item; the grid and
-    /// genre pills park focus on the pill row (their cards have no
-    /// imperative-claim plumbing, and the row is never empty).
-    private var contentEntryFocusRequest: Int {
-        switch selectedPill {
-        case .browse, .collections: return focusRequest
-        case .genres, .aToZ, .recentlyAdded: return 0
-        }
-    }
-
-    private func routeEntryFocus(_ request: Int) {
-        guard request > 0 else { return }
-        switch selectedPill {
-        case .browse, .collections:
-            break // content claims via its own forwarded token
-        case .genres, .aToZ, .recentlyAdded:
-            pillRowFocusRequest += 1
-        }
-    }
-
-    private func focusPillRow() {
-        pillRowFocusRequest += 1
-    }
-
-    /// The Browse landing's trailing `See All` card commits the
-    /// Collections pill (§6.2). The pressed card disappears with the
-    /// content swap, so focus is explicitly parked on the pill row —
-    /// the stable "you are here" chrome — rather than left to the engine.
-    private func jumpToCollectionsPill() {
-        selectPill(.collections)
-        pillRowFocusRequest += 1
     }
 }
 #endif

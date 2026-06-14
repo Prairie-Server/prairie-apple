@@ -40,10 +40,6 @@ struct TVCascadeSelector: View {
     /// The library currently scoped for this tab (gets the `✓`, and the
     /// row focus lands here on entry).
     let currentScopeId: Int?
-    /// Per-library item counts for the right-aligned count column, keyed by
-    /// library id. Absent ids render no count (the model carries no count,
-    /// so this is best-effort from loaded grids — §G).
-    let counts: [Int: Int]
     /// Whether focus has entered the panel.
     let entersPanel: Bool
     /// Bumped by the host the moment focus should enter the panel — lands
@@ -196,7 +192,6 @@ struct TVCascadeSelector: View {
             TVCascadeLibraryRowLabel(
                 title: library.name,
                 systemImage: type.systemImage,
-                count: counts[library.id],
                 trailingGlyph: isCurrent ? "checkmark" : "chevron.right",
                 isFocused: isFocused
             )
@@ -355,7 +350,7 @@ struct TVCascadeSelector: View {
         lastAppliedEntryToken = token
         if isSingleLibrary, let library = libraries.first {
             // Single-level: land on the first section (§5.3).
-            focus = .section(library.id, pills.first ?? .browse)
+            focus = .section(library.id, pills.first ?? .recommended)
         } else {
             // Two-level: land on the current-scope row, else the first.
             let target = currentScopeId ?? libraries.first?.id
@@ -407,9 +402,6 @@ struct TVCascadeSelector: View {
 
     private func accessibilityLabel(for library: Library, isCurrent: Bool) -> String {
         var label = library.name
-        if let count = counts[library.id] {
-            label += ", \(count) items"
-        }
         if isCurrent { label += ", current library" }
         return label
     }
@@ -417,12 +409,11 @@ struct TVCascadeSelector: View {
 
 // MARK: - Row labels
 
-/// Level-1 library row (§5.3): icon — name — count (right) — trailing
-/// glyph. Inverts to white on focus, matching the bar/pill grammar.
+/// Level-1 library row (§5.3): icon — name — trailing glyph. Inverts to
+/// white on focus, matching the bar/pill grammar.
 private struct TVCascadeLibraryRowLabel: View {
     let title: String
     let systemImage: String
-    let count: Int?
     let trailingGlyph: String
     let isFocused: Bool
 
@@ -439,13 +430,6 @@ private struct TVCascadeLibraryRowLabel: View {
                 .lineLimit(1)
 
             Spacer(minLength: 12)
-
-            if let count {
-                Text(count.formatted(.number))
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(foreground.opacity(isFocused ? 0.7 : 0.45))
-                    .lineLimit(1)
-            }
 
             Image(systemName: trailingGlyph)
                 .font(.system(size: 17, weight: .semibold))

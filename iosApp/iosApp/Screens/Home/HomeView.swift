@@ -31,21 +31,6 @@ struct HomeView: View {
     @State private var refreshStartedAt: Date?
     @State private var refreshHideTask: Task<Void, Never>?
     private let chromeFadeDistance: CGFloat = 72
-    #else
-    /// Entry tokens that arrived before any row existed to claim them —
-    /// sections mount async, so the initial hand-down would land on nothing.
-    @State private var pendingHomeFocusRequest: Int?
-    /// Token handed to the visible section row so its first card claims
-    /// focus on entry and on every page change.
-    @State private var rowFocusToken = 0
-    /// The section currently shown in the bottom band. Skyline pages one
-    /// section at a time (§6.1, revised) rather than scrolling, so the
-    /// focus engine never scrolls the row and it stays put while moving
-    /// across cards.
-    @State private var sectionIndex = 0
-    /// Debounced focused-card state driving the marquee + backdrop.
-    @State private var marqueeModel = TVFocusMarqueeModel()
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     #endif
     @Environment(AppRouter.self) private var router
     @Environment(AudioPlaybackStore.self) private var audioStore
@@ -69,31 +54,26 @@ struct HomeView: View {
         // the focus marquee over rows, with the backdrop tracking whichever
         // card holds focus (§5.4).
         #if os(tvOS)
-        ZStack(alignment: .top) {
-            TVRootHeroBackdrop(
-                tintColor: marqueeModel.tintColor,
-                artworkURL: marqueeModel.content?.backdropUrl,
-                artworkThumbhash: marqueeModel.content?.backdropThumbhash,
-                isVisible: marqueeModel.content != nil,
-                crossfadeDuration: ContinuumTheme.Skyline.marqueeCrossfadeDuration
-            )
-
-            // One section at a time, pinned to the bottom band. Because
-            // there is no scroll view, the focus engine never scrolls the
-            // row — it stays put while moving across cards. Up/Down page
-            // sections explicitly (see scrollContent).
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                // Reach into the bottom overscan so the focused row sits near
-                // the physical edge; it re-insets via rowBandBottomInset.
-                .ignoresSafeArea(edges: .bottom)
-
-            // Floats over the band above the row; never focusable or hit-testable.
-            TVFocusMarquee(
-                content: marqueeModel.content,
-                enrichment: marqueeModel.enrichment,
-                scale: .home
-            )
+        // The shared Skyline feed — the exact same layout component the
+        // library Browse tabs use, so Home and the library pages are
+        // identical. For You recommendation rows are folded into
+        // `displayedSections` right after Continue Watching (§6.1).
+        Group {
+            if viewModel.sections.isEmpty {
+                if let error = viewModel.error {
+                    ErrorView(state: error, onRetry: { Task { await viewModel.loadSections() } })
+                } else {
+                    Color.clear
+                }
+            } else {
+                TVSkylineSectionFeed(
+                    sections: displayedSections,
+                    focusRequest: homeFocusRequest,
+                    isTopMenuFocused: isTopMenuFocused,
+                    onTopMenuFocusRequest: onTopMenuFocusRequest,
+                    onItemTap: { navigateToDetail($0) }
+                )
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task {
@@ -111,19 +91,6 @@ struct HomeView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .homeSectionsShouldRefresh)) { _ in
             Task { await viewModel.loadSections() }
-        }
-        // Entry-focus routing lives on the always-mounted root, not the
-        // scroll content — rows mount only after the section load, and a
-        // token that arrives before then must wait as a pending claim.
-        .onAppear {
-            requestHomeFocus(homeFocusRequest)
-        }
-        .onChange(of: homeFocusRequest) { _, request in
-            requestHomeFocus(request)
-        }
-        .onChange(of: displayedSections.map(\.id)) { _, _ in
-            guard let request = pendingHomeFocusRequest else { return }
-            requestHomeFocus(request)
         }
         #else
         ZStack(alignment: .top) {
@@ -300,6 +267,7 @@ struct HomeView: View {
 
     // MARK: - Content
 
+    #if !os(tvOS)
     @ViewBuilder
     private var content: some View {
         if viewModel.sections.isEmpty {
@@ -313,46 +281,6 @@ struct HomeView: View {
         }
     }
 
-    #if os(tvOS)
-    /// One section at a time (§6.1, revised): only the section at
-    /// `sectionIndex` renders, pinned to the bottom band. No scroll view,
-    /// so the focus engine can't move the row when navigating across
-    /// cards — it stays put. Up/Down page sections explicitly and the
-    /// swap crossfades.
-    @ViewBuilder
-    private var scrollContent: some View {
-        let sections = displayedSections
-        ZStack(alignment: .bottom) {
-            if sections.indices.contains(sectionIndex) {
-                let section = sections[sectionIndex]
-                SectionRow(
-                    section: section,
-                    onItemTap: { navigateToDetail($0) },
-                    prefersDefaultFocusOnFirstItem: true,
-                    focusRequest: rowFocusToken,
-                    onMoveUp: sectionIndex == 0 ? onTopMenuFocusRequest : { pageSections(by: -1) },
-                    onItemFocus: { item in
-                        marqueeModel.preview(TVMarqueeContent(item: item, rowTitle: section.title))
-                    },
-                    cardWidth: ContinuumTheme.Skyline.densePosterCardWidth,
-                    onMoveDown: { pageSections(by: 1) }
-                )
-                // Natural height so the row hugs its header and bottom-aligns
-                // in the band; without it the full-height container stretches
-                // the row and floats the header up into the marquee.
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.bottom, ContinuumTheme.Skyline.rowBandBottomInset)
-                .id(section.id)
-                .transition(.opacity)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        .animation(
-            reduceMotion ? nil : .easeInOut(duration: ContinuumTheme.normalDuration),
-            value: sectionIndex
-        )
-    }
-    #else
     private var scrollContent: some View {
         GeometryReader { geometry in
             ScrollView(.vertical, showsIndicators: false) {
@@ -452,42 +380,6 @@ struct HomeView: View {
         return viewModel.regularSections
         #endif
     }
-
-    #if os(tvOS)
-    /// Entry focus → the first card of the first row (§6.1) — typically
-    /// Continue Watching — which the marquee previews immediately.
-    /// Tokens that arrive before the rows exist wait for the section
-    /// load; deferred claims are dropped if the user has meanwhile moved
-    /// up into the menu, so a late fetch never steals focus.
-    private func requestHomeFocus(_ request: Int) {
-        guard request > 0 else { return }
-        // Rows mount only once the home sections themselves have loaded
-        // (`content` gates on viewModel.sections) AND produced visible
-        // rows — a claim issued before that lands on nothing.
-        guard !viewModel.sections.isEmpty, !displayedSections.isEmpty else {
-            pendingHomeFocusRequest = request
-            return
-        }
-
-        let wasDeferred = pendingHomeFocusRequest != nil
-        pendingHomeFocusRequest = nil
-        if wasDeferred, isTopMenuFocused { return }
-        // Re-entry always lands on the first section's first card.
-        sectionIndex = 0
-        rowFocusToken += 1
-    }
-
-    /// Page the visible section by ±1 (§6.1 paging). Clamps at the ends;
-    /// Up past the first section is handled by the row's onMoveUp (to the
-    /// top bar), so this only fires for in-range moves. Each page hands
-    /// focus to the new section's first card via the focus token.
-    private func pageSections(by delta: Int) {
-        let target = sectionIndex + delta
-        guard displayedSections.indices.contains(target) else { return }
-        sectionIndex = target
-        rowFocusToken += 1
-    }
-    #endif
 
     #if !os(tvOS)
     private var headerChromeOpacity: Double {

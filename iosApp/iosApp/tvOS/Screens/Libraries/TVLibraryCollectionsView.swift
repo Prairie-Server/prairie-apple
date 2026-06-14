@@ -81,10 +81,10 @@ struct TVLibraryCollectionsView: View {
                             // cascade/dropdown section headers, at grid scale.
                             Text(section.name.uppercased())
                                 .font(.system(
-                                    size: ContinuumTheme.Skyline.fanGridGroupHeaderSize,
+                                    size: ContinuumTheme.Skyline.collectionGridGroupHeaderSize,
                                     design: .monospaced
                                 ))
-                                .tracking(ContinuumTheme.Skyline.fanGridGroupHeaderSize * 0.26)
+                                .tracking(ContinuumTheme.Skyline.collectionGridGroupHeaderSize * 0.26)
                                 .foregroundColor(.continuumOnSurface.opacity(0.38))
                                 .lineLimit(1)
                                 .padding(.leading, ContinuumTheme.safePadding)
@@ -92,14 +92,14 @@ struct TVLibraryCollectionsView: View {
                         LazyVGrid(
                             columns: Array(
                                 repeating: GridItem(
-                                    .fixed(ContinuumTheme.Skyline.fanCardWidth),
-                                    spacing: ContinuumTheme.Skyline.fanGridGap,
-                                    alignment: .leading
+                                    .flexible(),
+                                    spacing: ContinuumTheme.Skyline.collectionGridColumnSpacing,
+                                    alignment: .top
                                 ),
-                                count: ContinuumTheme.Skyline.fanGridColumnCount
+                                count: ContinuumTheme.Skyline.collectionGridColumnCount
                             ),
                             alignment: .leading,
-                            spacing: ContinuumTheme.Skyline.fanGridGap
+                            spacing: ContinuumTheme.Skyline.collectionGridRowSpacing
                         ) {
                             ForEach(section.collections) { collection in
                                 let isFirstOverall =
@@ -119,6 +119,7 @@ struct TVLibraryCollectionsView: View {
                                         ))
                                     }
                                 )
+                                .frame(maxWidth: .infinity)
                             }
                         }
                         .padding(.horizontal, ContinuumTheme.safePadding)
@@ -187,10 +188,10 @@ private struct TVCollectionCardMoveUpHandler: ViewModifier {
     }
 }
 
-/// Grid wrapper around `TVCollectionFanCard` (§6.3) that carries the
+/// Grid wrapper around `TVCollectionPosterCard` (§6.3) that carries the
 /// Collections pill's focus machinery: the programmatic entry kick, the
 /// first-card hand-up to the pill row, and the recycle guard. The visual
-/// is the shared fan card; this struct owns only focus plumbing.
+/// is the shared poster card; this struct owns only focus plumbing.
 private struct TVCollectionCard: View {
     let collection: LibraryCollection
     var prefersDefaultFocus: Bool = false
@@ -207,7 +208,7 @@ private struct TVCollectionCard: View {
     var onMoveUp: (() -> Void)? = nil
     let action: () -> Void
 
-    /// Drives the programmatic entry kick through the fan card's external
+    /// Drives the programmatic entry kick through the poster card's external
     /// focus binding. A single-card binding keyed on the collection id is
     /// enough — only the first card is ever handed a non-zero token.
     @FocusState private var focusedId: String?
@@ -218,7 +219,7 @@ private struct TVCollectionCard: View {
     @State private var lastAppliedFocusRequest = 0
 
     var body: some View {
-        TVCollectionFanCard(
+        TVCollectionPosterCard(
             collection: collection,
             action: action,
             prefersDefaultFocus: prefersDefaultFocus,

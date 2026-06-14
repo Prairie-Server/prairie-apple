@@ -226,8 +226,8 @@ struct ContinuumTheme {
 
         /// Marquee block bottom inset — Home scale. Anchors the metadata
         /// block bottom-left, just above the row band (rows bottom-align at
-        /// `rowBandBottomInset`; the band top sits near `homeFirstRowTop`).
-        /// Tuned on device so the block clears the row header by a hair.
+        /// `rowBandBottomInset`). Tuned on device so the block clears the row
+        /// header by a hair.
         static let marqueeBottomInsetHome: CGFloat = 440
         /// Marquee block bottom inset — library (compact) scale. A touch
         /// higher than Home: Browse row 1 is taller posters, so the block
@@ -261,13 +261,6 @@ struct ContinuumTheme {
 
         // MARK: Row band under the marquee (§5.7, revised)
 
-        /// Top of the row band on Home. Rows page one section at a time
-        /// in viewport-sized slots, bottom-aligned so the focused row
-        /// sits at the bottom of the screen; the band must be tall
-        /// enough for the tallest row (a full poster row ≈ 585).
-        static let homeFirstRowTop: CGFloat = 535
-        /// Top of the row band on a library Browse landing.
-        static let libraryFirstRowTop: CGFloat = 510
         /// Bottom inset for the row band, measured from the physical bottom
         /// edge. The row layers ignore the bottom safe area (the ~86pt tvOS
         /// overscan was leaving a dead band under the rail), so this is the
@@ -279,38 +272,18 @@ struct ContinuumTheme {
         /// metadata above it — taller posters overrun the synopsis/detail line.
         static let densePosterCardWidth: CGFloat = 160
 
-        // MARK: Collection fan card (§5.6 / §6.2 / §6.3)
+        // MARK: Collections poster grid (§6.3)
 
-        /// Fan card outer dimensions and radius (§5.6).
-        static let fanCardWidth: CGFloat = 430
-        static let fanCardHeight: CGFloat = 234
-        static let fanCardCornerRadius: CGFloat = 16
-        /// One of the three fanned mini posters (left cluster).
-        static let fanMiniPosterWidth: CGFloat = 104
-        static let fanMiniPosterHeight: CGFloat = 156
-        static let fanMiniPosterCornerRadius: CGFloat = 10
-        /// Rotations (degrees) of the back → front mini posters.
-        static let fanMiniPosterRotations: [Double] = [-8, -1, 7]
-        /// Horizontal step between fanned posters so the cluster reads as
-        /// a deck rather than a stack.
-        static let fanMiniPosterHorizontalStep: CGFloat = 26
-        /// Surface gradient opacity (§5.6, ~90%).
-        static let fanCardSurfaceOpacity: Double = 0.9
-        /// Right-block name and count type (§5.6).
-        static let fanCardNameSize: CGFloat = 25
-        static let fanCardCountSize: CGFloat = 17
-        /// Count caps tracking (§4.1 caps grammar).
-        static let fanCardCountTracking: CGFloat = 17 * 0.06
-        /// Focus border width on the fan card surface (§5.6, 2 px white).
-        static let fanCardFocusBorderWidth: CGFloat = 2
-
-        /// Collections pill grid (§6.3): 3 columns at the fan-card width,
-        /// 26 px gap, within the safe area.
-        static let fanGridColumnCount = 3
-        static let fanGridGap: CGFloat = 26
+        /// Collections render as standard 2:3 poster tiles (the canonical
+        /// `posterCardWidth` poster) in a grid that mirrors the library Browse
+        /// grid, so a collection reads as a first-class browseable card.
+        /// 6 flexible columns within the safe area.
+        static let collectionGridColumnCount = 6
+        static let collectionGridColumnSpacing: CGFloat = 40
+        static let collectionGridRowSpacing: CGFloat = 60
         /// Mono group-header size for the collections grid (§6.3, mono
         /// header style — the dropdown mono grammar at grid scale).
-        static let fanGridGroupHeaderSize: CGFloat = 22
+        static let collectionGridGroupHeaderSize: CGFloat = 22
     }
     #endif
 }

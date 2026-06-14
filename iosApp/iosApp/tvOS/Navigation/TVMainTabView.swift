@@ -33,10 +33,6 @@ struct TVMainTabView: View {
     /// re-persisted by the cascade selector. Single-library types resolve
     /// trivially and never need an entry.
     @State private var scopeSelections: [TVLibraryTabType: Int] = [:]
-    /// Best-effort library-wide item counts keyed by library id, fetched
-    /// lazily (the `Library` model carries none — §G). Feeds the scope
-    /// caption and the cascade's per-library count column.
-    @State private var libraryItemCounts: [Int: Int] = [:]
     /// The anchored panel currently open from the top bar (cascade or
     /// profile), plus whether focus has descended into it. Owned here so it
     /// renders as a scrimmed overlay over the page (§5.3) — not a pushed
@@ -193,7 +189,6 @@ struct TVMainTabView: View {
                 libraries: libraries(of: type),
                 activeLibrary: active,
                 selectedPill: pillSelection(for: type),
-                scopeItemCount: active.flatMap { libraryItemCounts[$0.id] },
                 focusRequest: contentFocusRequest,
                 isTopMenuFocused: isTopMenuFocused,
                 onTopMenuFocusRequest: { focusTopMenuIfVisible() }
@@ -321,7 +316,6 @@ struct TVMainTabView: View {
             type: type,
             libraries: libraries(of: type),
             currentScopeId: activeLibrary(for: type)?.id,
-            counts: libraryItemCounts,
             entersPanel: panelEntersFocus,
             focusEntryToken: panelFocusEntryToken,
             onCommitLibrary: { commitScope(type: type, library: $0, pill: nil) },
@@ -377,12 +371,9 @@ struct TVMainTabView: View {
 
         panelEntersFocus = false
         panelHasFocus = false
-        // Prefetch counts for a cascade so the count column and caption
-        // have data by the time the user rolls the list.
         withAnimation(reduceMotion ? nil : .easeOut(duration: ContinuumTheme.Skyline.cascadeScrimDuration)) {
             openPanel = panel
         }
-        prefetchPanelData(panel)
     }
 
     /// A deliberate **press** on the avatar (§5.8) opens the profile menu
@@ -436,13 +427,6 @@ struct TVMainTabView: View {
         withAnimation(reduceMotion ? nil : .easeOut(duration: ContinuumTheme.Skyline.cascadeScrimDuration)) {
             openPanel = panel
         }
-        prefetchPanelData(panel)
-    }
-
-    private func prefetchPanelData(_ panel: TVTopMenuPanel) {
-        if case .root(.libraryType(let type)) = panel {
-            Task { await loadItemCounts(for: type) }
-        }
     }
 
     /// Close the panel without changing scope (Menu/Back, scrim tap, or
@@ -473,14 +457,14 @@ struct TVMainTabView: View {
     }
 
     /// Commit a cascade selection (§5.3, §F): set + persist the tab scope,
-    /// preselect the pill (Browse for a library-row press; the chosen
+    /// preselect the pill (Recommended for a library-row press; the chosen
     /// section for a flyout-row press), select the tab, and tear the panel
     /// down. The page swaps in place via the scope/pill change + the
     /// existing `.id(activeLibrary.id)` crossfade.
     private func commitScope(type: TVLibraryTabType, library: Library, pill: TVLibraryPill?) {
         scopeSelections[type] = library.id
         TVLibraryScopeStore.shared.setSelectedLibraryId(library.id, for: type)
-        pillSelections[type] = pill ?? .browse
+        pillSelections[type] = pill ?? .recommended
 
         // Tear down the panel first, then select the tab + hand focus to the
         // swapped-in content. Selecting the root bumps contentFocusRequest,
@@ -491,25 +475,6 @@ struct TVMainTabView: View {
         panelEntersFocus = false
         panelHasFocus = false
         selectRoot(.libraryType(type))
-    }
-
-    /// Best-effort library-wide item counts for the scope caption (§G) and
-    /// the cascade's count column. The `Library` model carries no count, so
-    /// this reads `CatalogResponse.total` with a 1-item probe per library.
-    /// Failures leave the count absent (the caption omits it — never
-    /// fabricated).
-    private func loadItemCounts(for type: TVLibraryTabType) async {
-        for library in libraries(of: type) where libraryItemCounts[library.id] == nil {
-            let query: [String: String] = [
-                "source": "query",
-                "library_id": String(library.id),
-                "offset": "0",
-                "limit": "1",
-            ]
-            guard let response = try? await ContinuumAPI.shared.catalog(query: query),
-                  let total = response.total else { continue }
-            libraryItemCounts[library.id] = total
-        }
     }
 
     // MARK: - Tab derivation
@@ -549,7 +514,7 @@ struct TVMainTabView: View {
 
     private func pillSelection(for type: TVLibraryTabType) -> Binding<TVLibraryPill> {
         Binding(
-            get: { pillSelections[type] ?? .browse },
+            get: { pillSelections[type] ?? .recommended },
             set: { pillSelections[type] = $0 }
         )
     }
