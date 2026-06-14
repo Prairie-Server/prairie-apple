@@ -75,14 +75,10 @@ struct TVServerSetupView: View {
     // MARK: - Idle chooser (phone status + manual entry)
 
     private var connectChooser: some View {
-        VStack(spacing: 0) {
-            VStack(spacing: 14) {
-                AuroraEyebrow(text: "Step 01 — Connect", centered: true)
-                Text("Add your server")
-                    .font(.auroraSerif(52, .semibold))
-                    .foregroundStyle(Color.auroraInk)
-            }
-            Spacer(minLength: 36)
+        // Header is pinned near the top while the two cards are vertically
+        // centered in the remaining space, so they sit around screen center
+        // rather than being pushed low as part of a single centered block.
+        ZStack(alignment: .top) {
             HStack(alignment: .center, spacing: 0) {
                 phoneCard
                     .frame(width: 600)
@@ -93,7 +89,16 @@ struct TVServerSetupView: View {
                     .focusSection()
             }
             .frame(height: 580)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+
+            VStack(spacing: 14) {
+                AuroraEyebrow(text: "Step 01 — Connect", centered: true)
+                Text("Add your server")
+                    .font(.auroraSerif(52, .semibold))
+                    .foregroundStyle(Color.auroraInk)
+            }
         }
+        .frame(maxHeight: .infinity)
         .defaultFocus($focusedField, .host, priority: .userInitiated)
     }
 
