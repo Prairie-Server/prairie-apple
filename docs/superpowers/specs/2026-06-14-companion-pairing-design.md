@@ -4,6 +4,7 @@
 - **Status:** Approved design, pre-implementation
 - **Repo:** silo-apple (iOS + tvOS). Server endpoints already exist; Android is a documented follow-on.
 - **Related:** `docs/tvos-onboarding/` (Tandem "companion" direction), tvOS first-run redesign.
+- **Review history:** 2026-06-14 adversarial review (Codex). HIGH "persist-before-verify" → fixed (persist-on-success, §5/§6). CRITICAL "confirm-once multi-server MITM" → accepted as a documented v1 risk (§6, *Accepted risk*).
 
 ## 1. Summary
 
@@ -142,15 +143,19 @@ phone shows "update one of your apps" and offers QR fallback.
    sessions.
 5. **Per chosen server Sᵢ (sequential):**
    1. Phone → `PushServer(Sᵢ.url)`.
-   2. TV persists Sᵢ to `ServerRegistry`, calls `POST Sᵢ/auth/device/start` →
-      `{deviceCode, userCode, matchCode}`. TV **displays matchCode**. TV →
+   2. TV holds Sᵢ as a **pending candidate** (not yet written to `ServerRegistry`),
+      calls `POST Sᵢ/auth/device/start` → `{deviceCode, userCode, matchCode}`. TV
+      **displays the candidate server URL/name and matchCode**. TV →
       `DeviceStarted{userCode, matchCode}`.
    3. Phone displays matchCode. **For the first server only**, the user confirms
       it matches the TV screen (the anti-impersonation gate — §6). On confirm,
       phone calls `POST Sᵢ/auth/device/approve{code: userCode}` on Sᵢ's
       authenticated session.
-   4. TV's `poll` loop reaches `approved` → server mints tokens → TV stores them
-      in `TokenStore` under Sᵢ and marks Sᵢ known/active → TV → `ServerResult(signedIn)`.
+   4. TV's `poll` loop reaches `approved` → server mints tokens → **only now** TV
+      commits Sᵢ to `ServerRegistry`, stores tokens in `TokenStore` under Sᵢ, and
+      marks Sᵢ known/active → TV → `ServerResult(signedIn)`. On failure, decline,
+      timeout, cancel, or dropped connection the pending candidate is discarded —
+      nothing is persisted.
 6. After all chosen servers: phone → `Done`. Phone shows "Apple TV set up with 2
    servers." TV advances to profile selection ("Who's watching?") for the active server.
 
@@ -169,23 +174,58 @@ Identical, minus the URL push: the TV already has the server, so it can
 - **Tokens never cross the LAN.** The server mints them and delivers them to the
   TV over HTTPS via `poll`. The local channel only carries a server URL and a
   short-lived user/match code.
-- **TLS** on the `NWConnection` (TV presents an ephemeral self-signed cert) for
-  confidentiality against passive sniffing.
+- **TLS** on the `NWConnection` (TV presents an ephemeral self-signed cert) gives
+  **opportunistic confidentiality only**: the cert is not pinned or otherwise
+  authenticated, so it defeats passive sniffing but **not** an active on-path
+  attacker. Integrity of the approval rests on the match code, not on TLS.
 - **Match code = the human trust anchor.** It is *server-issued*, shown on the
-  physical TV, and confirmed on the phone before approval. An active LAN attacker
+  physical TV, and confirmed on the phone before approval — for single-server pairing and the
+  first server of a session (the confirm-once caveat for additional servers is in
+  *Accepted risk* below). An active LAN attacker
   who swaps the `userCode`/`matchCode` in transit cannot make the phone's
   displayed code match what the **real TV** renders (the TV got its code straight
   from the server over HTTPS) — so the user catches the mismatch and declines.
   This is why the single confirmation tap is retained.
-- **Worst-case bound on the URL push:** if an attacker tampered with the pushed
-  URL, the TV would configure a bogus server and poll *it* — the attacker still
-  cannot mint tokens for the user's real account. The user sees the wrong server
-  and aborts. No credential compromise.
+- **Worst-case bound on the URL push:** the TV treats a pushed URL as a *pending
+  candidate*, displays it, and persists it only after a successful sign-in. If an
+  attacker tampered with the URL, the TV would poll a bogus server (which cannot
+  mint tokens for the user's real account), the user sees the wrong server name on
+  screen and aborts, and **no server entry is persisted** — no credential
+  compromise and no lingering bad state.
 - Resulting TV session appears in `GET /auth/sessions`, named by device, and is
   user-revocable. Approval requires a fresh Face ID gesture.
 - **Future hardening (not v1):** SPAKE2 / ECDH with a short-authentication-string
   to also mutually authenticate the URL push, removing reliance on the user's
   visual compare.
+
+### Accepted risk (v1): confirm-once multi-server approval
+
+**Decision (2026-06-14):** keep the confirm-once multi-server UX and accept the
+exposure below for v1.
+
+- **The exposure.** When a user pushes 2+ servers in a single session, only the
+  first server's match code is visually confirmed; later servers are auto-approved
+  over the same `NWConnection`. Because v1's TLS is an unauthenticated self-signed
+  channel, an active on-path attacker can — *after* the legitimate first
+  confirmation — substitute a later `DeviceStarted` payload with a `userCode` from
+  the attacker's own pending device request. The phone, not re-confirming, approves
+  it with the user's authenticated session, minting tokens to the attacker's device
+  for that server.
+- **Preconditions (all required).** An active on-path LAN attacker (ARP spoof /
+  rogue AP) present during the pairing window; the user pairing **multiple** servers
+  in one pass; the unauthenticated self-signed channel. **Not affected:**
+  single-server pairing and the first server of any session (their match code is
+  always confirmed).
+- **Why accepted for v1.** Self-hosted home-media context; low probability of an
+  active on-path attacker on a trusted home LAN; blast radius limited to
+  media-account access on the affected server; the vulnerable surface is only the
+  optional multi-server convenience path.
+- **Mitigation if the threat model changes.** Switch to **confirm-per-server** — a
+  localized policy change in `CompanionPairingCoordinator`, no protocol change — or
+  add channel authentication (cert pinning / SPAKE2 with channel binding) so
+  confirm-once becomes safe.
+- **Tripwire — revisit before:** deploying for shared / public / multi-tenant
+  networks, or exposing pairing beyond the local link.
 
 ## 7. Edge cases & error handling
 
@@ -193,10 +233,10 @@ Identical, minus the URL push: the TV already has the server, so it can
 |------|----------|
 | iOS Local Network permission denied | Pairing browser inert; phone falls back to "open the app and scan the QR / enter the code." |
 | TV not found (different Wi-Fi, AP/client isolation) | Phone times out (~10–15s), suggests QR/manual; TV keeps showing QR. |
-| Match code mismatch | User declines → abort connection, log, allow retry. |
+| Match code mismatch | User declines → abort connection, discard the pending candidate (nothing persisted), log, allow retry. |
 | Phone's token for Sᵢ expired | Refresh; if refresh fails, grey out Sᵢ in the picker with a "sign in on phone first" hint. |
-| One server fails mid-loop | Continue remaining servers; report per-server status in the summary. |
-| Connection drops | TV returns to advertising; phone shows retry. |
+| One server fails mid-loop | Continue remaining servers; the failed server's pending candidate is discarded (never persisted); report per-server status in the summary. |
+| Connection drops | TV discards any pending candidate, returns to advertising; phone shows retry. |
 | Multiple TVs discovered | Banner becomes a short list keyed by TXT `name`/`id`. |
 | Second phone connects | TV accepts one connection at a time; rejects the second as busy. |
 | iOS app backgrounded | `NWBrowser` suspends; resume on foreground. |
@@ -222,6 +262,9 @@ Identical, minus the URL push: the TV already has the server, so it can
   - `CompanionPairingCoordinator` and `ReceiverPairingCoordinator` state machines
     against a **fake transport** + **fake `ContinuumAPI`**: happy path, multi-server,
     partial failure, match-code mismatch/decline, token expiry, cancel, code expiry.
+    Assert **persist-on-success**: no `ServerRegistry` / `TokenStore` mutation until
+    `signedIn`, and the pending candidate is rolled back on every
+    failure / decline / cancel / timeout / drop.
 - **Manual:** two-device (or two-simulator) pairing on a real LAN — Local Network
   prompt, AP isolation, match-code mismatch, multi-server pick.
 
@@ -247,7 +290,6 @@ Identical, minus the URL push: the TV already has the server, so it can
 
 ## 12. Open questions
 
-- Confirm-once vs. confirm-per-server for multi-server (default: confirm-once).
 - Exact Local Network usage-description copy (legal/marketing review).
 - Whether `SetUpTVBanner` should also appear in the iOS app's main UI (not just
   during onboarding) when a blank TV is detected, or only within an explicit
