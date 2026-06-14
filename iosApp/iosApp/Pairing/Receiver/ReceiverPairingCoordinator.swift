@@ -59,7 +59,8 @@ final class ReceiverPairingCoordinator {
                         self?.isPolling = false
                     }
                 case .done:
-                    await pollTask?.value // let the last server finish persisting
+                    if isPolling { pollTask?.cancel() } // an in-flight server has no committed result
+                    await pollTask?.value
                     if signedInCount > 0 { onAuthenticated() }
                     await teardown(session: session, resetState: false)
                     return
@@ -84,6 +85,8 @@ final class ReceiverPairingCoordinator {
     /// UI to idle so the advertiser can accept a fresh connection.
     private func teardown(session: PairingSession, resetState: Bool) async {
         pollTask?.cancel()
+        pollTask = nil
+        isPolling = false
         await session.close()
         if resetState { state = .idle }
     }
@@ -102,6 +105,7 @@ final class ReceiverPairingCoordinator {
             while Date() < deadline {
                 try Task.checkCancellation() // abort promptly on peer cancel / drop
                 let poll = try await api.poll(serverURL: normalized, deviceCode: started.deviceCode)
+                try Task.checkCancellation() // a cancel that raced the network must win — persist nothing
                 switch poll.status {
                 case "approved":
                     guard let access = poll.accessToken, let refresh = poll.refreshToken else {
