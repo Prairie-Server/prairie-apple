@@ -1,43 +1,81 @@
 #if os(tvOS)
 import SwiftUI
 
-/// First-run server entry on tvOS (Aurora). Two paths side by side over the
-/// aurora backdrop: a "Continue on iPhone" handoff card (stubbed until the
-/// server pairing endpoint exists) and a fully functional manual-entry card.
-/// The manual card is the emphasized, default-focused path.
+/// First-run server entry on tvOS (Aurora). The screen advertises on the LAN the
+/// moment it appears, so a nearby iPhone can set this TV up hands-off. Two paths
+/// sit side by side over the aurora backdrop: a live "Set up with iPhone" status
+/// card and a fully functional manual-entry card (the emphasized, default-focused
+/// path). When a phone connects, the same screen swaps *in place* to the pairing
+/// panel — no cover, so nothing ever bleeds through behind it.
 struct TVServerSetupView: View {
     var router: AppRouter
 
     @State private var viewModel = ServerSetupViewModel()
-    @State private var showPhoneSetup = false
+    @State private var advertiser = TVPairingAdvertiser()
+    @State private var coordinator = ReceiverPairingCoordinator()
     @FocusState private var focusedField: Field?
 
     private enum Field: Hashable {
-        case phoneSetup
         case host
         case scheme(ServerSetupScheme)
         case port
         case connect
     }
 
+    /// True once a phone is on the line; the screen hands over to the pairing panel.
+    private var isPairing: Bool {
+        if case .idle = coordinator.state { return false }
+        return true
+    }
+
     var body: some View {
         ZStack {
             AuroraBackdrop(variant: .server, scrim: .soft)
-            content
-                .padding(.horizontal, 96)
-                .padding(.top, 64)
-                .padding(.bottom, 64)
+            VStack(spacing: 0) {
+                topBar
+                Spacer(minLength: 20)
+                body(for: coordinator.state)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 96)
+            .padding(.top, 64)
+            .padding(.bottom, 64)
         }
         .ignoresSafeArea()
-        .fullScreenCover(isPresented: $showPhoneSetup) {
-            TVPairingReceiverView(router: router)
+        .animation(ContinuumTheme.springAnimation, value: isPairing)
+        .task { startAdvertising() }
+        .onDisappear {
+            advertiser.stop()
+            Task { await coordinator.cancel() }
         }
     }
 
-    private var content: some View {
+    @ViewBuilder
+    private func body(for state: ReceiverPairingCoordinator.State) -> some View {
+        if case .idle = state {
+            connectChooser
+                .transition(.opacity)
+        } else {
+            TVPairingReceiverView(coordinator: coordinator, router: router)
+                .transition(.opacity)
+        }
+    }
+
+    // MARK: - Advertiser lifecycle
+
+    private func startAdvertising() {
+        advertiser.start { session, stream in
+            Task {
+                await coordinator.run(session: session, stream: stream)
+                advertiser.release()
+            }
+        }
+    }
+
+    // MARK: - Idle chooser (phone status + manual entry)
+
+    private var connectChooser: some View {
         VStack(spacing: 0) {
-            topBar
-            Spacer(minLength: 20)
             VStack(spacing: 14) {
                 AuroraEyebrow(text: "Step 01 — Connect", centered: true)
                 Text("Add your server")
@@ -48,7 +86,6 @@ struct TVServerSetupView: View {
             HStack(alignment: .center, spacing: 0) {
                 phoneCard
                     .frame(width: 600)
-                    .focusSection()
                 orDivider
                     .frame(width: 84)
                 manualCard
@@ -56,7 +93,6 @@ struct TVServerSetupView: View {
                     .focusSection()
             }
             .frame(height: 580)
-            Spacer(minLength: 0)
         }
         .defaultFocus($focusedField, .host, priority: .userInitiated)
     }
@@ -68,36 +104,28 @@ struct TVServerSetupView: View {
         }
     }
 
-    // MARK: - Phone handoff card
+    // MARK: - Phone handoff card (live status — we are advertising)
 
     private var phoneCard: some View {
-        Button {
-            showPhoneSetup = true
-        } label: {
-            VStack(alignment: .leading, spacing: 0) {
-                phoneSetupPill
-                Spacer(minLength: 28)
-                Image(systemName: "iphone.gen3")
-                    .font(.system(size: 76, weight: .ultraLight))
-                    .foregroundStyle(Color.auroraInkSecondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                Spacer(minLength: 28)
-                Text("Continue on iPhone")
-                    .font(.system(size: 32, weight: .semibold))
-                    .foregroundStyle(Color.auroraInk)
-                Text("Set this Apple TV up from your phone — the address and your account come across automatically once your iPhone connects.")
-                    .font(.system(size: 22, weight: .regular))
-                    .foregroundStyle(Color.auroraInkSecondary)
-                    .lineSpacing(4)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 12)
-            }
-            .padding(46)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .auroraGlass(cornerRadius: 28, emphasized: focusedField == .phoneSetup)
+        VStack(alignment: .leading, spacing: 0) {
+            phoneSetupPill
+            Spacer(minLength: 20)
+            SearchingBeacon()
+                .frame(maxWidth: .infinity, alignment: .center)
+            Spacer(minLength: 20)
+            Text("Looking for your iPhone…")
+                .font(.system(size: 32, weight: .semibold))
+                .foregroundStyle(Color.auroraInk)
+            Text("Open Silo on your iPhone on the same Wi-Fi. It’ll offer to set up this Apple TV — the address and your account come across automatically.")
+                .font(.system(size: 22, weight: .regular))
+                .foregroundStyle(Color.auroraInkSecondary)
+                .lineSpacing(4)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 12)
         }
-        .buttonStyle(.continuumFlat)
-        .focused($focusedField, equals: .phoneSetup)
+        .padding(46)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .auroraGlass(cornerRadius: 28)
     }
 
     private var phoneSetupPill: some View {
@@ -222,6 +250,34 @@ struct TVServerSetupView: View {
             .font(.system(size: 15, weight: .semibold, design: .monospaced))
             .tracking(2)
             .foregroundStyle(Color.auroraInkTertiary)
+    }
+}
+
+// MARK: - Searching beacon (pulsing rings behind the phone glyph)
+
+private struct SearchingBeacon: View {
+    @State private var animate = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        ZStack {
+            ForEach(0..<3, id: \.self) { i in
+                Circle()
+                    .stroke(Color.auroraAccent.opacity(0.5), lineWidth: 2)
+                    .frame(width: 120, height: 120)
+                    .scaleEffect(animate ? 1.7 : 0.6)
+                    .opacity(animate ? 0 : 0.55)
+                    .animation(
+                        reduceMotion ? nil :
+                            .easeOut(duration: 2.4).repeatForever(autoreverses: false).delay(Double(i) * 0.8),
+                        value: animate)
+            }
+            Image(systemName: "iphone.gen3")
+                .font(.system(size: 76, weight: .ultraLight))
+                .foregroundStyle(Color.auroraInk)
+        }
+        .frame(width: 200, height: 200)
+        .onAppear { animate = true }
     }
 }
 
