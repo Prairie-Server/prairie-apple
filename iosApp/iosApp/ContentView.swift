@@ -71,6 +71,9 @@ struct ContentView: View {
         .environment(audioStore)
         .environmentObject(overlayPrefs)
         .preferredColorScheme(.dark)
+        #if os(iOS)
+        .setUpTVBanner()
+        #endif
         #if os(macOS)
         .sheet(isPresented: Binding(
             get: { debugPlayContentId != nil },
