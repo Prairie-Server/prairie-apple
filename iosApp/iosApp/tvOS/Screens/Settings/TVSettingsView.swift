@@ -31,7 +31,6 @@ struct TVSettingsView: View {
         Form {
             accountSection
             preferencesSection
-            librarySection
             accountActionsSection
             aboutSection
         }
@@ -103,25 +102,6 @@ struct TVSettingsView: View {
 
             Button { activeScreen = .cardOverlays } label: {
                 FocusAwareRowLabel(title: "Card Overlays")
-            }
-        }
-    }
-
-    // MARK: - Library
-
-    private var librarySection: some View {
-        Section("Library") {
-            Button { router.navigate(to: .watchlist) } label: {
-                FocusAwareLabel(title: "Watchlist", systemImage: "bookmark.fill")
-            }
-            Button { router.navigate(to: .favorites) } label: {
-                FocusAwareLabel(title: "Favorites", systemImage: "heart.fill")
-            }
-            Button { router.navigate(to: .history) } label: {
-                FocusAwareLabel(title: "Watch History", systemImage: "clock.fill")
-            }
-            Button { router.navigate(to: .collections) } label: {
-                FocusAwareLabel(title: "Collections", systemImage: "square.stack.fill")
             }
         }
     }

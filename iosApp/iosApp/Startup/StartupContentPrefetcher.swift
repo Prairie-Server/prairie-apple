@@ -99,6 +99,39 @@ enum StartupContentPrefetcher {
             urls.append(url)
         }
 
+        #if os(tvOS)
+        // Skyline §5.4: TV surfaces have no featured hero — entry focus
+        // lands on the first card of the first row and the marquee
+        // previews it. Warm that row's card art and backdrops (plus the
+        // first item's logo, which the marquee title slot swaps in) so a
+        // cold start shows a finished billboard.
+        let contentSections = response.sections.filter { !$0.isFeatured && !$0.items.isEmpty }
+        if let firstRow = contentSections.first {
+            append(firstRow.items.first?.logoUrl)
+            for item in firstRow.items {
+                if episodeSectionTypes.contains(firstRow.sectionType) {
+                    // Episode thumbs already render the backdrop, so the
+                    // card art and the marquee backdrop are one fetch.
+                    append(item.backdropUrl ?? item.posterUrl)
+                } else {
+                    append(item.posterUrl)
+                    append(item.backdropUrl)
+                }
+                if urls.count >= maxHomeArtworkURLs { break }
+            }
+        }
+        for section in contentSections.dropFirst() {
+            for item in section.items {
+                if episodeSectionTypes.contains(section.sectionType) {
+                    append(item.backdropUrl ?? item.posterUrl)
+                } else {
+                    append(item.posterUrl)
+                }
+                if urls.count >= maxHomeArtworkURLs { break }
+            }
+            if urls.count >= maxHomeArtworkURLs { break }
+        }
+        #else
         if let featuredItem = response.sections.first(where: \.isFeatured)?.items.first {
             append(featuredItem.backdropUrl ?? featuredItem.posterUrl)
             append(featuredItem.logoUrl)
@@ -115,6 +148,7 @@ enum StartupContentPrefetcher {
             }
             if urls.count >= maxHomeArtworkURLs { break }
         }
+        #endif
 
         guard !urls.isEmpty else { return }
         PosterImageCache.prefetcher.startPrefetching(with: urls)

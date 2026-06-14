@@ -128,9 +128,15 @@ final class PlayerCore: NSObject {
     /// Thread-safe PTS-ordered queue of decoded frames waiting to be
     private static let decodedVideoQueueCap = 24
     private static let decodedVideoFeedBackpressure = 16
+    /// Byte companion to the count threshold above. 16 × 1080p frames is
+    /// ~50 MiB (count governs); 16 × 4K 10-bit is ~400 MiB of IOSurface,
+    /// which this caps at ~192 MiB (≈8 frames / 300 ms at 24 fps — still
+    /// comfortably ahead of the display tick).
+    private static let decodedVideoFeedBackpressureBytes = 192 * 1024 * 1024
     private let videoFrameScheduler = VideoFrameScheduler(
         queueCap: decodedVideoQueueCap,
-        feedBackpressure: decodedVideoFeedBackpressure
+        feedBackpressure: decodedVideoFeedBackpressure,
+        feedBackpressureBytes: decodedVideoFeedBackpressureBytes
     )
     private let decodedVideoFrameRenderer = DecodedVideoFrameRenderer()
     /// Bound VT async decode submissions separately from decoded-frame queue
@@ -521,7 +527,11 @@ final class PlayerCore: NSObject {
     deinit {
         Self.logger.info("PlayerCore.deinit")
         removeAudioSessionObservers()
-        dispose()
+        // Inline frees only: the deferred-free path captures `self` strongly
+        // on the control queue, which is illegal from deinit (resurrection).
+        // Inline is safe here — any in-flight control-queue work (seek) holds
+        // a strong `self`, so reaching deinit proves the queue has none.
+        dispose(deferringFrees: false)
     }
 
     // MARK: - AVAudioSession lifecycle observers
@@ -531,6 +541,12 @@ final class PlayerCore: NSObject {
     /// iOS/tvOS only.
     private var audioRouteChangeObserver: NSObjectProtocol?
     private var audioMediaServicesResetObserver: NSObjectProtocol?
+    private var audioInterruptionObserver: NSObjectProtocol?
+    /// True when an AVAudioSession interruption (call, Siri, alarm) paused
+    /// playback the user had running. Drives the optional auto-resume on
+    /// `.ended` + `.shouldResume`. Cleared whenever `play()` runs so a manual
+    /// resume during the interruption supersedes the auto-resume.
+    private var wasPlayingWhenInterrupted = false
 
     private func installAudioSessionObservers() {
         #if !os(macOS)
@@ -549,6 +565,13 @@ final class PlayerCore: NSObject {
         ) { [weak self] _ in
             self?.handleAudioMediaServicesReset()
         }
+        audioInterruptionObserver = center.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: .main
+        ) { [weak self] note in
+            self?.handleAudioSessionInterruption(note)
+        }
         #endif
     }
 
@@ -561,6 +584,10 @@ final class PlayerCore: NSObject {
         if let token = audioMediaServicesResetObserver {
             center.removeObserver(token)
             audioMediaServicesResetObserver = nil
+        }
+        if let token = audioInterruptionObserver {
+            center.removeObserver(token)
+            audioInterruptionObserver = nil
         }
     }
 
@@ -582,10 +609,54 @@ final class PlayerCore: NSObject {
         // format. Don't react to reasons like `unknown` or `wakeFromSleep`
         // where the route did not actually change.
         switch reason {
-        case .newDeviceAvailable, .oldDeviceUnavailable, .categoryChange,
+        case .oldDeviceUnavailable:
+            // The active output went away (headphones/AirPods unplugged or
+            // out of range). Drop buffered audio AND pause: letting playback
+            // continue through the fallback route is the classic "audio
+            // suddenly blasting from the speaker" failure.
+            audioOutput.flush()
+            if !userPaused {
+                pause()
+            }
+        case .newDeviceAvailable, .categoryChange,
              .override, .routeConfigurationChange:
             audioOutput.flush()
         default:
+            break
+        }
+    }
+
+    /// Phone call / Siri / alarm interruptions. On `.began` the system has
+    /// already silenced the session and stopped the engine — route through
+    /// `pause()` so the timeline anchors at the interruption point and the
+    /// VM sees the state flip via `onPauseChange`. On `.ended`, resume only
+    /// when the system says `.shouldResume` and the user hasn't intervened.
+    private func handleAudioSessionInterruption(_ note: Notification) {
+        guard let typeRaw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: typeRaw)
+        else { return }
+        switch type {
+        case .began:
+            guard !isDisposed, !userPaused else { return }
+            Self.logger.info("AVAudioSession interruption began — pausing")
+            print("[CMP] audio interruption began; pausing")
+            wasPlayingWhenInterrupted = true
+            pause()
+        case .ended:
+            let shouldRestore = wasPlayingWhenInterrupted
+            wasPlayingWhenInterrupted = false
+            guard shouldRestore, !isDisposed else { return }
+            let optionsRaw = note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
+            let options = AVAudioSession.InterruptionOptions(rawValue: optionsRaw)
+            guard options.contains(.shouldResume) else { return }
+            Self.logger.info("AVAudioSession interruption ended — resuming")
+            print("[CMP] audio interruption ended; resuming")
+            // The interruption deactivated our session; reactivate before
+            // restarting the engine.
+            audioSessionActive = false
+            activateAudioSession()
+            play()
+        @unknown default:
             break
         }
     }
@@ -1077,6 +1148,7 @@ final class PlayerCore: NSObject {
     func play() {
         guard !isDisposed else { return }
         userPaused = false
+        wasPlayingWhenInterrupted = false
         let time = currentPlaybackTime()
         setPlaybackTimeline(time: time, rate: currentRate)
         audioOutput.setRate(currentRate)
@@ -1085,6 +1157,10 @@ final class PlayerCore: NSObject {
         // stays at 1.0 — pause is only a display-link toggle (zeroing the
         // timebase rate would blank the layer).
         DispatchQueue.main.async { [weak self] in
+            // Backgrounding while paused can leave the sample-buffer layer
+            // `.failed`; recover before the tick resumes enqueueing so the
+            // first resume after a foreground return isn't a frozen frame.
+            self?.recoverDisplayLayerIfFailed(reason: "play")
             self?.setVideoDisplayTickPaused(false)
             self?.onPauseChange?(false)
         }
@@ -1355,7 +1431,11 @@ final class PlayerCore: NSObject {
             self.onTimeChange?(target)
         }
 
-        // Restart demux + feeds from the seek point.
+        // Restart demux + feeds from the seek point. Re-check disposal —
+        // dispose() may have landed while we were blocked in
+        // `avformat_seek_file` or the main.sync above, and restarting the
+        // workers would resurrect a torn-down session.
+        guard !isDisposed else { return }
         clearEndOfFileFlag()
         resetCancellation()
         startVideoFeed()
@@ -1419,6 +1499,10 @@ final class PlayerCore: NSObject {
     }
 
     func dispose() {
+        dispose(deferringFrees: true)
+    }
+
+    private func dispose(deferringFrees: Bool) {
         guard claimDisposed() else { return }
         Self.logger.info("PlayerCore.dispose()")
 
@@ -1508,7 +1592,7 @@ final class PlayerCore: NSObject {
         embeddedSubtitlePipeline.waitForDecodeQueues()
 
         // Tear down FFmpeg + VT state.
-        teardownMedia()
+        teardownMedia(deferFrees: deferringFrees)
 
         // Give up the audio session. Done last because `teardownMedia` can
         // still produce a final CoreAudio drain event; releasing the session
@@ -1695,6 +1779,9 @@ final class PlayerCore: NSObject {
 
     private func resetCancellation() {
         cancelLock.lock(); defer { cancelLock.unlock() }
+        // dispose() relies on `_isCancelled` staying set so late-waking
+        // workers exit. A seek racing dispose must not clear it.
+        guard !_isDisposed else { return }
         _isCancelled = false
     }
 
@@ -4340,35 +4427,69 @@ final class PlayerCore: NSObject {
 
     // MARK: - Teardown
 
-    private func teardownMedia() {
+    private func teardownMedia(deferFrees: Bool = false) {
         videoToolboxDecoder.invalidate()
-        if videoCodecCtx != nil {
-            avcodec_free_context(&videoCodecCtx)
+
+        // Detach every FFmpeg context from `self` synchronously; free them
+        // either inline (deinit path) or behind the control queue.
+        //
+        // Why defer: `performSeek` runs on the control queue and can be
+        // inside a blocking `avformat_seek_file` when `dispose()` fires from
+        // another thread. The dispose barriers cover demux/feed queues but
+        // deliberately not control — performSeek does `DispatchQueue.main.sync`,
+        // so a control barrier taken from main would deadlock. Serializing
+        // the frees behind the control queue means an in-flight seek (which
+        // captured `formatCtx` before its disposed-check) finishes against
+        // valid pointers; later control-queue work re-checks `isDisposed` /
+        // nil properties and bails. The block captures `self` strongly so
+        // the FFmpeg interrupt callback's unretained pointer stays valid
+        // through `avformat_close_input`.
+        var videoCtxToFree = videoCodecCtx
+        videoCodecCtx = nil
+        let videoSwsCtxToFree = videoSwsCtx
+        videoSwsCtx = nil
+        var audioCtxToFree = audioCodecCtx
+        audioCodecCtx = nil
+        var audioSwrCtxToFree = audioSwrCtx
+        audioSwrCtx = nil
+        var formatCtxToFree = formatCtx
+        formatCtx = nil
+        let freeContexts = {
+            if videoCtxToFree != nil {
+                avcodec_free_context(&videoCtxToFree)
+            }
+            if videoSwsCtxToFree != nil {
+                sws_freeContext(videoSwsCtxToFree)
+            }
+            if audioCtxToFree != nil {
+                avcodec_free_context(&audioCtxToFree)
+            }
+            if audioSwrCtxToFree != nil {
+                swr_free(&audioSwrCtxToFree)
+            }
+            if formatCtxToFree != nil {
+                avformat_close_input(&formatCtxToFree)
+            }
         }
-        if videoSwsCtx != nil {
-            sws_freeContext(videoSwsCtx)
-            videoSwsCtx = nil
+        if deferFrees {
+            controlQueue.async { [self] in
+                freeContexts()
+                _ = self // keep the interrupt-callback target alive until closed
+            }
+        } else {
+            freeContexts()
         }
+
         videoDecodeMode = .videoToolbox
         videoFormatDescription = nil
         videoDecodeOutputDimensions = nil
         useUntimedCompressedVideoSamples = false
         isRebuildingDecoder = false
         decoderRebuildPending = false
-
-        if audioCodecCtx != nil {
-            avcodec_free_context(&audioCodecCtx)
-        }
-        if audioSwrCtx != nil {
-            swr_free(&audioSwrCtx)
-        }
         audioOutputConfig = nil
 
         embeddedSubtitlePipeline.teardown()
 
-        if formatCtx != nil {
-            avformat_close_input(&formatCtx)
-        }
         videoStreamIndex = -1
         audioStreamIndex = -1
 

@@ -34,15 +34,21 @@ struct MediaCard: View {
     var onRemoveFromContinueWatching: (() -> Void)? = nil
     var onSetWatched: ((Bool) -> Void)? = nil
     var aspect: MediaCardAspect = .poster
+    /// Overrides the theme's default card width. Skyline's dense landing
+    /// rows (§5.6) pass 208 so two rows + the marquee fit above the fold;
+    /// the poster keeps its 2:3 ratio.
+    var cardWidthOverride: CGFloat? = nil
 
     @State private var playedOverride: Bool?
     @EnvironmentObject private var overlayStore: OverlayPrefsStore
 
-    private var cardWidth: CGFloat { ContinuumTheme.posterCardWidth }
+    private var cardWidth: CGFloat { cardWidthOverride ?? ContinuumTheme.posterCardWidth }
     private var cardHeight: CGFloat {
         switch aspect {
-        case .poster: ContinuumTheme.posterCardHeight
-        case .square: ContinuumTheme.posterCardWidth
+        case .poster:
+            cardWidth * (ContinuumTheme.posterCardHeight / ContinuumTheme.posterCardWidth)
+        case .square:
+            cardWidth
         }
     }
 
@@ -225,14 +231,17 @@ private struct FocusableMediaCard<Content: View>: View {
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 22) {
             mediaButton
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
                     .font(.continuumSubheadline)
                     .foregroundColor(isFocused ? .continuumOnSurface : .continuumOnSurface.opacity(0.85))
-                    .lineLimit(2, reservesSpace: true)
+                    // Single line, truncated — keeps poster cards a uniform
+                    // height and the row short under the bottom-anchored marquee.
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                     .animation(.easeOut(duration: 0.15), value: isFocused)
 
                 if let year {

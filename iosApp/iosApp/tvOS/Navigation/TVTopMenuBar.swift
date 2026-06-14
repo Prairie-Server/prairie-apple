@@ -1,130 +1,183 @@
 #if os(tvOS)
 import SwiftUI
+import os // TVFOCUS-DEBUG: temporary focus tracing
+
+// TVFOCUS-DEBUG: temporary focus tracing (strip before finalizing)
+private let tvFocusBarLog = Logger(subsystem: "com.silo.tvfocus", category: "bar")
 
 enum TVTopMenuLayout {
     /// Vertical clearance needed when a root tvOS page does not render a
     /// full-bleed hero behind the custom top menu.
     static let contentTopInset: CGFloat = 188
-    static let primaryTopInset: CGFloat = 16
-    static let primaryRowHeight: CGFloat = 54
-    static let headerBandHeight: CGFloat = 92
-    static let profileMenuTopInset: CGFloat = 92
-    static let searchButtonWidth: CGFloat = 82
-    static let homeButtonWidth: CGFloat = 136
-    static let librariesButtonWidth: CGFloat = 196
-    static let forYouButtonWidth: CGFloat = 164
-    static let calendarButtonWidth: CGFloat = 186
-    static let librarySwitcherWidth: CGFloat = 218
-    static let librarySwitcherHeight: CGFloat = 46
-    static let librarySwitcherFocusPadding: CGFloat = 14
-    static let libraryModeWidth: CGFloat = 314
-    static let libraryModeFocusPadding: CGFloat = 12
-    static let libraryAccessoryHeight: CGFloat = 52
-    static let rootTextSize: CGFloat = 24
-    static let libraryMenuLeadingInset: CGFloat = 128
 }
 
-enum TVRootDestination: String, CaseIterable, Identifiable, Hashable {
-    case home = "Home"
-    case search = "Search"
-    case libraries = "Libraries"
-    case forYou = "For You"
-    case calendar = "Calendar"
+/// Publishes the on-screen bounds of each panel-bearing bar element so the
+/// shell can anchor the cascade / profile panel under it (§5.3 "centered
+/// under the tab", §5.8 "under the avatar"). One `Anchor` per element; the
+/// shell resolves the open panel's anchor in its own coordinate space.
+struct TVTopMenuAnchorKey: PreferenceKey {
+    static let defaultValue: [TVTopMenuPanel: Anchor<CGRect>] = [:]
 
-    var id: String { rawValue }
+    static func reduce(
+        value: inout [TVTopMenuPanel: Anchor<CGRect>],
+        nextValue: () -> [TVTopMenuPanel: Anchor<CGRect>]
+    ) {
+        value.merge(nextValue()) { _, new in new }
+    }
 }
 
-struct TVLibraryMenuOption: Identifiable, Equatable {
-    let id: Int
-    let name: String
-    let typeLabel: String
-    let iconName: String
+/// A library content type that can surface as a root tab (Skyline §3.1).
+/// Tabs represent types, not server libraries — a type's tab appears only
+/// if the profile can see at least one library of that type.
+enum TVLibraryTabType: String, CaseIterable, Hashable {
+    case movies
+    case series
+    case music
+    case audiobooks
+
+    var title: String {
+        switch self {
+        case .movies: return "Movies"
+        case .series: return "Series"
+        case .music: return "Music"
+        case .audiobooks: return "Audiobooks"
+        }
+    }
+
+    /// SF Symbol for a library row of this type in the cascade level-1
+    /// panel (§5.3). Per-library art isn't fetched there — the icon is a
+    /// quiet type cue, mirroring the empty-state glyphs elsewhere.
+    var systemImage: String {
+        switch self {
+        case .movies: return "film.stack"
+        case .series: return "tv"
+        case .music: return "music.note"
+        case .audiobooks: return "book.closed"
+        }
+    }
+
+    /// Mono section header for the cascade level-1 panel (§5.3), e.g.
+    /// `MOVIE LIBRARIES`.
+    var librariesHeader: String {
+        switch self {
+        case .movies: return "MOVIE LIBRARIES"
+        case .series: return "SERIES LIBRARIES"
+        case .music: return "MUSIC LIBRARIES"
+        case .audiobooks: return "AUDIOBOOK LIBRARIES"
+        }
+    }
+
+    /// Whether a server library belongs under this tab.
+    func matches(_ library: Library) -> Bool {
+        switch self {
+        case .movies: return library.type == "movies"
+        case .series: return library.isSeriesLibrary
+        case .music: return library.type == "music"
+        case .audiobooks: return library.isAudiobookLibrary
+        }
+    }
 }
 
-struct TVLibraryHeaderContext: Equatable {
-    let id: Int
-    let name: String
-    let typeLabel: String
-    let iconName: String
-    let canSwitchLibrary: Bool
-    let options: [TVLibraryMenuOption]
+enum TVRootDestination: Hashable {
+    case home
+    case libraryType(TVLibraryTabType)
+    case calendar
+
+    var title: String {
+        switch self {
+        case .home: return "Home"
+        case .libraryType(let type): return type.title
+        case .calendar: return "Calendar"
+        }
+    }
 }
 
+/// Skyline top bar: wordmark left, type-derived tabs centered, search +
+/// profile avatar right (§5.1). The bar is custom on purpose — the system
+/// `TabView` sidebar steals leftward focus — and draws no background band;
+/// it floats over each page's own scrim and dims to 70% while focus is
+/// down in the content zone.
 struct TVTopMenuBar: View {
+    let roots: [TVRootDestination]
     let selectedRoot: TVRootDestination
     let currentProfile: UserProfile?
-    let libraryHeaderContext: TVLibraryHeaderContext?
-    let libraryMode: TVLibraryLandingMode
+    /// Whether the signed-in user is a server admin — gates the Admin
+    /// Dashboard row in the profile dropdown.
+    let isAdmin: Bool
     @Binding var isMenuFocused: Bool
     let isFocusSuppressed: Bool
     let focusRequest: Int
+    /// Bar element to focus on the next `focusRequest` bump, overriding the
+    /// default of the selected tab. The shell sets this so Menu-ing out of a
+    /// panel returns focus to the *panel's* tab/avatar (§7), not whatever
+    /// root happens to be selected.
+    var focusRequestTarget: TVTopMenuPanel? = nil
+    /// Which bar element currently has an anchored panel open (the host
+    /// owns the panel; the bar only drives the dwell + hand-off). When set
+    /// to the focused element, its capsule drops from inverted to
+    /// `chrome.selected` once focus descends into the panel.
+    let openPanel: TVTopMenuPanel?
+    /// True once focus has descended from the bar into the open panel —
+    /// the tab/avatar then reads as selected, not focused (§5.1).
+    let panelHasFocus: Bool
     let onSelectRoot: (TVRootDestination) -> Void
-    let onSelectLibraryMode: (TVLibraryLandingMode) -> Void
-    let onSelectLibrary: (Int) -> Void
-    let onSwitchProfile: () -> Void
-    let onSwitchServer: () -> Void
-    let onSettings: () -> Void
-    let onSignOut: () -> Void
+    let onSearch: () -> Void
+    /// A bar element rested under focus for the dwell interval, or focus
+    /// left every dwellable element (`nil` → close any open panel). §5.3.
+    let onDwell: (TVTopMenuPanel?) -> Void
+    /// D-pad down on a panel-bearing element (library tab or avatar): the
+    /// host opens its panel if needed and hands focus in (§5.3). Takes the
+    /// element so the host routes to the right panel.
+    let onEnterPanel: (TVTopMenuPanel) -> Void
+    /// Press on the profile avatar opens the profile panel and enters it
+    /// immediately; dwell only previews it.
+    let onProfilePressed: () -> Void
     var onExit: (() -> Void)? = nil
 
-    @State private var showsProfileActions = false
-    @State private var showsLibraryActions = false
     @FocusState private var focusedItem: TVTopMenuFocus?
+    /// Dwell timer keyed on the focused element; cancelled on every focus
+    /// move so bar sweeps never open a panel (§5.3, Open-Q5/Q7).
+    @State private var dwellTask: Task<Void, Never>?
+    /// The last bar element focus actually settled on. Used to restore focus
+    /// when opening/closing the dropdown overlay transiently drops it.
+    @State private var lastBarFocus: TVTopMenuFocus?
+    /// Set when a sideways move closes the open panel: the overlay removal
+    /// perturbs focus, so the next nil-drop is spurious and must be re-pinned.
+    @State private var refocusAfterClose = false
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack(alignment: .top) {
-            topScrim
+            tabCluster
 
-            HStack(spacing: 34) {
-                iconButton(
-                    systemImage: "magnifyingglass",
-                    label: "Search",
-                    isSelected: selectedRoot == .search,
-                    isFocused: focusedItem == .search,
-                    action: { selectRootFromMenu(.search) }
-                )
+            HStack(spacing: 0) {
+                wordmark
 
-                rootButton(.home)
+                Spacer(minLength: ContinuumTheme.Skyline.tabSpacing)
 
-                rootButton(.libraries)
-
-                rootButton(.forYou)
-
-                rootButton(.calendar)
+                trailingCluster
             }
-            .frame(height: TVTopMenuLayout.primaryRowHeight, alignment: .top)
-            .padding(.top, TVTopMenuLayout.primaryTopInset)
-            .frame(maxWidth: .infinity, alignment: .top)
-            .zIndex(1)
-
-            HStack(spacing: 16) {
-                profileButton
-
-                librarySwitcherAccessory
-
-                Spacer(minLength: 0)
-            }
-            .frame(height: TVTopMenuLayout.primaryRowHeight, alignment: .top)
-            .padding(.leading, 44)
-            .padding(.top, TVTopMenuLayout.primaryTopInset)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-            .zIndex(1)
-
-            libraryModeAccessory
-                .frame(height: TVTopMenuLayout.primaryRowHeight, alignment: .top)
-                .padding(.trailing, 86)
-                .padding(.top, TVTopMenuLayout.primaryTopInset)
-                .frame(maxWidth: .infinity, alignment: .topTrailing)
-                .zIndex(1)
         }
+        .frame(height: ContinuumTheme.Skyline.barHeight)
+        .padding(.horizontal, ContinuumTheme.Skyline.safeAreaX)
+        .padding(.top, ContinuumTheme.Skyline.barTopInset)
         .frame(maxWidth: .infinity, alignment: .top)
-        .frame(minHeight: TVTopMenuLayout.headerBandHeight, alignment: .top)
-        .ignoresSafeArea(edges: .top)
+        .ignoresSafeArea(edges: [.top, .horizontal])
+        // The bar dims only while focus is down in the content zone (§5.1).
+        // An open panel keeps it fully lit — focus has merely descended into
+        // the dropdown, and dimming the bar there greys out the panel's own
+        // anchor tab and reads as a heavy "everything went dark" state.
+        .opacity(isMenuFocused || openPanel != nil ? 1.0 : ContinuumTheme.Skyline.barDimmedOpacity)
+        // Reduce Motion snaps the bar dim/restore as focus enters/leaves
+        // the content zone (§5.1; §4.2 acceptance: no drift animations).
+        .animation(reduceMotion ? nil : .easeInOut(duration: ContinuumTheme.normalDuration), value: isMenuFocused)
         .focusSection()
-        .animation(ContinuumTheme.springAnimation, value: showsProfileActions)
-        .animation(ContinuumTheme.springAnimation, value: showsLibraryActions)
         .disabled(isFocusSuppressed)
-        .modifier(TVTopMenuExitHandler(onExit: onExit))
+        // Menu while a panel is opening from the bar closes the panel
+        // instead of exiting the page. Once focus is inside the panel, the
+        // overlay's own `onExitCommand` catches Menu first.
+        .modifier(TVTopMenuExitHandler(onExit: barExitAction))
         .onChange(of: isFocusSuppressed) { _, newValue in
             if newValue {
                 focusedItem = nil
@@ -134,140 +187,130 @@ struct TVTopMenuBar: View {
             requestMenuFocus()
         }
         .onChange(of: isMenuFocused) { _, newValue in
-            if !newValue {
+            // Don't release the bar's own focus when the *panel* is what's
+            // taking it (panelHasFocus): the panel claims focus through its
+            // own @FocusState and the system clears ours. Nulling here first
+            // leaves a frame with nothing focused, which tvOS repairs to the
+            // Home tab — the flash / focus reset. Content hand-off still nulls
+            // via the isFocusSuppressed handler above.
+            if !newValue && !panelHasFocus {
                 focusedItem = nil
             }
         }
+        .onChange(of: panelHasFocus) { _, newValue in
+            isMenuFocused = focusedItem != nil && !newValue
+        }
         .onChange(of: focusedItem) { _, newValue in
-            isMenuFocused = newValue != nil
-        }
-        .fullScreenCover(isPresented: $showsProfileActions) {
-            profileMenuPresentation
-                .presentationBackground(.clear)
-        }
-        .fullScreenCover(isPresented: $showsLibraryActions) {
-            libraryMenuPresentation
-                .presentationBackground(.clear)
-        }
-    }
-
-    private var topScrim: some View {
-        LinearGradient(
-            stops: [
-                .init(color: Color.black.opacity(0.84), location: 0.0),
-                .init(color: Color.black.opacity(0.72), location: 0.58),
-                .init(color: Color.black.opacity(0.36), location: 0.88),
-                .init(color: .clear, location: 1.0),
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
-        .frame(height: TVTopMenuLayout.headerBandHeight)
-        .frame(maxWidth: .infinity, alignment: .top)
-        .allowsHitTesting(false)
-    }
-
-    private var profileButton: some View {
-        Button {
-            showsLibraryActions = false
-            showsProfileActions = true
-        } label: {
-            HStack(spacing: 14) {
-                ProfileAvatarView(
-                    avatar: currentProfile?.avatarEmoji,
-                    name: currentProfile?.name ?? "",
-                    size: 44,
-                    backgroundColor: Color.white.opacity(0.18),
-                    textColor: .white
-                )
-
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(profileForegroundColor)
+            tvFocusBarLog.debug("bar.focusedItem -> \(String(describing: newValue), privacy: .public) (openPanel=\(String(describing: self.openPanel), privacy: .public), panelHasFocus=\(self.panelHasFocus), refocusAfterClose=\(self.refocusAfterClose))")
+            if let newValue {
+                lastBarFocus = newValue
+                refocusAfterClose = false
+                isMenuFocused = !panelHasFocus
+                scheduleDwell(for: newValue)
+                return
             }
-            .frame(height: TVTopMenuLayout.primaryRowHeight)
-            .padding(.horizontal, 8)
-            .modifier(
-                TVTopMenuButtonChrome(
-                    isSelected: false,
-                    isFocused: focusedItem == .profile
-                )
-            )
-            .animation(ContinuumTheme.springAnimation, value: focusedItem)
-        }
-        .buttonStyle(.continuumFlat)
-        .focused($focusedItem, equals: .profile)
-        .accessibilityLabel("Profile")
-    }
-
-    private var profileMenuPresentation: some View {
-        TVProfileActionsModal(
-            profileName: currentProfile?.name ?? "Profile",
-            avatar: currentProfile?.avatarEmoji,
-            onSwitchProfile: { dismissProfileMenu(then: onSwitchProfile) },
-            onSwitchServer: { dismissProfileMenu(then: onSwitchServer) },
-            onSettings: { dismissProfileMenu(then: onSettings) },
-            onSignOut: { dismissProfileMenu(then: onSignOut) },
-            onDismiss: { showsProfileActions = false }
-        )
-    }
-
-    @ViewBuilder
-    private var libraryMenuPresentation: some View {
-        if let libraryHeaderContext {
-            TVLibraryActionsModal(
-                context: libraryHeaderContext,
-                onSelect: { libraryID in
-                    showsLibraryActions = false
-                    onSelectLibrary(libraryID)
-                },
-                onDismiss: { showsLibraryActions = false }
-            )
-        } else {
-            Color.clear
-                .ignoresSafeArea()
-                .onAppear {
-                    showsLibraryActions = false
+            // Focus dropped to nil. Opening OR closing the dropdown overlay
+            // perturbs the focus graph and makes tvOS drop the bar's
+            // @FocusState, repairing to the Home tab (the flash). When that's
+            // why we lost focus — a preview panel is open, or a sideways move
+            // just closed one — re-pin to the tab the user is actually on.
+            // A legit leave (down into the page, Menu out) has neither flag,
+            // so it falls through and focus is allowed to go.
+            let spuriousFromOpenPreview = openPanel != nil && !panelHasFocus
+            if (spuriousFromOpenPreview || refocusAfterClose), let target = lastBarFocus {
+                refocusAfterClose = false
+                DispatchQueue.main.async {
+                    guard focusedItem == nil, !panelHasFocus else { return }
+                    focusedItem = target
                 }
+                return
+            }
+            isMenuFocused = false
+            scheduleDwell(for: nil)
+        }
+        .onDisappear { dwellTask?.cancel() }
+    }
+
+    // MARK: - Clusters
+
+    private var wordmark: some View {
+        Text("SILO")
+            .font(.system(size: ContinuumTheme.Skyline.wordmarkSize, weight: .heavy))
+            .tracking(ContinuumTheme.Skyline.wordmarkTracking)
+            .foregroundStyle(.white)
+            .accessibilityLabel("Silo")
+            .accessibilityHidden(true)
+    }
+
+    private var tabCluster: some View {
+        HStack(spacing: ContinuumTheme.Skyline.tabSpacing) {
+            ForEach(Array(roots.enumerated()), id: \.element) { index, root in
+                rootButton(root, index: index, count: roots.count)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
+        .frame(height: ContinuumTheme.Skyline.barHeight)
+    }
+
+    private var trailingCluster: some View {
+        HStack(spacing: ContinuumTheme.Skyline.barTrailingSpacing) {
+            searchButton
+
+            profileButton
         }
     }
 
-    private var profileForegroundColor: Color {
-        focusedItem == .profile ? .white : .white.opacity(0.78)
-    }
+    // MARK: - Tabs
 
-    private func dismissProfileMenu(then action: @escaping () -> Void) {
-        showsProfileActions = false
-        DispatchQueue.main.async {
-            action()
-        }
-    }
-
-    private func rootButton(_ root: TVRootDestination) -> some View {
-        let isFocused = focusedItem == .root(root)
-        let isSelected = selectedRoot == root
+    private func rootButton(_ root: TVRootDestination, index: Int, count: Int) -> some View {
+        // While its panel owns focus the tab reads as selected, not focused
+        // (§5.1) — the inverted look transfers to the panel row.
+        let panelOwnsFocus = panelHasFocus && openPanel == .root(root)
+        let hasFocus = focusedItem == .root(root) && !panelHasFocus
+        let isFocused = hasFocus && !panelOwnsFocus
+        let isSelected = selectedRoot == root || panelOwnsFocus
 
         return Button {
             selectRootFromMenu(root)
         } label: {
-            Text(root.rawValue)
-                .font(.system(size: TVTopMenuLayout.rootTextSize, weight: isSelected || isFocused ? .semibold : .regular))
-                .foregroundStyle(isSelected || isFocused ? .white : .white.opacity(0.70))
+            Text(root.title)
+                .font(.system(size: ContinuumTheme.Skyline.tabLabelSize, weight: .semibold))
+                .foregroundStyle(tabForeground(isSelected: isSelected, isFocused: isFocused))
                 .lineLimit(1)
-                .minimumScaleFactor(0.82)
-                .frame(width: rootButtonWidth(for: root), height: TVTopMenuLayout.primaryRowHeight)
-                .modifier(
-                    TVTopMenuButtonChrome(
-                        isSelected: isSelected,
-                        isFocused: isFocused
-                    )
-                )
-                .animation(ContinuumTheme.springAnimation, value: isFocused)
-                .animation(.easeInOut(duration: 0.18), value: isSelected)
+                .padding(.horizontal, ContinuumTheme.Skyline.tabPaddingHorizontal)
+                .padding(.vertical, ContinuumTheme.Skyline.tabPaddingVertical)
+                .modifier(TVTopMenuCapsuleChrome(isSelected: isSelected, isFocused: isFocused))
         }
         .buttonStyle(.continuumFlat)
         .focused($focusedItem, equals: .root(root))
+        // Down opens this tab's cascade panel (if a dwell hasn't already)
+        // and hands focus straight into it, so the move never escapes to the
+        // page content behind the bar. Fires only when the engine can't move
+        // focus within the bar — i.e. the bar is a single row, so down
+        // always reaches here.
+        // `canOpenPanel` is keyed on the tab *kind* (a library tab always
+        // can; Home/Calendar never can) — invariant, so opening a panel
+        // never restructures this focused button (which dropped focus).
+        .modifier(TVTopMenuDownHandler(canOpenPanel: libraryRoot(root) != nil) {
+            onEnterPanel(.root(root))
+        })
+        // Library tabs publish their bounds so the shell can center the
+        // cascade panel under them (§5.3); other tabs have no panel.
+        .modifier(TVTopMenuAnchorPublisher(panel: libraryRoot(root) != nil ? .root(root) : nil))
+        .accessibilityLabel("\(root.title), tab, \(index + 1) of \(count)")
+        .accessibilityHint(libraryRoot(root) != nil ? "Rest to choose a library" : "")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    private func libraryRoot(_ root: TVRootDestination) -> TVLibraryTabType? {
+        if case .libraryType(let type) = root { return type }
+        return nil
+    }
+
+    private func tabForeground(isSelected: Bool, isFocused: Bool) -> Color {
+        if isFocused { return .continuumBackground }
+        if isSelected { return .white }
+        return .white.opacity(0.62)
     }
 
     private func selectRootFromMenu(_ root: TVRootDestination) {
@@ -277,240 +320,235 @@ struct TVTopMenuBar: View {
         }
     }
 
-    private func menuFocusTarget(for root: TVRootDestination) -> TVTopMenuFocus {
-        root == .search ? .search : .root(root)
-    }
-
     private func requestMenuFocus() {
-        let target = menuFocusTarget(for: selectedRoot)
         DispatchQueue.main.async {
             guard !isFocusSuppressed else { return }
-            focusedItem = target
+            switch focusRequestTarget {
+            case .root(let root): focusedItem = .root(root)
+            case .profile: focusedItem = .profile
+            case .none: focusedItem = .root(selectedRoot)
+            }
         }
     }
 
-    private func rootButtonWidth(for root: TVRootDestination) -> CGFloat {
-        switch root {
-        case .home:
-            return TVTopMenuLayout.homeButtonWidth
-        case .search:
-            return TVTopMenuLayout.searchButtonWidth
-        case .libraries:
-            return TVTopMenuLayout.librariesButtonWidth
-        case .forYou:
-            return TVTopMenuLayout.forYouButtonWidth
-        case .calendar:
-            return TVTopMenuLayout.calendarButtonWidth
-        }
-    }
+    // MARK: - Search
 
-    private func iconButton(
-        systemImage: String,
-        label: String,
-        isSelected: Bool,
-        isFocused: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 32, weight: .regular))
-                .foregroundStyle(iconForegroundColor(isSelected: isSelected, isFocused: isFocused))
-                .frame(width: TVTopMenuLayout.searchButtonWidth, height: TVTopMenuLayout.primaryRowHeight)
-                .modifier(
-                    TVTopMenuButtonChrome(
-                        isSelected: isSelected,
-                        isFocused: isFocused
-                    )
+    private var searchButton: some View {
+        let isFocused = focusedItem == .search && !panelHasFocus
+
+        return Button(action: onSearch) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(isFocused ? Color.continuumBackground : .white.opacity(0.62))
+                .frame(
+                    width: ContinuumTheme.Skyline.barIconSize,
+                    height: ContinuumTheme.Skyline.barIconSize
                 )
-                .animation(ContinuumTheme.springAnimation, value: isFocused)
+                .modifier(TVTopMenuCapsuleChrome(isSelected: false, isFocused: isFocused))
         }
         .buttonStyle(.continuumFlat)
         .focused($focusedItem, equals: .search)
-        .accessibilityLabel(label)
+        .accessibilityLabel("Search")
     }
 
-    private func iconForegroundColor(isSelected: Bool, isFocused: Bool) -> Color {
-        if isFocused || isSelected {
-            return .white
-        }
-        return .white.opacity(0.72)
-    }
+    // MARK: - Profile
 
-    @ViewBuilder
-    private var librarySwitcherAccessory: some View {
-        if selectedRoot == .libraries {
-            if let libraryHeaderContext {
-                Button {
-                    showsProfileActions = false
-                    showsLibraryActions = true
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: libraryHeaderContext.iconName)
-                            .font(.system(size: 16, weight: .semibold))
+    private var profileButton: some View {
+        // The avatar keeps its focus ring while the profile panel is open
+        // and focus is still on the avatar; once focus descends into the
+        // panel the ring drops (the panel rows carry focus then, §5.8).
+        let panelOwnsFocus = panelHasFocus && openPanel == .profile
+        let isFocused = focusedItem == .profile && !panelHasFocus && !panelOwnsFocus
 
-                        VStack(alignment: .leading, spacing: 0) {
-                            Text(libraryHeaderContext.typeLabel.uppercased())
-                                .font(.system(size: 9, weight: .bold))
-                                .tracking(1.2)
-                                .opacity(0.58)
-
-                            Text(libraryHeaderContext.name)
-                                .font(.system(size: 16, weight: .semibold))
-                                .lineLimit(1)
-                        }
-
-                        if libraryHeaderContext.canSwitchLibrary {
-                            Image(systemName: "chevron.down")
-                                .font(.system(size: 11, weight: .bold))
-                                .opacity(0.70)
-                        }
-                    }
-                    .foregroundStyle(libraryAccessoryForeground(isSelected: false, isFocused: focusedItem == .librarySwitcher))
-                    .padding(.horizontal, 12)
-                    .frame(width: TVTopMenuLayout.librarySwitcherWidth, height: TVTopMenuLayout.librarySwitcherHeight, alignment: .leading)
-                    .modifier(
-                        TVTopMenuButtonChrome(
-                            isSelected: false,
-                            isFocused: focusedItem == .librarySwitcher
-                        )
-                    )
-                }
-                .buttonStyle(.continuumFlat)
-                .disabled(!libraryHeaderContext.canSwitchLibrary)
-                .focused($focusedItem, equals: .librarySwitcher)
-                .accessibilityLabel("Switch Library")
-                .padding(.horizontal, TVTopMenuLayout.librarySwitcherFocusPadding)
-                .padding(.vertical, 4)
-            } else {
-                Color.clear
-                    .frame(
-                        width: TVTopMenuLayout.librarySwitcherWidth + (TVTopMenuLayout.librarySwitcherFocusPadding * 2),
-                        height: TVTopMenuLayout.primaryRowHeight
-                    )
+        return Button {
+            // Press opens and enters immediately (§5.8); dwell only previews.
+            onProfilePressed()
+        } label: {
+            ProfileAvatarView(
+                avatar: currentProfile?.avatarEmoji,
+                name: currentProfile?.name ?? "",
+                size: ContinuumTheme.Skyline.barIconSize,
+                backgroundColor: Color.white.opacity(0.18),
+                textColor: .white
+            )
+            .overlay {
+                Circle()
+                    .strokeBorder(Color.white, lineWidth: isFocused ? 3 : 0)
             }
+            // Reduce Motion drops the focus scale so the avatar snaps (§4.2).
+            .scaleEffect(isFocused && !reduceMotion ? 1.05 : 1.0)
+            .focusEffectDisabled()
+            .animation(reduceMotion ? nil : ContinuumTheme.springAnimation, value: isFocused)
+        }
+        .buttonStyle(.continuumFlat)
+        .focused($focusedItem, equals: .profile)
+        .modifier(TVTopMenuDownHandler(canOpenPanel: true) {
+            onEnterPanel(.profile)
+        })
+        .modifier(TVTopMenuAnchorPublisher(panel: .profile))
+        .accessibilityLabel("Profile")
+        .accessibilityHint("Rest or press to open the profile menu")
+    }
+
+    /// Menu handler for the bar: closes a dwell-open panel first (§5.3
+    /// "Menu closes"), otherwise the page-level exit (Home / system).
+    private var barExitAction: (() -> Void)? {
+        if openPanel != nil {
+            return { onDwell(nil) }
+        }
+        return onExit
+    }
+
+    // MARK: - Dwell (§5.3, §5.8)
+
+    /// Restart the dwell timer whenever focus settles on a new bar
+    /// element. A library tab or the profile avatar opens its panel after
+    /// the dwell interval; any other element (or losing focus) closes any
+    /// open panel immediately. Cancelled on every focus move so a sweep
+    /// across the bar never opens a panel (Open-Q5/Q7).
+    private func scheduleDwell(for item: TVTopMenuFocus?) {
+        dwellTask?.cancel()
+
+        // Moving focus to a *different bar element* — another tab, or the
+        // search button — closes the open panel right away (§5.3: "moving
+        // sideways to another tab closes it"), so it doesn't linger during
+        // the new element's dwell. Once the panel is expected to own focus,
+        // ignore top-bar repairs: tvOS may briefly re-home to Home while
+        // the panel row focus claim is being applied.
+        if let openPanel, !panelHasFocus, let item, !item.matches(panel: openPanel) {
+            onDwell(nil)
+            // Closing the panel removes its overlay, which perturbs focus and
+            // drops the tab we just moved to; flag it so the nil-drop re-pins.
+            refocusAfterClose = true
+        }
+
+        guard let target = dwellTarget(for: item) else { return }
+
+        dwellTask = Task { @MainActor in
+            try? await Task.sleep(
+                nanoseconds: ContinuumTheme.Skyline.cascadeDwellMilliseconds * 1_000_000
+            )
+            guard !Task.isCancelled else { return }
+            // Confirm focus is still on the same element before opening —
+            // a late move that didn't cancel in time must not fire.
+            guard focusedItem == item else { return }
+            onDwell(target)
         }
     }
 
-    @ViewBuilder
-    private var libraryModeAccessory: some View {
-        if selectedRoot == .libraries {
-            if libraryHeaderContext != nil {
-                TVLibraryModeSlider(
-                    selectedMode: libraryMode,
-                    focusedItem: $focusedItem,
-                    onSelectMode: onSelectLibraryMode
-                )
-                .focusSection()
-                .padding(.horizontal, TVTopMenuLayout.libraryModeFocusPadding)
-                .accessibilityLabel("Library view")
-                .accessibilityValue(libraryMode.title)
-            } else {
-                Color.clear
-                    .frame(
-                        width: TVTopMenuLayout.libraryModeWidth + (TVTopMenuLayout.libraryModeFocusPadding * 2),
-                        height: TVTopMenuLayout.libraryAccessoryHeight
-                    )
-            }
+    /// Maps a focused bar element to the panel it should dwell-open, or
+    /// `nil` for elements with no panel (wordmark/search/non-library tabs).
+    private func dwellTarget(for item: TVTopMenuFocus?) -> TVTopMenuPanel? {
+        switch item {
+        case .root(let root):
+            guard case .libraryType = root else { return nil }
+            return .root(root)
+        case .profile:
+            return .profile
+        case .search, .none:
+            return nil
         }
     }
+}
 
-    private func libraryAccessoryForeground(isSelected: Bool, isFocused: Bool) -> Color {
-        if isFocused || isSelected { return .white }
-        return Color.continuumOnSurface.opacity(0.76)
-    }
-
+/// Which bar element an anchored panel is attached to (§5.3/§5.8).
+enum TVTopMenuPanel: Hashable {
+    case root(TVRootDestination)
+    case profile
 }
 
 private enum TVTopMenuFocus: Hashable {
-    case profile
-    case search
     case root(TVRootDestination)
-    case librarySwitcher
-    case libraryMode(TVLibraryLandingMode)
+    case search
+    case profile
+
+    /// Whether this focused element is the anchor of the given open panel —
+    /// i.e. focus is still "on" that panel's tab/avatar, not a sibling.
+    func matches(panel: TVTopMenuPanel) -> Bool {
+        switch (self, panel) {
+        case let (.root(a), .root(b)): return a == b
+        case (.profile, .profile): return true
+        default: return false
+        }
+    }
 }
 
-private enum TVProfileAction: Hashable {
-    case switchProfile
-    case switchServer
-    case settings
-    case signOut
-    case cancel
-}
+/// Capsule chrome for top-bar tabs and the search button (§5.1):
+/// resting = bare label, selected = `chrome.selected` capsule, focused =
+/// inverted white capsule. Focus inversion is the platform grammar — no
+/// outline ring, no system halo.
+private struct TVTopMenuCapsuleChrome: ViewModifier {
+    let isSelected: Bool
+    let isFocused: Bool
 
-private struct TVLibraryModeSlider: View {
-    let selectedMode: TVLibraryLandingMode
-    @FocusState.Binding var focusedItem: TVTopMenuFocus?
-    let onSelectMode: (TVLibraryLandingMode) -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private let segmentWidth: CGFloat = 152
-    private let segmentHeight: CGFloat = 46
-
-    var body: some View {
-        HStack(spacing: 0) {
-            segmentButton(.recommended)
-            segmentButton(.collections)
-        }
-        .padding(5)
-        .background(
-            Capsule()
-                .fill(Color.black.opacity(isControlFocused ? 0.46 : 0.28))
-        )
-        .overlay {
-            Capsule()
-                .strokeBorder(Color.white.opacity(isControlFocused ? 0.56 : 0.14), lineWidth: isControlFocused ? 1.5 : 1)
-        }
-        .scaleEffect(isControlFocused ? 1.025 : 1.0)
-        .animation(ContinuumTheme.springAnimation, value: selectedMode)
-        .animation(ContinuumTheme.springAnimation, value: focusedItem)
-    }
-
-    private func segmentButton(_ mode: TVLibraryLandingMode) -> some View {
-        let isSelected = selectedMode == mode
-        let isFocused = focusedItem == .libraryMode(mode)
-
-        return Button {
-            onSelectMode(mode)
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: mode.systemImage)
-                    .font(.system(size: 13, weight: .bold))
-
-                Text(mode.title)
-                    .font(.system(size: 16, weight: .semibold))
-                    .lineLimit(1)
+    func body(content: Content) -> some View {
+        content
+            .background(Capsule().fill(fillColor))
+            .overlay {
+                Capsule().strokeBorder(borderColor, lineWidth: 1)
             }
-            .foregroundStyle(segmentForeground(isSelected: isSelected, isFocused: isFocused))
-            .frame(width: segmentWidth, height: segmentHeight)
-            .background(
-                Capsule()
-                    .fill(segmentFill(isSelected: isSelected, isFocused: isFocused))
-            )
-            .shadow(color: .black.opacity(isFocused ? 0.32 : 0), radius: isFocused ? 10 : 0, y: 4)
-        }
-        .buttonStyle(.continuumFlat)
-        .focused($focusedItem, equals: .libraryMode(mode))
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .onChange(of: isFocused) { _, newValue in
-            if newValue, selectedMode != mode {
-                onSelectMode(mode)
-            }
-        }
+            .focusEffectDisabled()
+            // Reduce Motion snaps the tab/search capsule inversion (§4.2).
+            .animation(reduceMotion ? nil : ContinuumTheme.springAnimation, value: isFocused)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: isSelected)
     }
 
-    private var isControlFocused: Bool {
-        focusedItem == .libraryMode(.recommended) || focusedItem == .libraryMode(.collections)
-    }
-
-    private func segmentFill(isSelected: Bool, isFocused: Bool) -> Color {
-        if isFocused { return Color.white.opacity(0.94) }
-        if isSelected { return Color.white.opacity(0.18) }
+    private var fillColor: Color {
+        if isFocused { return .white }
+        if isSelected { return .continuumChromeSelectedFill }
         return .clear
     }
 
-    private func segmentForeground(isSelected: Bool, isFocused: Bool) -> Color {
-        if isFocused { return .continuumBackground }
-        if isSelected { return .white }
-        return .white.opacity(isControlFocused ? 0.70 : 0.54)
+    private var borderColor: Color {
+        if isFocused { return .clear }
+        if isSelected { return .continuumChromeSelectedBorder }
+        return .clear
+    }
+}
+
+/// Shared surface for every Skyline anchored menu (§5.3 cascade + flyout,
+/// §5.8 profile) so they read as one family. A frosted material base under
+/// a near-opaque vertical tint — lighter at the top, as if lit from above —
+/// finished with a gradient hairline that brightens along the top lip and a
+/// two-layer shadow (a tight contact shadow under a broad ambient one) so
+/// the panel floats over the page on its own depth rather than needing a
+/// page scrim to darken everything behind it.
+struct TVSkylinePanelChrome: ViewModifier {
+    var cornerRadius: CGFloat = ContinuumTheme.Skyline.dropdownCornerRadius
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        return content
+            .background(shape.fill(.regularMaterial))
+            .background(
+                shape.fill(
+                    LinearGradient(
+                        colors: [
+                            Color(hex: "#23252C").opacity(0.92),
+                            Color(hex: "#141519").opacity(0.95),
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+            )
+            .overlay {
+                shape.strokeBorder(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.22),
+                            Color.white.opacity(0.05),
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    ),
+                    lineWidth: 1
+                )
+            }
+            .shadow(color: .black.opacity(0.35), radius: 8, y: 4)
+            .shadow(color: .black.opacity(0.55), radius: 40, y: 24)
     }
 }
 
@@ -527,304 +565,220 @@ private struct TVTopMenuExitHandler: ViewModifier {
     }
 }
 
-private struct TVProfileActionsPanel: View {
+/// Hands d-pad **down** on a panel-bearing bar element (library tab or
+/// avatar) to the host, which opens the element's panel if needed and moves
+/// focus into it (§5.3). Attachment is keyed on the element's *kind*
+/// (`canOpenPanel`, invariant) — never on whether its panel is currently
+/// open. Toggling the attachment on a *focused* button rebuilds its subtree
+/// and drops `@FocusState`, which bounced focus back to the Home tab; keeping
+/// it invariant fixes that. The live open/enter decision is in the closure.
+private struct TVTopMenuDownHandler: ViewModifier {
+    let canOpenPanel: Bool
+    let onDown: () -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if canOpenPanel {
+            content.onMoveCommand { direction in
+                if direction == .down { onDown() }
+            }
+        } else {
+            content
+        }
+    }
+}
+
+/// Publishes a bar element's bounds into `TVTopMenuAnchorKey` so the shell
+/// can anchor its panel. A `nil` panel publishes nothing (elements with no
+/// panel).
+private struct TVTopMenuAnchorPublisher: ViewModifier {
+    let panel: TVTopMenuPanel?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let panel {
+            content.anchorPreference(key: TVTopMenuAnchorKey.self, value: .bounds) {
+                [panel: $0]
+            }
+        } else {
+            content
+        }
+    }
+}
+
+// MARK: - Profile dropdown
+
+private enum TVProfileAction: Hashable {
+    case switchProfile
+    case watchlist
+    case favorites
+    case history
+    case settings
+    case adminDashboard
+    case switchServer
+    case signOut
+}
+
+/// Anchored profile dropdown panel (§5.8): the same `glass.strong` level-1
+/// panel as the cascade, hosted by the shell under the avatar. The shell
+/// owns the scrim and Menu-to-close; this view owns only its rows and the
+/// focus hand-off when the host bumps `focusEntryToken`.
+struct TVProfileDropdown: View {
     let profileName: String
     let avatar: String?
+    /// Display name of the active server, shown under the profile name in
+    /// the §5.8 mono header style.
+    let serverHost: String?
+    let isAdmin: Bool
+    /// Whether focus has entered the panel.
+    let entersPanel: Bool
+    /// Bumped by the host when focus should enter — lands on the first row.
+    let focusEntryToken: Int
+    /// Reports whether any row currently holds focus, so the host can drop
+    /// the avatar's focus ring once focus descends (§5.8).
+    let onPanelFocusChanged: (Bool) -> Void
     let onSwitchProfile: () -> Void
-    let onSwitchServer: () -> Void
+    let onWatchlist: () -> Void
+    let onFavorites: () -> Void
+    let onHistory: () -> Void
     let onSettings: () -> Void
+    let onAdminDashboard: () -> Void
+    let onSwitchServer: () -> Void
     let onSignOut: () -> Void
-    let onDismiss: () -> Void
 
     @FocusState private var focusedAction: TVProfileAction?
+    @State private var lastAppliedEntryToken = 0
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(spacing: 16) {
-                ProfileAvatarView(
-                    avatar: avatar,
-                    name: profileName,
-                    size: 50,
-                    backgroundColor: Color.white.opacity(0.16),
-                    textColor: .white
-                )
+        panel
+            // Inert until the host hands focus in. Dwell previews can keep
+            // focus on the avatar; avatar press or d-pad down enters rows.
+            .disabled(!entersPanel)
+            .onChange(of: focusEntryToken) { _, token in applyEntryToken(token) }
+            .onChange(of: focusedAction) { _, newValue in
+                onPanelFocusChanged(newValue != nil)
+            }
+            .onChange(of: entersPanel) { _, entered in
+                if !entered { focusedAction = nil }
+            }
+            .onAppear {
+                if entersPanel { applyEntryToken(focusEntryToken) }
+            }
+    }
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Profile")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Color.white.opacity(0.52))
+    private func applyEntryToken(_ token: Int) {
+        guard entersPanel, token > 0, token != lastAppliedEntryToken else { return }
+        lastAppliedEntryToken = token
+        focusedAction = .switchProfile
+    }
 
-                    Text(profileName)
-                        .font(.system(size: 28, weight: .semibold))
-                        .foregroundStyle(.white)
+    private var panel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            header
+
+            actionButton("Switch Profile", systemImage: "person.2.fill", id: .switchProfile, action: onSwitchProfile)
+            actionButton("Watchlist", systemImage: "bookmark.fill", id: .watchlist, action: onWatchlist)
+            actionButton("Favorites", systemImage: "heart.fill", id: .favorites, action: onFavorites)
+            actionButton("History", systemImage: "clock.fill", id: .history, action: onHistory)
+
+            divider
+
+            actionButton("Settings", systemImage: "gearshape.fill", id: .settings, action: onSettings)
+            if isAdmin {
+                actionButton("Admin Dashboard", systemImage: "slider.horizontal.3", id: .adminDashboard, action: onAdminDashboard)
+            }
+            // The guide marks Switch Server as Android-only (§5.8), but tvOS
+            // already ships multi-server switching — dropping it here would
+            // regress existing users.
+            actionButton("Switch Server", systemImage: "server.rack", id: .switchServer, action: onSwitchServer)
+            actionButton("Sign Out", systemImage: "rectangle.portrait.and.arrow.right", id: .signOut, isDestructive: true, action: onSignOut)
+
+            divider
+
+            Text("Press Menu to close")
+                .font(.system(size: ContinuumTheme.Skyline.dropdownHeaderSize, design: .monospaced))
+                .tracking(1.4)
+                .foregroundStyle(Color.white.opacity(0.38))
+                .padding(.horizontal, 16)
+                .padding(.bottom, 4)
+                .accessibilityHidden(true)
+        }
+        .padding(ContinuumTheme.Skyline.dropdownPadding)
+        .frame(width: ContinuumTheme.Skyline.dropdownWidth, alignment: .leading)
+        .modifier(TVSkylinePanelChrome())
+        .focusSection()
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Profile menu")
+    }
+
+    private var header: some View {
+        HStack(spacing: 14) {
+            ProfileAvatarView(
+                avatar: avatar,
+                name: profileName,
+                size: 44,
+                backgroundColor: Color.white.opacity(0.16),
+                textColor: .white
+            )
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(profileName)
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+
+                if let serverHost, !serverHost.isEmpty {
+                    Text(serverHost.uppercased())
+                        .font(.system(size: ContinuumTheme.Skyline.dropdownHeaderSize, design: .monospaced))
+                        .tracking(1.4)
+                        .foregroundStyle(Color.white.opacity(0.38))
                         .lineLimit(1)
                 }
             }
-            .padding(.horizontal, 8)
-            .padding(.bottom, 4)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+    }
 
-            VStack(spacing: 8) {
-                actionButton(
-                    title: "Switch Profile",
-                    systemImage: "person.2.fill",
-                    actionID: .switchProfile,
-                    action: onSwitchProfile
-                )
-                actionButton(
-                    title: "Switch Server",
-                    systemImage: "server.rack",
-                    actionID: .switchServer,
-                    action: onSwitchServer
-                )
-                actionButton(
-                    title: "Settings",
-                    systemImage: "gearshape.fill",
-                    actionID: .settings,
-                    action: onSettings
-                )
-                actionButton(
-                    title: "Sign Out",
-                    systemImage: "rectangle.portrait.and.arrow.right",
-                    actionID: .signOut,
-                    isDestructive: true,
-                    action: onSignOut
-                )
-                actionButton(
-                    title: "Cancel",
-                    systemImage: "xmark",
-                    actionID: .cancel,
-                    action: onDismiss
-                )
-            }
-        }
-        .padding(22)
-        .frame(width: 390, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.black.opacity(0.86))
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
-        }
-        .shadow(color: .black.opacity(0.45), radius: 34, y: 18)
-        .focusSection()
-        .onAppear {
-            focusedAction = .switchProfile
-        }
-        .onExitCommand(perform: onDismiss)
+    private var divider: some View {
+        Rectangle()
+            .fill(Color.continuumDivider)
+            .frame(height: 1)
+            .padding(.horizontal, 12)
     }
 
     private func actionButton(
-        title: String,
+        _ title: String,
         systemImage: String,
-        actionID: TVProfileAction,
+        id: TVProfileAction,
         isDestructive: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             HStack(spacing: 14) {
                 Image(systemName: systemImage)
-                    .font(.system(size: 21, weight: .semibold))
-                    .frame(width: 28)
+                    .font(.system(size: 20, weight: .semibold))
+                    .frame(width: 30)
 
                 Text(title)
-                    .font(.system(size: 25, weight: .semibold))
+                    .font(.system(size: ContinuumTheme.Skyline.dropdownRowTextSize, weight: .semibold))
                     .lineLimit(1)
 
                 Spacer(minLength: 0)
             }
         }
         .buttonStyle(TVProfileMenuButtonStyle(isDestructive: isDestructive))
-        .focused($focusedAction, equals: actionID)
-    }
-}
-
-private struct TVProfileActionsModal: View {
-    let profileName: String
-    let avatar: String?
-    let onSwitchProfile: () -> Void
-    let onSwitchServer: () -> Void
-    let onSettings: () -> Void
-    let onSignOut: () -> Void
-    let onDismiss: () -> Void
-
-    var body: some View {
-        ZStack(alignment: .topLeading) {
-            Color.black.opacity(0.001)
-                .ignoresSafeArea()
-
-            TVProfileActionsPanel(
-                profileName: profileName,
-                avatar: avatar,
-                onSwitchProfile: onSwitchProfile,
-                onSwitchServer: onSwitchServer,
-                onSettings: onSettings,
-                onSignOut: onSignOut,
-                onDismiss: onDismiss
-            )
-            .padding(.leading, 44)
-            .padding(.top, TVTopMenuLayout.profileMenuTopInset)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .ignoresSafeArea()
-    }
-}
-
-private struct TVLibraryActionsPanel: View {
-    let title: String
-    let options: [TVLibraryMenuOption]
-    let selectedLibraryID: Int
-    let onSelect: (Int) -> Void
-    let onDismiss: () -> Void
-
-    @FocusState private var focusedLibraryID: Int?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Color.white.opacity(0.52))
-
-                Text(selectedLibraryName)
-                    .font(.system(size: 28, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 8)
-            .padding(.bottom, 4)
-
-            ScrollViewReader { proxy in
-                ScrollView(.vertical, showsIndicators: false) {
-                    LazyVStack(spacing: 8) {
-                        ForEach(options) { option in
-                            libraryButton(option)
-                                .id(option.id)
-                        }
-                    }
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                }
-                .frame(maxHeight: 430)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .onChange(of: focusedLibraryID) { _, newValue in
-                    guard let newValue else { return }
-                    withAnimation(ContinuumTheme.springAnimation) {
-                        proxy.scrollTo(newValue, anchor: .center)
-                    }
-                }
-            }
-        }
-        .padding(22)
-        .frame(width: 430, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.black.opacity(0.86))
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
-        }
-        .shadow(color: .black.opacity(0.45), radius: 34, y: 18)
-        .focusSection()
-        .onAppear {
-            focusedLibraryID = initialFocusedLibraryID
-        }
-        .onExitCommand(perform: onDismiss)
-    }
-
-    private var selectedLibraryName: String {
-        options.first(where: { $0.id == selectedLibraryID })?.name ?? "Choose Library"
-    }
-
-    private func libraryButton(_ option: TVLibraryMenuOption) -> some View {
-        Button {
-            onSelect(option.id)
-        } label: {
-            HStack(spacing: 14) {
-                Image(systemName: option.iconName)
-                    .font(.system(size: 19, weight: .semibold))
-                    .frame(width: 24)
-
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(option.name)
-                        .font(.system(size: 21, weight: .semibold))
-                        .lineLimit(1)
-
-                    Text(option.typeLabel)
-                        .font(.system(size: 14, weight: .semibold))
-                        .lineLimit(1)
-                        .opacity(0.64)
-                }
-
-                Spacer(minLength: 0)
-
-                if option.id == selectedLibraryID {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 19, weight: .bold))
-                }
-            }
-        }
-        .buttonStyle(
-            TVProfileMenuButtonStyle(
-                isDestructive: false,
-                horizontalPadding: 14,
-                verticalPadding: 11,
-                focusedScale: 1.0
-            )
-        )
-        .focused($focusedLibraryID, equals: option.id)
-        .accessibilityAddTraits(option.id == selectedLibraryID ? .isSelected : [])
-    }
-
-    private var initialFocusedLibraryID: Int? {
-        if options.contains(where: { $0.id == selectedLibraryID }) {
-            return selectedLibraryID
-        }
-        return options.first?.id
-    }
-
-}
-
-private struct TVLibraryActionsModal: View {
-    let context: TVLibraryHeaderContext
-    let onSelect: (Int) -> Void
-    let onDismiss: () -> Void
-
-    var body: some View {
-        ZStack(alignment: .topLeading) {
-            Color.black.opacity(0.001)
-                .ignoresSafeArea()
-
-            TVLibraryActionsPanel(
-                title: "Library",
-                options: context.options,
-                selectedLibraryID: context.id,
-                onSelect: onSelect,
-                onDismiss: onDismiss
-            )
-            .padding(.leading, TVTopMenuLayout.libraryMenuLeadingInset)
-            .padding(.top, TVTopMenuLayout.profileMenuTopInset)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .ignoresSafeArea()
+        .focused($focusedAction, equals: id)
     }
 }
 
 private struct TVProfileMenuButtonStyle: ButtonStyle {
     let isDestructive: Bool
-    var horizontalPadding: CGFloat = 18
-    var verticalPadding: CGFloat = 14
-    var focusedScale: CGFloat = 1.02
 
     func makeBody(configuration: Configuration) -> some View {
         TVProfileMenuButtonBody(
             configuration: configuration,
-            isDestructive: isDestructive,
-            horizontalPadding: horizontalPadding,
-            verticalPadding: verticalPadding,
-            focusedScale: focusedScale
+            isDestructive: isDestructive
         )
     }
 }
@@ -832,118 +786,30 @@ private struct TVProfileMenuButtonStyle: ButtonStyle {
 private struct TVProfileMenuButtonBody: View {
     let configuration: ButtonStyleConfiguration
     let isDestructive: Bool
-    let horizontalPadding: CGFloat
-    let verticalPadding: CGFloat
-    let focusedScale: CGFloat
 
     @Environment(\.isFocused) private var isFocused
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         configuration.label
             .foregroundStyle(foregroundColor)
-            .padding(.horizontal, horizontalPadding)
-            .padding(.vertical, verticalPadding)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
             .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(backgroundColor)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(isFocused ? Color.white : Color.clear)
             )
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(borderColor, lineWidth: isFocused ? 1.5 : 1)
-            }
-            .scaleEffect(isFocused ? focusedScale : 1.0)
             .opacity(configuration.isPressed ? 0.75 : 1.0)
             .focusEffectDisabled()
-            .animation(ContinuumTheme.springAnimation, value: isFocused)
-            .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: configuration.isPressed)
+            // Reduce Motion snaps the profile-menu row inversion (§4.2).
+            .animation(reduceMotion ? nil : ContinuumTheme.springAnimation, value: isFocused)
+            .animation(reduceMotion ? nil : .easeOut(duration: ContinuumTheme.fastDuration), value: configuration.isPressed)
     }
 
     private var foregroundColor: Color {
         if isFocused { return .continuumBackground }
         if isDestructive { return .red.opacity(0.9) }
         return .white.opacity(0.86)
-    }
-
-    private var backgroundColor: Color {
-        isFocused ? Color.white.opacity(0.94) : Color.white.opacity(0.06)
-    }
-
-    private var borderColor: Color {
-        isFocused ? Color.white : Color.white.opacity(0.08)
-    }
-}
-
-private struct TVTopMenuTextButton: View {
-    let title: String
-    let isSelected: Bool
-    let isFocused: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: TVTopMenuLayout.rootTextSize, weight: fontWeight))
-                .foregroundStyle(foregroundColor)
-                .lineLimit(1)
-                .minimumScaleFactor(0.82)
-                .frame(height: TVTopMenuLayout.primaryRowHeight)
-                .padding(.horizontal, 22)
-                .modifier(
-                    TVTopMenuButtonChrome(
-                        isSelected: isSelected,
-                        isFocused: isFocused
-                    )
-                )
-                .animation(ContinuumTheme.springAnimation, value: isFocused)
-                .animation(.easeInOut(duration: 0.18), value: isSelected)
-        }
-        .buttonStyle(.continuumFlat)
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
-    }
-
-    private var fontWeight: Font.Weight {
-        isSelected || isFocused ? .semibold : .regular
-    }
-
-    private var foregroundColor: Color {
-        if isFocused || isSelected {
-            return .white
-        }
-        return .white.opacity(0.70)
-    }
-}
-
-private struct TVTopMenuButtonChrome: ViewModifier {
-    let isSelected: Bool
-    let isFocused: Bool
-
-    func body(content: Content) -> some View {
-        content
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(backgroundColor)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(borderColor, lineWidth: isFocused ? 1.5 : 1)
-            }
-            .shadow(color: isFocused ? .white.opacity(0.08) : .clear, radius: 10)
-            .scaleEffect(isFocused ? 1.025 : 1.0)
-            .focusEffectDisabled()
-            .animation(ContinuumTheme.springAnimation, value: isFocused)
-            .animation(.easeInOut(duration: 0.18), value: isSelected)
-    }
-
-    private var backgroundColor: Color {
-        if isFocused { return Color.white.opacity(0.12) }
-        if isSelected { return Color.white.opacity(0.08) }
-        return .clear
-    }
-
-    private var borderColor: Color {
-        if isFocused { return Color.white.opacity(0.28) }
-        if isSelected { return Color.white.opacity(0.14) }
-        return .clear
     }
 }
 #endif

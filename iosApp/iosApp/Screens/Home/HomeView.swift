@@ -4,69 +4,82 @@ extension Notification.Name {
     static let homeSectionsShouldRefresh = Notification.Name("homeSectionsShouldRefresh")
 }
 
-/// Main home screen with featured carousel and section rows.
+/// Main home screen. iOS/macOS keep the featured carousel above the
+/// section rows; tvOS replaced it with the Skyline focus marquee (§5.4) —
+/// a passive billboard previewing whichever card holds focus.
 struct HomeView: View {
     var homeFocusRequest: Int = 0
+    /// tvOS-only: whether the custom top menu holds focus. Deferred entry
+    /// claims are dropped while the user is up in the menu so late data
+    /// loads never yank focus.
+    var isTopMenuFocused: Bool = false
     var onTopMenuFocusRequest: (() -> Void)? = nil
 
     @State private var viewModel = HomeViewModel()
+    #if os(tvOS)
+    /// Skyline folded the For You root into Home (§4.1): its rows render
+    /// after Continue Watching, reusing the recommendations data source.
+    @State private var recommendationsViewModel = RecommendationsViewModel()
+    #endif
+    #if !os(tvOS)
     @State private var heroTintColor: Color = .continuumBackground
     @State private var heroBackdropURL: String?
     @State private var heroBackdropThumbhash: String?
-    #if !os(tvOS)
     @State private var currentProfile: UserProfile?
     @State private var homeScrollOffset: CGFloat = 0
     @State private var isRefreshing = false
     @State private var refreshStartedAt: Date?
     @State private var refreshHideTask: Task<Void, Never>?
     private let chromeFadeDistance: CGFloat = 72
-    #else
-    @State private var pendingHomeFocusRequest: Int?
     #endif
     @Environment(AppRouter.self) private var router
     @Environment(AudioPlaybackStore.self) private var audioStore
 
+    #if !os(tvOS)
     /// How far the blurred page backdrop extends below the hero's
     /// visible bottom edge. The extra vertical room lets the image's
     /// mask finish its fade well after the carousel's cards end, so
     /// there's no seam where the poster stops and the rest of the
     /// page begins.
-    private var heroBackdropFadeExtension: CGFloat {
-        #if os(tvOS)
-        return 420
-        #else
-        return 260
-        #endif
-    }
+    private let heroBackdropFadeExtension: CGFloat = 260
 
-    private var heroBackdropHorizontalBleed: CGFloat {
-        #if os(tvOS)
-        return 320
-        #else
-        return 0
-        #endif
-    }
+    private let heroBackdropHorizontalBleed: CGFloat = 0
+    #endif
 
     var body: some View {
         // On iOS the top bar overlays the hero backdrop — the scroll content
         // extends behind the status bar and the header floats on top with a
-        // semi-transparent fill. On tvOS the app-level sidebar (owned by
-        // `TVMainTabView`) handles profile + utility actions, so Home just
-        // renders content.
+        // semi-transparent fill. On tvOS the app-level top bar (owned by
+        // `TVMainTabView`) handles profile + utility actions; Home renders
+        // the focus marquee over rows, with the backdrop tracking whichever
+        // card holds focus (§5.4).
         #if os(tvOS)
-        ZStack(alignment: .top) {
-            TVRootHeroBackdrop(
-                tintColor: heroTintColor,
-                artworkURL: heroBackdropURL,
-                artworkThumbhash: heroBackdropThumbhash
-            )
-
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // The shared Skyline feed — the exact same layout component the
+        // library Browse tabs use, so Home and the library pages are
+        // identical. For You recommendation rows are folded into
+        // `displayedSections` right after Continue Watching (§6.1).
+        Group {
+            if viewModel.sections.isEmpty {
+                if let error = viewModel.error {
+                    ErrorView(state: error, onRetry: { Task { await viewModel.loadSections() } })
+                } else {
+                    Color.clear
+                }
+            } else {
+                TVSkylineSectionFeed(
+                    sections: displayedSections,
+                    focusRequest: homeFocusRequest,
+                    isTopMenuFocused: isTopMenuFocused,
+                    onTopMenuFocusRequest: onTopMenuFocusRequest,
+                    onItemTap: { navigateToDetail($0) }
+                )
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task {
-            await viewModel.loadSections()
+            async let sectionsLoad: Void = viewModel.loadSections()
+            async let recommendationsLoad: Void = recommendationsViewModel.loadRecommendations()
+            _ = await (sectionsLoad, recommendationsLoad)
         }
         .onAppear {
             // Refresh on return (e.g. after player dismiss) so
@@ -151,6 +164,7 @@ struct HomeView: View {
         #endif
     }
 
+    #if !os(tvOS)
     /// Plex-style page-level gradient. Starts at the sampled dominant
     /// color of the active featured backdrop and fades into the OLED
     /// black base. Because this layer sits behind the scroll view the
@@ -244,18 +258,16 @@ struct HomeView: View {
     /// backdrop image knows how tall to draw before the fade region
     /// starts. Keep these in sync.
     private var computedHeroHeight: CGFloat {
-        #if os(tvOS)
-        return 760
-        #else
         let screenWidth = PlatformScreen.mainBounds.width
         let screenHeight = PlatformScreen.mainBounds.height
         let widthDriven = max(420, min(screenWidth * 1.16, 580))
         return min(widthDriven, screenHeight * 0.72)
-        #endif
     }
+    #endif
 
     // MARK: - Content
 
+    #if !os(tvOS)
     @ViewBuilder
     private var content: some View {
         if viewModel.sections.isEmpty {
@@ -271,65 +283,49 @@ struct HomeView: View {
 
     private var scrollContent: some View {
         GeometryReader { geometry in
-            ScrollViewReader { proxy in
-                ScrollView(.vertical, showsIndicators: false) {
-                    LazyVStack(spacing: sectionSpacing, pinnedViews: []) {
-                        // Featured carousel
-                        if let featured = viewModel.featuredSection {
-                            FeaturedCarousel(
-                                items: featured.items,
-                                onItemTap: { navigateToDetail($0) },
-                                onPlayTap: { navigateToPlayer($0) },
-                                prefersDefaultFocus: true,
-                                onBackdropTintChange: { heroTintColor = $0 },
-                                onBackdropArtworkChange: { url, thumbhash in
-                                    withAnimation(.easeInOut(duration: 0.65)) {
-                                        heroBackdropURL = url
-                                        heroBackdropThumbhash = thumbhash
-                                    }
-                                },
-                                rendersAmbientBackdrop: false,
-                                prefersTightTVOSLayout: true,
-                                focusRequest: homeFocusRequest,
-                                onMoveUp: onTopMenuFocusRequest
-                            )
-                            .id(HomeFocusTarget.featured)
-                        } else {
-                            // No hero → reserve enough runway for the floating
-                            // Home header so the first row doesn't slide under
-                            // the status bar chrome on phones.
-                            Color.clear.frame(height: noFeaturedTopSpacing(topSafeAreaInset: geometry.safeAreaInsets.top))
-                                .id(HomeFocusTarget.noFeaturedTopSpacer)
-                        }
-
-                        // Regular sections
-                        ForEach(Array(viewModel.regularSections.enumerated()), id: \.element.id) { index, section in
-                            SectionRow(
-                                section: section,
-                                onItemTap: { navigateToDetail($0) },
-                                prefersDefaultFocusOnFirstItem: index == 0,
-                                onMoveUp: viewModel.featuredSection == nil && index == 0 ? onTopMenuFocusRequest : nil
-                            )
-                            .id(index == 0 ? HomeFocusTarget.firstRow : HomeFocusTarget.row(section.id))
-                        }
+            ScrollView(.vertical, showsIndicators: false) {
+                LazyVStack(spacing: sectionSpacing, pinnedViews: []) {
+                    // Featured carousel
+                    if let featured = viewModel.featuredSection {
+                        FeaturedCarousel(
+                            items: featured.items,
+                            onItemTap: { navigateToDetail($0) },
+                            onPlayTap: { navigateToPlayer($0) },
+                            prefersDefaultFocus: true,
+                            onBackdropTintChange: { heroTintColor = $0 },
+                            onBackdropArtworkChange: { url, thumbhash in
+                                withAnimation(.easeInOut(duration: 0.65)) {
+                                    heroBackdropURL = url
+                                    heroBackdropThumbhash = thumbhash
+                                }
+                            },
+                            rendersAmbientBackdrop: false,
+                            focusRequest: homeFocusRequest,
+                            onMoveUp: onTopMenuFocusRequest
+                        )
+                        .id(HomeFocusTarget.featured)
+                    } else {
+                        // No hero → reserve enough runway for the floating
+                        // Home header so the first row doesn't slide under
+                        // the status bar chrome on phones.
+                        Color.clear.frame(height: noFeaturedTopSpacing(topSafeAreaInset: geometry.safeAreaInsets.top))
+                            .id(HomeFocusTarget.noFeaturedTopSpacer)
                     }
-                    .padding(.bottom, ContinuumTheme.largePadding)
+
+                    // Regular sections
+                    ForEach(Array(displayedSections.enumerated()), id: \.element.id) { index, section in
+                        SectionRow(
+                            section: section,
+                            onItemTap: { navigateToDetail($0) },
+                            prefersDefaultFocusOnFirstItem: index == 0,
+                            onMoveUp: viewModel.featuredSection == nil && index == 0 ? onTopMenuFocusRequest : nil
+                        )
+                        .id(HomeFocusTarget.row(section.id))
+                    }
                 }
-                #if os(tvOS)
-                .onAppear {
-                    requestHomeFocus(homeFocusRequest, proxy: proxy)
-                }
-                .onChange(of: homeFocusRequest) { _, request in
-                    requestHomeFocus(request, proxy: proxy)
-                }
-                .onChange(of: viewModel.sections.map(\.id)) { _, _ in
-                    guard let request = pendingHomeFocusRequest else { return }
-                    requestHomeFocus(request, proxy: proxy)
-                }
-                #endif
+                .padding(.bottom, ContinuumTheme.largePadding)
             }
         }
-        #if !os(tvOS)
         // Keep the overlay chrome transparent at rest, then fade in a subtle
         // glass surface once content has moved underneath it.
         .onScrollGeometryChange(for: CGFloat.self) { geometry in
@@ -337,32 +333,53 @@ struct HomeView: View {
         } action: { _, newValue in
             homeScrollOffset = max(0, newValue)
         }
-        #endif
     }
+    #endif
 
     private enum HomeFocusTarget: Hashable {
         case featured
         case noFeaturedTopSpacer
-        case firstRow
         case row(String)
     }
 
-    #if os(tvOS)
-    private func requestHomeFocus(_ request: Int, proxy: ScrollViewProxy) {
-        guard request > 0 else { return }
-        guard !viewModel.sections.isEmpty else {
-            pendingHomeFocusRequest = request
-            return
-        }
+    /// Rows for the vertical list. On tvOS the For You recommendation rows
+    /// fold in right after Continue Watching (Skyline §6.1); other
+    /// platforms keep their dedicated Recommendations tab.
+    private var displayedSections: [ResolvedSection] {
+        #if os(tvOS)
+        let home = viewModel.regularSections
+        let recommendations = recommendationsViewModel.sections
+            .filter { !$0.items.isEmpty }
+            .map { section in
+                // Re-key so a recommendations row can never collide with a
+                // home row that shares the same server section id.
+                ResolvedSection(
+                    id: "rec:\(section.id)",
+                    sectionType: section.sectionType,
+                    title: section.title,
+                    featured: false,
+                    itemLimit: section.itemLimit,
+                    totalCount: section.totalCount,
+                    isCustom: section.isCustom,
+                    customized: section.customized,
+                    items: section.items
+                )
+            }
+        guard !recommendations.isEmpty else { return home }
 
-        pendingHomeFocusRequest = nil
-        let target: HomeFocusTarget = viewModel.featuredSection == nil ? .noFeaturedTopSpacer : .featured
-        withAnimation(ContinuumTheme.springAnimation) {
-            proxy.scrollTo(target, anchor: .top)
-        }
+        let continueWatchingIndex = home.lastIndex(where: {
+            $0.sectionType == "continue_watching" || $0.sectionType == "in_progress"
+        })
+        var merged = home
+        merged.insert(
+            contentsOf: recommendations,
+            at: continueWatchingIndex.map { $0 + 1 } ?? 0
+        )
+        return merged
+        #else
+        return viewModel.regularSections
+        #endif
     }
-
-    #endif
 
     #if !os(tvOS)
     private var headerChromeOpacity: Double {
@@ -452,39 +469,27 @@ struct HomeView: View {
         router.navigate(to: .itemDetail(contentId: contentId))
     }
 
+    #if !os(tvOS)
+    /// Hero-card play action. tvOS has no carousel anymore — pressing a
+    /// focused card opens it via `onItemTap`, and resume lives on detail.
     private func navigateToPlayer(_ item: SectionItem) {
         if item.isAudiobook {
             audioStore.play(contentId: item.contentId)
             return
         }
 
-        #if os(tvOS)
-        router.navigate(
-            to: .player(
-                contentId: item.contentId,
-                startFromBeginning: false,
-                resumePosition: nil
-            )
-        )
-        #else
         router.presentPlayer(contentId: item.contentId)
-        #endif
     }
+    #endif
 
+    #if !os(tvOS)
     private var sectionSpacing: CGFloat {
-        #if os(tvOS)
-        return 30
-        #else
-        return ContinuumTheme.largePadding
-        #endif
+        ContinuumTheme.largePadding
     }
 
     private func noFeaturedTopSpacing(topSafeAreaInset: CGFloat) -> CGFloat {
-        #if os(tvOS)
-        return TVTopMenuLayout.contentTopInset
-        #else
         let headerContentHeight: CGFloat = 40 + (ContinuumTheme.smallPadding * 2)
         return topSafeAreaInset + headerContentHeight + ContinuumTheme.largePadding + ContinuumTheme.smallPadding
-        #endif
     }
+    #endif
 }

@@ -65,6 +65,9 @@ enum CacheKey {
     static let favorites = "personal:favorites"
     static let history = "personal:history"
     static let watchlist = "personal:watchlist"
+    /// Libraries visible to the active profile — drives the Skyline
+    /// type-derived tabs on tvOS.
+    static let userLibraries = "user:libraries"
 
     static func itemDetail(_ contentId: String) -> String { "item:\(contentId)" }
     static func itemSeasons(_ seriesId: String) -> String { "item:\(seriesId):seasons" }
@@ -94,5 +97,6 @@ enum CacheKey {
         "collection:",
         "collections:",
         "calendar:",
+        "user:",
     ]
 }

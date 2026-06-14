@@ -36,8 +36,26 @@ struct MediaRow: View {
     var onRemoveFromContinueWatching: ((SectionItem) -> Void)? = nil
     var onSetWatched: ((SectionItem, Bool) -> Void)? = nil
     var onMoveUp: (() -> Void)? = nil
+    /// tvOS-only: reports which of the row's items holds card focus —
+    /// the Skyline focus marquee mirrors it. Fires on focus gain only;
+    /// focus leaving the row (nil) is deliberately not reported so the
+    /// marquee retains the last previewed item while focus is in chrome.
+    var onItemFocus: ((SectionItem) -> Void)? = nil
+    /// Optional width for poster/square cards — Skyline's dense landing
+    /// rows (§5.6) pass 208. Episode thumbs are unaffected.
+    var cardWidth: CGFloat? = nil
+    /// Down at the row's boundary — used by the Skyline section pager to
+    /// page to the next section (there is no row geometrically below).
+    var onMoveDown: (() -> Void)? = nil
 
     @FocusState private var focusedItemId: String?
+    #if os(tvOS)
+    /// Each focus token is applied once. Tracked so the claim works on a
+    /// freshly-mounted row too (the Skyline section pager swaps the row's
+    /// identity per page, so the kick has to land on `onAppear`, not only
+    /// on a `focusRequest` change).
+    @State private var lastAppliedFocusRequest = 0
+    #endif
 
     var body: some View {
         VStack(alignment: .leading, spacing: rowVerticalSpacing) {
@@ -47,13 +65,25 @@ struct MediaRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         #if os(tvOS)
         .focusSection()
-        .modifier(TVMoveUpHandler(onMoveUp: onMoveUp))
-        .onChange(of: focusRequest) { _, request in
-            guard request > 0, let firstId = items.first?.contentId else { return }
-            focusedItemId = firstId
+        .modifier(TVRowMoveHandler(onMoveUp: onMoveUp, onMoveDown: onMoveDown))
+        .onAppear { applyFocusRequest(focusRequest) }
+        .onChange(of: focusRequest) { _, request in applyFocusRequest(request) }
+        .onChange(of: focusedItemId) { _, newValue in
+            guard let newValue,
+                  let item = items.first(where: { $0.contentId == newValue }) else { return }
+            onItemFocus?(item)
         }
         #endif
     }
+
+    #if os(tvOS)
+    private func applyFocusRequest(_ request: Int) {
+        guard request > 0, request != lastAppliedFocusRequest,
+              let firstId = items.first?.contentId else { return }
+        lastAppliedFocusRequest = request
+        focusedItemId = firstId
+    }
+    #endif
 
     // MARK: - Header
 
@@ -103,7 +133,8 @@ struct MediaRow: View {
                             contentId: item.contentId,
                             onRemoveFromContinueWatching: continueWatchingRemovalAction(for: item),
                             onSetWatched: watchedToggleAction(for: item),
-                            aspect: layout == .square ? .square : .poster
+                            aspect: layout == .square ? .square : .poster,
+                            cardWidthOverride: cardWidth
                         )
                     case .thumbnail:
                         EpisodeThumbCard(
@@ -211,15 +242,23 @@ struct MediaRow: View {
 }
 
 #if os(tvOS)
-private struct TVMoveUpHandler: ViewModifier {
+/// Bridges the row's boundary up/down move commands to the host. Only
+/// attaches an `onMoveCommand` when at least one handler is supplied, so a
+/// row that should stay out of the focus path (e.g. a non-paged row)
+/// never intercepts the commands the focus engine needs for normal
+/// row-to-row movement.
+private struct TVRowMoveHandler: ViewModifier {
     let onMoveUp: (() -> Void)?
+    let onMoveDown: (() -> Void)?
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if let onMoveUp {
+        if onMoveUp != nil || onMoveDown != nil {
             content.onMoveCommand { direction in
-                if direction == .up {
-                    onMoveUp()
+                switch direction {
+                case .up: onMoveUp?()
+                case .down: onMoveDown?()
+                default: break
                 }
             }
         } else {
