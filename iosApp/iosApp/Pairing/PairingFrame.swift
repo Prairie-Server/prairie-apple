@@ -34,7 +34,7 @@ struct PairingFrameBuffer {
         var payloads: [Data] = []
         while true {
             guard buffer.count >= 4 else { break }
-            let length = Int(buffer.prefix(4).withUnsafeBytes { $0.load(as: UInt32.self).bigEndian })
+            let length = Int(buffer.prefix(4).withUnsafeBytes { $0.loadUnaligned(as: UInt32.self).bigEndian })
             guard length <= PairingFrame.maxFrameBytes else {
                 throw PairingFrame.FrameError.frameTooLarge(length)
             }

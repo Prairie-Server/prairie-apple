@@ -41,6 +41,7 @@ final class ReceiverPairingCoordinator {
     /// or a dropped connection aborts the attempt immediately rather than after
     /// the poll loop finishes (design spec §7).
     func run(session: PairingSession, stream: AsyncThrowingStream<PairingMessage, Error>) async {
+        signedInCount = 0
         let device = AppleDeviceIdentity.current
         do {
             try await session.send(.hello(

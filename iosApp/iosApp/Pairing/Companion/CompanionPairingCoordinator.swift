@@ -31,6 +31,7 @@ final class CompanionPairingCoordinator {
     private var tvName = "Apple TV"
     private var queue: [ServerEntry] = []
     private var confirmed = false
+    private var cancelled = false
     private var pendingUserCode: String?
     private var signedIn: [String] = []
     private var failed: [String] = []
@@ -85,6 +86,7 @@ final class CompanionPairingCoordinator {
     }
 
     func cancel() async {
+        cancelled = true
         try? await session.send(.cancel(reason: "user_cancelled"))
         await session.close()
         state = .error("Setup cancelled.")
@@ -148,7 +150,7 @@ final class CompanionPairingCoordinator {
     private func finish() async {
         try? await session.send(.done)
         await session.close()
-        state = .finished(signedIn: signedIn, failed: failed)
+        state = cancelled ? .error("Setup cancelled.") : .finished(signedIn: signedIn, failed: failed)
     }
 
     private func fail(_ server: ServerEntry) {
@@ -161,7 +163,7 @@ final class CompanionPairingCoordinator {
         while let message = try await nextMessage() {
             switch message {
             case .deviceStarted, .serverResult: return message
-            case .cancel: return nil
+            case .cancel: cancelled = true; return nil
             default: continue
             }
         }
