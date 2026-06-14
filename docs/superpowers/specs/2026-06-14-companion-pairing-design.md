@@ -176,10 +176,12 @@ Identical, minus the URL push: the TV already has the server, so it can
 - **Tokens never cross the LAN.** The server mints them and delivers them to the
   TV over HTTPS via `poll`. The local channel only carries a server URL and a
   short-lived user/match code.
-- **TLS** on the `NWConnection` (TV presents an ephemeral self-signed cert) gives
-  **opportunistic confidentiality only**: the cert is not pinned or otherwise
-  authenticated, so it defeats passive sniffing but **not** an active on-path
-  attacker. Integrity of the approval rests on the match code, not on TLS.
+- **TLS** on the `NWConnection` uses a **fixed pre-shared key compiled into the
+  app** (no certificate management). This gives **opportunistic confidentiality
+  only**: the PSK lives in the app binary, so it is not an authentication
+  boundary — it defeats casual passive sniffing but **not** an attacker who
+  extracts the key or is actively on-path. Integrity of the approval rests on the
+  match code, not on TLS.
 - **Match code = the human trust anchor.** It is *server-issued*, shown on the
   physical TV, and confirmed on the phone before approval — for single-server pairing and the
   first server of a session (the confirm-once caveat for additional servers is in
@@ -209,15 +211,15 @@ exposure below for v1.
 
 - **The exposure.** When a user pushes 2+ servers in a single session, only the
   first server's match code is visually confirmed; later servers are auto-approved
-  over the same `NWConnection`. Because v1's TLS is an unauthenticated self-signed
-  channel, an active on-path attacker can — *after* the legitimate first
+  over the same `NWConnection`. Because v1's TLS uses an app-embedded PSK (not an
+  authenticated channel), an active on-path attacker can — *after* the legitimate first
   confirmation — substitute a later `DeviceStarted` payload with a `userCode` from
   the attacker's own pending device request. The phone, not re-confirming, approves
   it with the user's authenticated session, minting tokens to the attacker's device
   for that server.
 - **Preconditions (all required).** An active on-path LAN attacker (ARP spoof /
   rogue AP) present during the pairing window; the user pairing **multiple** servers
-  in one pass; the unauthenticated self-signed channel. **Not affected:**
+  in one pass; the unauthenticated (app-embedded PSK) channel. **Not affected:**
   single-server pairing and the first server of any session (their match code is
   always confirmed).
 - **Why accepted for v1.** Self-hosted home-media context; low probability of an
