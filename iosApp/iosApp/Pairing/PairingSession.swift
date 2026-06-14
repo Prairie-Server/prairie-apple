@@ -26,11 +26,27 @@ actor PairingSession {
         self.connection = NWConnection(to: endpoint, using: params)
     }
 
-    /// A TLS-over-TCP parameter set with an ephemeral, unauthenticated cert.
-    /// `includePeerToPeer` lets discovery/transport use AWDL when available.
     static func tlsParameters() -> NWParameters {
-        let tcp = NWProtocolTCP.Options()
         let tls = NWProtocolTLS.Options()
+        // Opportunistic confidentiality only (design spec §6): a FIXED, non-secret
+        // pre-shared key compiled into the app. NOT an authentication boundary —
+        // the key is in the binary; the server-issued match code is the trust
+        // anchor. A PSK lets both the tvOS NWListener and the iOS NWConnection
+        // negotiate TLS without certificate/identity management.
+        let pskData = Data("silo-companion-pairing-v1".utf8)
+        let identityData = Data("silo-pairing".utf8)
+        let key = pskData.withUnsafeBytes { DispatchData(bytes: $0) }
+        let identity = identityData.withUnsafeBytes { DispatchData(bytes: $0) }
+        sec_protocol_options_add_pre_shared_key(
+            tls.securityProtocolOptions,
+            key as __DispatchData,
+            identity as __DispatchData
+        )
+        sec_protocol_options_append_tls_ciphersuite(
+            tls.securityProtocolOptions,
+            tls_ciphersuite_t.AES_128_GCM_SHA256
+        )
+        let tcp = NWProtocolTCP.Options()
         let params = NWParameters(tls: tls, tcp: tcp)
         params.includePeerToPeer = true
         return params

@@ -9,9 +9,11 @@ struct TVServerSetupView: View {
     var router: AppRouter
 
     @State private var viewModel = ServerSetupViewModel()
+    @State private var showPhoneSetup = false
     @FocusState private var focusedField: Field?
 
     private enum Field: Hashable {
+        case phoneSetup
         case host
         case scheme(ServerSetupScheme)
         case port
@@ -27,6 +29,9 @@ struct TVServerSetupView: View {
                 .padding(.bottom, 64)
         }
         .ignoresSafeArea()
+        .fullScreenCover(isPresented: $showPhoneSetup) {
+            TVPairingReceiverView(router: router)
+        }
     }
 
     private var content: some View {
@@ -43,6 +48,7 @@ struct TVServerSetupView: View {
             HStack(alignment: .center, spacing: 0) {
                 phoneCard
                     .frame(width: 600)
+                    .focusSection()
                 orDivider
                     .frame(width: 84)
                 manualCard
@@ -62,35 +68,40 @@ struct TVServerSetupView: View {
         }
     }
 
-    // MARK: - Phone handoff card (coming soon)
+    // MARK: - Phone handoff card
 
     private var phoneCard: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            comingSoonPill
-            Spacer(minLength: 28)
-            Image(systemName: "iphone.gen3")
-                .font(.system(size: 76, weight: .ultraLight))
-                .foregroundStyle(Color.auroraInkSecondary)
-                .frame(maxWidth: .infinity, alignment: .center)
-            Spacer(minLength: 28)
-            Text("Continue on iPhone")
-                .font(.system(size: 32, weight: .semibold))
-                .foregroundStyle(Color.auroraInk)
-            Text("Set this Apple TV up from your phone in a tap — the address and your account come across automatically. Arriving in a future update.")
-                .font(.system(size: 22, weight: .regular))
-                .foregroundStyle(Color.auroraInkSecondary)
-                .lineSpacing(4)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 12)
+        Button {
+            showPhoneSetup = true
+        } label: {
+            VStack(alignment: .leading, spacing: 0) {
+                phoneSetupPill
+                Spacer(minLength: 28)
+                Image(systemName: "iphone.gen3")
+                    .font(.system(size: 76, weight: .ultraLight))
+                    .foregroundStyle(Color.auroraInkSecondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                Spacer(minLength: 28)
+                Text("Continue on iPhone")
+                    .font(.system(size: 32, weight: .semibold))
+                    .foregroundStyle(Color.auroraInk)
+                Text("Set this Apple TV up from your phone — the address and your account come across automatically once your iPhone connects.")
+                    .font(.system(size: 22, weight: .regular))
+                    .foregroundStyle(Color.auroraInkSecondary)
+                    .lineSpacing(4)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 12)
+            }
+            .padding(46)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .auroraGlass(cornerRadius: 28, emphasized: focusedField == .phoneSetup)
         }
-        .padding(46)
-        .frame(maxHeight: .infinity, alignment: .top)
-        .auroraGlass(cornerRadius: 28)
-        .opacity(0.62)
+        .buttonStyle(.continuumFlat)
+        .focused($focusedField, equals: .phoneSetup)
     }
 
-    private var comingSoonPill: some View {
-        Text("COMING SOON")
+    private var phoneSetupPill: some View {
+        Text("SET UP WITH IPHONE")
             .font(.system(size: 14, weight: .semibold, design: .monospaced))
             .tracking(2)
             .foregroundStyle(Color.auroraInkSecondary)
