@@ -71,7 +71,9 @@ struct TVCascadeSelector: View {
     /// The flyout offsets to the anchored row's value to align tops (§5.3).
     @State private var rowTops: [Int: CGFloat] = [:]
 
-    private enum Focus: Hashable {
+    // `fileprivate` so the file-local `applyLibraryColumnDefaultFocus` helper
+    // can name this as the `defaultFocus` binding's value type.
+    fileprivate enum Focus: Hashable {
         case library(Int)
         case section(Int, TVLibraryPill)
     }
@@ -159,6 +161,14 @@ struct TVCascadeSelector: View {
         .modifier(TVSkylinePanelChrome(
             cornerRadius: ContinuumTheme.Skyline.dropdownCornerRadius
         ))
+        // The column is one focus section whose *user-initiated* default focus
+        // is the anchored row, so a d-pad Left out of the flyout lands directly
+        // there (§5.3) instead of the geometrically nearest row. `defaultFocus`
+        // with `.userInitiated` is required: `prefersDefaultFocus` only fires
+        // for automatic focus evaluations, not d-pad-driven moves — so it would
+        // be ignored on Left and the engine would fall back to geometry.
+        .focusSection()
+        .applyLibraryColumnDefaultFocus(flyoutAnchorId, binding: $focus)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(type.title) libraries")
     }
@@ -269,6 +279,9 @@ struct TVCascadeSelector: View {
             .modifier(TVSkylinePanelChrome(
                 cornerRadius: ContinuumTheme.Skyline.flyoutCornerRadius
             ))
+            // A sibling focus section, so a Left press is resolved as a move
+            // *out* of the flyout and *into* the library column's preferred row.
+            .focusSection()
             .fixedSize()
             // Crossfade the section list as the flyout follows focus to a
             // new library; the vertical move is handled by `flyoutTopOffset`
@@ -422,6 +435,33 @@ struct TVCascadeSelector: View {
         var label = library.name
         if isCurrent { label += ", current library" }
         return label
+    }
+}
+
+// MARK: - Flyout left-return focus
+
+private extension View {
+    /// Routes a d-pad **Left** out of the flyout straight to the anchored
+    /// library row (§5.3), instead of the geometrically nearest row — which,
+    /// because the flyout is top-aligned a row below, would be the wrong
+    /// library (e.g. "Movies – Anime" while scoped into "Movies").
+    ///
+    /// `.userInitiated` priority is the load-bearing detail: `prefersDefaultFocus`
+    /// only fires for *automatic* focus evaluations (scope first appears,
+    /// structural changes), so it is ignored on a d-pad move and the engine
+    /// falls back to geometry — producing a visible hop. `defaultFocus(…,
+    /// priority: .userInitiated)` is consulted for the user-driven move and
+    /// lands focus directly. Same idiom as `TVEpisodeRail.applyRailDefaultFocus`.
+    @ViewBuilder
+    func applyLibraryColumnDefaultFocus(
+        _ anchorId: Int?,
+        binding: FocusState<TVCascadeSelector.Focus?>.Binding
+    ) -> some View {
+        if let anchorId {
+            self.defaultFocus(binding, .library(anchorId), priority: .userInitiated)
+        } else {
+            self
+        }
     }
 }
 
