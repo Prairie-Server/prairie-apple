@@ -80,6 +80,9 @@ struct ProfileSelectionView: View {
     /// tiles have somewhere to "sit" without the background reading as a
     /// gradient card.
     private var background: some View {
+        #if os(tvOS)
+        AuroraBackdrop(variant: .profile, scrim: .soft)
+        #else
         ZStack {
             Color.continuumBackground.ignoresSafeArea()
             RadialGradient(
@@ -91,6 +94,7 @@ struct ProfileSelectionView: View {
             .ignoresSafeArea()
             .blendMode(.plusLighter)
         }
+        #endif
     }
 
     // MARK: - Content
@@ -174,6 +178,18 @@ struct ProfileSelectionView: View {
 
     private var titleBlock: some View {
         VStack(spacing: 6) {
+            #if os(tvOS)
+            Text("Who's watching?")
+                .font(.auroraSerif(titleSize, .semibold))
+                .foregroundStyle(Color.auroraInk)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+            Text("Select your profile")
+                .font(.system(size: subtitleSize, weight: .regular))
+                .foregroundStyle(Color.auroraInkSecondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+            #else
             Text("Who's watching?")
                 .font(.system(size: titleSize, weight: .semibold))
                 .tracking(-0.5)
@@ -185,6 +201,7 @@ struct ProfileSelectionView: View {
                 .foregroundStyle(.white.opacity(0.55))
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
+            #endif
         }
     }
 
