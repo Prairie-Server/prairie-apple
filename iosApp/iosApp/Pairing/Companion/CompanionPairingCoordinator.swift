@@ -65,16 +65,16 @@ final class CompanionPairingCoordinator {
 
     /// User tapped a set of servers to push (order = approval order).
     func pushSelected(_ servers: [ServerEntry]) async {
+        guard case .pickServers = state, !isPumping else { return }
         queue = servers
-        await pushNext()
+        await pump { await self.pushNext() }
     }
 
     /// User confirmed the displayed match code matches the TV.
     func confirmMatch() async {
+        guard case .confirmMatch = state, !isPumping, let current = queue.first else { return }
         confirmed = true
-        if case .confirmMatch = state, let current = queue.first {
-            await approveAndAdvance(current)
-        }
+        await pump { await self.approveAndAdvance(current) }
     }
 
     /// User said the codes don't match — abort.
@@ -87,6 +87,17 @@ final class CompanionPairingCoordinator {
     func cancel() async {
         try? await session.send(.cancel(reason: "user_cancelled"))
         await session.close()
+        state = .error("Setup cancelled.")
+    }
+
+    private var isPumping = false
+    /// Serializes stream-reading bursts so two never overlap (overlapping
+    /// AsyncThrowingStream reads fatally trap). False while paused for the
+    /// user's match-code confirmation.
+    private func pump(_ body: () async -> Void) async {
+        isPumping = true
+        await body()
+        isPumping = false
     }
 
     // MARK: - Internals
@@ -100,7 +111,9 @@ final class CompanionPairingCoordinator {
                 fail(server); await pushNext(); return
             }
             // Display the SERVER's authoritative match code, not the channel's.
-            let token = await TokenStore.shared.getAccessToken(for: server.id) ?? ""
+            guard let token = await TokenStore.shared.getAccessToken(for: server.id), !token.isEmpty else {
+                fail(server); await pushNext(); return
+            }
             let lookup = try await api.lookup(serverURL: server.url, bearer: token, userCode: userCode)
             let serverMatch = lookup.matchCode ?? ""
             pendingUserCode = userCode
@@ -138,7 +151,10 @@ final class CompanionPairingCoordinator {
         state = .finished(signedIn: signedIn, failed: failed)
     }
 
-    private func fail(_ server: ServerEntry) { failed.append(server.displayName) }
+    private func fail(_ server: ServerEntry) {
+        failed.append(server.displayName)
+        if !queue.isEmpty { queue.removeFirst() }
+    }
 
     /// Pull the next deviceStarted/serverResult, ignoring anything else.
     private func nextRelevant() async throws -> PairingMessage? {
@@ -156,7 +172,9 @@ final class CompanionPairingCoordinator {
     private func serversWithTokens() async -> [ServerEntry] {
         var result: [ServerEntry] = []
         for entry in ServerRegistry.shared.sortedEntries {
-            if await TokenStore.shared.getAccessToken(for: entry.id) != nil { result.append(entry) }
+            if let token = await TokenStore.shared.getAccessToken(for: entry.id), !token.isEmpty {
+                result.append(entry)
+            }
         }
         return result
     }
