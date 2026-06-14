@@ -4,7 +4,7 @@
 - **Status:** Approved design, pre-implementation
 - **Repo:** silo-apple (iOS + tvOS). Server endpoints already exist; Android is a documented follow-on.
 - **Related:** `docs/tvos-onboarding/` (Tandem "companion" direction), tvOS first-run redesign.
-- **Review history:** 2026-06-14 adversarial review (Codex). HIGH "persist-before-verify" → fixed (persist-on-success, §5/§6). CRITICAL "confirm-once multi-server MITM" → accepted as a documented v1 risk (§6, *Accepted risk*).
+- **Review history:** 2026-06-14 adversarial review (Codex). HIGH "persist-before-verify" → fixed (persist-on-success, §5/§6). CRITICAL "confirm-once multi-server MITM" → accepted as a documented v1 risk (§6, *Accepted risk*). 2026-06-14 second adversarial review: Face ID gate removed (a signed-in phone + the confirmation tap is the authorization); receiver poll loop made cancellable so peer cancel/drop aborts immediately (plan Task 8); confirm-once CRITICAL re-affirmed as accepted.
 
 ## 1. Summary
 
@@ -21,9 +21,11 @@ This rides the Silo server's **existing** device-authorization endpoints
 ### "Hands-off," stated honestly
 
 Discovery and connection are automatic. The user makes exactly **one**
-confirmation: they glance at a short match code shown on the TV, confirm it on
-the phone, and authorize with Face ID. That tap is the security anchor (§6) and
-cannot be removed without opening an impersonation hole on a shared network. It
+confirmation: they glance at a short match code shown on the TV and confirm it on
+the phone. The phone is already signed in to the server, so that tap is the
+authorization — there is no separate biometric step. The match-code confirmation
+is the security anchor (§6) and cannot be removed without opening an
+impersonation hole on a shared network. It
 is still dramatically faster than thumb-typing a URL and password on a remote.
 
 ## 2. Goals / Non-goals
@@ -139,8 +141,8 @@ phone shows "update one of your apps" and offers QR fallback.
    "Set up Apple TV 'Living Room'?"
 3. Tap → phone opens TLS `NWConnection` → receives `Hello`.
 4. Phone shows its servers from `ServerRegistry` (**only** those with valid
-   tokens) → user ticks S1, S2 → **Face ID once** to authorize using the phone's
-   sessions.
+   tokens) → user ticks S1, S2 → **Continue**. The phone's existing authenticated
+   sessions authorize the approvals; there is no separate biometric step.
 5. **Per chosen server Sᵢ (sequential):**
    1. Phone → `PushServer(Sᵢ.url)`.
    2. TV holds Sᵢ as a **pending candidate** (not yet written to `ServerRegistry`),
@@ -193,7 +195,9 @@ Identical, minus the URL push: the TV already has the server, so it can
   screen and aborts, and **no server entry is persisted** — no credential
   compromise and no lingering bad state.
 - Resulting TV session appears in `GET /auth/sessions`, named by device, and is
-  user-revocable. Approval requires a fresh Face ID gesture.
+  user-revocable. Authorization is the user's confirmation tap on a phone already
+  authenticated to the server — there is no separate biometric gate (a deliberate
+  v1 choice: the signed-in phone is the authority).
 - **Future hardening (not v1):** SPAKE2 / ECDH with a short-authentication-string
   to also mutually authenticate the URL push, removing reliance on the user's
   visual compare.

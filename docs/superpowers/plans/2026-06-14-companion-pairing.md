@@ -20,6 +20,8 @@
 4. **Tests.** The repo has no working XCTest target (the lone `iosApp/Tests/*.swift` file is an orphaned `@main` + `precondition()` script). Per CLAUDE.md ("focused tests only for critical or high-risk behavior") we unit-test only the **pure, dependency-free** logic — `PairingProtocol` and `PairingFrame` — with standalone `swiftc`-compiled `precondition()` programs that mirror the existing pattern. The stateful coordinators are structured against injected protocols and verified by the **manual LAN end-to-end test** (Task 14).
 5. **One server-contract check.** The `GET /auth/device` response field names are not verified field-by-field in this repo. Task 7 includes a step to confirm them against `silo-server/internal/api/handlers/auth_device.go`.
 6. **tvOS onboarding is in flux.** `Screens/Auth/TVServerSetupView.swift` has uncommitted Aurora-redesign edits. The Receiver UI is built as a self-contained view (Task 9) wired in with a minimal addition, to avoid clobbering that work.
+7. **No biometric gate.** Authorization is the user's confirmation tap on a phone already signed in to the server — there is no Face ID / `LocalAuthentication` step (decision 2026-06-14). The match-code visual compare remains the security anchor.
+8. **Receiver polling is cancellable.** The Receiver coordinator reads the session stream on a loop that never blocks on network work; each server's start+poll is a separate cancellable `Task`, so a peer `Cancel` or a dropped connection aborts the attempt immediately and frees the advertiser (Task 8).
 
 ---
 
@@ -810,6 +812,12 @@ final class ReceiverPairingCoordinator {
     private let api: PairingDeviceAPI
     private let onAuthenticated: () -> Void
     private var signedInCount = 0
+    /// The in-flight start+poll for the current server. Run as a separate
+    /// cancellable task so the stream reader below is NEVER blocked by polling.
+    private var pollTask: Task<Void, Never>?
+    /// True while `pollTask` is active. The protocol is one-server-at-a-time;
+    /// an overlapping PushServer is ignored.
+    private var isPolling = false
     private static let logger = Logger(subsystem: "com.continuum.app", category: "pairing.receiver")
 
     /// - Parameter onAuthenticated: called on the main actor after at least
@@ -819,7 +827,10 @@ final class ReceiverPairingCoordinator {
         self.onAuthenticated = onAuthenticated
     }
 
-    /// Run the receive loop for an opened session until it finishes.
+    /// Consume the session stream. The stream is ALWAYS being read here; each
+    /// server's start+poll runs as a cancellable child task so a Cancel message
+    /// or a dropped connection aborts the attempt immediately rather than after
+    /// the poll loop finishes (design spec §7).
     func run(session: PairingSession, stream: AsyncThrowingStream<PairingMessage, Error>) async {
         let device = AppleDeviceIdentity.current
         do {
@@ -832,23 +843,40 @@ final class ReceiverPairingCoordinator {
             for try await message in stream {
                 switch message {
                 case let .pushServer(serverURL, serverName):
-                    await handlePushServer(serverURL: serverURL, serverName: serverName, session: session)
+                    guard !isPolling else { break } // one at a time; ignore overlap
+                    isPolling = true
+                    pollTask = Task { [weak self] in
+                        await self?.handlePushServer(serverURL: serverURL, serverName: serverName, session: session)
+                        self?.isPolling = false
+                    }
                 case .done:
+                    await pollTask?.value // let the last server finish persisting
                     if signedInCount > 0 { onAuthenticated() }
-                    await session.close()
+                    await teardown(session: session, resetState: false)
                     return
                 case let .cancel(reason):
                     Self.logger.notice("peer cancelled: \(reason, privacy: .public)")
-                    await session.close()
+                    await teardown(session: session, resetState: true)
                     return
                 default:
-                    break // Receiver ignores TV→phone message kinds echoed back.
+                    break // Receiver only consumes phone→TV message kinds.
                 }
             }
+            // Stream ended without a Done (peer closed the connection).
+            await teardown(session: session, resetState: true)
         } catch {
+            // Stream threw: the connection dropped mid-session.
             Self.logger.error("session error: \(String(describing: error), privacy: .public)")
-            state = .failed("Connection lost")
+            await teardown(session: session, resetState: true)
         }
+    }
+
+    /// Cancel any in-flight poll, close the session, and (optionally) return the
+    /// UI to idle so the advertiser can accept a fresh connection.
+    private func teardown(session: PairingSession, resetState: Bool) async {
+        pollTask?.cancel()
+        await session.close()
+        if resetState { state = .idle }
     }
 
     private func handlePushServer(serverURL: String, serverName: String?, session: PairingSession) async {
@@ -863,6 +891,7 @@ final class ReceiverPairingCoordinator {
             // 2. Poll until approved or the device code expires.
             let deadline = Date().addingTimeInterval(TimeInterval(started.expiresIn))
             while Date() < deadline {
+                try Task.checkCancellation() // abort promptly on peer cancel / drop
                 let poll = try await api.poll(serverURL: normalized, deviceCode: started.deviceCode)
                 switch poll.status {
                 case "approved":
@@ -883,6 +912,12 @@ final class ReceiverPairingCoordinator {
             throw PairingDeviceAPI.APIError.http(408) // local timeout
         } catch {
             // Persist-on-success: nothing was written, so nothing to roll back.
+            if Task.isCancelled {
+                // Peer cancelled or the connection dropped (teardown already reset
+                // the UI). The peer is gone, so send nothing.
+                Self.logger.notice("attempt for \(normalized, privacy: .public) cancelled")
+                return
+            }
             Self.logger.error("server \(normalized, privacy: .public) failed: \(String(describing: error), privacy: .public)")
             state = .failed(serverName ?? normalized)
             try? await session.send(.serverResult(serverURL: normalized, status: .failed, error: "auth_failed"))
