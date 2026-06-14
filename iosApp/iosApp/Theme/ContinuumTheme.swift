@@ -224,10 +224,15 @@ struct ContinuumTheme {
 
         // MARK: Focus marquee (§5.4/§5.5)
 
-        /// Marquee content block top — Home (full-bleed) scale.
-        static let marqueeTopHome: CGFloat = 218
-        /// Marquee content block top — library (compact) scale.
-        static let marqueeTopLibrary: CGFloat = 246
+        /// Marquee block bottom inset — Home scale. Anchors the metadata
+        /// block bottom-left, just above the row band (rows bottom-align at
+        /// `rowBandBottomInset`; the band top sits near `homeFirstRowTop`).
+        /// Tuned on device so the block clears the row header by a hair.
+        static let marqueeBottomInsetHome: CGFloat = 440
+        /// Marquee block bottom inset — library (compact) scale. A touch
+        /// higher than Home: Browse row 1 is taller posters, so the block
+        /// seats slightly above where it does over Continue Watching.
+        static let marqueeBottomInsetLibrary: CGFloat = 485
         /// Marquee content block width.
         static let marqueeContentWidth: CGFloat = 880
         static let marqueeTitleSizeHome: CGFloat = 84
@@ -263,10 +268,11 @@ struct ContinuumTheme {
         static let homeFirstRowTop: CGFloat = 535
         /// Top of the row band on a library Browse landing.
         static let libraryFirstRowTop: CGFloat = 510
-        /// Bottom inset for the row band so the focused row's card
-        /// captions clear the tvOS bottom overscan instead of clipping
-        /// at the screen edge. The rows bottom-align to this line.
-        static let rowBandBottomInset: CGFloat = 90
+        /// Bottom inset for the row band, measured from the physical bottom
+        /// edge. The row layers ignore the bottom safe area (the ~86pt tvOS
+        /// overscan was leaving a dead band under the rail), so this is the
+        /// small margin kept below the focused row's captions.
+        static let rowBandBottomInset: CGFloat = 48
         /// Dense poster card (§5.6) used on Browse landing rows so two
         /// rows + marquee fit above the fold.
         static let densePosterCardWidth: CGFloat = 208

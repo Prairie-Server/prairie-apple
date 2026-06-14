@@ -103,6 +103,9 @@ struct TVLibraryBrowseView: View {
                 rowsContent
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            // Reach into the bottom overscan so the focused row sits near the
+            // physical edge; it re-insets via rowBandBottomInset.
+            .ignoresSafeArea(edges: .bottom)
 
             // Floats over the reserved band; never focusable or hit-testable.
             TVFocusMarquee(

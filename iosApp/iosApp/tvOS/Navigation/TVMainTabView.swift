@@ -150,25 +150,24 @@ struct TVMainTabView: View {
                 .id(selectedRoot)
                 .transition(reduceMotion ? .identity : .opacity)
                 .focusScope(tabContentNamespace)
-                // Pull page cards out of the focus graph the moment ANY panel
-                // is open — preview included — not just once focus is in it.
-                // Why: while a cascade preview is showing, d-pad-down to enter
-                // it is a geometric focus *move*. The page's pill row sits at
-                // pillRowTopInset (150) — closer to the bar than the dropdown's
-                // first row (below dropdownTopInset 132 + its header) — so the
-                // engine lands focus on a pill for a frame before the cascade's
-                // @FocusState claim pulls it back: the visible "focus bounces
-                // through the section rows" jump. Disabling the page removes
-                // that competing target, so the only place down can land is the
-                // dropdown row the host claims.
+                // Hold the page inert whenever a top-menu panel is open —
+                // preview included. A d-pad-down to enter the cascade is a
+                // geometric focus *move*; the page's pill row (pillRowTopInset
+                // 150) sits closer to the bar than the dropdown's first row, so
+                // with the page live the engine lands focus on a pill for a
+                // frame before the cascade's @FocusState claim pulls it back —
+                // the "focus bounces through the section rows" jump. Disabling
+                // the page removes that competing target so down lands straight
+                // on the dropdown row the host claims.
                 //
-                // This previously caused a Home-tab flash (tvOS re-resolving
-                // focus when the big subtree goes inert on preview-open). That's
-                // now absorbed by the bar's spurious-nil re-pin
-                // (TVTopMenuBar.onChange(focusedItem) / spuriousFromOpenPreview),
-                // which keeps focus on the dwelled tab. Focus is never in the
-                // page when a panel opens (panels open from the bar), so this
-                // never rips focus out of page content.
+                // Two things make this safe (an earlier attempt stranded focus
+                // here): (1) the bar's spurious-nil re-pin keeps focus on the
+                // dwelled tab when the subtree goes inert on preview-open
+                // (TVTopMenuBar.onChange(focusedItem) / spuriousFromOpenPreview);
+                // (2) `selectRoot` clears `openPanel` before handing focus to
+                // page content, so the content hand-off never targets an inert
+                // page. Focus is only ever on the bar (not the page) when a
+                // panel opens, so this never rips focus out of page content.
                 .disabled(openPanel != nil)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -590,12 +589,22 @@ struct TVMainTabView: View {
         router.popToRoot()
 
         suppressTopMenuFocusForContentHandoff()
+        // Selecting a root closes any open dropdown. Pressing a library tab
+        // while its cascade preview is open should navigate to that library
+        // *and* dismiss the panel: leaving `openPanel` set orphans the dropdown
+        // on screen over the new page, and — because the page is held inert
+        // while a panel is open (§ rootContent `.disabled(openPanel != nil)`) —
+        // the content focus hand-off below lands on nothing, stranding the
+        // remote. Clearing it here is the single fix for both.
         // Tab content switches crossfade over 200 ms (§4.2); the outgoing
         // view never owns focus here because selection happens from the bar.
         // Reduce Motion snaps (the `.identity` transition + nil animation).
         withAnimation(reduceMotion ? nil : .easeInOut(duration: ContinuumTheme.normalDuration)) {
             selectedRoot = root
+            openPanel = nil
         }
+        panelEntersFocus = false
+        panelHasFocus = false
         // Push focus into whichever root content is swapping in. Suppressing
         // the menu relinquishes its focus (TVTopMenuBar.onChange(isFocusSuppressed)),
         // so without an active hand-down the new content never claims focus and

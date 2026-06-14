@@ -84,6 +84,9 @@ struct HomeView: View {
             // sections explicitly (see scrollContent).
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Reach into the bottom overscan so the focused row sits near
+                // the physical edge; it re-insets via rowBandBottomInset.
+                .ignoresSafeArea(edges: .bottom)
 
             // Floats over the band above the row; never focusable or hit-testable.
             TVFocusMarquee(

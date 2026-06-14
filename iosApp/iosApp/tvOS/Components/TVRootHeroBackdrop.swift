@@ -6,8 +6,13 @@ import SwiftUI
 /// Keeping this behind the whole page instead of inside the hero/marquee
 /// gives the custom top menu, marquee, and rows one shared visual plane.
 /// On Home and the library Browse landings the artwork tracks the
-/// marquee's focused item (Skyline §5.4); Calendar and Recommendations
-/// keep passing static (nil) artwork.
+/// marquee's focused item (Skyline §5.4): a crisp image is anchored in the
+/// top-right corner and fades out toward the leading edge and the bottom
+/// into a color sampled from the art itself, which is carried (dimmed)
+/// across the rest of the page so the metadata and rows below sit on the
+/// same tint. Calendar and Recommendations keep passing static (nil)
+/// artwork with `tintColor: .continuumBackground`, so they render as the
+/// flat app background.
 struct TVRootHeroBackdrop: View {
     let tintColor: Color
     let artworkURL: String?
@@ -19,38 +24,46 @@ struct TVRootHeroBackdrop: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private let fadeExtension: CGFloat = 420
-    private let horizontalBleed: CGFloat = 380
-    private let heroHeight: CGFloat = 760
-    /// How far the blurred art is pushed toward the trailing edge so its
-    /// focal mass sits right of the marquee text column (§5.4). Paired with
-    /// `leadingReadabilityScrim`, which keeps the leading half dark so the
-    /// title/meta/synopsis stay legible regardless of the focused art's
-    /// colors. The bleed above absorbs the shift so no gap opens on the left.
-    private let artHorizontalShift: CGFloat = 150
+    /// Crisp art occupies the upper-right corner; the corner mask fades it
+    /// out toward the leading edge and the bottom into the sampled wash.
+    private let artWidthFraction: CGFloat = 0.64
+    private let artHeightFraction: CGFloat = 0.70
+    /// Near-crisp by request (§ user direction). Bump a little only if the
+    /// server's backdrop is low-res enough to show compression artifacts.
+    private let artBlur: CGFloat = 0
+    /// Full-width top scrim height so the menu bar stays legible over the
+    /// bright art now sitting directly behind the tabs and profile avatar.
+    private let topScrimHeight: CGFloat = 190
 
     var body: some View {
         ZStack(alignment: .top) {
+            Color.continuumBackground
+
             tintBackground
 
             if isVisible {
                 backdropImage
+                topChromeScrim
             }
         }
         .ignoresSafeArea()
         .allowsHitTesting(false)
     }
 
+    /// Sampled-color wash: richest in the top-right behind the art, carried
+    /// dimmed down to the bottom-left so the page keeps the art's color
+    /// without washing out the metadata or row captions. When the caller
+    /// passes `.continuumBackground` (Calendar/Recommendations) every stop
+    /// collapses to the app background, so the wash renders flat.
     private var tintBackground: some View {
         LinearGradient(
             stops: [
                 .init(color: tintColor, location: 0.0),
-                .init(color: tintColor.opacity(isVisible ? 0.55 : 0.0), location: 0.35),
-                .init(color: .continuumBackground, location: 0.8),
-                .init(color: .continuumBackground, location: 1.0),
+                .init(color: tintColor.opacity(isVisible ? 0.5 : 0.0), location: 0.45),
+                .init(color: tintColor.opacity(isVisible ? 0.18 : 0.0), location: 1.0),
             ],
-            startPoint: .top,
-            endPoint: .bottom
+            startPoint: .topTrailing,
+            endPoint: .bottomLeading
         )
         .animation(reduceMotion ? nil : .easeInOut(duration: crossfadeDuration), value: tintColor)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: isVisible)
@@ -58,99 +71,78 @@ struct TVRootHeroBackdrop: View {
 
     @ViewBuilder
     private var backdropImage: some View {
-        let totalHeight = heroHeight + fadeExtension
-
         GeometryReader { geometry in
-            let visibleWidth = geometry.size.width
-            let paintedWidth = visibleWidth + horizontalBleed
+            let artWidth = geometry.size.width * artWidthFraction
+            let artHeight = geometry.size.height * artHeightFraction
 
-            Color.clear
-                .frame(width: visibleWidth, height: totalHeight, alignment: .top)
-                .overlay(alignment: .top) {
-                    ZStack(alignment: .top) {
-                        if let artworkURL, !artworkURL.isEmpty {
-                            AsyncImageView(
-                                url: artworkURL,
-                                thumbhash: artworkThumbhash,
-                                targetSize: CGSize(width: paintedWidth, height: totalHeight),
-                                contentMode: .fill
-                            )
-                            .id(artworkURL)
-                            .frame(width: paintedWidth, height: totalHeight, alignment: .top)
-                            .scaleEffect(1.04)
-                            .blur(radius: 22)
-                            // Push the focal mass off the leading text column;
-                            // the bleed leaves the left edge covered.
-                            .offset(x: artHorizontalShift)
-                            .transition(
-                                reduceMotion
-                                    ? .identity
-                                    : .opacity.animation(.easeInOut(duration: crossfadeDuration))
-                            )
-
-                            Rectangle()
-                                .fill(Color.black.opacity(0.34))
-                                .frame(width: paintedWidth, height: totalHeight)
-
-                            LinearGradient(
-                                colors: [.black.opacity(0.54), .clear],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                            .frame(width: paintedWidth, height: 140, alignment: .top)
-
-                            // Leading readability scrim. Visible-width (not
-                            // the bled paint width) so the leading→trailing
-                            // ramp maps to the screen: the marquee text column
-                            // stays dark, the art breathes on the trailing side.
-                            leadingReadabilityScrim
-                                .frame(width: visibleWidth, height: totalHeight)
-                        }
-                    }
-                    .frame(width: paintedWidth, height: totalHeight, alignment: .top)
-                    .mask {
-                        fadeMask
-                            .frame(width: paintedWidth, height: totalHeight)
-                    }
-                }
+            if let artworkURL, !artworkURL.isEmpty {
+                AsyncImageView(
+                    url: artworkURL,
+                    thumbhash: artworkThumbhash,
+                    targetSize: CGSize(width: artWidth, height: artHeight),
+                    contentMode: .fill
+                )
+                .id(artworkURL)
+                .frame(width: artWidth, height: artHeight)
+                .clipped()
+                .blur(radius: artBlur)
+                .mask { cornerFadeMask }
+                // Anchor the art block to the screen's top-right corner; the
+                // mask keeps only that corner opaque, so the corner reads as
+                // fully painted with no gap and the art dissolves inward.
+                .frame(
+                    width: geometry.size.width,
+                    height: geometry.size.height,
+                    alignment: .topTrailing
+                )
+                .transition(
+                    reduceMotion
+                        ? .identity
+                        : .opacity.animation(.easeInOut(duration: crossfadeDuration))
+                )
+            }
         }
-        .frame(height: totalHeight, alignment: .top)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .ignoresSafeArea(edges: [.top, .horizontal])
+        .ignoresSafeArea()
     }
 
-    /// Horizontal dark-to-clear ramp behind the marquee's leading text
-    /// column (§5.4). The text spans roughly the leading half (safeArea.x
-    /// 88 → synopsis cap 780), so the scrim holds full strength through the
-    /// midline, then falls to clear by ~0.9 so the trailing art reads at the
-    /// base 34% dim only. Stacks on that flat dim, so the leading edge lands
-    /// near ~0.8 effective — a stable bed for white title + secondary text.
-    private var leadingReadabilityScrim: some View {
-        LinearGradient(
-            stops: [
-                .init(color: .black.opacity(0.72), location: 0.0),
-                .init(color: .black.opacity(0.6), location: 0.3),
-                .init(color: .black.opacity(0.34), location: 0.52),
-                .init(color: .black.opacity(0.08), location: 0.72),
-                .init(color: .clear, location: 0.9),
-            ],
-            startPoint: .leading,
-            endPoint: .trailing
-        )
-    }
-
-    private var fadeMask: some View {
+    /// Corner falloff: opaque only at the top-right, fading to clear toward
+    /// the leading edge (horizontal ramp) and the bottom (vertical ramp).
+    /// Nesting the two ramps as masks multiplies their alpha, so the art
+    /// dissolves into the sampled wash on its left and below.
+    private var cornerFadeMask: some View {
         LinearGradient(
             stops: [
                 .init(color: .black, location: 0.0),
-                .init(color: .black, location: 0.42),
-                .init(color: Color.black.opacity(0.7), location: 0.66),
-                .init(color: Color.black.opacity(0.25), location: 0.86),
+                .init(color: .black, location: 0.32),
                 .init(color: .clear, location: 1.0),
             ],
+            startPoint: .trailing,
+            endPoint: .leading
+        )
+        .mask {
+            LinearGradient(
+                stops: [
+                    .init(color: .black, location: 0.0),
+                    .init(color: .black, location: 0.42),
+                    .init(color: .clear, location: 1.0),
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        }
+    }
+
+    /// Full-width black ramp pinned to the top so the wordmark, tabs, and
+    /// profile avatar stay legible now that bright art sits behind them.
+    private var topChromeScrim: some View {
+        LinearGradient(
+            colors: [.black.opacity(0.5), .clear],
             startPoint: .top,
             endPoint: .bottom
         )
+        .frame(maxWidth: .infinity, maxHeight: topScrimHeight, alignment: .top)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .ignoresSafeArea()
     }
 }
 #endif

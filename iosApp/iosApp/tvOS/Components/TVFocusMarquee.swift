@@ -312,23 +312,24 @@ final class TVFocusMarqueeModel {
 
 // MARK: - Marquee view
 
-/// Passive billboard at the top of Home and the library Browse landings
-/// (§5.4/§5.5): always previews the card the user is focused on, never
+/// Passive billboard anchored bottom-left on Home and the library Browse
+/// landings (§5.4/§5.5): always previews the card the user is focused on, never
 /// participates in focus, has no buttons. Crossfades 240 ms (snaps under
 /// Reduce Motion) and is exposed to VoiceOver as a polite, non-interrupting
 /// description of the focused item.
 struct TVFocusMarquee: View {
     enum Scale {
-        /// Home — full-bleed scale (block top 218, title 84, eyebrow 17).
+        /// Home — full-bleed scale (title 84), anchored bottom-left above
+        /// the row band.
         case home
-        /// Library landing — compact spotlight scale (top 246, title 66,
-        /// eyebrow 16) so row 1 stays fully visible above the fold.
+        /// Library landing — compact spotlight scale (title 66) so the block
+        /// clears the pill row while sitting just above row 1.
         case library
 
-        var contentTop: CGFloat {
+        var bottomInset: CGFloat {
             switch self {
-            case .home: ContinuumTheme.Skyline.marqueeTopHome
-            case .library: ContinuumTheme.Skyline.marqueeTopLibrary
+            case .home: ContinuumTheme.Skyline.marqueeBottomInsetHome
+            case .library: ContinuumTheme.Skyline.marqueeBottomInsetLibrary
             }
         }
 
@@ -363,7 +364,7 @@ struct TVFocusMarquee: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
+        ZStack(alignment: .bottomLeading) {
             if let content {
                 TVMarqueeBlock(content: content, enrichment: enrichment, scale: scale)
                     .id(content.id)
@@ -373,10 +374,10 @@ struct TVFocusMarquee: View {
         .frame(
             maxWidth: .infinity,
             maxHeight: .infinity,
-            alignment: .topLeading
+            alignment: .bottomLeading
         )
         .padding(.leading, ContinuumTheme.Skyline.safeAreaX)
-        .padding(.top, scale.contentTop)
+        .padding(.bottom, scale.bottomInset)
         .ignoresSafeArea(edges: [.top, .horizontal])
         .allowsHitTesting(false)
         .focusEffectDisabled()
@@ -454,9 +455,7 @@ private struct TVMarqueeBlock: View {
                     .font(.system(size: ContinuumTheme.Skyline.marqueeSynopsisSize, weight: .regular))
                     .lineSpacing(6)
                     .foregroundStyle(Color.continuumSecondaryText)
-                    // A displayed logo (or a wrapped text title) fills part
-                    // of the synopsis budget, dropping it from 3 lines to 2.
-                    .lineLimit(titleWrapsTwoLines || logoImage != nil ? 2 : 3)
+                    .lineLimit(synopsisLineLimit)
                     .frame(maxWidth: ContinuumTheme.Skyline.marqueeSynopsisMaxWidth, alignment: .leading)
             }
 
@@ -468,6 +467,19 @@ private struct TVMarqueeBlock: View {
             logoTask?.cancel()
             logoTask = nil
         }
+    }
+
+    /// Synopsis line budget. The library scale anchors a taller block lower,
+    /// so it caps at two lines to clear the Browse pill row; Home affords
+    /// three. A shown logo (or a wrapped title) fills part of the budget and
+    /// drops one line either way.
+    private var synopsisLineLimit: Int {
+        let cap: Int
+        switch scale {
+        case .home: cap = 3
+        case .library: cap = 2
+        }
+        return (titleWrapsTwoLines || logoImage != nil) ? min(cap, 2) : cap
     }
 
     /// Air date + top-billed cast (§9 backfill). Fades in once the
