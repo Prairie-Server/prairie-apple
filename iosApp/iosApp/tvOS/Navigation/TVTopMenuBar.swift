@@ -1,5 +1,6 @@
 #if os(tvOS)
 import SwiftUI
+import UIKit
 import os // TVFOCUS-DEBUG: temporary focus tracing
 
 // TVFOCUS-DEBUG: temporary focus tracing (strip before finalizing)
@@ -174,10 +175,16 @@ struct TVTopMenuBar: View {
         .animation(reduceMotion ? nil : .easeInOut(duration: ContinuumTheme.normalDuration), value: isMenuFocused)
         .focusSection()
         .disabled(isFocusSuppressed)
-        // Menu while a panel is opening from the bar closes the panel
-        // instead of exiting the page. Once focus is inside the panel, the
-        // overlay's own `onExitCommand` catches Menu first.
-        .modifier(TVTopMenuExitHandler(onExit: barExitAction))
+        // Menu handling must not be conditionally wrapped around the focused
+        // tab buttons. Toggling an `onExitCommand` ancestor when `openPanel`
+        // changes invalidates tvOS focus and produces the preview-open flash.
+        .background(
+            TVTopMenuExitPressCatcher(
+                isActive: shouldCaptureExitPress,
+                onExit: handleExitPress
+            )
+            .frame(width: 0, height: 0)
+        )
         .onChange(of: isFocusSuppressed) { _, newValue in
             if newValue {
                 focusedItem = nil
@@ -213,16 +220,15 @@ struct TVTopMenuBar: View {
             // perturbs the focus graph and makes tvOS drop the bar's
             // @FocusState, repairing to the Home tab (the flash). When that's
             // why we lost focus — a preview panel is open, or a sideways move
-            // just closed one — re-pin to the tab the user is actually on.
+            // just closed one — re-pin to the tab the user is actually on in
+            // the same transaction. Deferring this by one main-queue turn
+            // leaves a visible frame where tvOS repairs focus back to Home.
             // A legit leave (down into the page, Menu out) has neither flag,
             // so it falls through and focus is allowed to go.
             let spuriousFromOpenPreview = openPanel != nil && !panelHasFocus
             if (spuriousFromOpenPreview || refocusAfterClose), let target = lastBarFocus {
                 refocusAfterClose = false
-                DispatchQueue.main.async {
-                    guard focusedItem == nil, !panelHasFocus else { return }
-                    focusedItem = target
-                }
+                focusedItem = target
                 return
             }
             isMenuFocused = false
@@ -391,12 +397,22 @@ struct TVTopMenuBar: View {
     }
 
     /// Menu handler for the bar: closes a dwell-open panel first (§5.3
-    /// "Menu closes"), otherwise the page-level exit (Home / system).
-    private var barExitAction: (() -> Void)? {
+    /// "Menu closes"), otherwise runs the page-level bar exit. This is captured
+    /// by `TVTopMenuExitPressCatcher` instead of `.onExitCommand` so changing
+    /// `openPanel` never rewrites the focused tab's SwiftUI ancestor chain.
+    private var shouldCaptureExitPress: Bool {
+        !isFocusSuppressed
+            && focusedItem != nil
+            && !panelHasFocus
+            && (openPanel != nil || onExit != nil)
+    }
+
+    private func handleExitPress() {
         if openPanel != nil {
-            return { onDwell(nil) }
+            onDwell(nil)
+            return
         }
-        return onExit
+        onExit?()
     }
 
     // MARK: - Dwell (§5.3, §5.8)
@@ -552,19 +568,6 @@ struct TVSkylinePanelChrome: ViewModifier {
     }
 }
 
-private struct TVTopMenuExitHandler: ViewModifier {
-    let onExit: (() -> Void)?
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if let onExit {
-            content.onExitCommand(perform: onExit)
-        } else {
-            content
-        }
-    }
-}
-
 /// Hands d-pad **down** on a panel-bearing bar element (library tab or
 /// avatar) to the host, which opens the element's panel if needed and moves
 /// focus into it (§5.3). Attachment is keyed on the element's *kind*
@@ -603,6 +606,80 @@ private struct TVTopMenuAnchorPublisher: ViewModifier {
         } else {
             content
         }
+    }
+}
+
+/// Window-level Menu capture for the top bar. A SwiftUI `.onExitCommand`
+/// modifier would need to appear and disappear as a panel opens, which rebuilds
+/// the ancestor chain around the currently focused tab. This recognizer stays
+/// mounted and simply declines the press when the bar has nothing to handle, so
+/// the system Menu behavior still passes through on Home.
+private struct TVTopMenuExitPressCatcher: UIViewRepresentable {
+    var isActive: Bool
+    var onExit: () -> Void
+
+    func makeUIView(context: Context) -> TVTopMenuExitPressUIView {
+        let view = TVTopMenuExitPressUIView()
+        apply(to: view)
+        return view
+    }
+
+    func updateUIView(_ uiView: TVTopMenuExitPressUIView, context: Context) {
+        apply(to: uiView)
+    }
+
+    private func apply(to view: TVTopMenuExitPressUIView) {
+        view.isActive = isActive
+        view.onExit = onExit
+    }
+}
+
+private final class TVTopMenuExitPressUIView: UIView, UIGestureRecognizerDelegate {
+    var isActive = false
+    var onExit: () -> Void = {}
+
+    private weak var attachedWindow: UIWindow?
+    private var recognizer: UITapGestureRecognizer?
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        attachRecognizerIfNeeded()
+    }
+
+    deinit {
+        detachRecognizer()
+    }
+
+    private func attachRecognizerIfNeeded() {
+        guard attachedWindow !== window else { return }
+        detachRecognizer()
+
+        guard let window else { return }
+        let recognizer = UITapGestureRecognizer(target: self, action: #selector(handleMenuPress(_:)))
+        recognizer.allowedPressTypes = [NSNumber(value: UIPress.PressType.menu.rawValue)]
+        recognizer.cancelsTouchesInView = true
+        recognizer.delegate = self
+
+        window.addGestureRecognizer(recognizer)
+        attachedWindow = window
+        self.recognizer = recognizer
+    }
+
+    private func detachRecognizer() {
+        if let recognizer, let attachedWindow {
+            attachedWindow.removeGestureRecognizer(recognizer)
+        }
+        recognizer = nil
+        attachedWindow = nil
+    }
+
+    @objc private func handleMenuPress(_ recognizer: UITapGestureRecognizer) {
+        guard isActive, recognizer.state == .ended else { return }
+        onExit()
+    }
+
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        isActive
     }
 }
 
@@ -651,9 +728,8 @@ struct TVProfileDropdown: View {
 
     var body: some View {
         panel
-            // Inert until the host hands focus in. Dwell previews can keep
-            // focus on the avatar; avatar press or d-pad down enters rows.
-            .disabled(!entersPanel)
+            // Dwell previews render passive labels; rows become focusable
+            // only after the host explicitly hands focus into the panel.
             .onChange(of: focusEntryToken) { _, token in applyEntryToken(token) }
             .onChange(of: focusedAction) { _, newValue in
                 onPanelFocusChanged(newValue != nil)
@@ -747,6 +823,7 @@ struct TVProfileDropdown: View {
             .padding(.horizontal, 12)
     }
 
+    @ViewBuilder
     private func actionButton(
         _ title: String,
         systemImage: String,
@@ -754,21 +831,30 @@ struct TVProfileDropdown: View {
         isDestructive: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 14) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 20, weight: .semibold))
-                    .frame(width: 30)
+        let label = HStack(spacing: 14) {
+            Image(systemName: systemImage)
+                .font(.system(size: 20, weight: .semibold))
+                .frame(width: 30)
 
-                Text(title)
-                    .font(.system(size: ContinuumTheme.Skyline.dropdownRowTextSize, weight: .semibold))
-                    .lineLimit(1)
+            Text(title)
+                .font(.system(size: ContinuumTheme.Skyline.dropdownRowTextSize, weight: .semibold))
+                .lineLimit(1)
 
-                Spacer(minLength: 0)
-            }
+            Spacer(minLength: 0)
         }
-        .buttonStyle(TVProfileMenuButtonStyle(isDestructive: isDestructive))
-        .focused($focusedAction, equals: id)
+
+        if entersPanel {
+            Button(action: action) {
+                label
+            }
+            .buttonStyle(TVProfileMenuButtonStyle(isDestructive: isDestructive))
+            .focused($focusedAction, equals: id)
+        } else {
+            label
+                .foregroundStyle(isDestructive ? .red.opacity(0.9) : .white.opacity(0.86))
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+        }
     }
 }
 

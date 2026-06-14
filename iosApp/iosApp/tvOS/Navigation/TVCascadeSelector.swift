@@ -90,10 +90,10 @@ struct TVCascadeSelector: View {
                 twoLevelPanel
             }
         }
-        // Rows stay inert until the host hands focus in on d-pad down. This
-        // keeps dwell-open menus as previews and lets left/right continue
-        // across the top bar.
-        .disabled(!entersPanel)
+        // Dwell-open menus are passive previews: until the host hands focus
+        // in on d-pad down, rows render as labels instead of disabled Buttons.
+        // Disabled focusable controls still perturb tvOS's focus graph and
+        // make the bar briefly drop focus when the submenu appears.
         .onChange(of: focusEntryToken) { _, token in applyEntryToken(token) }
         .onChange(of: focus) { _, newValue in handleFocusChange(newValue) }
         .onChange(of: entersPanel) { _, entered in
@@ -182,36 +182,47 @@ struct TVCascadeSelector: View {
         }
     }
 
+    @ViewBuilder
     private func libraryRow(_ library: Library) -> some View {
         let isFocused = focus == .library(library.id)
         let isCurrent = library.id == currentScopeId
+        let label = TVCascadeLibraryRowLabel(
+            title: library.name,
+            systemImage: type.systemImage,
+            trailingGlyph: isCurrent ? "checkmark" : "chevron.right",
+            isFocused: isFocused
+        )
 
-        return Button {
-            onCommitLibrary(library)
-        } label: {
-            TVCascadeLibraryRowLabel(
-                title: library.name,
-                systemImage: type.systemImage,
-                trailingGlyph: isCurrent ? "checkmark" : "chevron.right",
-                isFocused: isFocused
+        if entersPanel {
+            Button {
+                onCommitLibrary(library)
+            } label: {
+                label
+            }
+            .buttonStyle(.continuumFlat)
+            .focused($focus, equals: .library(library.id))
+            // Report this row's top in the level-1 HStack's coordinate space so
+            // the flyout can offset to align with the anchored row (§5.3). This
+            // survives the panel's ScrollView / nested stacks, which a custom
+            // VerticalAlignment guide would not.
+            .background(libraryRowTopReporter(for: library))
+            .accessibilityLabel(accessibilityLabel(for: library, isCurrent: isCurrent))
+            .accessibilityAddTraits(isCurrent ? .isSelected : [])
+        } else {
+            label
+                .background(libraryRowTopReporter(for: library))
+                .accessibilityLabel(accessibilityLabel(for: library, isCurrent: isCurrent))
+                .accessibilityAddTraits(isCurrent ? .isSelected : [])
+        }
+    }
+
+    private func libraryRowTopReporter(for library: Library) -> some View {
+        GeometryReader { geo in
+            Color.clear.preference(
+                key: TVCascadeRowAnchorKey.self,
+                value: [library.id: geo.frame(in: .named(Self.cascadeSpace)).minY]
             )
         }
-        .buttonStyle(.continuumFlat)
-        .focused($focus, equals: .library(library.id))
-        // Report this row's top in the level-1 HStack's coordinate space so
-        // the flyout can offset to align with the anchored row (§5.3). This
-        // survives the panel's ScrollView / nested stacks, which a custom
-        // VerticalAlignment guide would not.
-        .background(
-            GeometryReader { geo in
-                Color.clear.preference(
-                    key: TVCascadeRowAnchorKey.self,
-                    value: [library.id: geo.frame(in: .named(Self.cascadeSpace)).minY]
-                )
-            }
-        )
-        .accessibilityLabel(accessibilityLabel(for: library, isCurrent: isCurrent))
-        .accessibilityAddTraits(isCurrent ? .isSelected : [])
     }
 
     // MARK: - Single-level (single library)
@@ -269,21 +280,28 @@ struct TVCascadeSelector: View {
         }
     }
 
+    @ViewBuilder
     private func sectionRow(_ pill: TVLibraryPill, in library: Library) -> some View {
         let isFocused = focus == .section(library.id, pill)
+        let label = TVCascadeSectionRowLabel(
+            title: pill.title,
+            systemImage: pill.systemImage,
+            isFocused: isFocused
+        )
 
-        return Button {
-            onCommitSection(library, pill)
-        } label: {
-            TVCascadeSectionRowLabel(
-                title: pill.title,
-                systemImage: pill.systemImage,
-                isFocused: isFocused
-            )
+        if entersPanel {
+            Button {
+                onCommitSection(library, pill)
+            } label: {
+                label
+            }
+            .buttonStyle(.continuumFlat)
+            .focused($focus, equals: .section(library.id, pill))
+            .accessibilityLabel("\(pill.title), section")
+        } else {
+            label
+                .accessibilityLabel("\(pill.title), section")
         }
-        .buttonStyle(.continuumFlat)
-        .focused($focus, equals: .section(library.id, pill))
-        .accessibilityLabel("\(pill.title), section")
     }
 
     // MARK: - Shared chrome

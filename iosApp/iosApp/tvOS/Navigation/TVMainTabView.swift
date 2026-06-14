@@ -146,25 +146,12 @@ struct TVMainTabView: View {
                 .id(selectedRoot)
                 .transition(reduceMotion ? .identity : .opacity)
                 .focusScope(tabContentNamespace)
-                // Hold the page inert whenever a top-menu panel is open —
-                // preview included. A d-pad-down to enter the cascade is a
-                // geometric focus *move*; the page's pill row (pillRowTopInset
-                // 150) sits closer to the bar than the dropdown's first row, so
-                // with the page live the engine lands focus on a pill for a
-                // frame before the cascade's @FocusState claim pulls it back —
-                // the "focus bounces through the section rows" jump. Disabling
-                // the page removes that competing target so down lands straight
-                // on the dropdown row the host claims.
-                //
-                // Two things make this safe (an earlier attempt stranded focus
-                // here): (1) the bar's spurious-nil re-pin keeps focus on the
-                // dwelled tab when the subtree goes inert on preview-open
-                // (TVTopMenuBar.onChange(focusedItem) / spuriousFromOpenPreview);
-                // (2) `selectRoot` clears `openPanel` before handing focus to
-                // page content, so the content hand-off never targets an inert
-                // page. Focus is only ever on the bar (not the page) when a
-                // panel opens, so this never rips focus out of page content.
-                .disabled(openPanel != nil)
+                // Keep the page from taking remote/pointer events while a
+                // menu floats above it, without writing `\.isEnabled` through
+                // the whole content subtree. Using `.disabled(openPanel != nil)`
+                // here made every visible button/card redraw in its disabled
+                // state when a dwell preview opened, which read as a page flash.
+                .allowsHitTesting(openPanel == nil)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea(edges: [.top, .horizontal])
@@ -219,34 +206,70 @@ struct TVMainTabView: View {
     /// "centered under the tab"; §5.8 "under the avatar", right-aligned).
     @ViewBuilder
     private func panelOverlay(anchors: [TVTopMenuPanel: Anchor<CGRect>]) -> some View {
-        if router.path.isEmpty, let panel = openPanel {
+        if router.path.isEmpty {
             GeometryReader { proxy in
-                let leading = panelLeadingInset(
-                    panel: panel,
-                    anchors: anchors,
-                    proxy: proxy
-                )
-
                 // No page scrim: the menu floats over the page on its own
                 // layered shadow (`TVSkylinePanelChrome`) instead of darkening
-                // everything behind it. The page is still inert via
-                // `.disabled` while the panel is visible, so nothing behind it
-                // is reachable.
+                // everything behind it. Page hit testing is still blocked
+                // while the panel is visible, so nothing behind it is
+                // reachable without pushing `\.isEnabled` through the page.
                 ZStack(alignment: .topLeading) {
-                    panelBody(for: panel)
-                        .modifier(TVPanelOpenTransition(
-                            anchorX: panelTransitionAnchorX(panel: panel, anchors: anchors, proxy: proxy, leading: leading),
-                            reduceMotion: reduceMotion
-                        ))
-                        .padding(.leading, leading)
-                        .padding(.top, ContinuumTheme.Skyline.dropdownTopInset)
+                    ForEach(persistentPanels, id: \.self) { panel in
+                        anchoredPanel(panel, anchors: anchors, proxy: proxy)
+                    }
                 }
                 .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
             }
             .ignoresSafeArea()
-            .transition(.opacity)
-            .onExitCommand { closePanel() }
         }
+    }
+
+    /// Panels stay mounted while the top bar is visible so hover-open/close
+    /// does not insert or remove a focus subtree. tvOS was dropping bar focus
+    /// every time the cascade overlay appeared, even when its rows were
+    /// passive labels.
+    private var persistentPanels: [TVTopMenuPanel] {
+        var panels = visibleRoots.compactMap { root -> TVTopMenuPanel? in
+            if case .libraryType = root { return .root(root) }
+            return nil
+        }
+        panels.append(.profile)
+        return panels
+    }
+
+    private func anchoredPanel(
+        _ panel: TVTopMenuPanel,
+        anchors: [TVTopMenuPanel: Anchor<CGRect>],
+        proxy: GeometryProxy
+    ) -> some View {
+        let leading = panelLeadingInset(
+            panel: panel,
+            anchors: anchors,
+            proxy: proxy
+        )
+        let anchorX = panelTransitionAnchorX(
+            panel: panel,
+            anchors: anchors,
+            proxy: proxy,
+            leading: leading
+        )
+        let isActive = openPanel == panel
+
+        return panelBody(for: panel, isActive: isActive)
+            .padding(.leading, leading)
+            .padding(.top, ContinuumTheme.Skyline.dropdownTopInset)
+            .opacity(isActive ? 1 : 0)
+            .scaleEffect(
+                reduceMotion || isActive ? 1 : ContinuumTheme.Skyline.cascadeOpenScale,
+                anchor: UnitPoint(x: anchorX, y: 0)
+            )
+            .allowsHitTesting(isActive)
+            .accessibilityHidden(!isActive)
+            .animation(
+                reduceMotion ? nil : .easeOut(duration: ContinuumTheme.Skyline.cascadeOpenDuration),
+                value: isActive
+            )
+            .onExitCommand { closePanel() }
     }
 
     /// Leading inset that places the panel under its anchor. Library
@@ -300,23 +323,23 @@ struct TVMainTabView: View {
     }
 
     @ViewBuilder
-    private func panelBody(for panel: TVTopMenuPanel) -> some View {
+    private func panelBody(for panel: TVTopMenuPanel, isActive: Bool) -> some View {
         switch panel {
         case .root(let root):
             if case .libraryType(let type) = root {
-                cascadePanel(for: type)
+                cascadePanel(for: type, isActive: isActive)
             }
         case .profile:
-            profilePanel
+            profilePanel(isActive: isActive)
         }
     }
 
-    private func cascadePanel(for type: TVLibraryTabType) -> some View {
+    private func cascadePanel(for type: TVLibraryTabType, isActive: Bool) -> some View {
         TVCascadeSelector(
             type: type,
             libraries: libraries(of: type),
             currentScopeId: activeLibrary(for: type)?.id,
-            entersPanel: panelEntersFocus,
+            entersPanel: isActive && panelEntersFocus,
             focusEntryToken: panelFocusEntryToken,
             onCommitLibrary: { commitScope(type: type, library: $0, pill: nil) },
             onCommitSection: { commitScope(type: type, library: $0, pill: $1) },
@@ -325,13 +348,13 @@ struct TVMainTabView: View {
         )
     }
 
-    private var profilePanel: some View {
+    private func profilePanel(isActive: Bool) -> some View {
         TVProfileDropdown(
             profileName: currentProfile?.name ?? "Profile",
             avatar: currentProfile?.avatarEmoji,
             serverHost: ServerRegistry.shared.activeServer?.displayName,
             isAdmin: isAdmin,
-            entersPanel: panelEntersFocus,
+            entersPanel: isActive && panelEntersFocus,
             focusEntryToken: panelFocusEntryToken,
             onPanelFocusChanged: { panelHasFocus = $0 },
             onSwitchProfile: { closePanel(then: switchProfile) },
@@ -557,10 +580,10 @@ struct TVMainTabView: View {
         // Selecting a root closes any open dropdown. Pressing a library tab
         // while its cascade preview is open should navigate to that library
         // *and* dismiss the panel: leaving `openPanel` set orphans the dropdown
-        // on screen over the new page, and — because the page is held inert
-        // while a panel is open (§ rootContent `.disabled(openPanel != nil)`) —
-        // the content focus hand-off below lands on nothing, stranding the
-        // remote. Clearing it here is the single fix for both.
+        // on screen over the new page, and page hit testing remains blocked
+        // while a panel is open, so the content focus hand-off below lands on
+        // nothing, stranding the remote. Clearing it here is the single fix
+        // for both.
         // Tab content switches crossfade over 200 ms (§4.2); the outgoing
         // view never owns focus here because selection happens from the bar.
         // Reduce Motion snaps (the `.identity` transition + nil animation).
@@ -762,26 +785,4 @@ struct TVMainTabView: View {
     }
 }
 
-// MARK: - Panel open transition
-
-/// Cascade / profile open animation (§4.2): 180 ms scale 0.96 → 1.0 + fade,
-/// scaling up from under the anchor (`anchorX`) so the panel grows out of
-/// its tab rather than its own center. Reduce Motion snaps with no scale or
-/// fade.
-private struct TVPanelOpenTransition: ViewModifier {
-    let anchorX: CGFloat
-    let reduceMotion: Bool
-
-    func body(content: Content) -> some View {
-        if reduceMotion {
-            content.transition(.identity)
-        } else {
-            content.transition(
-                .scale(scale: ContinuumTheme.Skyline.cascadeOpenScale, anchor: UnitPoint(x: anchorX, y: 0))
-                    .combined(with: .opacity)
-                    .animation(.easeOut(duration: ContinuumTheme.Skyline.cascadeOpenDuration))
-            )
-        }
-    }
-}
 #endif
