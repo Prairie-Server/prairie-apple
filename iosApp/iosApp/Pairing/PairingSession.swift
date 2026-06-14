@@ -6,7 +6,7 @@ import Network
 /// opportunistic confidentiality only (the cert is unauthenticated — see the
 /// design spec §6); integrity rests on the server-issued match code.
 actor PairingSession {
-    enum SessionError: Error { case closed, decodeFailed }
+    enum SessionError: Error { case closed }
 
     private let connection: NWConnection
     private var frameBuffer = PairingFrameBuffer()
@@ -40,7 +40,8 @@ actor PairingSession {
     /// decoded inbound messages; the stream finishes on close and throws on
     /// transport/decode error.
     func open() -> AsyncThrowingStream<PairingMessage, Error> {
-        AsyncThrowingStream { continuation in
+        guard !isOpen else { return AsyncThrowingStream { $0.finish() } }
+        return AsyncThrowingStream { continuation in
             self.continuation = continuation
             self.isOpen = true
             self.connection.stateUpdateHandler = { [weak self] state in
@@ -48,10 +49,15 @@ actor PairingSession {
                 switch state {
                 case .ready:
                     Task { await self.receiveLoop() }
-                case .failed(let error), .waiting(let error):
-                    continuation.finish(throwing: error)
+                case .failed(let error):
+                    Task { await self.teardown(error) }
+                case .waiting:
+                    // Transient for an outbound connection (no route yet,
+                    // Wi-Fi associating, peer-to-peer bring-up). NW keeps
+                    // retrying and can still reach `.ready`, so don't finish.
+                    break
                 case .cancelled:
-                    continuation.finish()
+                    Task { await self.teardown(nil) }
                 default:
                     break
                 }
@@ -63,7 +69,8 @@ actor PairingSession {
         }
     }
 
-    /// Encode and send one message as a single frame.
+    /// Encode and send one message as a single frame. Caller-serialized:
+    /// only one send may be outstanding at a time.
     func send(_ message: PairingMessage) async throws {
         guard isOpen else { throw SessionError.closed }
         let payload = try encoder.encode(message)
@@ -76,10 +83,17 @@ actor PairingSession {
     }
 
     func close() {
+        teardown(nil)
+    }
+
+    /// Single terminal-exit path for every code site (explicit close, `.failed`,
+    /// `.cancelled`, receive error, EOF). Idempotent — the `isOpen` guard also
+    /// breaks the cancel → `.cancelled` → teardown recursion.
+    private func teardown(_ error: Error?) {
         guard isOpen else { return }
         isOpen = false
         connection.cancel()
-        continuation?.finish()
+        if let error { continuation?.finish(throwing: error) } else { continuation?.finish() }
         continuation = nil
     }
 
@@ -91,8 +105,9 @@ actor PairingSession {
     }
 
     private func handleReceive(data: Data?, isComplete: Bool, error: Error?) {
+        guard isOpen, continuation != nil else { return }
         if let error {
-            continuation?.finish(throwing: error)
+            teardown(error)
             return
         }
         if let data, !data.isEmpty {
@@ -102,15 +117,14 @@ actor PairingSession {
                     continuation?.yield(message)
                 }
             } catch {
-                continuation?.finish(throwing: error)
+                teardown(error)
                 return
             }
         }
         if isComplete {
-            continuation?.finish()
+            teardown(nil)
             return
         }
-        guard isOpen else { return }
         receiveLoop()
     }
 }
