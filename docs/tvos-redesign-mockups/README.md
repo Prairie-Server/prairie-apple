@@ -22,7 +22,7 @@ from the current `ContinuumTheme`; each direction varies the chrome, not the bra
 
 Apple TV-app-native. Libraries stop being a place you visit — each library type is
 a top-level tab (Home · Movies · Series · Music · Audiobooks · Calendar). The mode
-slider is replaced by sub-destination pills under the bar (Featured / Collections /
+slider is replaced by sub-destination pills under the bar (Browse / Collections /
 Genres / A–Z), and collections additionally surface as an inline row on each
 library's landing. With multiple libraries of one type, the tab grows a lightweight
 anchored dropdown (a3) — no full-screen modal.

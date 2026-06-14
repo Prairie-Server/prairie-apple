@@ -77,7 +77,9 @@ final class ReceiverPairingCoordinator {
                     if isPolling { pollTask?.cancel() } // an in-flight server has no committed result
                     await pollTask?.value
                     if signedInCount > 0 { state = .completed(serverNames: signedInNames) }
-                    await teardown(session: session, resetState: false)
+                    // With zero sign-ins there is no terminal state to dwell on, so
+                    // return to idle (like cancel/drop) instead of stranding the panel.
+                    await teardown(session: session, resetState: signedInCount == 0)
                     return
                 case let .cancel(reason):
                     Self.logger.notice("peer cancelled: \(reason, privacy: .public)")

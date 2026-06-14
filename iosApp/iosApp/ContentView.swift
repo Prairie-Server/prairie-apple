@@ -98,6 +98,7 @@ struct ContentView: View {
             handleDeepLink(url)
         }
         .onReceive(NotificationCenter.default.publisher(for: .continuumSessionExpired)) { _ in
+            audioStore.dismissFullPlayer()
             Task { await audioStore.player.close() }
             router.expiredSession()
         }

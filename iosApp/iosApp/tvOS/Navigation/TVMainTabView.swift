@@ -677,6 +677,7 @@ struct TVMainTabView: View {
                 selectedRoot = .home
                 currentProfile = nil
                 libraries = []
+                ResponseCache.shared.remove(CacheKey.userLibraries)
                 pillSelections = [:]
                 isAdmin = false
                 refreshAuthState()

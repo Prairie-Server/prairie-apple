@@ -74,6 +74,16 @@ struct TVSkylineSectionFeed: View {
         // Rows mount only after the async section load; a deferred entry
         // token re-fires once they exist.
         .onChange(of: sections.map(\.id)) { _, _ in
+            // Home/library refresh their rows on return (e.g. player dismiss).
+            // If the user had paged down to a row that vanished (Continue
+            // Watching shrinks, permissions/data change), the stale pageIndex
+            // would fall out of range and the band would render nothing,
+            // stranding the page blank. Clamp it back into range and re-claim
+            // focus so the now-visible row's first card re-primes the marquee.
+            if !sections.isEmpty, pageIndex >= sections.count {
+                pageIndex = sections.count - 1
+                contentFocusToken += 1
+            }
             if let pending = pendingFocusRequest { requestEntryFocus(pending) }
         }
     }

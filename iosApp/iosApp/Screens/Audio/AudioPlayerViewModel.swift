@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import OSLog
 
 @Observable
 @MainActor
@@ -15,7 +16,16 @@ final class AudioPlayerViewModel {
     /// Invalidates an in-flight track load when the user seeks again or
     /// closes the player while `/playback/start` is still on the wire.
     private var loadGeneration = 0
+    /// Serializes `start(contentId:)` requests: bumped before the
+    /// item-detail load so a slower, older start cannot overwrite the
+    /// context of a newer book that superseded it. Kept separate from
+    /// `loadGeneration` because `loadTrack()` bumps that on success.
+    private var startGeneration = 0
     private var isClosing = false
+    private let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "com.continuum.app",
+        category: "Playback"
+    )
 
     private(set) var context: AudiobookPlaybackContext?
     private(set) var isLoading = false
@@ -62,12 +72,21 @@ final class AudioPlayerViewModel {
     func start(contentId: String, restart: Bool = false, startPosition: Double? = nil) async {
         isLoading = true
         error = nil
+        var generation = startGeneration
         do {
             try configureAudioSession()
             if context != nil {
                 await close()
             }
+            startGeneration += 1
+            generation = startGeneration
             let detail = try await ContinuumAPI.shared.itemDetail(contentId: contentId)
+            guard generation == startGeneration else {
+                // A newer start() superseded this request while the
+                // item-detail load was in flight; abandon it so the older,
+                // slower response cannot overwrite the newer book's context.
+                return
+            }
             guard let context = AudiobookPlaybackContext(detail: detail) else {
                 throw APIError.unsupportedMedia("No playable audio track is available.")
             }
@@ -84,7 +103,7 @@ final class AudioPlayerViewModel {
         } catch {
             self.error = ErrorState(error)
         }
-        isLoading = false
+        if generation == startGeneration { isLoading = false }
     }
 
     func play() {
@@ -152,6 +171,7 @@ final class AudioPlayerViewModel {
         syncTask?.cancel()
         syncTask = nil
         loadGeneration += 1
+        startGeneration += 1
         let closedContext = context
         let closedSession = activeSession
         let position = currentTime
@@ -298,20 +318,32 @@ final class AudioPlayerViewModel {
         if let session = activeSession,
            let activeTrackIndex,
            let track = context.tracks.first(where: { $0.index == activeTrackIndex }) {
-            try? await ContinuumAPI.shared.reportPlaybackProgress(
-                sessionId: session.sessionId,
-                report: ProgressReport(
-                    position: AudioPlaybackTimeline.localTime(for: currentTime, in: track),
-                    isPaused: !isPlaying
+            do {
+                try await ContinuumAPI.shared.reportPlaybackProgress(
+                    sessionId: session.sessionId,
+                    report: ProgressReport(
+                        position: AudioPlaybackTimeline.localTime(for: currentTime, in: track),
+                        isPaused: !isPlaying
+                    )
                 )
+            } catch {
+                logger.warning(
+                    "reportPlaybackProgress failed for session \(session.sessionId, privacy: .public): \(String(describing: error), privacy: .public)"
+                )
+            }
+        }
+        do {
+            try await ContinuumAPI.shared.syncProgress(
+                mediaItemId: context.contentId,
+                position: currentTime,
+                duration: duration,
+                forceOverwrite: true
+            )
+        } catch {
+            logger.warning(
+                "syncProgress failed for \(context.contentId, privacy: .public) at \(self.currentTime, privacy: .public): \(String(describing: error), privacy: .public)"
             )
         }
-        try? await ContinuumAPI.shared.syncProgress(
-            mediaItemId: context.contentId,
-            position: currentTime,
-            duration: duration,
-            forceOverwrite: true
-        )
     }
 
     private func attachNowPlaying() {

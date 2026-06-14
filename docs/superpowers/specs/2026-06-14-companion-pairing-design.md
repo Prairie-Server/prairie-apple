@@ -100,10 +100,13 @@ Each unit has one purpose, a defined interface, and is testable in isolation.
 - **`TVPairingAdvertiser`** — wraps `NWListener` advertising `_silopair._tcp` + TXT.
   Accepts one inbound connection at a time. Lifecycle bound to the onboarding screen.
 - **`ReceiverPairingCoordinator`** — TV-side state machine. On `PushServer`:
-  normalize + persist URL (reuse `ServerSetupViewModel` logic), call
-  `device/start`, display match code, send `DeviceStarted`, `poll`, store tokens
-  in `TokenStore` + register in `ServerRegistry`, send `ServerResult`, loop per
-  server, then advance `AppRouter`.
+  normalize the URL and hold it as a **pending candidate** (not yet persisted),
+  call `device/start`, display the match code, send `DeviceStarted`, then `poll`.
+  Only after the poll returns tokens does it persist — store tokens in
+  `TokenStore` and register the server in `ServerRegistry` — then send
+  `ServerResult`, loop per server, and finally advance `AppRouter`. On any
+  failure, decline, timeout, cancel, or dropped connection the pending candidate
+  is discarded and nothing is persisted.
 - **UI:** a "Set up with iPhone" state inside the in-progress **Tandem** first-run
   flow ("Looking for your iPhone…" → match code when a phone connects), with QR
   and manual entry kept as siblings/fallbacks.
@@ -121,7 +124,7 @@ Each unit has one purpose, a defined interface, and is testable in isolation.
   - `st` — `setup` (blank, needs a server) or `login` (has a server, needs a user)
 - **Phone browses** with `NWBrowser`, then opens an `NWConnection`.
 
-### Messages (envelope: `{ type, v, payload }`)
+### Messages (envelope: flat `{ type, v, ...fields }`)
 | Message | Direction | Payload |
 |---------|-----------|---------|
 | `Hello` | TV → phone | `{ tvName, tvDeviceId, state, supportedVersions }` |
