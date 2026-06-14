@@ -229,13 +229,27 @@ struct TVLoginView: View {
     }
 
     private func matchCodeTiles(_ code: String) -> some View {
-        HStack(spacing: 12) {
-            ForEach(Array(code.uppercased().enumerated()), id: \.offset) { _, ch in
+        let chars = Array(code.uppercased())
+        let gap: CGFloat = 10
+        // Match codes are server-generated word pairs of unbounded length.
+        // Cap the row width and scale the tiles down for longer codes so the
+        // row never becomes the widest element in the panel — otherwise the
+        // split layout overflows its maxWidth and shoves the hero column off
+        // the left edge.
+        let maxRowWidth: CGFloat = 560
+        let totalGaps = gap * CGFloat(max(chars.count - 1, 0))
+        let tileWidth = min(60, (maxRowWidth - totalGaps) / CGFloat(max(chars.count, 1)))
+        let sepWidth = tileWidth * 0.46
+        let tileHeight = tileWidth * 1.23
+        let fontSize = tileWidth * 0.63
+
+        return HStack(spacing: gap) {
+            ForEach(Array(chars.enumerated()), id: \.offset) { _, ch in
                 let isSep = (ch == "-" || ch == " ")
                 Text(isSep ? "–" : String(ch))
-                    .font(.system(size: 38, weight: .bold, design: .monospaced))
+                    .font(.system(size: fontSize, weight: .bold, design: .monospaced))
                     .foregroundStyle(isSep ? Color.auroraInkTertiary : Color.auroraInk)
-                    .frame(width: isSep ? 28 : 60, height: 74)
+                    .frame(width: isSep ? sepWidth : tileWidth, height: tileHeight)
                     .background {
                         if !isSep {
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
