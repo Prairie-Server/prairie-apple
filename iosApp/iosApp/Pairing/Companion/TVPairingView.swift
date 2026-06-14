@@ -39,6 +39,7 @@ struct TVPairingView: View {
             self.coordinator = coordinator
             await coordinator.begin()
         }
+        .onDisappear { Task { await coordinator?.cancel() } }
     }
 
     @ViewBuilder private func serverPicker(_ servers: [ServerEntry]) -> some View {
