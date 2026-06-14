@@ -482,17 +482,30 @@ private struct TVMarqueeBlock: View {
         return (titleWrapsTwoLines || logoImage != nil) ? min(cap, 2) : cap
     }
 
-    /// Air date + top-billed cast (§9 backfill). Fades in once the
-    /// detail fetch lands; absent until then so the marquee never waits.
+    /// Air date + top-billed cast (§9 backfill). For any item that can
+    /// enrich (has a contentId) an invisible one-line sizer always holds the
+    /// row's height, and the real line fades into an *overlay* on top of it.
+    /// Because the overlay never contributes to layout, the bottom-anchored
+    /// block can't reflow when the async detail lands — the text above stays
+    /// put. Collections never enrich, so they reserve nothing.
     @ViewBuilder
     private var detailLine: some View {
-        if let line = enrichment?.detailLine, !line.isEmpty {
-            Text(line)
+        if content.contentId != nil {
+            Text(verbatim: "Ag")
                 .font(.system(size: scale.metaSize, weight: .medium))
-                .foregroundStyle(Color.continuumOnSurface.opacity(0.5))
                 .lineLimit(1)
+                .opacity(0)
                 .frame(maxWidth: ContinuumTheme.Skyline.marqueeSynopsisMaxWidth, alignment: .leading)
-                .transition(reduceMotion ? .identity : .opacity)
+                .overlay(alignment: .leading) {
+                    if let line = enrichment?.detailLine, !line.isEmpty {
+                        Text(line)
+                            .font(.system(size: scale.metaSize, weight: .medium))
+                            .foregroundStyle(Color.continuumOnSurface.opacity(0.5))
+                            .lineLimit(1)
+                            .frame(maxWidth: ContinuumTheme.Skyline.marqueeSynopsisMaxWidth, alignment: .leading)
+                            .transition(reduceMotion ? .identity : .opacity)
+                    }
+                }
         }
     }
 

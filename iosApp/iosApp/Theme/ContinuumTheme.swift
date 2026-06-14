@@ -272,10 +272,12 @@ struct ContinuumTheme {
         /// edge. The row layers ignore the bottom safe area (the ~86pt tvOS
         /// overscan was leaving a dead band under the rail), so this is the
         /// small margin kept below the focused row's captions.
-        static let rowBandBottomInset: CGFloat = 48
-        /// Dense poster card (§5.6) used on Browse landing rows so two
-        /// rows + marquee fit above the fold.
-        static let densePosterCardWidth: CGFloat = 208
+        static let rowBandBottomInset: CGFloat = 28
+        /// Dense poster card (§5.6) for Home + Browse poster rows. Sized so
+        /// a full poster row (header + 2:3 poster + title/year) bottom-aligned
+        /// at `rowBandBottomInset` still clears the bottom-anchored marquee
+        /// metadata above it — taller posters overrun the synopsis/detail line.
+        static let densePosterCardWidth: CGFloat = 160
 
         // MARK: Collection fan card (§5.6 / §6.2 / §6.3)
 
