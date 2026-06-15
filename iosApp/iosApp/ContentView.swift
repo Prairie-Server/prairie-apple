@@ -346,7 +346,7 @@ struct ContentView: View {
         case .signup:
             SignupView(router: router)
         case .login:
-            LoginView(router: router)
+            loginRoot
         case .serverSetup:
             #if os(tvOS)
             TVServerSetupView(router: router)
