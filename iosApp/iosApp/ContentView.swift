@@ -344,7 +344,12 @@ struct ContentView: View {
         case .setup:
             SetupView(router: router)
         case .signup:
+            #if os(tvOS)
+            EmptyStateView(icon: "person.badge.plus", title: "Sign up from a phone or the web", subtitle: nil)
+                .continuumBackground()
+            #else
             SignupView(router: router)
+            #endif
         case .login:
             loginRoot
         case .serverSetup:
@@ -390,7 +395,12 @@ struct ContentView: View {
         case .setup:
             SetupView(router: router)
         case .signup:
+            #if os(tvOS)
+            EmptyStateView(icon: "person.badge.plus", title: "Sign up from a phone or the web", subtitle: nil)
+                .continuumBackground()
+            #else
             SignupView(router: router)
+            #endif
         default:
             EmptyStateView(icon: "questionmark.circle", title: "Unknown", subtitle: nil)
                 .continuumBackground()

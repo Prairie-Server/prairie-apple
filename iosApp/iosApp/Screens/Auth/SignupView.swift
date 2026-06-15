@@ -1,151 +1,86 @@
 import SwiftUI
 
-private enum ContinuumTextContentType {
-    case username
-    case emailAddress
-    case oneTimeCode
-    case password
-}
-
-private enum ContinuumKeyboardType {
-    case `default`
-    case emailAddress
-}
-
-/// Account registration screen (shown when signup is enabled on the server).
+#if !os(tvOS)
+/// Account registration (Aurora). Shown when signup is enabled on the server.
 struct SignupView: View {
     var router: AppRouter
     @State private var viewModel = SignupViewModel()
+    @FocusState private var focusedField: Field?
+
+    private enum Field: Hashable { case username, email, password, confirm, invite }
 
     var body: some View {
-        ZStack {
-            Color.continuumBackground.ignoresSafeArea()
+        AuroraScreen(variant: .signIn, scrim: .soft) {
+            SiloWordmarkView(width: 132)
+                .frame(maxWidth: .infinity)
+                .padding(.bottom, 30)
 
-            ScrollView {
-                VStack(spacing: 28) {
-                    Spacer().frame(height: 40)
-
-                    // Header
-                    VStack(spacing: 4) {
-                        Text("Create Account")
-                            .font(.continuumTitle)
-                            .foregroundColor(.continuumOnSurface)
-
-                        Text("Join the server")
-                            .font(.continuumBody)
-                            .foregroundColor(.continuumSecondaryText)
-                    }
-
-                    // Form
-                    VStack(spacing: ContinuumTheme.padding) {
-                        formField("Username", text: $viewModel.username, contentType: .username)
-                        formField(
-                            "Email",
-                            text: $viewModel.email,
-                            contentType: .emailAddress,
-                            keyboardType: .emailAddress
-                        )
-                        secureField("Password", text: $viewModel.password)
-                        secureField("Confirm Password", text: $viewModel.confirmPassword)
-                        formField(
-                            "Invite Code",
-                            text: $viewModel.inviteCode,
-                            contentType: .oneTimeCode
-                        )
-                    }
-
-                    // Error
-                    if let error = viewModel.error {
-                        Text(error)
-                            .font(.continuumCaption)
-                            .foregroundColor(.continuumError)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-
-                    // Submit
-                    Button("Create Account") {
-                        Task { await viewModel.signup(router: router) }
-                    }
-                    .buttonStyle(ContinuumPrimaryButtonStyle(isLoading: viewModel.isLoading))
-                    .disabled(viewModel.isLoading)
-
-                    // Back to login
-                    Button("Already have an account? Sign In") {
-                        router.goBack()
-                    }
-                    .buttonStyle(ContinuumTextButtonStyle())
-                }
-                .padding(.horizontal, ContinuumTheme.largePadding)
-                .continuumFormWidth()
+            VStack(spacing: 12) {
+                AuroraEyebrow(text: "Create account", centered: true)
+                Text("Create your account")
+                    .font(.continuumTitle)
+                    .foregroundStyle(Color.auroraInk)
+                    .multilineTextAlignment(.center)
             }
+            .frame(maxWidth: .infinity)
+            .padding(.bottom, 24)
+
+            VStack(alignment: .leading, spacing: 16) {
+                AuroraTextField(
+                    label: "Username", text: $viewModel.username, placeholder: "yourname",
+                    focus: $focusedField, equals: .username,
+                    contentType: .username, onSubmit: { focusedField = .email }
+                )
+                AuroraTextField(
+                    label: "Email", text: $viewModel.email, placeholder: "you@example.com",
+                    focus: $focusedField, equals: .email,
+                    contentType: .email, keyboard: .email, onSubmit: { focusedField = .password }
+                )
+                AuroraTextField(
+                    label: "Password", text: $viewModel.password, placeholder: "••••••",
+                    focus: $focusedField, equals: .password,
+                    isSecure: true, showsRevealToggle: true,
+                    contentType: .password, onSubmit: { focusedField = .confirm }
+                )
+                AuroraTextField(
+                    label: "Confirm password", text: $viewModel.confirmPassword, placeholder: "••••••",
+                    focus: $focusedField, equals: .confirm,
+                    isSecure: true, contentType: .password, onSubmit: { focusedField = .invite }
+                )
+                AuroraTextField(
+                    label: "Invite code", text: $viewModel.inviteCode, placeholder: "ABCD-1234",
+                    focus: $focusedField, equals: .invite,
+                    contentType: .oneTimeCode, submitLabel: .go, onSubmit: { createAccount() }
+                )
+
+                if let error = viewModel.error {
+                    AuroraErrorLabel(error)
+                }
+
+                Button {
+                    createAccount()
+                } label: {
+                    Text(viewModel.isLoading ? "Creating…" : "Create account")
+                }
+                .buttonStyle(AuroraPrimaryButtonStyle(isLoading: viewModel.isLoading))
+                .disabled(viewModel.isLoading)
+                .padding(.top, 4)
+
+                Button("Back to sign in") { router.goBack() }
+                    .buttonStyle(AuroraGhostButtonStyle())
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 2)
+            }
+            .padding(22)
+            .auroraGlass(cornerRadius: 24, emphasized: true)
+            .animation(.easeInOut(duration: 0.2), value: viewModel.error)
         }
         .navigationBarBackButtonHidden()
     }
 
-    // MARK: - Helpers
-
-    private func formField(
-        _ label: String,
-        text: Binding<String>,
-        contentType: ContinuumTextContentType? = nil,
-        keyboardType: ContinuumKeyboardType = .default
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(label)
-                .font(.continuumCaption)
-                .foregroundColor(.continuumSecondaryText)
-
-            TextField(label, text: text)
-                .textFieldStyle(ContinuumTextFieldStyle())
-                #if !os(macOS)
-                .textContentType(systemTextContentType(contentType))
-                .keyboardType(systemKeyboardType(keyboardType))
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-                #endif
-        }
+    private func createAccount() {
+        guard !viewModel.isLoading else { return }
+        Task { await viewModel.signup(router: router) }
     }
-
-    private func secureField(
-        _ label: String,
-        text: Binding<String>
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(label)
-                .font(.continuumCaption)
-                .foregroundColor(.continuumSecondaryText)
-
-            SecureField(label, text: text)
-                .textFieldStyle(ContinuumTextFieldStyle())
-                #if !os(macOS)
-                .textContentType(.password)
-                #endif
-        }
-    }
-
-    #if !os(macOS)
-    private func systemTextContentType(_ contentType: ContinuumTextContentType?) -> UITextContentType? {
-        switch contentType {
-        case .username:
-            .username
-        case .emailAddress:
-            .emailAddress
-        case .oneTimeCode:
-            .oneTimeCode
-        case .password:
-            .password
-        case .none:
-            nil
-        }
-    }
-
-    private func systemKeyboardType(_ keyboardType: ContinuumKeyboardType) -> UIKeyboardType {
-        switch keyboardType {
-        case .default:
-            .default
-        case .emailAddress:
-            .emailAddress
-        }
-    }
-    #endif
 }
+#endif
