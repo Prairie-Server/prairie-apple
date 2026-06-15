@@ -197,8 +197,7 @@ enum LibraryPageTab: String, CaseIterable, Identifiable {
 
 /// Plezy-style chip tab selector for the Recommended/Library/Collections
 /// pages. Extracted so screens like `LibrariesTabView` can hoist it into a
-/// `safeAreaInset` overlay (so a recommended-tab backdrop can render behind
-/// it).
+/// shared top-chrome `safeAreaInset` overlay.
 struct LibraryPageTabSelector: View {
     @Binding var selectedTab: LibraryPageTab
 
@@ -298,10 +297,6 @@ private class LibraryRecommendedViewModel {
     var isRefreshing = false
     var error: ErrorState?
 
-    var featuredSection: ResolvedSection? {
-        sections.first(where: { $0.isFeatured })
-    }
-
     var regularSections: [ResolvedSection] {
         sections.filter { !$0.isFeatured && !$0.items.isEmpty }
     }
@@ -338,14 +333,9 @@ private class LibraryRecommendedViewModel {
 
 struct LibraryRecommendedView: View {
     let libraryId: Int
-    /// When true, the underlying scroll view ignores the top safe area so
-    /// the featured carousel's backdrop renders all the way up behind any
-    /// chrome the parent installed via `safeAreaInset(edge: .top)` (e.g. the
-    /// LibrariesTab top bar + tab selector).
-    var extendsBackdropToTop: Bool = false
     /// Reports the current vertical scroll offset (≥0, 0 at the top) so the
-    /// parent can fade a chrome scrim in as the user scrolls away from the
-    /// full-bleed hero.
+    /// parent can fade a chrome scrim in as the rows scroll up behind the
+    /// top bar.
     var onScrollOffsetChange: (CGFloat) -> Void = { _ in }
 
     @State private var viewModel = LibraryRecommendedViewModel()
@@ -353,7 +343,6 @@ struct LibraryRecommendedView: View {
     @State private var refreshStartedAt: Date?
     @State private var refreshHideTask: Task<Void, Never>?
     @Environment(AppRouter.self) private var router
-    @Environment(AudioPlaybackStore.self) private var audioStore
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -368,7 +357,7 @@ struct LibraryRecommendedView: View {
                     EmptyStateView(
                         icon: "rectangle.stack.fill",
                         title: "No recommendations yet",
-                        subtitle: "This library does not have any featured rows right now."
+                        subtitle: "This library does not have any recommended rows right now."
                     )
                 }
             }
@@ -393,27 +382,6 @@ struct LibraryRecommendedView: View {
     private var content: some View {
         ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(spacing: ContinuumTheme.largePadding) {
-                if let featured = viewModel.featuredSection {
-                    FeaturedCarousel(
-                        items: featured.items,
-                        onItemTap: { router.navigate(to: .itemDetail(contentId: $0)) },
-                        onPlayTap: { item in
-                            if item.isAudiobook {
-                                audioStore.play(contentId: item.contentId)
-                                return
-                            }
-                            router.navigate(
-                                to: .player(
-                                    contentId: item.contentId,
-                                    startFromBeginning: false,
-                                    resumePosition: nil
-                                )
-                            )
-                        },
-                        extraTopInset: libraryHeroTopInset
-                    )
-                }
-
                 ForEach(viewModel.regularSections) { section in
                     SectionRow(
                         section: section,
@@ -423,13 +391,6 @@ struct LibraryRecommendedView: View {
             }
             .padding(.bottom, ContinuumTheme.largePadding)
         }
-        // Only extend behind the chrome when there's a featured carousel to
-        // justify it — otherwise the first plain SectionRow would render up
-        // behind the header and clip the "Recently Added" row.
-        .ignoresSafeArea(
-            .container,
-            edges: (extendsBackdropToTop && viewModel.featuredSection != nil) ? .top : []
-        )
         // Report the distance scrolled from the resting top position. We add
         // the top content inset so the value starts at 0 at rest regardless
         // of whether a safe-area inset is applied.
@@ -440,17 +401,8 @@ struct LibraryRecommendedView: View {
         }
     }
 
-    /// The Libraries tab overlays a two-tier top chrome (library switcher +
-    /// tab chips) above the featured hero, so the carousel needs more top
-    /// runway than the standalone Home hero on iPhone.
-    private var libraryHeroTopInset: CGFloat {
-        let topBarHeight: CGFloat = 52
-        let tabSelectorHeight: CGFloat = 40
-        return topBarHeight + tabSelectorHeight
-    }
-
     private var refreshStatusTopPadding: CGFloat {
-        extendsBackdropToTop ? libraryHeroTopInset + ContinuumTheme.smallPadding : ContinuumTheme.padding
+        ContinuumTheme.padding
     }
 
     private func refreshRecommendations() async {
