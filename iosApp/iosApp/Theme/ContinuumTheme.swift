@@ -271,7 +271,7 @@ struct ContinuumTheme {
         static let rowBandBottomInset: CGFloat = 20
         /// Vertical gap between the focused row and the passive preview of
         /// the next row.
-        static let rowBandPreviewSpacing: CGFloat = 16
+        static let rowBandPreviewSpacing: CGFloat = 10
         /// Tighter vertical breathing room for the focused Skyline card strip.
         /// Regular rows keep the wider tvOS padding so focus lift has more
         /// space in standard scroll layouts.
