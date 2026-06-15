@@ -17,10 +17,14 @@ final class TVPairingAdvertiser {
     func start(onConnection: @escaping (PairingSession, AsyncThrowingStream<PairingMessage, Error>) -> Void) {
         stop()
         let device = AppleDeviceIdentity.current
-        // `sid` is a fresh per-advertising-session nonce. The phone keys "Not
-        // Now" dismissals on it, so the card re-appears only when the TV
-        // restarts its pairing request (a new `sid`) — not on brief Bonjour
-        // flaps (same `sid`). Older phones ignore it and fall back to `id`.
+        // `sid` is a fresh nonce minted on each `start()` — i.e. each time the
+        // TV (re)starts advertising (reboot, or leaving and re-entering the
+        // setup screen). It is stable for the life of one setup session:
+        // `release()` between pairing attempts keeps the same listener and
+        // `sid`. The phone keys "Not Now" dismissals on it, so the card
+        // re-appears when the TV starts a new setup session (new `sid`) but
+        // not on brief Bonjour flaps (same `sid`). Older phones ignore it and
+        // fall back to `id`.
         let txt = NWTXTRecord([
             "v": String(PairingProtocol.version),
             "name": device.name,

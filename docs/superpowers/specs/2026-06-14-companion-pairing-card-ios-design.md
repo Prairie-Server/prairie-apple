@@ -109,8 +109,9 @@ once connected; the discovery step keeps scrim-tap = Not Now.
 
 ### 3. Dismissal until the TV re-advertises (session nonce — option B)
 
-Goal: "Not Now" hides the card for that Apple TV until the TV **restarts its
-pairing request**, not forever and not merely for the app session.
+Goal: "Not Now" hides the card for that Apple TV until the TV **starts a new
+setup session** (it re-advertises from scratch), not forever and not merely for
+the app session.
 
 The advertised `id` is a stable device id, so it cannot by itself distinguish a
 continuing setup session from a restarted one. Add a per-session nonce.
@@ -118,8 +119,14 @@ continuing setup session from a restarted one. Add a per-session nonce.
 - **tvOS — `TVPairingAdvertiser.swift`:** add a `sid` field to the TXT record,
   generated fresh on each `start()` call (a random token, e.g.
   `UUID().uuidString`). All existing fields (`v`, `name`, `id`, `st`) unchanged.
-  Because the advertiser is (re)started each time the TV enters its setup
-  screen, a genuine restart yields a new `sid`.
+  `start()` runs when the TV's setup screen appears (`TVServerSetupView.task`),
+  so a new `sid` is minted when the TV reboots or leaves and re-enters setup.
+  **Granularity note:** within one setup session the `sid` is *stable* — after a
+  pairing attempt the receiver calls `release()` (same listener, same `sid`),
+  not `start()`. So "Not Now" stays dismissed for the whole time the TV sits on
+  its setup screen, and re-presents only when that screen restarts. This is the
+  intended, no-nag behavior; per-attempt re-prompting is an explicit non-goal
+  (see §6 for an optional future refinement).
 - **iOS — `TVPairingBrowser.swift` / `DiscoveredTV`:** parse `sid` from the TXT
   record; add `sid: String?` to `DiscoveredTV` (optional for older TVs that
   don't advertise it).
@@ -128,9 +135,10 @@ continuing setup session from a restarted one. Add a per-session nonce.
   present, and `id` alone when it is absent (fallback for older TVs). "Not Now"
   inserts the current candidate's key. A TV is a candidate only if its current
   key is not in the set.
-  - Real restart → new `sid` → new key → card re-presents. ✔
-  - Bonjour flap (service briefly drops and returns) → same `sid` → same key →
-    stays dismissed. ✔
+  - New setup session (TV reboot / re-enter setup) → new `sid` → new key → card
+    re-presents. ✔
+  - Same setup session (later pairing attempt, or a brief Bonjour flap where the
+    service drops and returns) → same `sid` → same key → stays dismissed. ✔
   - Older TV without `sid` → behaves like "dismiss for this app session" keyed
     on `id`. ✔
 
@@ -170,6 +178,15 @@ Add only that focused test under `iosApp/Tests/`.
 - **Server:** no change. The match code is already server-authoritative.
 - The `CompanionPairingCoordinator` "confirm-once multi-server" accepted risk is
   pre-existing and unaffected.
+- **Optional: per-attempt `sid` rotation (deferred).** Today `sid` rotates per
+  *setup session* (screen restart), not per *pairing attempt* — after a
+  cancelled/failed attempt the receiver returns to `.idle` keeping the same
+  `sid`, so a TV that the user dismissed with "Not Now" won't re-prompt until
+  its setup screen restarts. This is the intended no-nag behavior and fails safe
+  (over-sticky dismissal, never spurious prompts). If finer granularity is ever
+  wanted, the tvOS receiver could re-issue the listener's TXT with a fresh `sid`
+  on each return to `.idle` (`TVPairingAdvertiser` + `ReceiverPairingCoordinator`).
+  Not done here.
 
 ## Files touched
 
