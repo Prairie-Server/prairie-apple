@@ -224,15 +224,14 @@ struct ContinuumTheme {
 
         // MARK: Focus marquee (§5.4/§5.5)
 
-        /// Marquee block bottom inset — Home scale. Anchors the metadata
-        /// block bottom-left, just above the row band (rows bottom-align at
-        /// `rowBandBottomInset`). Tuned on device so the block clears the row
-        /// header by a hair.
-        static let marqueeBottomInsetHome: CGFloat = 440
-        /// Marquee block bottom inset — library (compact) scale. A touch
-        /// higher than Home: Browse row 1 is taller posters, so the block
-        /// seats slightly above where it does over Continue Watching.
-        static let marqueeBottomInsetLibrary: CGFloat = 485
+        /// Marquee block bottom inset — Home scale. On a 1080p tvOS canvas,
+        /// this lands the marquee's bottom edge at the midpoint so the lower
+        /// half can hold the focused row plus a peek of the next row.
+        static let marqueeBottomInsetHome: CGFloat = 540
+        /// Marquee block bottom inset — library (compact) scale. Matched to
+        /// Home so the Skyline feed keeps a consistent 50/50 marquee-to-row
+        /// split across Home and library landings.
+        static let marqueeBottomInsetLibrary: CGFloat = 540
         /// Marquee content block width.
         static let marqueeContentWidth: CGFloat = 880
         static let marqueeTitleSizeHome: CGFloat = 84
@@ -243,11 +242,10 @@ struct ContinuumTheme {
         /// Synopsis column cap (§4.1) — narrower than the content block.
         static let marqueeSynopsisMaxWidth: CGFloat = 780
         /// Cached server logo art caps in the marquee title slot. With
-        /// rows paging one section at a time along the bottom of the
-        /// screen, Home affords the full §5.4 cap; the library scale
-        /// stays tighter because the pill row eats into its band. While
-        /// a logo is shown the synopsis drops a line, like a wrapped
-        /// title.
+        /// the row stack owning the lower half of the screen, Home affords
+        /// the full §5.4 cap; the library scale stays tighter because the
+        /// pill row eats into its band. While a logo is shown the synopsis
+        /// drops a line, like a wrapped title.
         static let marqueeLogoMaxWidth: CGFloat = 880
         static let marqueeLogoMaxHeightHome: CGFloat = 200
         static let marqueeLogoMaxHeightLibrary: CGFloat = 150
@@ -261,15 +259,31 @@ struct ContinuumTheme {
 
         // MARK: Row band under the marquee (§5.7, revised)
 
+        /// Portion of the screen reserved for the row stack. The focused row
+        /// sits at the top of this lower-half band and the following row peeks
+        /// below it.
+        static let rowBandHeightFraction: CGFloat = 0.50
+
         /// Bottom inset for the row band, measured from the physical bottom
         /// edge. The row layers ignore the bottom safe area (the ~86pt tvOS
         /// overscan was leaving a dead band under the rail), so this is the
         /// small margin kept below the focused row's captions.
         static let rowBandBottomInset: CGFloat = 28
+        /// Vertical gap between the focused row and the passive preview of
+        /// the next row.
+        static let rowBandPreviewSpacing: CGFloat = 28
+        /// Duration for the vertical row-stack scroll when paging up/down.
+        static let rowBandScrollDuration: Double = 0.24
+        /// Passive row preview tint so it reads as available content without
+        /// competing with the focused row.
+        static let rowPreviewOpacity: Double = 0.74
+        /// Number of preview cards to paint. Enough to fill the visible width
+        /// without doing unnecessary image work for off-screen cards.
+        static let rowPreviewItemLimit = 8
         /// Dense poster card (§5.6) for Home + Browse poster rows. Sized so
-        /// a full poster row (header + 2:3 poster + title/year) bottom-aligned
-        /// at `rowBandBottomInset` still clears the bottom-anchored marquee
-        /// metadata above it — taller posters overrun the synopsis/detail line.
+        /// a full poster row (header + 2:3 poster + title/year) fits in the
+        /// top of the lower-half row band while leaving a preview of the next
+        /// row below it.
         static let densePosterCardWidth: CGFloat = 160
 
         // MARK: Collections poster grid (§6.3)
