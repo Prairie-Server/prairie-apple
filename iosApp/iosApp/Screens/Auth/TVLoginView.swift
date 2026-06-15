@@ -90,7 +90,7 @@ struct TVLoginView: View {
     private var heroColumn: some View {
         VStack(alignment: .leading, spacing: 0) {
             AuroraEyebrow(text: "Step 02 — Sign in")
-            (Text("Sign in with\nyour ") + Text("phone").italic() + Text("."))
+            Text("Sign in with\nyour \(Text("phone").italic()).")
                 .font(.continuumHeroTitle)
                 .foregroundStyle(Color.auroraInk)
                 .multilineTextAlignment(.leading)

@@ -10,7 +10,7 @@ import OSLog
 final class TVPairingAdvertiser {
     private var listener: NWListener?
     private var busy = false
-    private static let logger = Logger(subsystem: "com.continuum.app", category: "pairing.advertiser")
+    private nonisolated static let logger = Logger(subsystem: "com.continuum.app", category: "pairing.advertiser")
 
     /// - Parameter onConnection: called on the main actor with an opened
     ///   session + its inbound stream for the coordinator to drive.
