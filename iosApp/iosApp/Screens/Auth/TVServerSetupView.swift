@@ -1,148 +1,204 @@
 #if os(tvOS)
 import SwiftUI
 
-/// First-run server URL entry on tvOS. A single centered card on the
-/// same radial-spotlight canvas as `TVLoginView` / `ProfileSelectionView`,
-/// so the pre-auth flow reads as one continuous environment as the user
-/// moves through server → login → profile.
+/// First-run server entry on tvOS (Aurora). The screen advertises on the LAN the
+/// moment it appears, so a nearby iPhone can set this TV up hands-off. Two paths
+/// sit side by side over the aurora backdrop: a live "Set up with iPhone" status
+/// card and a fully functional manual-entry card (the emphasized, default-focused
+/// path). When a phone connects, the same screen swaps *in place* to the pairing
+/// panel — no cover, so nothing ever bleeds through behind it.
 struct TVServerSetupView: View {
     var router: AppRouter
 
     @State private var viewModel = ServerSetupViewModel()
+    @State private var advertiser = TVPairingAdvertiser()
+    @State private var coordinator = ReceiverPairingCoordinator()
     @FocusState private var focusedField: Field?
 
     private enum Field: Hashable {
         case host
-        case advanced
         case scheme(ServerSetupScheme)
         case port
         case connect
     }
 
+    /// True once a phone is on the line; the screen hands over to the pairing panel.
+    private var isPairing: Bool {
+        if case .idle = coordinator.state { return false }
+        return true
+    }
+
     var body: some View {
         ZStack {
-            background
-            content
+            AuroraBackdrop(variant: .server, scrim: .soft)
+            VStack(spacing: 0) {
+                topBar
+                Spacer(minLength: 20)
+                body(for: coordinator.state)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 96)
+            .padding(.top, 64)
+            .padding(.bottom, 64)
         }
         .ignoresSafeArea()
-    }
-
-    // MARK: - Background
-
-    private var background: some View {
-        Color.continuumBackground.ignoresSafeArea()
-    }
-
-    // MARK: - Content
-
-    private var content: some View {
-        VStack(spacing: 0) {
-            authHeader
-            Spacer(minLength: 76)
-            formCard
-                .frame(maxWidth: 760)
-            Spacer(minLength: 0)
+        .animation(ContinuumTheme.springAnimation, value: isPairing)
+        .task { startAdvertising() }
+        .onDisappear {
+            advertiser.stop()
+            Task { await coordinator.cancel() }
         }
-        .padding(.horizontal, ContinuumTheme.safePadding)
-        .padding(.top, 88)
-        .padding(.bottom, 72)
     }
 
-    // MARK: - Header
+    @ViewBuilder
+    private func body(for state: ReceiverPairingCoordinator.State) -> some View {
+        if case .idle = state {
+            connectChooser
+                .transition(.opacity)
+        } else {
+            TVPairingReceiverView(coordinator: coordinator, router: router)
+                .transition(.opacity)
+        }
+    }
 
-    private var authHeader: some View {
+    // MARK: - Advertiser lifecycle
+
+    private func startAdvertising() {
+        advertiser.start { session, stream in
+            Task {
+                await coordinator.run(session: session, stream: stream)
+                advertiser.release()
+            }
+        }
+    }
+
+    // MARK: - Idle chooser (phone status + manual entry)
+
+    private var connectChooser: some View {
+        // Header is pinned near the top while the two cards are vertically
+        // centered in the remaining space, so they sit around screen center
+        // rather than being pushed low as part of a single centered block.
+        ZStack(alignment: .top) {
+            HStack(alignment: .center, spacing: 0) {
+                phoneCard
+                    .frame(width: 600)
+                orDivider
+                    .frame(width: 84)
+                manualCard
+                    .frame(width: 600)
+                    .focusSection()
+            }
+            .frame(height: 580)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+
+            VStack(spacing: 14) {
+                AuroraEyebrow(text: "Step 01 — Connect", centered: true)
+                Text("Add your server")
+                    .font(.continuumTitle)
+                    .foregroundStyle(Color.auroraInk)
+            }
+        }
+        .frame(maxHeight: .infinity)
+        .defaultFocus($focusedField, .host, priority: .userInitiated)
+    }
+
+    private var topBar: some View {
         HStack {
-            SiloWordmarkView(width: 132, subtitle: "Server setup")
+            SiloWordmarkView(width: 132)
             Spacer(minLength: 0)
         }
     }
 
-    // MARK: - Form
+    // MARK: - Phone handoff card (live status — we are advertising)
 
-    private var formCard: some View {
-        VStack(alignment: .leading, spacing: 28) {
+    private var phoneCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            phoneSetupPill
+            Spacer(minLength: 20)
+            SearchingBeacon()
+                .frame(maxWidth: .infinity, alignment: .center)
+            Spacer(minLength: 20)
+            Text("Looking for your iPhone…")
+                .font(.continuumHeadline)
+                .foregroundStyle(Color.auroraInk)
+            Text("Open Silo on your iPhone on the same Wi-Fi. It’ll offer to set up this Apple TV — the address and your account come across automatically.")
+                .font(.continuumBody)
+                .foregroundStyle(Color.auroraInkSecondary)
+                .lineSpacing(4)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 12)
+        }
+        .padding(46)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .auroraGlass(cornerRadius: 28)
+    }
+
+    private var phoneSetupPill: some View {
+        Text("SET UP WITH IPHONE")
+            .font(.system(size: 14, weight: .semibold, design: .monospaced))
+            .tracking(2)
+            .foregroundStyle(Color.auroraInkSecondary)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(Capsule().fill(Color.white.opacity(0.08)))
+            .overlay(Capsule().stroke(Color.white.opacity(0.14), lineWidth: 1))
+    }
+
+    // MARK: - OR divider
+
+    private var orDivider: some View {
+        VStack(spacing: 16) {
+            Rectangle()
+                .fill(LinearGradient(colors: [.clear, .white.opacity(0.16)], startPoint: .top, endPoint: .bottom))
+                .frame(width: 1)
+                .frame(maxHeight: .infinity)
+            Text("OR")
+                .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                .tracking(3)
+                .foregroundStyle(Color.auroraInkTertiary)
+            Rectangle()
+                .fill(LinearGradient(colors: [.white.opacity(0.16), .clear], startPoint: .top, endPoint: .bottom))
+                .frame(width: 1)
+                .frame(maxHeight: .infinity)
+        }
+    }
+
+    // MARK: - Manual entry card (active)
+
+    private var manualCard: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            Text("Enter it here")
+                .font(.continuumHeadline)
+                .foregroundStyle(Color.auroraInk)
+
             VStack(alignment: .leading, spacing: 10) {
-                Text("Server")
-                    .font(.system(size: 42, weight: .semibold))
-                    .foregroundStyle(.white)
-                Text("Enter the host for your Silo server.")
-                    .font(.system(size: 21, weight: .regular))
-                    .foregroundStyle(.white.opacity(0.58))
+                fieldLabel("Server address")
+                AuroraInputField(
+                    text: $viewModel.host,
+                    placeholder: "media.example.com",
+                    focus: $focusedField,
+                    equals: .host,
+                    contentType: .URL,
+                    keyboard: .URL
+                )
             }
 
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Server host")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.66))
-
-                TextField("media.example.com", text: $viewModel.host)
-                    .modifier(TVAuthFieldChrome(isFocused: focusedField == .host))
-                    .focused($focusedField, equals: .host)
-                    .textContentType(.URL)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                    .keyboardType(.URL)
-            }
-
-            VStack(alignment: .leading, spacing: 16) {
-                Button {
-                    viewModel.showsAdvancedOptions.toggle()
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: viewModel.showsAdvancedOptions ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 18, weight: .bold))
-                        Text("Advanced")
-                            .font(.system(size: 20, weight: .semibold))
-                    }
-                    .foregroundStyle(focusedField == .advanced ? Color.continuumBackground : .white.opacity(0.62))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 14)
-                    .continuumInputChrome(isFocused: focusedField == .advanced)
+            HStack(alignment: .top, spacing: 20) {
+                VStack(alignment: .leading, spacing: 10) {
+                    fieldLabel("Protocol")
+                    protocolSegments
                 }
-                .buttonStyle(.continuumFlat)
-                .focused($focusedField, equals: .advanced)
-
-                if viewModel.showsAdvancedOptions {
-                    VStack(alignment: .leading, spacing: 18) {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("Protocol")
-                                .font(.system(size: 18, weight: .semibold))
-                                .foregroundStyle(.white.opacity(0.66))
-
-                            HStack(spacing: 12) {
-                                ForEach(ServerSetupScheme.allCases) { scheme in
-                                    Button {
-                                        viewModel.selectedScheme = scheme
-                                    } label: {
-                                        Text(scheme.rawValue)
-                                            .font(.system(size: 20, weight: .semibold))
-                                            .foregroundStyle(protocolTextColor(for: scheme))
-                                            .frame(maxWidth: .infinity)
-                                            .padding(.vertical, 14)
-                                            .background(protocolBackground(for: scheme))
-                                    }
-                                    .buttonStyle(.continuumFlat)
-                                    .focused($focusedField, equals: .scheme(scheme))
-                                }
-                            }
-                        }
-
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("Port")
-                                .font(.system(size: 18, weight: .semibold))
-                                .foregroundStyle(.white.opacity(0.66))
-
-                            TextField("Optional", text: $viewModel.port)
-                                .modifier(TVAuthFieldChrome(isFocused: focusedField == .port))
-                                .focused($focusedField, equals: .port)
-                                .autocorrectionDisabled()
-                                .textInputAutocapitalization(.never)
-                                .keyboardType(.numberPad)
-                        }
-                    }
-                    .transition(.opacity)
+                VStack(alignment: .leading, spacing: 10) {
+                    fieldLabel("Port")
+                    AuroraInputField(
+                        text: $viewModel.port,
+                        placeholder: "8096",
+                        focus: $focusedField,
+                        equals: .port,
+                        keyboard: .numberPad
+                    )
                 }
+                .frame(width: 190)
             }
 
             if let error = viewModel.error {
@@ -154,9 +210,10 @@ struct TVServerSetupView: View {
                         .foregroundStyle(Color.continuumError)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
                 .transition(.opacity)
             }
+
+            Spacer(minLength: 0)
 
             Button {
                 guard !viewModel.isLoading else { return }
@@ -164,47 +221,69 @@ struct TVServerSetupView: View {
             } label: {
                 Text(viewModel.isLoading ? "Connecting…" : "Connect")
             }
-            .buttonStyle(ContinuumPrimaryButtonStyle(isLoading: viewModel.isLoading))
+            .buttonStyle(AuroraPrimaryButtonStyle(isLoading: viewModel.isLoading))
             .focused($focusedField, equals: .connect)
-            // Stay focusable while connecting so focus isn't bounced to a
-            // neighbour mid-request; re-entry is guarded above.
         }
-        .padding(.horizontal, 48)
-        .padding(.vertical, 44)
-        .background(
-            RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius, style: .continuous)
-                .fill(Color.continuumSurface)
-                .overlay(
-                    RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius, style: .continuous)
-                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                )
-        )
+        .padding(46)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .auroraGlass(cornerRadius: 28, emphasized: true)
         .animation(.easeInOut(duration: 0.2), value: viewModel.error)
-        .animation(.easeInOut(duration: 0.2), value: viewModel.showsAdvancedOptions)
-        .focusSection()
-        // Land first focus on the address field rather than whatever the engine
-        // picks geometrically — this is the first screen a new user sees.
-        .defaultFocus($focusedField, .host, priority: .userInitiated)
     }
 
-    private func protocolTextColor(for scheme: ServerSetupScheme) -> Color {
-        if focusedField == .scheme(scheme) {
-            return .continuumBackground
+    private var protocolSegments: some View {
+        HStack(spacing: 8) {
+            ForEach(ServerSetupScheme.allCases) { scheme in
+                Button {
+                    viewModel.selectedScheme = scheme
+                } label: {
+                    AuroraSegment(
+                        title: scheme.rawValue,
+                        isSelected: viewModel.selectedScheme == scheme,
+                        isFocused: focusedField == .scheme(scheme)
+                    )
+                }
+                .buttonStyle(.continuumFlat)
+                .focused($focusedField, equals: .scheme(scheme))
+            }
         }
-        return viewModel.selectedScheme == scheme ? .continuumOnSurface : .white.opacity(0.64)
     }
 
-    private func protocolBackground(for scheme: ServerSetupScheme) -> some View {
-        let isFocused = focusedField == .scheme(scheme)
-        let isSelected = viewModel.selectedScheme == scheme
-        return RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .fill(isFocused ? Color.white : Color.white.opacity(isSelected ? 0.16 : 0.055))
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(Color.white.opacity(isFocused || isSelected ? 0.45 : 0.1), lineWidth: 1)
-            )
-    }
+    // MARK: - Helpers
 
+    private func fieldLabel(_ text: String) -> some View {
+        Text(text.uppercased())
+            .font(.system(size: 15, weight: .semibold, design: .monospaced))
+            .tracking(2)
+            .foregroundStyle(Color.auroraInkTertiary)
+    }
+}
+
+// MARK: - Searching beacon (pulsing rings behind the phone glyph)
+
+private struct SearchingBeacon: View {
+    @State private var animate = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        ZStack {
+            ForEach(0..<3, id: \.self) { i in
+                Circle()
+                    .stroke(Color.auroraAccent.opacity(0.5), lineWidth: 2)
+                    .frame(width: 120, height: 120)
+                    .scaleEffect(animate ? 1.7 : 0.6)
+                    .opacity(animate ? 0 : 0.55)
+                    .animation(
+                        reduceMotion ? nil :
+                            .easeOut(duration: 2.4).repeatForever(autoreverses: false).delay(Double(i) * 0.8),
+                        value: animate)
+            }
+            Image(systemName: "iphone.gen3")
+                .font(.system(size: 76, weight: .ultraLight))
+                .foregroundStyle(Color.auroraInk)
+        }
+        .frame(width: 200, height: 200)
+        .onAppear { animate = true }
+    }
 }
 
 #endif

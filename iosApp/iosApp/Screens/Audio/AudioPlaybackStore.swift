@@ -6,6 +6,7 @@ final class AudioPlaybackStore {
     let player = AudioPlayerViewModel()
     var isShowingFullPlayer = false
     private var lastRequest: AudioPlaybackRequest?
+    private var playbackTask: Task<Void, Never>?
 
     func play(contentId: String, restart: Bool = false, startPosition: Double? = nil) {
         lastRequest = AudioPlaybackRequest(
@@ -23,7 +24,8 @@ final class AudioPlaybackStore {
 
     private func startLastRequest() {
         guard let lastRequest else { return }
-        Task {
+        playbackTask?.cancel()
+        playbackTask = Task {
             await player.start(
                 contentId: lastRequest.contentId,
                 restart: lastRequest.restart,

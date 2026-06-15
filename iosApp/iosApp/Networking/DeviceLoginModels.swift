@@ -49,3 +49,18 @@ enum DeviceLoginStatus: String {
         self = DeviceLoginStatus(rawValue: raw) ?? .unknown
     }
 }
+
+/// Body for POST /api/v1/auth/device/approve (sent by an authenticated client).
+struct DeviceApproveRequest: Codable {
+    let code: String
+}
+
+/// Response from GET /api/v1/auth/device?code=<userCode>. All optional: we
+/// only need the authoritative match code and a display name. Confirm field
+/// names against silo-server (see Step 1).
+struct DeviceLookupResponse: Codable {
+    let matchCode: String?
+    let deviceName: String?
+    let devicePlatform: String?
+    let status: String?
+}

@@ -515,8 +515,7 @@ stays empty (backdrop scrim only) until the first row has content.
    and the library Browse landings; rows-first focus maps; backdrop follows
    focus; `Featured` pill renamed `Browse`.
 3. **Phase 3 — scopes:** cascading selector (dwell trigger, sections flyout),
-   `All <Type>` merged scope (server-coordinated), scope persistence,
-   single-library sections panel.
+   scope persistence, single-library sections panel.
 4. **Phase 4 — polish & parity:** collections fan row + fan cards, Android
    Calendar, motion & reduced-motion pass, VoiceOver/TalkBack pass.
 

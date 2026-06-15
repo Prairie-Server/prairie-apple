@@ -80,6 +80,9 @@ struct ProfileSelectionView: View {
     /// tiles have somewhere to "sit" without the background reading as a
     /// gradient card.
     private var background: some View {
+        #if os(tvOS)
+        AuroraBackdrop(variant: .profile, scrim: .soft)
+        #else
         ZStack {
             Color.continuumBackground.ignoresSafeArea()
             RadialGradient(
@@ -91,6 +94,7 @@ struct ProfileSelectionView: View {
             .ignoresSafeArea()
             .blendMode(.plusLighter)
         }
+        #endif
     }
 
     // MARK: - Content
@@ -146,24 +150,26 @@ struct ProfileSelectionView: View {
 
     private var header: some View {
         #if os(tvOS)
-        HStack(alignment: .top, spacing: 12) {
-            Spacer(minLength: 0)
-            titleBlock
-                .frame(maxWidth: .infinity)
-                .padding(.leading, 60) // visually balance the top-right chips
-                .accessibilityAddTraits(.isHeader)
-
-            changeServerChip
-            signOutChip
-        }
-        .padding(.top, headerTopPadding)
-        .padding(.horizontal, 60)
-        // Without this, pressing Up from a centered profile tile can't
-        // reach the Sign Out chip — the focus engine looks for a
-        // focusable element roughly above the current one, and the chip
-        // is pinned to the top-right corner. `focusSection` tells the
-        // engine to treat the whole header row as a valid upward target.
-        .focusSection()
+        // The title is centered across the full screen width; the chips are
+        // overlaid in the top-right corner so they don't shift the title off
+        // center.
+        titleBlock
+            .frame(maxWidth: .infinity)
+            .accessibilityAddTraits(.isHeader)
+            .overlay(alignment: .topTrailing) {
+                HStack(alignment: .top, spacing: 12) {
+                    changeServerChip
+                    signOutChip
+                }
+            }
+            .padding(.top, headerTopPadding)
+            .padding(.horizontal, 60)
+            // Without this, pressing Up from a centered profile tile can't
+            // reach the Sign Out chip — the focus engine looks for a
+            // focusable element roughly above the current one, and the chip
+            // is pinned to the top-right corner. `focusSection` tells the
+            // engine to treat the whole header row as a valid upward target.
+            .focusSection()
         #else
         titleBlock
             .padding(.horizontal, 24)
@@ -174,6 +180,18 @@ struct ProfileSelectionView: View {
 
     private var titleBlock: some View {
         VStack(spacing: 6) {
+            #if os(tvOS)
+            Text("Who's watching?")
+                .font(.system(size: titleSize, weight: .semibold))
+                .foregroundStyle(Color.auroraInk)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+            Text("Select your profile")
+                .font(.system(size: subtitleSize, weight: .regular))
+                .foregroundStyle(Color.auroraInkSecondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+            #else
             Text("Who's watching?")
                 .font(.system(size: titleSize, weight: .semibold))
                 .tracking(-0.5)
@@ -185,6 +203,7 @@ struct ProfileSelectionView: View {
                 .foregroundStyle(.white.opacity(0.55))
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
+            #endif
         }
     }
 

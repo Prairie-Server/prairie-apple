@@ -109,6 +109,18 @@ actor TokenStore {
         return cachedRefreshToken
     }
 
+    /// Read a specific server's stored access token WITHOUT changing the
+    /// active server. Used by companion pairing to approve a device on a
+    /// server other than the one currently active.
+    func getAccessToken(for serverId: String) -> String? {
+        guard !serverId.isEmpty else { return nil }
+        if serverId == activeServerId {
+            ensureLoaded()
+            return cachedAccessToken
+        }
+        return keychain.get(Self.accessTokenKey(for: serverId))
+    }
+
     func saveTokens(accessToken: String, refreshToken: String) {
         guard !activeServerId.isEmpty else { return }
         ensureLoaded()

@@ -57,7 +57,8 @@ struct AudioFullPlayerView: View {
         } else if let error = player.error {
             ErrorView(
                 state: error,
-                onRetry: { audioStore.retryLastRequest() }
+                onRetry: { audioStore.retryLastRequest() },
+                onGoBack: { audioStore.dismissFullPlayer() }
             )
         } else if player.hasActiveSession {
             #if os(tvOS)
