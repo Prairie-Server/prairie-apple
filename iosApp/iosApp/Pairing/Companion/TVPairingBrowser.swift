@@ -9,6 +9,9 @@ struct DiscoveredTV: Identifiable, Equatable {
     let state: PairingReceiverState
     let endpoint: NWEndpoint
     let sid: String?        // TXT `sid`: per-advertising-session nonce, if present.
+    // id-only equality is intentional: `sid`/`state` changes are surfaced via the
+    // Optional nil↔value transition in CompanionPairingCardModifier's onChange latch,
+    // not by field equality. Don't make this field-sensitive without revisiting that.
     static func == (a: DiscoveredTV, b: DiscoveredTV) -> Bool { a.id == b.id }
 }
 
