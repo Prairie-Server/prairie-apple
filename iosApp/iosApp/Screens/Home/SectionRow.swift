@@ -18,8 +18,11 @@ struct SectionRow: View {
     /// can drive the Skyline focus marquee with `(item, row title)`.
     var onItemFocus: ((SectionItem) -> Void)? = nil
     /// Optional poster/square card width forwarded to `MediaRow` —
-    /// Skyline's dense landing rows (§5.6) pass 208.
+    /// Skyline's dense landing rows (§5.6) pass a compact width.
     var cardWidth: CGFloat? = nil
+    /// Optional tvOS card-strip padding override. Skyline uses this to keep
+    /// the focused row short enough for the next row title preview.
+    var cardVerticalPadding: CGFloat? = nil
     /// Down at the row boundary — forwarded to `MediaRow` for the section pager.
     var onMoveDown: (() -> Void)? = nil
 
@@ -75,6 +78,7 @@ struct SectionRow: View {
             onMoveUp: onMoveUp,
             onItemFocus: onItemFocus,
             cardWidth: cardWidth,
+            cardVerticalPadding: cardVerticalPadding,
             onMoveDown: onMoveDown
         )
     }

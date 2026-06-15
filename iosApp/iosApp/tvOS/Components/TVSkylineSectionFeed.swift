@@ -148,6 +148,7 @@ struct TVSkylineSectionFeed: View {
                 marqueeModel.preview(TVMarqueeContent(item: item, rowTitle: section.title))
             },
             cardWidth: ContinuumTheme.Skyline.densePosterCardWidth,
+            cardVerticalPadding: ContinuumTheme.Skyline.rowBandCardVerticalPadding,
             onMoveDown: { pageBand(by: 1) }
         )
         // Natural height so the row hugs its header and top-aligns in the

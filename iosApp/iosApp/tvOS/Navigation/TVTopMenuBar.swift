@@ -133,6 +133,10 @@ struct TVTopMenuBar: View {
     /// Press on the profile avatar opens the profile panel and enters it
     /// immediately; dwell only previews it.
     let onProfilePressed: () -> Void
+    /// Focus left the bar through normal focus movement into page content.
+    /// The shell uses this to disable the bar again so later content-row
+    /// Up presses can't geometrically jump back to the menu.
+    let onContentFocusHandoff: () -> Void
     var onExit: (() -> Void)? = nil
 
     @FocusState private var focusedItem: TVTopMenuFocus?
@@ -233,6 +237,9 @@ struct TVTopMenuBar: View {
             }
             isMenuFocused = false
             scheduleDwell(for: nil)
+            if !panelHasFocus {
+                onContentFocusHandoff()
+            }
         }
         .onDisappear { dwellTask?.cancel() }
     }

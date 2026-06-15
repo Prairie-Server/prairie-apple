@@ -268,10 +268,14 @@ struct ContinuumTheme {
         /// edge. The row layers ignore the bottom safe area (the ~86pt tvOS
         /// overscan was leaving a dead band under the rail), so this is the
         /// small margin kept below the focused row's captions.
-        static let rowBandBottomInset: CGFloat = 28
+        static let rowBandBottomInset: CGFloat = 20
         /// Vertical gap between the focused row and the passive preview of
         /// the next row.
-        static let rowBandPreviewSpacing: CGFloat = 28
+        static let rowBandPreviewSpacing: CGFloat = 16
+        /// Tighter vertical breathing room for the focused Skyline card strip.
+        /// Regular rows keep the wider tvOS padding so focus lift has more
+        /// space in standard scroll layouts.
+        static let rowBandCardVerticalPadding: CGFloat = 14
         /// Duration for the vertical row-stack scroll when paging up/down.
         static let rowBandScrollDuration: Double = 0.24
         /// Passive row preview tint so it reads as available content without
@@ -284,7 +288,7 @@ struct ContinuumTheme {
         /// a full poster row (header + 2:3 poster + title/year) fits in the
         /// top of the lower-half row band while leaving a preview of the next
         /// row below it.
-        static let densePosterCardWidth: CGFloat = 160
+        static let densePosterCardWidth: CGFloat = 176
 
         // MARK: Collections poster grid (§6.3)
 

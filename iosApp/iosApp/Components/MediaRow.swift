@@ -42,8 +42,11 @@ struct MediaRow: View {
     /// marquee retains the last previewed item while focus is in chrome.
     var onItemFocus: ((SectionItem) -> Void)? = nil
     /// Optional width for poster/square cards — Skyline's dense landing
-    /// rows (§5.6) pass 208. Episode thumbs are unaffected.
+    /// rows (§5.6) pass a compact width. Episode thumbs are unaffected.
     var cardWidth: CGFloat? = nil
+    /// Optional tvOS-only vertical padding override for the card strip.
+    /// Standard rows keep the default breathing room for focus lift.
+    var cardVerticalPadding: CGFloat? = nil
     /// Down at the row's boundary — used by the Skyline section pager to
     /// page to the next section (there is no row geometrically below).
     var onMoveDown: (() -> Void)? = nil
@@ -234,6 +237,10 @@ struct MediaRow: View {
     /// Vertical padding on the row content so focus lift doesn't clip.
     private var verticalCardPadding: CGFloat {
         #if os(tvOS)
+        if let cardVerticalPadding {
+            return cardVerticalPadding
+        }
+
         return 24
         #else
         return 0

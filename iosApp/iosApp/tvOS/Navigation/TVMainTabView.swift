@@ -84,6 +84,7 @@ struct TVMainTabView: View {
                     onDwell: handleDwell(_:),
                     onEnterPanel: enterPanelFor,
                     onProfilePressed: openProfilePanelImmediately,
+                    onContentFocusHandoff: suppressTopMenuFocusForContentHandoff,
                     onExit: selectedRoot == .home ? nil : returnToHomeInMenu
                 )
             }
