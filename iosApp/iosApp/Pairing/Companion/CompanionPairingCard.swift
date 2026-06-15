@@ -5,7 +5,7 @@ import SwiftUI
 /// app and runs the whole flow for one discovered TV — discovery, server
 /// selection, match-code confirm, progress, result — beneath a consistent
 /// header. Owns the `PairingSession` + `CompanionPairingCoordinator` for that
-/// TV (folds in the former `TVPairingView`).
+/// TV (folds in the former pairing modal).
 struct CompanionPairingCard: View {
     let tv: DiscoveredTV
     /// Discovery-step "Not Now" (and scrim tap): dismiss until the TV re-advertises.

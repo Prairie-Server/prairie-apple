@@ -72,7 +72,7 @@ struct ContentView: View {
         .environmentObject(overlayPrefs)
         .preferredColorScheme(.dark)
         #if os(iOS)
-        .setUpTVBanner()
+        .companionPairingCard()
         #endif
         #if os(macOS)
         .sheet(isPresented: Binding(
