@@ -348,7 +348,11 @@ struct ContentView: View {
         case .login:
             LoginView(router: router)
         case .serverSetup:
+            #if os(tvOS)
+            TVServerSetupView(router: router)
+            #else
             ServerSetupView(router: router)
+            #endif
         default:
             // Routes handled inside the authenticated tab view
             EmptyStateView(

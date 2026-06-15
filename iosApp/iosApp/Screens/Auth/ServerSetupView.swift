@@ -1,105 +1,118 @@
 import SwiftUI
 
-/// First screen a user sees when no server URL is configured.
+#if !os(tvOS)
+/// First screen when no server is configured (Aurora). A single centered glass
+/// form over the plum backdrop — no phone-pairing card, because on iPhone the
+/// phone *is* the companion (the pairing card auto-overlays from `ContentView`
+/// when a TV is nearby). Protocol + port stay tucked under "Advanced options".
 struct ServerSetupView: View {
     var router: AppRouter
     @State private var viewModel = ServerSetupViewModel()
+    @FocusState private var focusedField: Field?
+
+    private enum Field: Hashable { case host, port }
 
     var body: some View {
-        ZStack {
-            Color.continuumBackground.ignoresSafeArea()
+        AuroraScreen(variant: .server, scrim: .soft) {
+            SiloWordmarkView(width: 132)
+                .frame(maxWidth: .infinity)
+                .padding(.bottom, 30)
 
-            VStack(spacing: 32) {
-                Spacer()
-
-                SiloWordmarkView(width: 150, subtitle: "Media Server")
-
-                Spacer()
-
-                // Connection form
-                VStack(spacing: ContinuumTheme.padding) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Server Host")
-                            .font(.continuumCaption)
-                            .foregroundColor(.continuumSecondaryText)
-
-                        TextField("media.example.com", text: $viewModel.host)
-                            .textFieldStyle(ContinuumTextFieldStyle())
-                            #if !os(macOS)
-                            .textContentType(.URL)
-                            .autocorrectionDisabled()
-                            .textInputAutocapitalization(.never)
-                            .keyboardType(.URL)
-                            #endif
-                    }
-
-                    #if !os(tvOS)
-                    advancedOptions
-                    #endif
-
-                    if let error = viewModel.error {
-                        Text(error)
-                            .font(.continuumCaption)
-                            .foregroundColor(.continuumError)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-
-                    Button("Connect") {
-                        Task { await viewModel.connect(router: router) }
-                    }
-                    .buttonStyle(ContinuumPrimaryButtonStyle(isLoading: viewModel.isLoading))
-                    .disabled(viewModel.isLoading)
-                }
-                .padding(.horizontal, ContinuumTheme.largePadding)
-                .continuumFormWidth()
-
-                Spacer()
+            VStack(spacing: 12) {
+                AuroraEyebrow(text: "Step 01 — Connect", centered: true)
+                Text("Add your server")
+                    .font(.continuumTitle)
+                    .foregroundStyle(Color.auroraInk)
             }
+            .frame(maxWidth: .infinity)
+            .padding(.bottom, 24)
+
+            VStack(alignment: .leading, spacing: 18) {
+                AuroraTextField(
+                    label: "Server address",
+                    text: $viewModel.host,
+                    placeholder: "media.example.com",
+                    focus: $focusedField,
+                    equals: .host,
+                    contentType: .url,
+                    keyboard: .url,
+                    submitLabel: .go,
+                    onSubmit: { connect() }
+                )
+
+                advancedDisclosure
+
+                if let error = viewModel.error {
+                    AuroraErrorLabel(error)
+                }
+
+                Button {
+                    connect()
+                } label: {
+                    Text(viewModel.isLoading ? "Connecting…" : "Connect")
+                }
+                .buttonStyle(AuroraPrimaryButtonStyle(isLoading: viewModel.isLoading))
+                .disabled(viewModel.isLoading)
+                .padding(.top, 4)
+            }
+            .padding(22)
+            .auroraGlass(cornerRadius: 24, emphasized: true)
+            .animation(.easeInOut(duration: 0.2), value: viewModel.error)
         }
     }
 
-    #if !os(tvOS)
-    private var advancedOptions: some View {
-        DisclosureGroup(
-            isExpanded: $viewModel.showsAdvancedOptions,
-            content: {
-                VStack(alignment: .leading, spacing: ContinuumTheme.padding) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Protocol")
-                            .font(.continuumCaption)
-                            .foregroundColor(.continuumSecondaryText)
+    private func connect() {
+        guard !viewModel.isLoading else { return }
+        Task { await viewModel.connect(router: router) }
+    }
 
-                        Picker("Protocol", selection: $viewModel.selectedScheme) {
-                            ForEach(ServerSetupScheme.allCases) { scheme in
-                                Text(scheme.rawValue).tag(scheme)
+    @ViewBuilder
+    private var advancedDisclosure: some View {
+        Button {
+            withAnimation(ContinuumTheme.springAnimation) {
+                viewModel.showsAdvancedOptions.toggle()
+            }
+        } label: {
+            HStack(spacing: 7) {
+                Text("Advanced options")
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 13, weight: .semibold))
+                    .rotationEffect(.degrees(viewModel.showsAdvancedOptions ? 180 : 0))
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(AuroraGhostButtonStyle())
+
+        if viewModel.showsAdvancedOptions {
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 8) {
+                    AuroraFieldLabel("Protocol")
+                    HStack(spacing: 8) {
+                        ForEach(ServerSetupScheme.allCases) { scheme in
+                            Button {
+                                viewModel.selectedScheme = scheme
+                            } label: {
+                                AuroraSegment(
+                                    title: scheme.rawValue,
+                                    isSelected: viewModel.selectedScheme == scheme,
+                                    isFocused: false
+                                )
                             }
+                            .buttonStyle(.plain)
                         }
-                        .pickerStyle(.segmented)
-                    }
-
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Port")
-                            .font(.continuumCaption)
-                            .foregroundColor(.continuumSecondaryText)
-
-                        TextField("Optional", text: $viewModel.port)
-                            .textFieldStyle(ContinuumTextFieldStyle())
-                            #if !os(macOS)
-                            .autocorrectionDisabled()
-                            .textInputAutocapitalization(.never)
-                            .keyboardType(.numberPad)
-                            #endif
                     }
                 }
-                .padding(.top, 8)
-            },
-            label: {
-                Text("Advanced")
-                    .font(.continuumCaption)
-                    .foregroundColor(.continuumSecondaryText)
+                AuroraTextField(
+                    label: "Port",
+                    text: $viewModel.port,
+                    placeholder: "8096",
+                    focus: $focusedField,
+                    equals: .port,
+                    keyboard: .number
+                )
             }
-        )
-        .tint(.continuumSecondaryText)
+            .transition(.opacity.combined(with: .move(edge: .top)))
+        }
     }
-    #endif
 }
+#endif
