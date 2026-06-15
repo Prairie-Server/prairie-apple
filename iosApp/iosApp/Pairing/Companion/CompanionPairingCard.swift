@@ -28,6 +28,9 @@ struct CompanionPairingCard: View {
                 .ignoresSafeArea()
                 .contentShape(Rectangle())
                 .onTapGesture { if !started { animateOut(onNotNow) } }
+                .accessibilityAddTraits(.isButton)
+                .accessibilityLabel("Dismiss")
+                .accessibilityHidden(started)
 
             card
                 .padding(.horizontal, 10)
@@ -260,8 +263,11 @@ struct CompanionPairingCard: View {
     }
 
     private func animateOut(_ completion: @escaping () -> Void) {
-        withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) { appeared = false }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) { completion() }
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) {
+            appeared = false
+        } completion: {
+            completion()
+        }
     }
 }
 #endif
