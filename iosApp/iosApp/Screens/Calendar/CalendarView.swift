@@ -62,6 +62,7 @@ struct CalendarView: View {
                 TabTopBarActions(
                     profile: currentProfile,
                     onSearch: { router.navigate(to: .search) },
+                    onOpenSettings: { router.navigate(to: .settings) },
                     onSwitchProfile: {
                         AuthService.shared.profileId = nil
                         router.showProfileSelection()

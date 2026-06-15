@@ -28,6 +28,12 @@ struct HomeView: View {
     @State private var refreshStartedAt: Date?
     @State private var refreshHideTask: Task<Void, Never>?
     private let chromeFadeDistance: CGFloat = 72
+    #if os(iOS)
+    /// Pull the floating header up into the unused safe-area band beside the
+    /// Dynamic Island. The logo sits on the left and the action icons on the
+    /// right, so the centered island and status-bar glyphs are never overlapped.
+    private let headerTopReclaim: CGFloat = 16
+    #endif
     #endif
     @Environment(AppRouter.self) private var router
 
@@ -102,15 +108,14 @@ struct HomeView: View {
             HStack(spacing: 12) {
                 SidebarToggleButton()
 
-                Text("Home")
-                    .font(.continuumTitle)
-                    .foregroundColor(.continuumOnSurface)
+                SiloWordmarkView(width: 72)
 
                 Spacer(minLength: 8)
 
                 TabTopBarActions(
                     profile: currentProfile,
                     onSearch: { router.navigate(to: .search) },
+                    onOpenSettings: { router.navigate(to: .settings) },
                     onSwitchProfile: {
                         AuthService.shared.profileId = nil
                         router.showProfileSelection()
@@ -120,7 +125,9 @@ struct HomeView: View {
                 )
             }
             .padding(.horizontal, ContinuumTheme.padding)
-            .padding(.top, ContinuumTheme.smallPadding)
+            #if os(iOS)
+            .padding(.top, -headerTopReclaim)
+            #endif
             .padding(.bottom, ContinuumTheme.smallPadding)
             .background {
                 homeHeaderChrome
@@ -323,8 +330,12 @@ struct HomeView: View {
     }
 
     private func topRunwaySpacing(topSafeAreaInset: CGFloat) -> CGFloat {
-        let headerContentHeight: CGFloat = 40 + (ContinuumTheme.smallPadding * 2)
-        return topSafeAreaInset + headerContentHeight + ContinuumTheme.largePadding + ContinuumTheme.smallPadding
+        let headerContentHeight: CGFloat = 40 + ContinuumTheme.smallPadding
+        var runway = topSafeAreaInset + headerContentHeight + ContinuumTheme.largePadding + ContinuumTheme.smallPadding
+        #if os(iOS)
+        runway -= headerTopReclaim
+        #endif
+        return runway
     }
     #endif
 }

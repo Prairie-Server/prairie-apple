@@ -116,6 +116,7 @@ struct LibrariesTabView: View {
                 profile: currentProfile,
                 onLibraryTap: { showPicker = true },
                 onSearch: { router.navigate(to: .search) },
+                onOpenSettings: { router.navigate(to: .settings) },
                 onSwitchProfile: {
                     AuthService.shared.profileId = nil
                     router.showProfileSelection()
@@ -214,6 +215,7 @@ private struct LibrariesTopBar: View {
     let profile: UserProfile?
     let onLibraryTap: () -> Void
     let onSearch: () -> Void
+    let onOpenSettings: () -> Void
     let onSwitchProfile: () -> Void
     let onSwitchServer: () -> Void
     let onSignOut: () -> Void
@@ -233,6 +235,7 @@ private struct LibrariesTopBar: View {
             TabTopBarActions(
                 profile: profile,
                 onSearch: onSearch,
+                onOpenSettings: onOpenSettings,
                 onSwitchProfile: onSwitchProfile,
                 onSwitchServer: onSwitchServer,
                 onSignOut: onSignOut
