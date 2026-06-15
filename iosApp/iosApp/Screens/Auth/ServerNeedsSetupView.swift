@@ -53,8 +53,10 @@ struct ServerNeedsSetupView: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                         Spacer(minLength: 0)
+                        #if os(iOS)
                         Image(systemName: "doc.on.doc")
                             .foregroundStyle(Color.auroraInkTertiary)
+                        #endif
                     }
                     .padding(.horizontal, 16)
                     .frame(height: AuroraControl.height)
@@ -66,7 +68,9 @@ struct ServerNeedsSetupView: View {
                         RoundedRectangle(cornerRadius: AuroraControl.corner, style: .continuous)
                             .stroke(Color.white.opacity(0.16), lineWidth: 1.5)
                     )
+                    #if os(iOS)
                     .onTapGesture { copyURL() }
+                    #endif
                 }
 
                 if let error {

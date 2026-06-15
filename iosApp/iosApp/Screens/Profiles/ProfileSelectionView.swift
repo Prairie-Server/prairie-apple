@@ -75,16 +75,10 @@ struct ProfileSelectionView: View {
 
     // MARK: - Background
 
-    /// Pure black canvas with a soft radial spotlight behind the row. The
-    /// radial is 8% white at the center fading to transparent, so the
-    /// tiles have somewhere to "sit" without the background reading as a
-    /// gradient card.
+    /// The shared Aurora plum backdrop with a soft edge scrim, so the profile
+    /// tiles have somewhere to "sit". Identical on every platform now.
     private var background: some View {
-        #if os(tvOS)
         AuroraBackdrop(variant: .profile, scrim: .soft)
-        #else
-        AuroraBackdrop(variant: .profile, scrim: .soft)
-        #endif
     }
 
     // MARK: - Content
