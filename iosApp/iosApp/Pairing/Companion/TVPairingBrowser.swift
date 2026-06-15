@@ -8,6 +8,7 @@ struct DiscoveredTV: Identifiable, Equatable {
     let name: String        // TXT `name`.
     let state: PairingReceiverState
     let endpoint: NWEndpoint
+    let sid: String?        // TXT `sid`: per-advertising-session nonce, if present.
     static func == (a: DiscoveredTV, b: DiscoveredTV) -> Bool { a.id == b.id }
 }
 
@@ -43,7 +44,7 @@ final class TVPairingBrowser {
         let name = txt["name"] ?? "Apple TV"
         let id = txt["id"] ?? "\(result.endpoint)"
         let state = PairingReceiverState(rawValue: txt["st"] ?? "setup") ?? .setup
-        return DiscoveredTV(id: id, name: name, state: state, endpoint: result.endpoint)
+        return DiscoveredTV(id: id, name: name, state: state, endpoint: result.endpoint, sid: txt["sid"])
     }
 }
 #endif
