@@ -33,6 +33,7 @@ fastlane/test_output/
 .worktrees/
 .playwright-mcp/
 .playwright-cli/
+.superpowers/
 
 # Logs and OS files
 *.log
