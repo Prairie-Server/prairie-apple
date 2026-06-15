@@ -83,17 +83,7 @@ struct ProfileSelectionView: View {
         #if os(tvOS)
         AuroraBackdrop(variant: .profile, scrim: .soft)
         #else
-        ZStack {
-            Color.continuumBackground.ignoresSafeArea()
-            RadialGradient(
-                colors: [Color.white.opacity(0.07), Color.black.opacity(0)],
-                center: .center,
-                startRadius: 0,
-                endRadius: 900
-            )
-            .ignoresSafeArea()
-            .blendMode(.plusLighter)
-        }
+        AuroraBackdrop(variant: .profile, scrim: .soft)
         #endif
     }
 
@@ -195,12 +185,12 @@ struct ProfileSelectionView: View {
             Text("Who's watching?")
                 .font(.system(size: titleSize, weight: .semibold))
                 .tracking(-0.5)
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.auroraInk)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
             Text("Select your profile")
                 .font(.system(size: subtitleSize, weight: .regular))
-                .foregroundStyle(.white.opacity(0.55))
+                .foregroundStyle(Color.auroraInkSecondary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
             #endif
