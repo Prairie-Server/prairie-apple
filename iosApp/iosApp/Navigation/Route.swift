@@ -5,7 +5,7 @@ enum Route: Hashable {
     // Auth flow
     case serverSetup
     case login
-    case setup
+    case serverNeedsSetup
     case signup
 
     // Profile selection

@@ -60,11 +60,9 @@ class ServerSetupViewModel {
             attempted.append(candidate)
             do {
                 let status = try await auth.checkServer(url: candidate)
+                router.authState = .needsLogin
                 if status.needsSetup {
-                    router.authState = .needsLogin
-                    router.navigate(to: .setup)
-                } else {
-                    router.authState = .needsLogin
+                    router.navigate(to: .serverNeedsSetup)
                 }
                 return
             } catch let connectError {

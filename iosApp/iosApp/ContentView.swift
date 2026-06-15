@@ -341,8 +341,13 @@ struct ContentView: View {
     @ViewBuilder
     private func destinationView(for route: Route) -> some View {
         switch route {
-        case .setup:
-            SetupView(router: router)
+        case .serverNeedsSetup:
+            #if os(tvOS)
+            EmptyStateView(icon: "gearshape.2", title: "Finish setup in your browser", subtitle: nil)
+                .continuumBackground()
+            #else
+            ServerNeedsSetupView(router: router)
+            #endif
         case .signup:
             #if os(tvOS)
             EmptyStateView(icon: "person.badge.plus", title: "Sign up from a phone or the web", subtitle: nil)
@@ -392,8 +397,13 @@ struct ContentView: View {
             #else
             LoginView(router: router)
             #endif
-        case .setup:
-            SetupView(router: router)
+        case .serverNeedsSetup:
+            #if os(tvOS)
+            EmptyStateView(icon: "gearshape.2", title: "Finish setup in your browser", subtitle: nil)
+                .continuumBackground()
+            #else
+            ServerNeedsSetupView(router: router)
+            #endif
         case .signup:
             #if os(tvOS)
             EmptyStateView(icon: "person.badge.plus", title: "Sign up from a phone or the web", subtitle: nil)
