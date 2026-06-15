@@ -23,76 +23,17 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        Group {
-            switch router.authState {
-            case .loading:
-                StartupSplashView {
-                    didFinishStartupSplash = true
-                    finishInitialStartupIfReady()
-                }
-                .task {
-                    guard !didStartInitialStateCheck else { return }
-                    didStartInitialStateCheck = true
-                    await checkInitialState()
-                }
-
-            case .needsServerSetup:
-                #if os(tvOS)
-                TVServerSetupView(router: router)
-                #else
-                ServerSetupView(router: router)
-                #endif
-
-            case .needsLogin:
-                NavigationStack(path: $router.path) {
-                    loginRoot
-                        .navigationDestination(for: Route.self) { route in
-                            destinationView(for: route)
-                        }
-                }
-
-            case .needsProfile:
-                NavigationStack(path: $router.path) {
-                    ProfileSelectionView(router: router)
-                        .navigationDestination(for: Route.self) { route in
-                            profileFlowDestination(for: route)
-                        }
-                }
-                .environment(router)
-
-            case .authenticated:
-                #if os(tvOS)
-                TVMainTabView(router: router)
-                #else
-                MainTabView(router: router)
-                #endif
-            }
-        }
+        authContent
         .environment(audioStore)
         .environmentObject(overlayPrefs)
         .preferredColorScheme(.dark)
         #if os(iOS)
         .companionPairingCard()
         #endif
-        #if os(macOS)
-        .sheet(isPresented: Binding(
-            get: { debugPlayContentId != nil },
-            set: { if !$0 { debugPlayContentId = nil } }
-        )) {
-            if let contentId = debugPlayContentId {
-                PlayerView(contentId: contentId)
-            }
-        }
-        #else
-        .fullScreenCover(isPresented: Binding(
-            get: { debugPlayContentId != nil },
-            set: { if !$0 { debugPlayContentId = nil } }
-        )) {
-            if let contentId = debugPlayContentId {
-                PlayerView(contentId: contentId)
-            }
-        }
-        #endif
+        .modifier(DebugPlayerPresentationModifier(
+            contentId: debugPlayContentId,
+            isPresented: debugPlayerPresentation
+        ))
         .onReceive(NotificationCenter.default.publisher(for: .continuumDeepLink)) { notification in
             guard let url = notification.userInfo?["url"] as? URL else { return }
             handleDeepLink(url)
@@ -135,6 +76,60 @@ struct ContentView: View {
                   router.authState == .authenticated else { return }
             Task { await overlayPrefs.hydrateIfNeeded() }
         }
+    }
+
+    @ViewBuilder
+    private var authContent: some View {
+        switch router.authState {
+        case .loading:
+            StartupSplashView {
+                didFinishStartupSplash = true
+                finishInitialStartupIfReady()
+            }
+            .task {
+                guard !didStartInitialStateCheck else { return }
+                didStartInitialStateCheck = true
+                await checkInitialState()
+            }
+
+        case .needsServerSetup:
+            #if os(tvOS)
+            TVServerSetupView(router: router)
+            #else
+            ServerSetupView(router: router)
+            #endif
+
+        case .needsLogin:
+            NavigationStack(path: $router.path) {
+                loginRoot
+                    .navigationDestination(for: Route.self) { route in
+                        destinationView(for: route)
+                    }
+            }
+
+        case .needsProfile:
+            NavigationStack(path: $router.path) {
+                ProfileSelectionView(router: router)
+                    .navigationDestination(for: Route.self) { route in
+                        profileFlowDestination(for: route)
+                    }
+            }
+            .environment(router)
+
+        case .authenticated:
+            #if os(tvOS)
+            TVMainTabView(router: router)
+            #else
+            MainTabView(router: router)
+            #endif
+        }
+    }
+
+    private var debugPlayerPresentation: Binding<Bool> {
+        Binding(
+            get: { debugPlayContentId != nil },
+            set: { if !$0 { debugPlayContentId = nil } }
+        )
     }
 
     /// Resolves a `continuum://` URL to a navigation action. Supported
@@ -395,6 +390,30 @@ struct ContentView: View {
         default:
             EmptyStateView(icon: "questionmark.circle", title: "Unknown", subtitle: nil)
                 .continuumBackground()
+        }
+    }
+}
+
+private struct DebugPlayerPresentationModifier: ViewModifier {
+    let contentId: String?
+    @Binding var isPresented: Bool
+
+    func body(content: Content) -> some View {
+        #if os(macOS)
+        content.sheet(isPresented: $isPresented) {
+            player
+        }
+        #else
+        content.fullScreenCover(isPresented: $isPresented) {
+            player
+        }
+        #endif
+    }
+
+    @ViewBuilder
+    private var player: some View {
+        if let contentId {
+            PlayerView(contentId: contentId)
         }
     }
 }
