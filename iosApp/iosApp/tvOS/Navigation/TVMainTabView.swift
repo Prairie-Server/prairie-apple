@@ -41,6 +41,7 @@ struct TVMainTabView: View {
     @State private var panelEntersFocus = false
     @State private var panelFocusEntryToken = 0
     @State private var panelHasFocus = false
+    @State private var panelFocusExitTask: Task<Void, Never>?
     /// Bar element to re-focus after Menu-ing out of a panel — its own
     /// anchor, so focus returns to the dwelled tab/avatar (§7).
     @State private var panelReturnFocus: TVTopMenuPanel?
@@ -57,6 +58,8 @@ struct TVMainTabView: View {
     @Namespace private var tabContentNamespace
     @Environment(AudioPlaybackStore.self) private var audioStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private static let panelFocusExitCloseDelayNanoseconds: UInt64 = 80_000_000
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -345,7 +348,7 @@ struct TVMainTabView: View {
             onCommitLibrary: { commitScope(type: type, library: $0, pill: nil) },
             onCommitSection: { commitScope(type: type, library: $0, pill: $1) },
             onClose: { closePanel() },
-            onPanelFocusChanged: { panelHasFocus = $0 }
+            onPanelFocusChanged: { handlePanelFocusChanged($0) }
         )
     }
 
@@ -357,7 +360,7 @@ struct TVMainTabView: View {
             isAdmin: isAdmin,
             entersPanel: isActive && panelEntersFocus,
             focusEntryToken: panelFocusEntryToken,
-            onPanelFocusChanged: { panelHasFocus = $0 },
+            onPanelFocusChanged: { handlePanelFocusChanged($0) },
             onSwitchProfile: { closePanel(then: switchProfile) },
             onWatchlist: { closePanel(then: { router.navigate(to: .watchlist) }) },
             onFavorites: { closePanel(then: { router.navigate(to: .favorites) }) },
@@ -393,6 +396,8 @@ struct TVMainTabView: View {
         guard panel != openPanel else { return }
         tvFocusLog.debug("host.openPanelPreview \(String(describing: panel), privacy: .public)")
 
+        panelFocusExitTask?.cancel()
+        panelFocusExitTask = nil
         panelEntersFocus = false
         panelHasFocus = false
         withAnimation(reduceMotion ? nil : .easeOut(duration: ContinuumTheme.Skyline.cascadeScrimDuration)) {
@@ -415,6 +420,8 @@ struct TVMainTabView: View {
     private func enterOpenPanel() {
         guard openPanel != nil else { return }
         tvFocusLog.debug("host.enterOpenPanel openPanel=\(String(describing: self.openPanel), privacy: .public)")
+        panelFocusExitTask?.cancel()
+        panelFocusExitTask = nil
         panelEntersFocus = true
         panelHasFocus = true
         panelFocusEntryToken += 1
@@ -445,6 +452,8 @@ struct TVMainTabView: View {
     /// so hover-open menus never trap horizontal tab navigation.
     private func openPanelAndEnter(_ panel: TVTopMenuPanel) {
         tvFocusLog.debug("host.openPanelAndEnter \(String(describing: panel), privacy: .public)")
+        panelFocusExitTask?.cancel()
+        panelFocusExitTask = nil
         panelEntersFocus = true
         panelHasFocus = true
         panelFocusEntryToken += 1
@@ -461,6 +470,8 @@ struct TVMainTabView: View {
             action?()
             return
         }
+        panelFocusExitTask?.cancel()
+        panelFocusExitTask = nil
         let wasFocused = panelHasFocus
         withAnimation(reduceMotion ? nil : .easeOut(duration: ContinuumTheme.Skyline.cascadeScrimDuration)) {
             openPanel = nil
@@ -480,12 +491,51 @@ struct TVMainTabView: View {
         action?()
     }
 
+    /// If d-pad down escapes past the last row in an open dropdown, tvOS may
+    /// move focus into the page content behind it. That is a valid focus
+    /// destination, but the floating menu should leave with the panel focus.
+    private func handlePanelFocusChanged(_ hasFocus: Bool) {
+        panelFocusExitTask?.cancel()
+        panelFocusExitTask = nil
+
+        if hasFocus {
+            panelHasFocus = true
+            return
+        }
+
+        let hadPanelFocus = panelHasFocus
+        panelHasFocus = false
+
+        guard hadPanelFocus, openPanel != nil, panelEntersFocus else { return }
+
+        panelFocusExitTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: Self.panelFocusExitCloseDelayNanoseconds)
+            guard !Task.isCancelled else { return }
+            guard openPanel != nil, panelEntersFocus, !panelHasFocus, !isTopMenuFocused else { return }
+            closePanelForContentHandoff()
+        }
+    }
+
+    private func closePanelForContentHandoff() {
+        guard openPanel != nil else { return }
+        panelFocusExitTask?.cancel()
+        panelFocusExitTask = nil
+        withAnimation(reduceMotion ? nil : .easeOut(duration: ContinuumTheme.Skyline.cascadeScrimDuration)) {
+            openPanel = nil
+        }
+        panelEntersFocus = false
+        panelHasFocus = false
+        suppressTopMenuFocusForContentHandoff()
+    }
+
     /// Commit a cascade selection (§5.3, §F): set + persist the tab scope,
     /// preselect the pill (Recommended for a library-row press; the chosen
     /// section for a flyout-row press), select the tab, and tear the panel
     /// down. The page swaps in place via the scope/pill change + the
     /// existing `.id(activeLibrary.id)` crossfade.
     private func commitScope(type: TVLibraryTabType, library: Library, pill: TVLibraryPill?) {
+        panelFocusExitTask?.cancel()
+        panelFocusExitTask = nil
         scopeSelections[type] = library.id
         TVLibraryScopeStore.shared.setSelectedLibraryId(library.id, for: type)
         pillSelections[type] = pill ?? .recommended
