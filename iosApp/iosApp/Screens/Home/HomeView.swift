@@ -82,7 +82,7 @@ struct HomeView: View {
                 .ignoresSafeArea()
 
             Group {
-                if !viewModel.sections.isEmpty {
+                if !displayedSections.isEmpty {
                     scrollContent
                 } else if let error = viewModel.error {
                     ErrorView(state: error, onRetry: { Task { await viewModel.loadSections() } })

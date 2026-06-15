@@ -347,7 +347,7 @@ struct LibraryRecommendedView: View {
     var body: some View {
         ZStack(alignment: .top) {
             Group {
-                if !viewModel.sections.isEmpty {
+                if !viewModel.regularSections.isEmpty {
                     content
                 } else if let error = viewModel.error {
                     ErrorView(state: error, onRetry: { Task { await viewModel.loadSections(libraryId: libraryId) } })
