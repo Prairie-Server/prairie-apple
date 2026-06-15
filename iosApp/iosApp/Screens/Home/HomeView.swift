@@ -4,9 +4,9 @@ extension Notification.Name {
     static let homeSectionsShouldRefresh = Notification.Name("homeSectionsShouldRefresh")
 }
 
-/// Main home screen. iOS/macOS keep the featured carousel above the
-/// section rows; tvOS replaced it with the Skyline focus marquee (§5.4) —
-/// a passive billboard previewing whichever card holds focus.
+/// Main home screen. iOS/macOS render resume-first section rows on a flat
+/// background; tvOS uses the Skyline focus marquee (§5.4) — a passive
+/// billboard previewing whichever card holds focus.
 struct HomeView: View {
     var homeFocusRequest: Int = 0
     /// tvOS-only: whether the custom top menu holds focus. Deferred entry
@@ -22,37 +22,27 @@ struct HomeView: View {
     @State private var recommendationsViewModel = RecommendationsViewModel()
     #endif
     #if !os(tvOS)
-    @State private var heroTintColor: Color = .continuumBackground
-    @State private var heroBackdropURL: String?
-    @State private var heroBackdropThumbhash: String?
     @State private var currentProfile: UserProfile?
     @State private var homeScrollOffset: CGFloat = 0
     @State private var isRefreshing = false
     @State private var refreshStartedAt: Date?
     @State private var refreshHideTask: Task<Void, Never>?
     private let chromeFadeDistance: CGFloat = 72
+    #if os(iOS)
+    /// Pull the floating header up into the unused safe-area band beside the
+    /// Dynamic Island. The logo sits on the left and the action icons on the
+    /// right, so the centered island and status-bar glyphs are never overlapped.
+    private let headerTopReclaim: CGFloat = 16
+    #endif
     #endif
     @Environment(AppRouter.self) private var router
-    @Environment(AudioPlaybackStore.self) private var audioStore
-
-    #if !os(tvOS)
-    /// How far the blurred page backdrop extends below the hero's
-    /// visible bottom edge. The extra vertical room lets the image's
-    /// mask finish its fade well after the carousel's cards end, so
-    /// there's no seam where the poster stops and the rest of the
-    /// page begins.
-    private let heroBackdropFadeExtension: CGFloat = 260
-
-    private let heroBackdropHorizontalBleed: CGFloat = 0
-    #endif
 
     var body: some View {
-        // On iOS the top bar overlays the hero backdrop — the scroll content
-        // extends behind the status bar and the header floats on top with a
-        // semi-transparent fill. On tvOS the app-level top bar (owned by
-        // `TVMainTabView`) handles profile + utility actions; Home renders
-        // the focus marquee over rows, with the backdrop tracking whichever
-        // card holds focus (§5.4).
+        // On iOS the header floats over the scroll content, which extends
+        // behind the status bar with a semi-transparent fill. On tvOS the
+        // app-level top bar (owned by `TVMainTabView`) handles profile +
+        // utility actions; Home renders the focus marquee over rows, with
+        // the backdrop tracking whichever card holds focus (§5.4).
         #if os(tvOS)
         // The shared Skyline feed — the exact same layout component the
         // library Browse tabs use, so Home and the library pages are
@@ -94,38 +84,38 @@ struct HomeView: View {
         }
         #else
         ZStack(alignment: .top) {
-            heroTintBackground
-            heroBackdropImage
+            Color.continuumBackground
+                .ignoresSafeArea()
 
             Group {
-                if viewModel.sections.isEmpty {
-                    if let error = viewModel.error {
-                        ErrorView(state: error, onRetry: { Task { await viewModel.loadSections() } })
-                    } else {
-                        Color.clear
-                    }
+                if !displayedSections.isEmpty {
+                    scrollContent
+                } else if let error = viewModel.error {
+                    ErrorView(state: error, onRetry: { Task { await viewModel.loadSections() } })
+                } else if viewModel.isLoading {
+                    Color.clear
                 } else {
-                    content
+                    EmptyStateView(
+                        icon: "play.rectangle.on.rectangle",
+                        title: "Nothing to watch yet",
+                        subtitle: "Add media to your libraries or start watching to see it here."
+                    )
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // Let the scroll content (and the hero backdrop inside it) extend
-            // up behind the status bar so the overlay header reads as floating
-            // on top of the image.
             .ignoresSafeArea(edges: .top)
 
             HStack(spacing: 12) {
                 SidebarToggleButton()
 
-                Text("Home")
-                    .font(.continuumTitle)
-                    .foregroundColor(.continuumOnSurface)
+                SiloWordmarkView(width: 72)
 
                 Spacer(minLength: 8)
 
                 TabTopBarActions(
                     profile: currentProfile,
                     onSearch: { router.navigate(to: .search) },
+                    onOpenSettings: { router.navigate(to: .settings) },
                     onSwitchProfile: {
                         AuthService.shared.profileId = nil
                         router.showProfileSelection()
@@ -135,7 +125,9 @@ struct HomeView: View {
                 )
             }
             .padding(.horizontal, ContinuumTheme.padding)
-            .padding(.top, ContinuumTheme.smallPadding)
+            #if os(iOS)
+            .padding(.top, -headerTopReclaim)
+            #endif
             .padding(.bottom, ContinuumTheme.smallPadding)
             .background {
                 homeHeaderChrome
@@ -164,161 +156,25 @@ struct HomeView: View {
         #endif
     }
 
-    #if !os(tvOS)
-    /// Plex-style page-level gradient. Starts at the sampled dominant
-    /// color of the active featured backdrop and fades into the OLED
-    /// black base. Because this layer sits behind the scroll view the
-    /// tint stretches beneath every row — the hero blends into the
-    /// rest of the screen instead of leaving a seam where the ambient
-    /// backdrop stops.
-    private var heroTintBackground: some View {
-        LinearGradient(
-            stops: [
-                .init(color: heroTintColor, location: 0.0),
-                .init(color: heroTintColor.opacity(0.55), location: 0.35),
-                .init(color: .continuumBackground, location: 0.8),
-                .init(color: .continuumBackground, location: 1.0),
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
-        .animation(.easeInOut(duration: 0.55), value: heroTintColor)
-        .ignoresSafeArea()
-    }
-
-    /// Blurred full-bleed backdrop that lives at the page level so it
-    /// can extend past the hero's height. The mask fades the image
-    /// out gradually into the `heroTintBackground` gradient below, so
-    /// there's no hard edge where the poster ends.
-    @ViewBuilder
-    private var heroBackdropImage: some View {
-        let totalHeight = computedHeroHeight + heroBackdropFadeExtension
-        GeometryReader { geometry in
-            let visibleWidth = geometry.size.width
-            let paintedWidth = visibleWidth + heroBackdropHorizontalBleed
-
-            Color.clear
-                .frame(width: visibleWidth, height: totalHeight, alignment: .top)
-                .overlay(alignment: .top) {
-                    ZStack(alignment: .top) {
-                        if let url = heroBackdropURL, !url.isEmpty {
-                            AsyncImageView(
-                                url: url,
-                                thumbhash: heroBackdropThumbhash,
-                                targetSize: CGSize(width: paintedWidth, height: totalHeight),
-                                contentMode: .fill
-                            )
-                            .id(url)
-                            .frame(width: paintedWidth, height: totalHeight, alignment: .top)
-                            .scaleEffect(1.04)
-                            .blur(radius: 22)
-                            .transition(.opacity.animation(.easeInOut(duration: 0.55)))
-
-                            Rectangle()
-                                .fill(Color.black.opacity(0.34))
-                                .frame(width: paintedWidth, height: totalHeight)
-
-                            LinearGradient(
-                                colors: [.black.opacity(0.54), .clear],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                            .frame(height: 140)
-                            .frame(width: paintedWidth, alignment: .top)
-                        }
-                    }
-                    .frame(width: paintedWidth, height: totalHeight, alignment: .top)
-                    .mask {
-                        heroBackdropFadeMask
-                            .frame(width: paintedWidth, height: totalHeight)
-                    }
-                }
-        }
-        .frame(height: totalHeight, alignment: .top)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .ignoresSafeArea(edges: [.top, .horizontal])
-        .allowsHitTesting(false)
-    }
-
-    private var heroBackdropFadeMask: some View {
-        LinearGradient(
-            stops: [
-                .init(color: .black, location: 0.0),
-                .init(color: .black, location: 0.42),
-                .init(color: Color.black.opacity(0.7), location: 0.66),
-                .init(color: Color.black.opacity(0.25), location: 0.86),
-                .init(color: .clear, location: 1.0),
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
-    }
-
-    /// Mirrors `FeaturedCarousel.preferredHeroHeight` so the page-level
-    /// backdrop image knows how tall to draw before the fade region
-    /// starts. Keep these in sync.
-    private var computedHeroHeight: CGFloat {
-        let screenWidth = PlatformScreen.mainBounds.width
-        let screenHeight = PlatformScreen.mainBounds.height
-        let widthDriven = max(420, min(screenWidth * 1.16, 580))
-        return min(widthDriven, screenHeight * 0.72)
-    }
-    #endif
-
     // MARK: - Content
 
     #if !os(tvOS)
-    @ViewBuilder
-    private var content: some View {
-        if viewModel.sections.isEmpty {
-            if let error = viewModel.error {
-                ErrorView(state: error, onRetry: { Task { await viewModel.loadSections() } })
-            } else {
-                Color.clear
-            }
-        } else {
-            scrollContent
-        }
-    }
-
     private var scrollContent: some View {
         GeometryReader { geometry in
             ScrollView(.vertical, showsIndicators: false) {
                 LazyVStack(spacing: sectionSpacing, pinnedViews: []) {
-                    // Featured carousel
-                    if let featured = viewModel.featuredSection {
-                        FeaturedCarousel(
-                            items: featured.items,
-                            onItemTap: { navigateToDetail($0) },
-                            onPlayTap: { navigateToPlayer($0) },
-                            prefersDefaultFocus: true,
-                            onBackdropTintChange: { heroTintColor = $0 },
-                            onBackdropArtworkChange: { url, thumbhash in
-                                withAnimation(.easeInOut(duration: 0.65)) {
-                                    heroBackdropURL = url
-                                    heroBackdropThumbhash = thumbhash
-                                }
-                            },
-                            rendersAmbientBackdrop: false,
-                            focusRequest: homeFocusRequest,
-                            onMoveUp: onTopMenuFocusRequest
-                        )
-                        .id(HomeFocusTarget.featured)
-                    } else {
-                        // No hero → reserve enough runway for the floating
-                        // Home header so the first row doesn't slide under
-                        // the status bar chrome on phones.
-                        Color.clear.frame(height: noFeaturedTopSpacing(topSafeAreaInset: geometry.safeAreaInsets.top))
-                            .id(HomeFocusTarget.noFeaturedTopSpacer)
-                    }
+                    // No hero — reserve runway for the floating Home header so
+                    // the first row doesn't slide under the status-bar chrome.
+                    Color.clear
+                        .frame(height: topRunwaySpacing(topSafeAreaInset: geometry.safeAreaInsets.top))
+                        .id(HomeFocusTarget.topSpacer)
 
-                    // Regular sections
                     ForEach(Array(displayedSections.enumerated()), id: \.element.id) { index, section in
                         SectionRow(
                             section: section,
                             onItemTap: { navigateToDetail($0) },
                             prefersDefaultFocusOnFirstItem: index == 0,
-                            onMoveUp: viewModel.featuredSection == nil && index == 0 ? onTopMenuFocusRequest : nil
+                            onMoveUp: index == 0 ? onTopMenuFocusRequest : nil
                         )
                         .id(HomeFocusTarget.row(section.id))
                     }
@@ -337,8 +193,7 @@ struct HomeView: View {
     #endif
 
     private enum HomeFocusTarget: Hashable {
-        case featured
-        case noFeaturedTopSpacer
+        case topSpacer
         case row(String)
     }
 
@@ -470,26 +325,17 @@ struct HomeView: View {
     }
 
     #if !os(tvOS)
-    /// Hero-card play action. tvOS has no carousel anymore — pressing a
-    /// focused card opens it via `onItemTap`, and resume lives on detail.
-    private func navigateToPlayer(_ item: SectionItem) {
-        if item.isAudiobook {
-            audioStore.play(contentId: item.contentId)
-            return
-        }
-
-        router.presentPlayer(contentId: item.contentId)
-    }
-    #endif
-
-    #if !os(tvOS)
     private var sectionSpacing: CGFloat {
         ContinuumTheme.largePadding
     }
 
-    private func noFeaturedTopSpacing(topSafeAreaInset: CGFloat) -> CGFloat {
-        let headerContentHeight: CGFloat = 40 + (ContinuumTheme.smallPadding * 2)
-        return topSafeAreaInset + headerContentHeight + ContinuumTheme.largePadding + ContinuumTheme.smallPadding
+    private func topRunwaySpacing(topSafeAreaInset: CGFloat) -> CGFloat {
+        let headerContentHeight: CGFloat = 40 + ContinuumTheme.smallPadding
+        var runway = topSafeAreaInset + headerContentHeight + ContinuumTheme.largePadding + ContinuumTheme.smallPadding
+        #if os(iOS)
+        runway -= headerTopReclaim
+        #endif
+        return runway
     }
     #endif
 }

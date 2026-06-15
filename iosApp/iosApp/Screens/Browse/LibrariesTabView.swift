@@ -16,12 +16,12 @@ struct LibrariesTabView: View {
     @State private var currentProfile: UserProfile?
     /// How far the Recommended tab has been scrolled from the top (in pt).
     /// Drives the fade-in of the chrome scrim so the header is fully
-    /// transparent while the hero is at rest, then matches the current
-    /// gradient once the user scrolls past the hero's top edge.
+    /// transparent at the resting top, then matches the current gradient
+    /// once the user scrolls the rows up behind the top bar.
     @State private var recommendedScrollOffset: CGFloat = 0
 
     /// Distance (pt) over which the chrome scrim fades in as the user
-    /// scrolls away from the resting hero. Chosen to feel responsive without
+    /// scrolls away from the resting top. Chosen to feel responsive without
     /// flickering on tiny rubber-band movements.
     private let chromeScrimFadeDistance: CGFloat = 80
 
@@ -73,10 +73,7 @@ struct LibrariesTabView: View {
     private func loadedContent(activeLibrary: Library) -> some View {
         // Switch tab content directly here (rather than going through
         // `LibraryDetailView`) so we can hoist the top bar + tab selector
-        // into a single `safeAreaInset` overlay. That lets the Recommended
-        // tab's featured carousel ignore the top safe area and render its
-        // backdrop all the way up behind the chrome, while Library/
-        // Collections keep their normal layout below it.
+        // into a single `safeAreaInset` overlay shared by all three tabs.
         tabContent(activeLibrary: activeLibrary)
             // Forces the whole tab subtree to reset when switching
             // libraries, so stale content never flashes on screen.
@@ -92,7 +89,6 @@ struct LibrariesTabView: View {
         case .recommended:
             LibraryRecommendedView(
                 libraryId: activeLibrary.id,
-                extendsBackdropToTop: true,
                 onScrollOffsetChange: { recommendedScrollOffset = $0 }
             )
         case .library:
@@ -102,8 +98,8 @@ struct LibrariesTabView: View {
         }
     }
 
-    /// Opacity applied to the Recommended-tab chrome scrim. 0 while the hero
-    /// is at rest (header is fully transparent); climbs linearly to 1 once
+    /// Opacity applied to the Recommended-tab chrome scrim. 0 at the resting
+    /// top (header is fully transparent); climbs linearly to 1 once
     /// the user has scrolled `chromeScrimFadeDistance` past the top.
     private var chromeScrimOpacity: Double {
         guard selectedTab == .recommended else { return 0 }
@@ -120,6 +116,7 @@ struct LibrariesTabView: View {
                 profile: currentProfile,
                 onLibraryTap: { showPicker = true },
                 onSearch: { router.navigate(to: .search) },
+                onOpenSettings: { router.navigate(to: .settings) },
                 onSwitchProfile: {
                     AuthService.shared.profileId = nil
                     router.showProfileSelection()
@@ -134,10 +131,9 @@ struct LibrariesTabView: View {
             LibraryPageTabSelector(selectedTab: $selectedTab)
                 .padding(.bottom, ContinuumTheme.padding)
         }
-        // On the Recommended tab the chrome sits over the featured carousel
-        // backdrop. The scrim is fully transparent while the hero is at
-        // rest and fades in as the user scrolls, so the header reads as
-        // part of the artwork until movement starts.
+        // On the Recommended tab the chrome sits over the scrolling rows.
+        // The scrim is transparent at rest and fades in as the user scrolls,
+        // so rows passing behind the top bar stay legible.
         .background {
             if selectedTab == .recommended {
                 LinearGradient(
@@ -219,6 +215,7 @@ private struct LibrariesTopBar: View {
     let profile: UserProfile?
     let onLibraryTap: () -> Void
     let onSearch: () -> Void
+    let onOpenSettings: () -> Void
     let onSwitchProfile: () -> Void
     let onSwitchServer: () -> Void
     let onSignOut: () -> Void
@@ -238,6 +235,7 @@ private struct LibrariesTopBar: View {
             TabTopBarActions(
                 profile: profile,
                 onSearch: onSearch,
+                onOpenSettings: onOpenSettings,
                 onSwitchProfile: onSwitchProfile,
                 onSwitchServer: onSwitchServer,
                 onSignOut: onSignOut

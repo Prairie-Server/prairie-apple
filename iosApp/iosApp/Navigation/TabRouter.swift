@@ -25,11 +25,16 @@ enum AppTab: String, CaseIterable, Identifiable {
     /// Search as a top-level tab because the 10-foot UI has no top-bar
     /// search icon and focus-driven navigation benefits from a direct route.
     /// Profile / Server switchers are tvOS-only sidebar shortcuts.
+    ///
+    /// iOS/iPadOS/macOS also exclude Settings — it's reached from the
+    /// top-bar profile menu (`TabTopBarActions`) rather than a tab, so the
+    /// bottom bar / sidebar stays focused on content destinations. tvOS
+    /// keeps Settings as a top-level item for its 10-foot navigation.
     static var visibleCases: [AppTab] {
         #if os(tvOS)
         return [.home, .libraries, .search, .recommendations, .settings, .switchProfile, .switchServer]
         #else
-        return [.home, .libraries, .recommendations, .calendar, .settings]
+        return [.home, .libraries, .recommendations, .calendar]
         #endif
     }
 

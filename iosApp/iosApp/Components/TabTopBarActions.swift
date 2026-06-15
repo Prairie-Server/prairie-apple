@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The shared right-hand action cluster used at the top of tab-root screens:
-/// Search and a profile-avatar menu with Switch Profile / Sign Out.
+/// Search and a profile-avatar menu with Settings / Switch Profile / Sign Out.
 ///
 /// Each tab renders its own leading content (e.g. library selector on the
 /// Libraries tab, a static title on Home) and places this view on the
@@ -9,6 +9,7 @@ import SwiftUI
 struct TabTopBarActions: View {
     let profile: UserProfile?
     let onSearch: () -> Void
+    let onOpenSettings: () -> Void
     let onSwitchProfile: () -> Void
     let onSwitchServer: () -> Void
     let onSignOut: () -> Void
@@ -18,6 +19,7 @@ struct TabTopBarActions: View {
             TopBarIconButton(systemImage: "magnifyingglass", accessibilityLabel: "Search", action: onSearch)
             ProfileAvatarMenu(
                 profile: profile,
+                onOpenSettings: onOpenSettings,
                 onSwitchProfile: onSwitchProfile,
                 onSwitchServer: onSwitchServer,
                 onSignOut: onSignOut
@@ -47,16 +49,25 @@ private struct TopBarIconButton: View {
 
 /// Profile avatar rendered via `ProfileAvatarView` (which handles DiceBear
 /// presets, URLs, emojis, and initials uniformly). Wraps a Menu exposing
-/// Switch Profile / Sign Out so the user can manage their account without
-/// leaving the current tab.
+/// Settings / Switch Profile / Sign Out so the user can reach app settings
+/// and manage their account without leaving the current tab.
 private struct ProfileAvatarMenu: View {
     let profile: UserProfile?
+    let onOpenSettings: () -> Void
     let onSwitchProfile: () -> Void
     let onSwitchServer: () -> Void
     let onSignOut: () -> Void
 
     var body: some View {
         Menu {
+            Button {
+                onOpenSettings()
+            } label: {
+                Label("Settings", systemImage: "gearshape")
+            }
+
+            Divider()
+
             Button {
                 onSwitchProfile()
             } label: {

@@ -38,6 +38,10 @@ struct MediaCard: View {
     /// rows (§5.6) pass 208 so two rows + the marquee fit above the fold;
     /// the poster keeps its 2:3 ratio.
     var cardWidthOverride: CGFloat? = nil
+    /// "S2 · E10" badge drawn over the bottom-leading corner of the poster
+    /// for episodes rendered in a poster row (e.g. "Recently Released
+    /// Episodes"). `nil` for movies / series / audiobooks.
+    var episodeBadge: String? = nil
 
     @State private var playedOverride: Bool?
     @EnvironmentObject private var overlayStore: OverlayPrefsStore
@@ -126,6 +130,20 @@ struct MediaCard: View {
                     .clipShape(RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius))
             }
 
+            // Episode badge (e.g. "S2 · E10") for episodes shown as posters,
+            // so new episodes of the same series stay distinguishable.
+            if let episodeBadge {
+                Text(episodeBadge)
+                    .font(.continuumCaption)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, episodeBadgeHPadding)
+                    .padding(.vertical, episodeBadgeVPadding)
+                    .background(Capsule().fill(Color.black.opacity(0.65)))
+                    .padding(episodeBadgeInset)
+                    .frame(width: cardWidth, height: cardHeight, alignment: .bottomLeading)
+            }
+
             // Progress bar at bottom of poster (inside rounded corners)
             if let progress, progress > 0 {
                 VStack {
@@ -201,6 +219,30 @@ struct MediaCard: View {
     private var checkBadgePadding: CGFloat {
         #if os(tvOS)
         return 12
+        #else
+        return 6
+        #endif
+    }
+
+    private var episodeBadgeHPadding: CGFloat {
+        #if os(tvOS)
+        return 14
+        #else
+        return 8
+        #endif
+    }
+
+    private var episodeBadgeVPadding: CGFloat {
+        #if os(tvOS)
+        return 7
+        #else
+        return 4
+        #endif
+    }
+
+    private var episodeBadgeInset: CGFloat {
+        #if os(tvOS)
+        return 14
         #else
         return 6
         #endif
