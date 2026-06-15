@@ -172,12 +172,23 @@ private struct AuroraGhostBody: View {
     let configuration: ButtonStyle.Configuration
     @Environment(\.isFocused) private var isFocused
 
+    // tvOS uses 10-foot sizing; iOS/macOS need a normal tertiary-button scale.
+    #if os(tvOS)
+    private let fontSize: CGFloat = 22
+    private let hPadding: CGFloat = 22
+    private let vPadding: CGFloat = 12
+    #else
+    private let fontSize: CGFloat = 15
+    private let hPadding: CGFloat = 16
+    private let vPadding: CGFloat = 9
+    #endif
+
     var body: some View {
         configuration.label
-            .font(.system(size: 22, weight: .medium))
+            .font(.system(size: fontSize, weight: .medium))
             .foregroundStyle(isFocused ? Color.auroraNightBottom : Color.auroraInkSecondary)
-            .padding(.horizontal, 22)
-            .padding(.vertical, 12)
+            .padding(.horizontal, hPadding)
+            .padding(.vertical, vPadding)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(isFocused ? Color.auroraInk : Color.white.opacity(0.06))
