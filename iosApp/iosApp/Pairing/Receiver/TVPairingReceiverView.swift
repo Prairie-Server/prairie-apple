@@ -44,11 +44,11 @@ struct TVPairingReceiverView: View {
         VStack(spacing: 26) {
             AuroraEyebrow(text: "Step 01 — Connect", centered: true)
             Text("iPhone connected")
-                .font(.auroraSerif(52, .semibold))
+                .font(.continuumTitle)
                 .foregroundStyle(Color.auroraInk)
             WaitingDots()
             Text("Choose which servers to set up on your iPhone — they’ll appear here in a moment.")
-                .font(.system(size: 24))
+                .font(.continuumBody)
                 .foregroundStyle(Color.auroraInkSecondary)
                 .frame(maxWidth: 720)
             cancelButton(title: "Cancel")
@@ -62,7 +62,7 @@ struct TVPairingReceiverView: View {
         VStack(spacing: 24) {
             AuroraEyebrow(text: "Almost there", centered: true)
             Text("Confirm on your iPhone")
-                .font(.auroraSerif(52, .semibold))
+                .font(.continuumTitle)
                 .foregroundStyle(Color.auroraInk)
 
             matchCodeCard(matchCode)
@@ -73,7 +73,7 @@ struct TVPairingReceiverView: View {
                     .tracking(2)
                     .foregroundStyle(Color.auroraInkTertiary)
                 Text(serverName)
-                    .font(.system(size: 26, weight: .semibold))
+                    .font(.continuumSubheadline)
                     .foregroundStyle(Color.auroraInk)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -82,7 +82,7 @@ struct TVPairingReceiverView: View {
             HStack(spacing: 12) {
                 WaitingDots(compact: true)
                 Text("Waiting for approval on your iPhone — make sure it shows this same code.")
-                    .font(.system(size: 22))
+                    .font(.continuumCaption)
                     .foregroundStyle(Color.auroraInkSecondary)
             }
             .frame(maxWidth: 720)
@@ -94,7 +94,7 @@ struct TVPairingReceiverView: View {
 
     private func matchCodeCard(_ matchCode: String) -> some View {
         Text(matchCode)
-            .font(.system(size: 64, weight: .heavy, design: .rounded))
+            .font(.continuumPIN)
             .textCase(.uppercase)
             .tracking(2)
             .foregroundStyle(Color.auroraInk)
@@ -110,12 +110,12 @@ struct TVPairingReceiverView: View {
         VStack(spacing: 20) {
             successMark
             Text(count <= 1 ? "Signed in" : "Signed in to \(count) servers")
-                .font(.auroraSerif(46, .semibold))
+                .font(.continuumTitle)
                 .foregroundStyle(Color.auroraInk)
             HStack(spacing: 12) {
                 WaitingDots(compact: true)
                 Text("Finishing up on your iPhone…")
-                    .font(.system(size: 22))
+                    .font(.continuumCaption)
                     .foregroundStyle(Color.auroraInkSecondary)
             }
             cancelButton(title: "Cancel")
@@ -130,10 +130,10 @@ struct TVPairingReceiverView: View {
             AuroraEyebrow(text: "All set", centered: true)
             successMark
             Text("You’re all set")
-                .font(.auroraSerif(52, .semibold))
+                .font(.continuumTitle)
                 .foregroundStyle(Color.auroraInk)
             Text(completedSummary(serverNames))
-                .font(.system(size: 24))
+                .font(.continuumBody)
                 .foregroundStyle(Color.auroraInkSecondary)
                 .frame(maxWidth: 720)
 
@@ -168,10 +168,10 @@ struct TVPairingReceiverView: View {
                 .font(.system(size: 60))
                 .foregroundStyle(Color.auroraAccent)
             Text("Setup didn’t finish")
-                .font(.auroraSerif(52, .semibold))
+                .font(.continuumTitle)
                 .foregroundStyle(Color.auroraInk)
             Text("Something went wrong setting up \(name). Try again from your iPhone, or set up your server manually.")
-                .font(.system(size: 24))
+                .font(.continuumBody)
                 .foregroundStyle(Color.auroraInkSecondary)
                 .frame(maxWidth: 720)
 

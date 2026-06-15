@@ -26,17 +26,6 @@ extension Color {
     static var auroraInkTertiary: Color { auroraInk.opacity(0.40) }
 }
 
-// MARK: - Serif display type
-//
-// Uses the system serif (New York) shipped with tvOS — no bundled font. Pair
-// the serif for display/headlines with SF Pro for body and SF Mono for labels.
-
-extension Font {
-    static func auroraSerif(_ size: CGFloat, _ weight: Font.Weight = .semibold) -> Font {
-        .system(size: size, weight: weight, design: .serif)
-    }
-}
-
 // MARK: - Eyebrow (gold hairline + mono caps label)
 
 struct AuroraEyebrow: View {

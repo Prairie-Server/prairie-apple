@@ -67,8 +67,8 @@ struct TVPairingView: View {
 
     @ViewBuilder private func confirm(serverName: String, matchCode: String) -> some View {
         VStack(spacing: 24) {
-            Text("Does your Apple TV show this code?").font(.headline)
-            Text(matchCode).font(.system(size: 44, weight: .heavy, design: .rounded)).textCase(.uppercase)
+            Text("Does your Apple TV show this code?").font(.continuumHeadline)
+            Text(matchCode).font(.continuumPIN).textCase(.uppercase)
             Text("For \(serverName)").foregroundStyle(.secondary)
             HStack(spacing: 16) {
                 Button("Doesn’t match") { Task { await coordinator?.declineMatch() } }
@@ -82,7 +82,7 @@ struct TVPairingView: View {
     @ViewBuilder private func finished(signedIn: [String], failed: [String]) -> some View {
         VStack(spacing: 16) {
             Image(systemName: "checkmark.circle.fill").font(.largeTitle).foregroundStyle(.green)
-            Text(signedIn.isEmpty ? "Nothing set up" : "Set up \(signedIn.joined(separator: ", "))").font(.headline)
+            Text(signedIn.isEmpty ? "Nothing set up" : "Set up \(signedIn.joined(separator: ", "))").font(.continuumHeadline)
             if !failed.isEmpty { Text("Couldn’t set up: \(failed.joined(separator: ", "))").foregroundStyle(.secondary) }
             Button("Done") { close() }.buttonStyle(.borderedProminent)
         }.padding()

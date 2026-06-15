@@ -32,8 +32,8 @@ struct SetUpTVBannerModifier: ViewModifier {
         HStack(spacing: 12) {
             Image(systemName: "appletv.fill")
             VStack(alignment: .leading) {
-                Text("Set up \(tv.name)?").font(.subheadline.bold())
-                Text("Sign this Apple TV in from your iPhone").font(.caption).foregroundStyle(.secondary)
+                Text("Set up \(tv.name)?").font(.continuumSubheadline)
+                Text("Sign this Apple TV in from your iPhone").font(.continuumCaption).foregroundStyle(.secondary)
             }
             Spacer()
             Button("Set Up") { activeTV = tv }.buttonStyle(.borderedProminent).controlSize(.small)

@@ -182,7 +182,7 @@ struct ProfileSelectionView: View {
         VStack(spacing: 6) {
             #if os(tvOS)
             Text("Who's watching?")
-                .font(.auroraSerif(titleSize, .semibold))
+                .font(.system(size: titleSize, weight: .semibold))
                 .foregroundStyle(Color.auroraInk)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)

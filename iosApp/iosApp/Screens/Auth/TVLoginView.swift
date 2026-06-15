@@ -3,7 +3,7 @@ import SwiftUI
 import UIKit
 
 /// Phone-first sign-in for tvOS (Aurora). The screen leads with the QR
-/// device-login pairing so the viewer never types on the remote: a serif
+/// device-login pairing so the viewer never types on the remote: a bold
 /// hero + numbered steps on the left, a glass panel with the live QR and
 /// match code on the right. An on-screen username/password form is one
 /// focus-step away as the fallback. A device-login session is started
@@ -62,7 +62,7 @@ struct TVLoginView: View {
             SiloWordmarkView(width: 132)
             if let host = hostLabel {
                 Text(host)
-                    .font(.system(size: 18, weight: .regular))
+                    .font(.continuumCaption)
                     .foregroundStyle(Color.auroraInkTertiary)
             }
             Spacer(minLength: 0)
@@ -91,13 +91,13 @@ struct TVLoginView: View {
         VStack(alignment: .leading, spacing: 0) {
             AuroraEyebrow(text: "Step 02 — Sign in")
             (Text("Sign in with\nyour ") + Text("phone").italic() + Text("."))
-                .font(.auroraSerif(80, .semibold))
+                .font(.continuumHeroTitle)
                 .foregroundStyle(Color.auroraInk)
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 24)
             Text("Point your phone at the code, confirm the number, then approve. Nothing to type on the remote.")
-                .font(.system(size: 27, weight: .regular))
+                .font(.continuumBody)
                 .foregroundStyle(Color.auroraInkSecondary)
                 .lineSpacing(4)
                 .frame(maxWidth: 720, alignment: .leading)
@@ -124,7 +124,7 @@ struct TVLoginView: View {
                     .progressViewStyle(CircularProgressViewStyle(tint: Color.auroraAccent))
                     .scaleEffect(0.95)
                 Text(statusText)
-                    .font(.system(size: 22, weight: .regular))
+                    .font(.continuumCaption)
                     .foregroundStyle(Color.auroraInkSecondary)
                     .monospacedDigit()
             }
@@ -208,10 +208,10 @@ struct TVLoginView: View {
                     .font(.system(size: 40, weight: .semibold))
                     .foregroundStyle(Color.continuumError)
                 Text("Pairing code unavailable")
-                    .font(.system(size: 24, weight: .semibold))
+                    .font(.continuumSubheadline)
                     .foregroundStyle(Color.auroraInk)
                 Text(message)
-                    .font(.system(size: 20))
+                    .font(.continuumCaption)
                     .foregroundStyle(Color.auroraInkSecondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
@@ -275,7 +275,7 @@ struct TVLoginView: View {
             VStack(alignment: .leading, spacing: 24) {
                 AuroraEyebrow(text: "Step 02 — Sign in")
                 Text("Sign in")
-                    .font(.auroraSerif(52, .semibold))
+                    .font(.continuumTitle)
                     .foregroundStyle(Color.auroraInk)
 
                 fieldGroup(label: "Username") {

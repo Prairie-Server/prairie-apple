@@ -94,7 +94,7 @@ struct TVServerSetupView: View {
             VStack(spacing: 14) {
                 AuroraEyebrow(text: "Step 01 — Connect", centered: true)
                 Text("Add your server")
-                    .font(.auroraSerif(52, .semibold))
+                    .font(.continuumTitle)
                     .foregroundStyle(Color.auroraInk)
             }
         }
@@ -119,10 +119,10 @@ struct TVServerSetupView: View {
                 .frame(maxWidth: .infinity, alignment: .center)
             Spacer(minLength: 20)
             Text("Looking for your iPhone…")
-                .font(.system(size: 32, weight: .semibold))
+                .font(.continuumHeadline)
                 .foregroundStyle(Color.auroraInk)
             Text("Open Silo on your iPhone on the same Wi-Fi. It’ll offer to set up this Apple TV — the address and your account come across automatically.")
-                .font(.system(size: 22, weight: .regular))
+                .font(.continuumBody)
                 .foregroundStyle(Color.auroraInkSecondary)
                 .lineSpacing(4)
                 .fixedSize(horizontal: false, vertical: true)
@@ -168,7 +168,7 @@ struct TVServerSetupView: View {
     private var manualCard: some View {
         VStack(alignment: .leading, spacing: 22) {
             Text("Enter it here")
-                .font(.system(size: 32, weight: .semibold))
+                .font(.continuumHeadline)
                 .foregroundStyle(Color.auroraInk)
 
             VStack(alignment: .leading, spacing: 10) {
