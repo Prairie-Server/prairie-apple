@@ -18,6 +18,7 @@ struct CompanionPairingCard: View {
     private let accent = Color.blue
 
     @State private var coordinator: CompanionPairingCoordinator?
+    @State private var startupTask: Task<Void, Never>?
     @State private var selection: Set<String> = []
     @State private var started = false
     @State private var appeared = false
@@ -40,7 +41,11 @@ struct CompanionPairingCard: View {
         .onAppear {
             withAnimation(.spring(response: 0.45, dampingFraction: 0.85)) { appeared = true }
         }
-        .onDisappear { Task { await coordinator?.cancel() } }
+        .onDisappear {
+            startupTask?.cancel()
+            startupTask = nil
+            Task { await coordinator?.cancel() }
+        }
     }
 
     // MARK: - Card shell
@@ -253,9 +258,14 @@ struct CompanionPairingCard: View {
 
     private func setUp() {
         started = true
-        Task {
+        startupTask?.cancel()
+        startupTask = Task {
             let session = PairingSession(endpoint: tv.endpoint)
             let stream = await session.open()
+            guard !Task.isCancelled else {
+                await session.close()
+                return
+            }
             let coordinator = CompanionPairingCoordinator(session: session, stream: stream)
             self.coordinator = coordinator
             await coordinator.begin()
