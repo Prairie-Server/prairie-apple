@@ -30,19 +30,25 @@ struct SectionRow: View {
         section.sectionType == "continue_watching" || section.sectionType == "in_progress"
     }
 
-    /// True when the section has a dedicated "next up / up next" type,
-    /// or when every item in it is an episode (series-centric row).
+    private var hasEpisodeItems: Bool {
+        section.items.contains(where: { $0.type.lowercased() == "episode" })
+    }
+
+    /// True when the row should render 16:9 episode stills instead of posters.
+    /// A dedicated "Next Up" row always does. For other episode-bearing rows
+    /// the platforms differ: tvOS Skyline keeps every episode row as a still,
+    /// while iOS/iPadOS/macOS reserve stills for the resume context (Continue
+    /// Watching) and render episode-discovery rows (e.g. "Recently Released
+    /// Episodes") as ordinary series posters with an S·E badge.
     private var isEpisodeRow: Bool {
-        let t = section.sectionType.lowercased()
-        if t.contains("next") || t.contains("up_next") || t.contains("next_up") {
+        if section.sectionType.lowercased().contains("next") {
             return true
         }
-        // If ANY item is an episode, treat the row as episode-centric so the
-        // thumbnails use the 16:9 still instead of a poster.
-        if section.items.contains(where: { $0.type.lowercased() == "episode" }) {
-            return true
-        }
-        return false
+        #if os(tvOS)
+        return hasEpisodeItems
+        #else
+        return isContinueWatching && hasEpisodeItems
+        #endif
     }
 
     /// Audiobook covers are square, so rows made entirely of audiobooks

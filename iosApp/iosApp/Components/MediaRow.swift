@@ -124,7 +124,7 @@ struct MediaRow: View {
                     switch layout {
                     case .poster, .square:
                         MediaCard(
-                            title: item.title,
+                            title: posterTitle(for: item),
                             posterUrl: item.posterUrl ?? "",
                             thumbhash: item.posterThumbhash,
                             year: item.year,
@@ -137,7 +137,8 @@ struct MediaRow: View {
                             onRemoveFromContinueWatching: continueWatchingRemovalAction(for: item),
                             onSetWatched: watchedToggleAction(for: item),
                             aspect: layout == .square ? .square : .poster,
-                            cardWidthOverride: cardWidth
+                            cardWidthOverride: cardWidth,
+                            episodeBadge: episodeBadge(for: item)
                         )
                     case .thumbnail:
                         EpisodeThumbCard(
@@ -198,6 +199,21 @@ struct MediaRow: View {
     private func watchedToggleAction(for item: SectionItem) -> ((Bool) -> Void)? {
         guard let onSetWatched else { return nil }
         return { played in onSetWatched(item, played) }
+    }
+
+    /// Caption for a poster card. Episodes are captioned with the series name
+    /// — the bare `title` is the episode title (often "TBA" when unannounced).
+    private func posterTitle(for item: SectionItem) -> String {
+        item.type.lowercased() == "episode" ? (item.seriesTitle ?? item.title) : item.title
+    }
+
+    /// "S2 · E10" badge for an episode rendered as a poster, so new episodes
+    /// of the same series stay distinguishable. `nil` for non-episodes.
+    private func episodeBadge(for item: SectionItem) -> String? {
+        guard item.type.lowercased() == "episode",
+              let season = item.seasonNumber,
+              let episode = item.episodeNumber else { return nil }
+        return "S\(season) · E\(episode)"
     }
 
     // MARK: - Metrics
