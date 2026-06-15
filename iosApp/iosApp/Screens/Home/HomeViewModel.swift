@@ -13,12 +13,11 @@ class HomeViewModel {
     var isRefreshing = false
     var error: ErrorState?
 
-    /// Featured section (first section if marked as featured).
-    var featuredSection: ResolvedSection? {
-        sections.first(where: { $0.isFeatured })
-    }
-
-    /// Non-featured sections for the vertical list (filtered to non-empty).
+    /// Sections for the vertical list, filtered to non-empty. `featured`
+    /// sections are intentionally excluded — the resume-first Home drops the
+    /// server's featured section entirely (matching tvOS Skyline) rather than
+    /// surfacing it as a hero. See
+    /// docs/superpowers/specs/2026-06-15-resume-first-home-design.md.
     var regularSections: [ResolvedSection] {
         sections.filter { !$0.isFeatured && !$0.items.isEmpty }
     }
