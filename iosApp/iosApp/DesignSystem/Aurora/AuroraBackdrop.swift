@@ -1,4 +1,3 @@
-#if os(tvOS)
 import SwiftUI
 
 // MARK: - Variants
@@ -162,5 +161,3 @@ private struct SeededRNG {
         return Double(state >> 11) / Double(1 << 53)
     }
 }
-
-#endif
