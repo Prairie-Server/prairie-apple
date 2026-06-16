@@ -256,11 +256,12 @@ final class TVCastReceiver {
 
     private func closeActiveSession(sendClose: Bool) {
         let session = activeSession
-        if sendClose, let session {
-            Task { try? await session.send(.close) }
-        }
         if let session {
-            Task { await session.close() }
+            if sendClose {
+                Task { await session.closeGracefully() }
+            } else {
+                Task { await session.close() }
+            }
         }
         activeSession = nil
         activeConnectionId = nil

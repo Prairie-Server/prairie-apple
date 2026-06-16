@@ -123,6 +123,18 @@ actor SiloCastSession {
         teardown(nil)
     }
 
+    /// Enqueue a final `.close` (ordered after any pending sends), then tear
+    /// down after a brief flush window. Bounded so a wedged connection can't
+    /// leak the session.
+    func closeGracefully() {
+        guard isOpen else { return }
+        enqueue(.close)
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            await self?.close()
+        }
+    }
+
     private func teardown(_ error: Error?) {
         guard isOpen else { return }
         isOpen = false

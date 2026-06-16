@@ -140,12 +140,7 @@ final class SiloCastController {
 
     func disconnect() {
         let session = self.session
-        Task {
-            if let session {
-                try? await session.send(.close)
-                await session.close()
-            }
-        }
+        Task { await session?.closeGracefully() }
         clearSession()
     }
 
