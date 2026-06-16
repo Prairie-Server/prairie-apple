@@ -67,16 +67,50 @@ struct SiloCastRemoteControlView: View {
 
     @ViewBuilder
     private var content: some View {
-        if let state = controller.state {
+        if controller.isReconnecting {
+            statusView(title: "Reconnecting…", showSpinner: true)
+        } else if let state = controller.state, state.contentId == nil {
+            idleConnectedView(state: state)
+        } else if let state = controller.state {
             RemoteNowPlayingContent(
                 state: state,
+                clock: controller.clock,
                 targetName: controller.activeTarget?.name,
                 posterURL: artwork.posterURL ?? artwork.backdropURL,
-                onCommand: { controller.send($0) }
+                onCommand: { controller.send($0) },
+                onTogglePlayPause: { controller.togglePlayPauseOptimistic() },
+                onSeek: { controller.seekOptimistic(to: $0) },
+                onPlayNext: { controller.playNext() },
+                onSetVolume: { controller.setVolume($0) },
+                onSetMuted: { controller.setMuted($0) }
             )
         } else {
             connectingView
         }
+    }
+
+    private func idleConnectedView(state: SiloCastPlaybackState) -> some View {
+        VStack(spacing: 18) {
+            Image(systemName: "airplayvideo")
+                .font(.system(size: 44, weight: .medium))
+                .foregroundStyle(Color.continuumOnSurface)
+            Text("Connected to \(controller.activeTarget?.name ?? "Silo TV")")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(Color.continuumOnSurface)
+            Text("Pick something from your library to start playing.")
+                .font(.subheadline)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(Color.continuumSecondaryText)
+        }
+        .padding(32)
+    }
+
+    private func statusView(title: String, showSpinner: Bool) -> some View {
+        VStack(spacing: 14) {
+            if showSpinner { ProgressView() }
+            Text(title).font(.headline).foregroundStyle(Color.continuumSecondaryText)
+        }
+        .padding(32)
     }
 
     private var connectingView: some View {
@@ -107,9 +141,15 @@ struct SiloCastRemoteControlView: View {
 /// previews with mock `SiloCastPlaybackState`.
 private struct RemoteNowPlayingContent: View {
     let state: SiloCastPlaybackState
+    let clock: RemotePlaybackClock
     let targetName: String?
     let posterURL: String?
     let onCommand: (SiloCastControlCommand) -> Void
+    let onTogglePlayPause: () -> Void
+    let onSeek: (Double) -> Void
+    let onPlayNext: () -> Void
+    let onSetVolume: (Double) -> Void
+    let onSetMuted: (Bool) -> Void
 
     @State private var scrubPreview: Double?
     private let speedOptions: [Double] = [0.75, 1.0, 1.25, 1.5, 2.0]
@@ -123,6 +163,7 @@ private struct RemoteNowPlayingContent: View {
             playingOnPill.padding(.top, 10)
             scrubber.padding(.top, 22)
             transport.padding(.top, 18)
+            volumeRow.padding(.top, 18)
             Spacer(minLength: 16)
             secondaryControls
             if let error = state.error, !error.isEmpty {
@@ -188,91 +229,119 @@ private struct RemoteNowPlayingContent: View {
     }
 
     private var scrubber: some View {
-        VStack(spacing: 8) {
-            Slider(
-                value: Binding(
-                    get: { scrubPreview ?? state.currentTime },
-                    set: { scrubPreview = $0 }
-                ),
-                in: 0...max(state.duration, 1),
-                onEditingChanged: { editing in
-                    guard !editing, let scrubPreview else { return }
-                    onCommand(.seek(seconds: scrubPreview))
-                    self.scrubPreview = nil
-                }
-            )
-            .tint(Color.continuumOnSurface)
-            .disabled(state.duration <= 0)
-            .accessibilityLabel("Playback position")
+        TimelineView(.periodic(from: .now, by: 0.25)) { ctx in
+            let live = scrubPreview ?? clock.displayTime(asOf: ctx.date)
+            VStack(spacing: 8) {
+                Slider(
+                    value: Binding(get: { live }, set: { scrubPreview = $0 }),
+                    in: 0...max(state.duration, 1),
+                    onEditingChanged: { editing in
+                        guard !editing, let scrubPreview else { return }
+                        onSeek(scrubPreview)
+                        self.scrubPreview = nil
+                    }
+                )
+                .tint(Color.continuumOnSurface)
+                .disabled(state.duration <= 0)
+                .accessibilityLabel("Playback position")
+                .accessibilityValue(PlayerTimeFormatter.formatHMS(live))
 
-            HStack {
-                Text(PlayerTimeFormatter.formatHMS(scrubPreview ?? state.currentTime))
-                Spacer()
-                Text(remainingLabel)
+                HStack {
+                    Text(PlayerTimeFormatter.formatHMS(live))
+                    Spacer()
+                    Text(remainingLabel(live: live))
+                }
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(Color.continuumSecondaryText)
             }
-            .font(.caption.monospacedDigit())
-            .foregroundStyle(Color.continuumSecondaryText)
         }
     }
 
-    private var remainingLabel: String {
+    private func remainingLabel(live: Double) -> String {
         guard state.duration > 0 else { return PlayerTimeFormatter.formatHMS(state.duration) }
-        let remaining = max(0, state.duration - (scrubPreview ?? state.currentTime))
-        return "-" + PlayerTimeFormatter.formatHMS(remaining)
+        return "-" + PlayerTimeFormatter.formatHMS(max(0, state.duration - live))
     }
 
     private var transport: some View {
-        HStack(spacing: 36) {
+        HStack(spacing: 28) {
             Button {
-                onCommand(.seek(seconds: max(0, state.currentTime - 10)))
+                onSeek(max(0, clock.displayTime() - 10))
             } label: {
                 Image(systemName: "gobackward.10").font(.system(size: 30, weight: .regular))
             }
             .accessibilityLabel("Back 10 seconds")
 
             Button {
-                onCommand(.playPause)
+                onTogglePlayPause()
             } label: {
                 ZStack {
                     Circle().fill(Color.continuumOnSurface).frame(width: 64, height: 64)
                     if state.isLoading || state.isBuffering {
                         ProgressView().tint(Color.continuumBackground)
                     } else {
-                        Image(systemName: state.isPlaying ? "pause.fill" : "play.fill")
+                        Image(systemName: clock.isPlaying ? "pause.fill" : "play.fill")
                             .font(.system(size: 28, weight: .medium))
                             .foregroundStyle(Color.continuumBackground)
                     }
                 }
             }
-            .accessibilityLabel(state.isPlaying ? "Pause" : "Play")
+            .accessibilityLabel(clock.isPlaying ? "Pause" : "Play")
 
             Button {
-                let target = state.duration > 0 ? min(state.duration, state.currentTime + 30) : state.currentTime + 30
-                onCommand(.seek(seconds: target))
+                let base = clock.displayTime()
+                let target = state.duration > 0 ? min(state.duration, base + 30) : base + 30
+                onSeek(target)
             } label: {
                 Image(systemName: "goforward.30").font(.system(size: 30, weight: .regular))
             }
             .accessibilityLabel("Forward 30 seconds")
+
+            if state.hasNextEpisode {
+                Button { onPlayNext() } label: {
+                    Image(systemName: "forward.end.fill").font(.system(size: 24, weight: .regular))
+                }
+                .accessibilityLabel(state.nextEpisodeTitle.map { "Next: \($0)" } ?? "Next episode")
+            }
+        }
+        .foregroundStyle(Color.continuumOnSurface)
+        .buttonStyle(.plain)
+    }
+
+    private var volumeRow: some View {
+        HStack(spacing: 14) {
+            Button { onSetMuted(!state.isMuted) } label: {
+                Image(systemName: state.isMuted || state.volume <= 0.001
+                      ? "speaker.slash.fill" : "speaker.fill")
+                    .font(.system(size: 18, weight: .medium))
+                    .frame(width: 28)
+            }
+            .accessibilityLabel(state.isMuted ? "Unmute" : "Mute")
+
+            Slider(
+                value: Binding(
+                    get: { state.isMuted ? 0 : state.volume },
+                    set: { onSetVolume($0) }
+                ),
+                in: 0...1
+            )
+            .tint(Color.continuumOnSurface)
+            .accessibilityLabel("Volume")
+            .accessibilityValue("\(Int((state.isMuted ? 0 : state.volume) * 100)) percent")
         }
         .foregroundStyle(Color.continuumOnSurface)
         .buttonStyle(.plain)
     }
 
     private var secondaryControls: some View {
-        HStack(alignment: .top, spacing: 8) {
-            if !state.audioTracks.isEmpty {
-                audioMenu.frame(maxWidth: .infinity)
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .top, spacing: 8) {
+                if !state.audioTracks.isEmpty { audioMenu.frame(minWidth: 76) }
+                if !state.subtitleTracks.isEmpty { subtitleMenu.frame(minWidth: 76) }
+                if !state.qualityOptions.isEmpty { qualityMenu.frame(minWidth: 76) }
+                speedMenu.frame(minWidth: 76)
+                if state.supportsVideoGravity || state.supportsHDRToggle { displayMenu.frame(minWidth: 76) }
             }
-            if !state.subtitleTracks.isEmpty {
-                subtitleMenu.frame(maxWidth: .infinity)
-            }
-            if !state.qualityOptions.isEmpty {
-                qualityMenu.frame(maxWidth: .infinity)
-            }
-            speedMenu.frame(maxWidth: .infinity)
-            if state.supportsVideoGravity || state.supportsHDRToggle {
-                displayMenu.frame(maxWidth: .infinity)
-            }
+            .padding(.horizontal, 2)
         }
     }
 
@@ -338,7 +407,7 @@ private struct RemoteNowPlayingContent: View {
                     Label(state.hdrEnabled ? "HDR On" : "HDR Off", systemImage: state.hdrEnabled ? "checkmark" : "sun.max")
                 }
             }
-        } label: { RemoteChipLabel(systemImage: "rectangle.inset.filled", caption: "Aspect") }
+        } label: { RemoteChipLabel(systemImage: "rectangle.inset.filled", caption: state.supportsVideoGravity ? "Aspect" : "HDR") }
         .accessibilityValue(VideoGravity(rawValue: state.videoGravity)?.label ?? state.videoGravity)
     }
 
@@ -398,10 +467,10 @@ private extension SiloCastPlaybackState {
             activeQualityId: "auto", isQualitySwitching: false,
             playbackSpeed: 1.0, videoGravity: VideoGravity.fit.rawValue, hdrEnabled: false,
             supportsVideoGravity: true, supportsHDRToggle: true,
-            volume: 1.0,
+            volume: 0.8,
             isMuted: false,
-            hasNextEpisode: false,
-            nextEpisodeTitle: nil,
+            hasNextEpisode: true,
+            nextEpisodeTitle: "Forks",
             error: nil
         )
     }
@@ -412,9 +481,15 @@ private extension SiloCastPlaybackState {
         SiloCastArtworkBackground(urlString: nil)
         RemoteNowPlayingContent(
             state: .previewPlaying(),
+            clock: RemotePlaybackClock(),
             targetName: "Living Room",
             posterURL: nil,
-            onCommand: { _ in }
+            onCommand: { _ in },
+            onTogglePlayPause: {},
+            onSeek: { _ in },
+            onPlayNext: {},
+            onSetVolume: { _ in },
+            onSetMuted: { _ in }
         )
     }
     .preferredColorScheme(.dark)
