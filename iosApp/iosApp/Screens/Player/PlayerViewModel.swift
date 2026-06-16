@@ -5399,14 +5399,24 @@ extension PlayerViewModel {
                 throw SiloCastPlayerControlError.missingEnabledValue
             }
             setHDREnabled(enabled)
-        case .setVolume, .setMuted, .playNext:
-            // Handled by a later task; no-op for now so the protocol compiles.
-            break
+        case .setVolume:
+            guard let volume = command.volume, volume.isFinite else {
+                throw SiloCastPlayerControlError.missingValue
+            }
+            activePlayer.setVolume(Float(min(max(volume, 0), 1)))
+        case .setMuted:
+            guard let enabled = command.enabled else {
+                throw SiloCastPlayerControlError.missingEnabledValue
+            }
+            activePlayer.setMuted(enabled)
+        case .playNext:
+            playNextEpisodeNow()
         }
     }
 
     @MainActor
     func makeSiloCastPlaybackState(contentId: String?) -> SiloCastPlaybackState {
+        let liveContentId = lastLoadRequest?.contentId ?? contentId
         let titleText = metadata.primaryTitle.isEmpty ? title : metadata.primaryTitle
         let subtitleText = [metadata.seriesTitle, metadata.episodeTag]
             .compactMap { value -> String? in
@@ -5416,7 +5426,7 @@ extension PlayerViewModel {
             .joined(separator: " · ")
 
         return SiloCastPlaybackState(
-            contentId: contentId,
+            contentId: liveContentId,
             sessionId: activePlaybackSessionId,
             title: titleText.isEmpty ? "Loading" : titleText,
             subtitle: subtitleText.isEmpty ? nil : subtitleText,
@@ -5437,10 +5447,10 @@ extension PlayerViewModel {
             hdrEnabled: settings.hdrEnabled,
             supportsVideoGravity: backendCapabilities.supportsVideoGravity,
             supportsHDRToggle: backendCapabilities.supportsHDRToggle,
-            volume: 1.0,
-            isMuted: false,
-            hasNextEpisode: false,
-            nextEpisodeTitle: nil,
+            volume: Double(activePlayer.volume()),
+            isMuted: activePlayer.isMuted(),
+            hasNextEpisode: nextUpEpisode != nil,
+            nextEpisodeTitle: nextUpEpisode?.title,
             error: error
         )
     }

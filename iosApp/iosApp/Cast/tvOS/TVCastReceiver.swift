@@ -224,6 +224,8 @@ final class TVCastReceiver {
             return
         }
 
+        // Volume, mute, and next-episode all flow through applySiloCastControl
+        // below; only .stop needs special handling (it dismisses the player).
         guard let playerViewModel else {
             sendError(code: "player_not_ready", message: "The TV player is not ready yet.")
             return
