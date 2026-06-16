@@ -56,9 +56,6 @@ struct TVSeriesDetailView: View {
                         castSection(cast: cast)
                     }
                     detailsSection
-                        .readableFocusSection()
-                    aboutSection
-                        .readableFocusSection()
                     similarSection
                 }
                 .padding(.horizontal, ContinuumTheme.safePadding)
@@ -243,30 +240,6 @@ struct TVSeriesDetailView: View {
                 episodes: episodes,
                 onSelect: onEpisodeTap
             )
-        }
-    }
-
-    // MARK: - About
-
-    private var aboutSection: some View {
-        VStack(alignment: .leading, spacing: 28) {
-            TVSectionHeader(label: "About", title: "The Series")
-
-            if let tagline = detail.tagline, !tagline.isEmpty {
-                Text(tagline)
-                    .font(.system(size: 30, weight: .regular, design: .serif))
-                    .italic()
-                    .foregroundColor(.continuumOnSurface.opacity(0.85))
-                    .frame(maxWidth: 1400, alignment: .leading)
-            }
-
-            if let overview = detail.overview, !overview.isEmpty {
-                Text(overview)
-                    .font(.system(size: 26, weight: .regular))
-                    .foregroundColor(.continuumOnSurface.opacity(0.82))
-                    .lineSpacing(9)
-                    .frame(maxWidth: 1400, alignment: .leading)
-            }
         }
     }
 

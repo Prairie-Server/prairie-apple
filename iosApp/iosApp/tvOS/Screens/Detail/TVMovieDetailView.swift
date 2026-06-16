@@ -58,9 +58,6 @@ struct TVMovieDetailView: View {
                         castSection(cast: cast)
                     }
                     detailsSection
-                        .readableFocusSection()
-                    aboutSection
-                        .readableFocusSection()
                     if showsSimilarRail {
                         similarSection
                     }
@@ -197,35 +194,6 @@ struct TVMovieDetailView: View {
     private var primaryPlayLabel: String {
         guard let pos = resumePositionSeconds else { return "Play" }
         return "Resume \(PlayerTimeFormatter.formatHMS(pos))"
-    }
-
-    // MARK: - About section
-
-    private var aboutSection: some View {
-        VStack(alignment: .leading, spacing: 28) {
-            TVSectionHeader(label: "About", title: aboutTitle)
-
-            if let tagline = detail.tagline, !tagline.isEmpty {
-                Text(tagline)
-                    .font(.system(size: 30, weight: .regular, design: .serif))
-                    .italic()
-                    .foregroundColor(.continuumOnSurface.opacity(0.85))
-                    .frame(maxWidth: 1400, alignment: .leading)
-            }
-
-            if let overview = detail.overview, !overview.isEmpty {
-                Text(overview)
-                    .font(.system(size: 26, weight: .regular))
-                    .foregroundColor(.continuumOnSurface.opacity(0.82))
-                    .lineSpacing(9)
-                    .frame(maxWidth: 1400, alignment: .leading)
-            }
-        }
-    }
-
-    private var aboutTitle: String {
-        if detail.type == "episode" { return "Episode" }
-        return "The Movie"
     }
 
     // MARK: - Episodes (episode detail page)

@@ -61,11 +61,6 @@ struct TVSeasonDetailView: View {
                         castSection(cast: cast)
                     }
                     detailsSection
-                        .readableFocusSection()
-                    if detail.overview?.isEmpty == false {
-                        aboutSection
-                            .readableFocusSection()
-                    }
                 }
                 .padding(.horizontal, ContinuumTheme.safePadding)
                 .padding(.bottom, 160)
@@ -256,22 +251,6 @@ struct TVSeasonDetailView: View {
         VStack(alignment: .leading, spacing: 28) {
             TVSectionHeader(label: "Info", title: "Details")
             TVDetailFactsSection(detail: detail)
-        }
-    }
-
-    // MARK: - About
-
-    private var aboutSection: some View {
-        VStack(alignment: .leading, spacing: 28) {
-            TVSectionHeader(label: "About", title: detail.title)
-
-            if let overview = detail.overview, !overview.isEmpty {
-                Text(overview)
-                    .font(.system(size: 26, weight: .regular))
-                    .foregroundColor(.continuumOnSurface.opacity(0.82))
-                    .lineSpacing(9)
-                    .frame(maxWidth: 1400, alignment: .leading)
-            }
         }
     }
 }
