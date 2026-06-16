@@ -3,9 +3,9 @@ import SwiftUI
 
 /// Movie / episode detail layout for tvOS. The hero fills the top of the
 /// viewport; the scrollable body underneath contains cast, a full
-/// overview, and facts. Audio / subtitle track selection happens in the
-/// player — the detail page only exposes a compact Version picker
-/// beneath the primary actions when multiple file versions exist.
+/// overview, and facts. A pre-Play selector row beneath the primary
+/// actions exposes Edition / Version / Audio / Subtitles, each auto-hiding
+/// when there is no real choice.
 struct TVMovieDetailView: View {
     let detail: ItemDetail
     let isFavorite: Bool
@@ -78,9 +78,20 @@ struct TVMovieDetailView: View {
     private var actionColumn: some View {
         VStack(alignment: .leading, spacing: 24) {
             actionRow
-            if availableVersions.count > 1 {
-                versionPicker
-            }
+            TVPlaybackSelectorRow(
+                versions: availableVersions,
+                currentVersion: DetailVersionSelection.displayVersion(
+                    versions: availableVersions,
+                    selectedFileId: selectedVersionFileId,
+                    lastFileId: detail.userData?.lastFileId
+                ),
+                selectedVersionFileId: selectedVersionFileId,
+                selectedAudioTrackIndex: selectedAudioTrackIndex,
+                selectedSubtitleTrackIndex: selectedSubtitleTrackIndex,
+                onSelectVersion: onSelectVersion,
+                onSelectAudioTrack: onSelectAudioTrack,
+                onSelectSubtitleTrack: onSelectSubtitleTrack
+            )
         }
     }
 
@@ -139,79 +150,12 @@ struct TVMovieDetailView: View {
     }
 
     private var hasMoreMenu: Bool {
-        hasOverflowNavigation ||
-        !selectableAudioTracks.isEmpty ||
-        supportsSubtitleSelection
+        hasOverflowNavigation
     }
 
     @ViewBuilder
     private var moreMenu: some View {
         TVCircleMenuButton(accessibilityLabel: "More options") {
-            if !selectableAudioTracks.isEmpty {
-                Menu {
-                    Button {
-                        onSelectAudioTrack(nil)
-                    } label: {
-                        playbackMenuItem(
-                            title: "Auto",
-                            detail: "Use the file default track",
-                            isSelected: selectedAudioTrackIndex == nil
-                        )
-                    }
-                    ForEach(selectableAudioTracks) { track in
-                        let trackIndex = track.index ?? -1
-                        Button {
-                            onSelectAudioTrack(track.index)
-                        } label: {
-                            playbackMenuItem(
-                                title: audioTrackTitle(track),
-                                detail: audioTrackDetail(track),
-                                isSelected: selectedAudioTrackIndex == trackIndex
-                            )
-                        }
-                    }
-                } label: {
-                    Label("Audio Track", systemImage: "speaker.wave.2")
-                }
-            }
-
-            if supportsSubtitleSelection {
-                Menu {
-                    Button {
-                        onSelectSubtitleTrack(nil)
-                    } label: {
-                        playbackMenuItem(
-                            title: "Auto",
-                            detail: "Use your subtitle preferences",
-                            isSelected: selectedSubtitleTrackIndex == nil
-                        )
-                    }
-                    Button {
-                        onSelectSubtitleTrack(-1)
-                    } label: {
-                        playbackMenuItem(
-                            title: "Off",
-                            detail: "Start playback without subtitles",
-                            isSelected: selectedSubtitleTrackIndex == -1
-                        )
-                    }
-                    ForEach(selectableSubtitleTracks) { track in
-                        let trackIndex = track.index ?? -1
-                        Button {
-                            onSelectSubtitleTrack(track.index)
-                        } label: {
-                            playbackMenuItem(
-                                title: subtitleTrackTitle(track),
-                                detail: subtitleTrackDetail(track),
-                                isSelected: selectedSubtitleTrackIndex == trackIndex
-                            )
-                        }
-                    }
-                } label: {
-                    Label("Subtitle Track", systemImage: "captions.bubble")
-                }
-            }
-
             if let seriesId = detail.seriesId,
                let seasonNumber = detail.seasonNumber,
                seasonNumber > 0 {
@@ -237,31 +181,6 @@ struct TVMovieDetailView: View {
 
     private var watchedLabelUnmark: String {
         detail.type == "episode" ? "Mark Episode Unwatched" : "Mark as Unwatched"
-    }
-
-    private var versionPicker: some View {
-        TVVersionPillButton(currentLabel: currentVersionLabel) {
-            Button {
-                onSelectVersion(nil)
-            } label: {
-                versionMenuItem(
-                    title: "Auto",
-                    detail: "Best match for this device",
-                    isSelected: selectedVersionFileId == nil
-                )
-            }
-            ForEach(availableVersions) { version in
-                Button {
-                    onSelectVersion(version.fileId)
-                } label: {
-                    versionMenuItem(
-                        title: versionPrimaryText(version),
-                        detail: versionSecondaryText(version),
-                        isSelected: selectedVersionFileId == version.fileId
-                    )
-                }
-            }
-        }
     }
 
     private var resumePositionSeconds: Double? {
@@ -390,237 +309,6 @@ struct TVMovieDetailView: View {
 
     private var availableVersions: [FileVersion] {
         detail.versions ?? []
-    }
-
-    private var selectedVersion: FileVersion? {
-        availableVersions.first(where: { $0.fileId == selectedVersionFileId })
-    }
-
-    private var effectiveVersion: FileVersion? {
-        DetailVersionSelection.displayVersion(
-            versions: availableVersions,
-            selectedFileId: selectedVersionFileId,
-            lastFileId: detail.userData?.lastFileId,
-            preferredQualityId: PlayerSettings.shared.preferredQuality
-        )
-    }
-
-    private var trackSelectionVersion: FileVersion? {
-        effectiveVersion
-    }
-
-    private var currentVersionLabel: String {
-        versionMenuLabel(selectedVersion ?? effectiveVersion) ?? "Auto"
-    }
-
-    @ViewBuilder
-    private func versionMenuItem(title: String, detail: String?, isSelected: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                if isSelected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.continuumPrimary)
-                }
-                Text(title)
-                    .font(.continuumBody)
-                    .foregroundColor(.continuumOnSurface)
-                    .lineLimit(2)
-            }
-            if let detail, !detail.isEmpty {
-                Text(detail)
-                    .font(.continuumCaption)
-                    .foregroundColor(.continuumSecondaryText)
-                    .lineLimit(2)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func playbackMenuItem(title: String, detail: String?, isSelected: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                if isSelected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.continuumPrimary)
-                }
-                Text(title)
-                    .font(.continuumBody)
-                    .foregroundColor(.continuumOnSurface)
-                    .lineLimit(2)
-            }
-            if let detail, !detail.isEmpty {
-                Text(detail)
-                    .font(.continuumCaption)
-                    .foregroundColor(.continuumSecondaryText)
-                    .lineLimit(2)
-            }
-        }
-    }
-
-    // MARK: - Version / codec helpers
-
-    private func normalizedVideoCodec(_ codec: String?) -> String {
-        guard let codec = codec?.lowercased() else { return "H.264" }
-        if codec.contains("hevc") || codec.contains("h265") { return "HEVC" }
-        if codec.contains("av1") { return "AV1" }
-        return "H.264"
-    }
-
-    private func normalizedAudioCodec(_ codec: String?) -> String? {
-        guard let codec = codec?.lowercased(), !codec.isEmpty else { return nil }
-        if codec.contains("eac3") || codec.contains("ec-3") { return "EAC3" }
-        if codec.contains("ac3") || codec.contains("ac-3") { return "AC3" }
-        if codec.contains("aac") { return "AAC" }
-        if codec.contains("mp3") { return "MP3" }
-        return codec.uppercased()
-    }
-
-    private func versionPrimaryText(_ version: FileVersion) -> String {
-        [
-            version.resolution,
-            normalizedVideoCodec(version.codecVideo),
-            version.hdr == true ? "HDR" : nil,
-            normalizedAudioCodec(version.codecAudio),
-        ]
-        .compactMap { $0 }
-        .joined(separator: " \u{00B7} ")
-    }
-
-    private func versionMenuLabel(_ version: FileVersion?) -> String? {
-        guard let version else { return nil }
-        let parts = [
-            version.resolution,
-            version.hdr == true ? "HDR" : nil,
-        ]
-        .compactMap { $0 }
-        if !parts.isEmpty {
-            return parts.joined(separator: " ")
-        }
-        let codec = normalizedVideoCodec(version.codecVideo)
-        if !codec.isEmpty {
-            return codec
-        }
-        if let container = version.container?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !container.isEmpty {
-            return container.uppercased()
-        }
-        return "Version \(version.fileId)"
-    }
-
-    private func versionSecondaryText(_ version: FileVersion) -> String {
-        let details = [
-            version.container?.uppercased(),
-            version.fileSize.map(formatFileSize),
-        ]
-        .compactMap { $0 }
-        return details.isEmpty ? "Playable" : details.joined(separator: " \u{00B7} ")
-    }
-
-    private func formatFileSize(_ bytes: Int64) -> String {
-        let gb = Double(bytes) / (1024 * 1024 * 1024)
-        if gb >= 1.0 { return String(format: "%.1f GB", gb) }
-        let mb = Double(bytes) / (1024 * 1024)
-        return String(format: "%.0f MB", mb)
-    }
-
-    private var selectableAudioTracks: [AudioTrack] {
-        trackSelectionVersion?.audioTracks?.filter { $0.index != nil } ?? []
-    }
-
-    private var selectableSubtitleTracks: [SubtitleTrack] {
-        trackSelectionVersion?.subtitleTracks?.filter { $0.index != nil } ?? []
-    }
-
-    private var supportsSubtitleSelection: Bool {
-        trackSelectionVersion != nil
-    }
-
-    private func audioTrackTitle(_ track: AudioTrack) -> String {
-        if let title = normalizedTrackText(track.title) { return title }
-        if let language = localizedLanguageName(track.language) { return language }
-        if let index = track.index { return "Track \(index)" }
-        return "Audio Track"
-    }
-
-    private func audioTrackDetail(_ track: AudioTrack) -> String? {
-        var parts: [String] = []
-        if let language = localizedLanguageName(track.language),
-           let title = normalizedTrackText(track.title),
-           !title.localizedCaseInsensitiveContains(language) {
-            parts.append(language)
-        }
-        if let layout = normalizedAudioLayout(track), !layout.isEmpty {
-            parts.append(layout)
-        }
-        if let codec = normalizedAudioCodec(track.codec) {
-            parts.append(codec)
-        }
-        if track.isDefault == true {
-            parts.append("Default")
-        }
-        return parts.isEmpty ? nil : parts.joined(separator: " \u{00B7} ")
-    }
-
-    private func subtitleTrackTitle(_ track: SubtitleTrack) -> String {
-        if let title = normalizedTrackText(track.title) { return title }
-        if let language = localizedLanguageName(track.language) { return language }
-        if let index = track.index { return "Track \(index)" }
-        return "Subtitle Track"
-    }
-
-    private func subtitleTrackDetail(_ track: SubtitleTrack) -> String? {
-        var parts: [String] = []
-        if let language = localizedLanguageName(track.language),
-           let title = normalizedTrackText(track.title),
-           !title.localizedCaseInsensitiveContains(language) {
-            parts.append(language)
-        }
-        if let codec = track.codec?.uppercased(), !codec.isEmpty {
-            parts.append(codec)
-        }
-        if track.forced == true {
-            parts.append("Forced")
-        }
-        if track.isDefault == true {
-            parts.append("Default")
-        }
-        if track.external == true {
-            parts.append("External")
-        }
-        return parts.isEmpty ? nil : parts.joined(separator: " \u{00B7} ")
-    }
-
-    private func normalizedTrackText(_ value: String?) -> String? {
-        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !trimmed.isEmpty else {
-            return nil
-        }
-        return trimmed
-    }
-
-    private func localizedLanguageName(_ code: String?) -> String? {
-        guard let code, !code.isEmpty else { return nil }
-        return Locale(identifier: "en").localizedString(forLanguageCode: code)?.capitalized
-            ?? code.uppercased()
-    }
-
-    private func normalizedAudioLayout(_ track: AudioTrack) -> String? {
-        if let layout = track.channelLayout?.lowercased(), !layout.isEmpty {
-            if layout.contains("7.1") { return "7.1" }
-            if layout.contains("5.1") { return "5.1" }
-            if layout.contains("stereo") || layout == "2.0" { return "Stereo" }
-            return track.channelLayout
-        }
-        if let channels = track.channels {
-            switch channels {
-            case 1: return "Mono"
-            case 2: return "Stereo"
-            case 6: return "5.1"
-            case 8: return "7.1"
-            default: return "\(channels)ch"
-            }
-        }
-        return nil
     }
 }
 #endif
