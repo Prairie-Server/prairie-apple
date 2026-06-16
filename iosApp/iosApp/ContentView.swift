@@ -486,14 +486,6 @@ struct MainTabView: View {
         }
         .tint(.continuumOnSurface)
         #if !os(macOS)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            #if os(iOS)
-            SiloCastMiniBar(controller: castController)
-                .animation(.snappy, value: castController.hasActiveSession)
-                .animation(.snappy, value: castController.isShowingRemoteControl)
-            #endif
-            AudioMiniPlayerView()
-        }
         .fullScreenCover(isPresented: Binding(
             get: { audioStore.isShowingFullPlayer },
             set: { if !$0 { audioStore.dismissFullPlayer() } }
@@ -559,6 +551,9 @@ struct MainTabView: View {
             .navigationDestination(for: Route.self) { route in
                 routeContent(for: route)
             }
+            #if os(iOS)
+            .modifier(NowPlayingShelfAttachment())
+            #endif
         }
     }
 
@@ -596,6 +591,9 @@ struct MainTabView: View {
             }
         }
         .environment(\.sidebarToggle, toggleSidebar)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            NowPlayingShelf(style: .card)
+        }
     }
 
     /// Collapses or re-expands the sidebar. Animated so the detail pane
