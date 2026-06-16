@@ -52,7 +52,7 @@ final class SiloCastController {
             return true
         }
 
-        await closeCurrentSession(sendClose: false)
+        await closeCurrentSession(sendClose: true)
 
         isConnecting = true
         errorMessage = nil
@@ -269,9 +269,10 @@ final class SiloCastController {
         missedHeartbeats = 0
         if let session {
             if sendClose {
-                try? await session.send(.close)
+                await session.closeGracefully()
+            } else {
+                await session.close()
             }
-            await session.close()
         }
         session = nil
         connectionId = nil
