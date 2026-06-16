@@ -5,6 +5,7 @@ import SwiftUI
 /// progress hairline along the bottom edge tracks book position.
 struct AudioMiniPlayerView: View {
     @Environment(AudioPlaybackStore.self) private var audioStore
+    var style: NowPlayingBarStyle = .card
 
     var body: some View {
         let player = audioStore.player
@@ -46,12 +47,7 @@ struct AudioMiniPlayerView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(.ultraThinMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-            .overlay {
-                RoundedRectangle(cornerRadius: 14)
-                    .strokeBorder(Color.continuumOutline, lineWidth: 1)
-            }
+            .modifier(NowPlayingBarChrome(style: style))
             .overlay(alignment: .bottomLeading) {
                 GeometryReader { proxy in
                     Capsule()
@@ -67,8 +63,8 @@ struct AudioMiniPlayerView: View {
                 .padding(.horizontal, 12)
                 .accessibilityHidden(true)
             }
-            .padding(.horizontal)
-            .padding(.bottom, 8)
+            .padding(.horizontal, style == .card ? 16 : 0)
+            .padding(.bottom, style == .card ? 8 : 0)
         }
     }
 

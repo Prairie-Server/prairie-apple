@@ -5,6 +5,7 @@ import SwiftUI
 /// session is active and the full remote is dismissed. Tapping reopens the remote.
 struct SiloCastMiniBar: View {
     @Bindable var controller: SiloCastController
+    var style: NowPlayingBarStyle = .card
     @State private var artwork = SiloCastArtworkResolver()
 
     var body: some View {
@@ -34,14 +35,12 @@ struct SiloCastMiniBar: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(Color.continuumOutline, lineWidth: 1))
+                .modifier(NowPlayingBarChrome(style: style))
                 .foregroundStyle(Color.continuumOnSurface)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .padding(.horizontal, 12)
+            .padding(.horizontal, style == .card ? 12 : 0)
             .transition(.move(edge: .bottom).combined(with: .opacity))
             .task(id: controller.state?.contentId) {
                 await artwork.resolve(contentId: controller.state?.contentId)
