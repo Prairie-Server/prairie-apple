@@ -174,6 +174,8 @@ struct TVItemDetailView: View {
                 episodes: viewModel.episodes,
                 isLoadingEpisodes: viewModel.isLoadingEpisodes,
                 selectedNextUpFileId: preferredNextUpFileId,
+                selectedNextUpAudioTrackIndex: preferredNextUpAudioTrackIndex,
+                selectedNextUpSubtitleTrackIndex: preferredNextUpSubtitleTrackIndex,
                 nextUpPlaybackDetail: nextUpPlaybackDetail,
                 isLoadingNextUpPlaybackDetail: isLoadingNextUpPlaybackDetail,
                 didLoadNextUpPlaybackDetail: didLoadNextUpPlaybackDetail,
@@ -189,8 +191,8 @@ struct TVItemDetailView: View {
                             to: .playerWithFile(
                                 contentId: id,
                                 fileId: fileId,
-                                audioTrackIndex: nil,
-                                subtitleTrackIndex: nil,
+                                audioTrackIndex: preferredNextUpAudioTrackIndex,
+                                subtitleTrackIndex: preferredNextUpSubtitleTrackIndex,
                                 startFromBeginning: startFromBeginning,
                                 resumePosition: resumePosition
                             )
@@ -210,6 +212,30 @@ struct TVItemDetailView: View {
                 },
                 onSelectNextUpVersion: { fileId in
                     preferredNextUpFileId = fileId
+                    preferredNextUpAudioTrackIndex = sanitizedAudioTrackIndex(
+                        for: nextUpPlaybackDetail,
+                        versionFileId: fileId,
+                        candidate: preferredNextUpAudioTrackIndex
+                    )
+                    preferredNextUpSubtitleTrackIndex = sanitizedSubtitleTrackIndex(
+                        for: nextUpPlaybackDetail,
+                        versionFileId: fileId,
+                        candidate: preferredNextUpSubtitleTrackIndex
+                    )
+                },
+                onSelectNextUpAudioTrack: { index in
+                    preferredNextUpAudioTrackIndex = sanitizedAudioTrackIndex(
+                        for: nextUpPlaybackDetail,
+                        versionFileId: preferredNextUpFileId,
+                        candidate: index
+                    )
+                },
+                onSelectNextUpSubtitleTrack: { index in
+                    preferredNextUpSubtitleTrackIndex = sanitizedSubtitleTrackIndex(
+                        for: nextUpPlaybackDetail,
+                        versionFileId: preferredNextUpFileId,
+                        candidate: index
+                    )
                 },
                 onToggleFavorite: { Task { await viewModel.toggleFavorite() } },
                 onToggleWatchlist: { Task { await viewModel.toggleWatchlist() } },
@@ -459,6 +485,8 @@ struct TVItemDetailView: View {
             isLoadingNextUpPlaybackDetail = false
             didLoadNextUpPlaybackDetail = false
             preferredNextUpFileId = nil
+            preferredNextUpAudioTrackIndex = nil
+            preferredNextUpSubtitleTrackIndex = nil
             return
         }
 
@@ -466,6 +494,8 @@ struct TVItemDetailView: View {
         isLoadingNextUpPlaybackDetail = true
         didLoadNextUpPlaybackDetail = false
         preferredNextUpFileId = nil
+        preferredNextUpAudioTrackIndex = nil
+        preferredNextUpSubtitleTrackIndex = nil
 
         do {
             let item = try await ContinuumAPI.shared.itemDetail(contentId: nextUp.contentId)

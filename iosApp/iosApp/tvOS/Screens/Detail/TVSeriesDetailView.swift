@@ -13,6 +13,8 @@ struct TVSeriesDetailView: View {
     let episodes: [EpisodeListItem]
     let isLoadingEpisodes: Bool
     let selectedNextUpFileId: Int?
+    let selectedNextUpAudioTrackIndex: Int?
+    let selectedNextUpSubtitleTrackIndex: Int?
     let nextUpPlaybackDetail: ItemDetail?
     let isLoadingNextUpPlaybackDetail: Bool
     let didLoadNextUpPlaybackDetail: Bool
@@ -20,6 +22,8 @@ struct TVSeriesDetailView: View {
     let onPlayEpisode: (_ contentId: String, _ fileId: Int?, _ startFromBeginning: Bool) -> Void
     let onEpisodeTap: (_ contentId: String) -> Void
     let onSelectNextUpVersion: (Int?) -> Void
+    let onSelectNextUpAudioTrack: (Int?) -> Void
+    let onSelectNextUpSubtitleTrack: (Int?) -> Void
     let onToggleFavorite: () -> Void
     let onToggleWatchlist: () -> Void
     let onToggleWatched: () -> Void
@@ -72,10 +76,23 @@ struct TVSeriesDetailView: View {
             actionRow
             if shouldShowVersionPlaceholder {
                 TVVersionPillPlaceholder()
-            } else if nextUpEpisode != nil, nextUpVersionRows.count > 1 {
-                nextUpVersionPicker
+            } else if nextUpEpisode != nil {
+                TVPlaybackSelectorRow(
+                    versions: nextUpVersions,
+                    currentVersion: effectiveNextUpVersion,
+                    selectedVersionFileId: selectedNextUpFileId,
+                    selectedAudioTrackIndex: selectedNextUpAudioTrackIndex,
+                    selectedSubtitleTrackIndex: selectedNextUpSubtitleTrackIndex,
+                    onSelectVersion: onSelectNextUpVersion,
+                    onSelectAudioTrack: onSelectNextUpAudioTrack,
+                    onSelectSubtitleTrack: onSelectNextUpSubtitleTrack
+                )
             }
         }
+    }
+
+    private var nextUpVersions: [FileVersion] {
+        nextUpPlaybackDetail?.versions ?? []
     }
 
     private var actionRow: some View {
@@ -150,31 +167,6 @@ struct TVSeriesDetailView: View {
             && (isLoadingNextUpPlaybackDetail || (!didLoadNextUpPlaybackDetail && nextUpPlaybackDetail == nil))
     }
 
-    private var nextUpVersionPicker: some View {
-        TVVersionPillButton(currentLabel: currentVersionLabel) {
-            Button {
-                onSelectNextUpVersion(nil)
-            } label: {
-                versionMenuItem(
-                    title: "Auto",
-                    detail: "Best match for this device",
-                    isSelected: selectedNextUpFileId == nil
-                )
-            }
-            ForEach(nextUpVersionRows) { row in
-                Button {
-                    onSelectNextUpVersion(row.fileId)
-                } label: {
-                    versionMenuItem(
-                        title: row.title,
-                        detail: row.detail,
-                        isSelected: selectedNextUpFileId == row.fileId
-                    )
-                }
-            }
-        }
-    }
-
     private func selectedFileId(for episode: EpisodeListItem) -> Int? {
         guard let selectedNextUpFileId else { return nil }
         if let versions = nextUpPlaybackDetail?.versions, !versions.isEmpty {
@@ -186,17 +178,6 @@ struct TVSeriesDetailView: View {
         return selectedNextUpFileId
     }
 
-    private var currentVersionLabel: String {
-        if let effectiveNextUpVersion {
-            return versionMenuLabel(effectiveNextUpVersion)
-        }
-        guard let nextUp = nextUpEpisode else { return "Auto" }
-        let files = nextUp.files ?? []
-        let effective = files.first(where: { $0.fileId == selectedNextUpFileId }) ?? files.first
-        guard let file = effective else { return "Auto" }
-        return episodeFileLabel(file)
-    }
-
     private var effectiveNextUpVersion: FileVersion? {
         DetailVersionSelection.displayVersion(
             versions: nextUpPlaybackDetail?.versions ?? [],
@@ -204,26 +185,6 @@ struct TVSeriesDetailView: View {
             lastFileId: nextUpPlaybackDetail?.userData?.lastFileId,
             preferredQualityId: PlayerSettings.shared.preferredQuality
         )
-    }
-
-    private var nextUpVersionRows: [TVSeriesNextUpVersionRow] {
-        if let versions = nextUpPlaybackDetail?.versions, !versions.isEmpty {
-            return versions.map { version in
-                TVSeriesNextUpVersionRow(
-                    fileId: version.fileId,
-                    title: versionTitle(version),
-                    detail: versionDetail(version)
-                )
-            }
-        }
-        guard let files = nextUpEpisode?.files, !files.isEmpty else { return [] }
-        return files.map { file in
-            TVSeriesNextUpVersionRow(
-                fileId: file.fileId,
-                title: episodeFileTitle(file),
-                detail: episodeFileDetail(file)
-            )
-        }
     }
 
     // MARK: - Episodes + season selector
@@ -339,146 +300,6 @@ struct TVSeriesDetailView: View {
         }
     }
 
-    private func versionTitle(_ version: FileVersion) -> String {
-        let parts = [
-            version.resolution,
-            normalizedVideoCodec(version.codecVideo),
-            version.hdr == true ? "HDR" : nil,
-            normalizedAudioCodec(version.codecAudio),
-        ]
-        .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
-        .filter { !$0.isEmpty }
-        if !parts.isEmpty {
-            return parts.joined(separator: " \u{00B7} ")
-        }
-        return versionMenuLabel(version)
-    }
-
-    private func versionMenuLabel(_ version: FileVersion?) -> String {
-        guard let version else { return "Auto" }
-        let parts = [
-            version.resolution,
-            version.hdr == true ? "HDR" : nil,
-        ]
-        .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
-        .filter { !$0.isEmpty }
-        if !parts.isEmpty {
-            return parts.joined(separator: " ")
-        }
-        if let codec = normalizedVideoCodec(version.codecVideo), !codec.isEmpty {
-            return codec
-        }
-        if let container = version.container?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !container.isEmpty {
-            return container.uppercased()
-        }
-        return "Version \(version.fileId)"
-    }
-
-    private func versionDetail(_ version: FileVersion) -> String? {
-        let parts = [
-            version.container?.uppercased(),
-            version.fileSize.map(formatFileSize),
-        ].compactMap { $0 }
-        return parts.isEmpty ? nil : parts.joined(separator: " \u{00B7} ")
-    }
-
-    private func episodeFileLabel(_ file: EpisodeFile) -> String {
-        let parts = [
-            file.resolution,
-            file.hdr == true ? "HDR" : nil,
-        ]
-        .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
-        .filter { !$0.isEmpty }
-        if !parts.isEmpty {
-            return parts.joined(separator: " ")
-        }
-        if let codec = normalizedVideoCodec(file.codecVideo), !codec.isEmpty {
-            return codec
-        }
-        if let container = file.container?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !container.isEmpty {
-            return container.uppercased()
-        }
-        return "Version \(file.fileId)"
-    }
-
-    private func episodeFileTitle(_ file: EpisodeFile) -> String {
-        let parts = [
-            file.resolution,
-            normalizedVideoCodec(file.codecVideo),
-            file.hdr == true ? "HDR" : nil,
-            file.audioChannels.map { "\($0)ch" }
-        ]
-        .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
-        .filter { !$0.isEmpty }
-        if !parts.isEmpty {
-            return parts.joined(separator: " \u{00B7} ")
-        }
-        return episodeFileLabel(file)
-    }
-
-    private func episodeFileDetail(_ file: EpisodeFile) -> String? {
-        let parts = [
-            file.container?.uppercased(),
-            file.fileSize.map(formatFileSize),
-        ].compactMap { $0 }
-        return parts.isEmpty ? nil : parts.joined(separator: " \u{00B7} ")
-    }
-
-    private func normalizedVideoCodec(_ codec: String?) -> String? {
-        guard let codec = codec?.lowercased(), !codec.isEmpty else { return nil }
-        if codec.contains("hevc") || codec.contains("h265") { return "HEVC" }
-        if codec.contains("av1") { return "AV1" }
-        if codec.contains("avc") || codec.contains("h264") { return "H.264" }
-        return codec.uppercased()
-    }
-
-    private func normalizedAudioCodec(_ codec: String?) -> String? {
-        guard let codec = codec?.lowercased(), !codec.isEmpty else { return nil }
-        if codec.contains("eac3") || codec.contains("ec-3") { return "EAC3" }
-        if codec.contains("ac3") || codec.contains("ac-3") { return "AC3" }
-        if codec.contains("aac") { return "AAC" }
-        if codec.contains("mp3") { return "MP3" }
-        return codec.uppercased()
-    }
-
-    private func formatFileSize(_ bytes: Int64) -> String {
-        let gb = Double(bytes) / (1024 * 1024 * 1024)
-        if gb >= 1.0 { return String(format: "%.1f GB", gb) }
-        let mb = Double(bytes) / (1024 * 1024)
-        return String(format: "%.0f MB", mb)
-    }
-
-    @ViewBuilder
-    private func versionMenuItem(title: String, detail: String?, isSelected: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                if isSelected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.continuumPrimary)
-                }
-                Text(title)
-                    .font(.continuumBody)
-                    .foregroundColor(.continuumOnSurface)
-                    .lineLimit(2)
-            }
-            if let detail, !detail.isEmpty {
-                Text(detail)
-                    .font(.continuumCaption)
-                    .foregroundColor(.continuumSecondaryText)
-                    .lineLimit(2)
-            }
-        }
-    }
-}
-
-private struct TVSeriesNextUpVersionRow: Identifiable, Hashable {
-    let fileId: Int
-    let title: String
-    let detail: String?
-
-    var id: Int { fileId }
 }
 
 #endif
