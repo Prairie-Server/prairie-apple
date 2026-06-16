@@ -173,6 +173,26 @@ struct AudiobookDetailContent: View {
             TVSecondaryPillButton(icon: "arrow.counterclockwise", title: "Start Over") {
                 audioStore.play(contentId: detail.contentId, restart: true)
             }
+
+            if !otherNarrations.isEmpty {
+                Menu {
+                    ForEach(otherNarrations) { narration in
+                        Button { onNavigateToItem(narration.contentId) } label: {
+                            Text(narration.narrators.isEmpty ? narration.title
+                                 : narration.narrators.joined(separator: ", "))
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "person.wave.2").font(.system(size: 22, weight: .semibold))
+                        Text("NARRATION").font(.system(size: 18, weight: .bold)).tracking(1.0).opacity(0.6)
+                        Text(currentNarratorLabel).font(.system(size: 22, weight: .semibold)).lineLimit(1)
+                        Image(systemName: "chevron.down").font(.system(size: 15, weight: .bold)).opacity(0.6)
+                    }
+                }
+                .menuStyle(.button)
+                .buttonStyle(TVPillButtonStyle(kind: .secondary))
+            }
         }
         #else
         HStack(spacing: 12) {
@@ -435,6 +455,13 @@ struct AudiobookDetailContent: View {
         detail.audiobook?.otherNarrations ?? []
     }
 
+    private var currentNarratorLabel: String {
+        guard let names = joinedNames(detail.audiobook?.narrators), !names.isEmpty else {
+            return "Default"
+        }
+        return names
+    }
+
     private var metadataLine: String {
         var tokens: [String] = []
         if let authors = joinedNames(detail.audiobook?.authors), !authors.isEmpty {
@@ -621,7 +648,7 @@ private struct TVAudiobookRowBody: View {
         configuration.label
             .foregroundColor(isFocused ? .black : .white)
             .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                RoundedRectangle(cornerRadius: ContinuumTheme.smallCornerRadius, style: .continuous)
                     .fill(isFocused ? Color.white : Color.white.opacity(0.06))
             )
             .shadow(
