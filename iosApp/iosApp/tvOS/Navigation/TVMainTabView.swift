@@ -156,6 +156,9 @@ struct TVMainTabView: View {
         .onDisappear {
             castReceiver.stop()
         }
+        .onChange(of: ServerRegistry.shared.activeServerId) {
+            castReceiver.start(router: router)
+        }
     }
 
     private var rootContent: some View {

@@ -16,6 +16,13 @@ final class TVCastReceiver {
     private(set) var standbyState: TVCastStandbyState?
     private var readTask: Task<Void, Never>?
     private var stateTask: Task<Void, Never>?
+    private var heartbeatTask: Task<Void, Never>?
+    private var authWatchdogTask: Task<Void, Never>?
+    private var missedHeartbeats = 0
+    private var isAuthorized = false
+    private static let heartbeatInterval: Duration = .seconds(3)
+    private static let maxMissedHeartbeats = 3      // ~9–12s of silence ⇒ dead
+    private static let authGracePeriod: Duration = .seconds(5)
     private weak var playerViewModel: PlayerViewModel?
     private var playerContentId: String?
     private var remoteControllerName: String?
@@ -102,15 +109,16 @@ final class TVCastReceiver {
     }
 
     private func accept(_ connection: NWConnection) async {
-        guard activeSession == nil else {
-            connection.cancel()
-            return
+        if activeSession != nil {
+            // Newest controller wins (matches AirPlay/Cast); frees the old slot.
+            closeActiveSession(sendClose: true)
         }
 
         let session = SiloCastSession(connection: connection)
         let connectionId = UUID()
         activeSession = session
         activeConnectionId = connectionId
+        isAuthorized = false
         remoteControllerName = nil
         refreshStandbyState()
         let stream = await session.open()
@@ -118,6 +126,8 @@ final class TVCastReceiver {
         if playerViewModel != nil {
             startStateUpdates()
         }
+        startHeartbeat(connectionId: connectionId)
+        startAuthWatchdog(connectionId: connectionId)
 
         do {
             try await session.send(makeHello())
@@ -153,25 +163,39 @@ final class TVCastReceiver {
 
     private func handle(_ message: SiloCastMessage, connectionId: UUID) {
         guard activeConnectionId == connectionId else { return }
+        missedHeartbeats = 0
         switch message {
         case .hello(let hello):
-            if let serverId = hello.serverId,
-               let activeServerId = ServerRegistry.shared.activeServerId,
-               serverId != activeServerId {
-                sendError(code: "server_mismatch", message: "This Apple TV is connected to a different Silo server.")
+            guard let serverId = hello.serverId, !serverId.isEmpty,
+                  let activeServerId = ServerRegistry.shared.activeServerId,
+                  serverId == activeServerId else {
+                sendError(code: "server_mismatch",
+                          message: "This Apple TV is connected to a different Silo server.")
                 closeActiveSession(sendClose: true)
-            } else {
-                remoteControllerName = hello.deviceName
-                refreshStandbyState()
+                return
             }
+            isAuthorized = true
+            authWatchdogTask?.cancel(); authWatchdogTask = nil
+            remoteControllerName = hello.deviceName
+            refreshStandbyState()
         case .launch(let launch):
+            guard isAuthorized else {
+                sendError(code: "unauthorized", message: "Connect with a matching Silo account first.")
+                return
+            }
             handleLaunch(launch)
         case .control(let command):
+            guard isAuthorized else {
+                sendError(code: "unauthorized", message: "Connect with a matching Silo account first.")
+                return
+            }
             handleControl(command)
+        case .ping:
+            activeSession?.enqueue(.pong)
+        case .pong, .state, .error:
+            break
         case .close:
             closeActiveSession(sendClose: false)
-        case .state, .error, .ping, .pong:
-            break
         }
     }
 
@@ -221,6 +245,10 @@ final class TVCastReceiver {
         readTask = nil
         stateTask?.cancel()
         stateTask = nil
+        heartbeatTask?.cancel(); heartbeatTask = nil
+        authWatchdogTask?.cancel(); authWatchdogTask = nil
+        missedHeartbeats = 0
+        isAuthorized = false
         standbyState = nil
     }
 
@@ -239,6 +267,10 @@ final class TVCastReceiver {
         readTask = nil
         stateTask?.cancel()
         stateTask = nil
+        heartbeatTask?.cancel(); heartbeatTask = nil
+        authWatchdogTask?.cancel(); authWatchdogTask = nil
+        missedHeartbeats = 0
+        isAuthorized = false
         standbyState = nil
     }
 
@@ -263,11 +295,40 @@ final class TVCastReceiver {
         )
     }
 
+    private func startHeartbeat(connectionId: UUID) {
+        heartbeatTask?.cancel()
+        missedHeartbeats = 0
+        heartbeatTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Self.heartbeatInterval)
+                guard let self, self.activeConnectionId == connectionId else { return }
+                self.missedHeartbeats += 1
+                if self.missedHeartbeats > Self.maxMissedHeartbeats {
+                    Self.logger.info("cast: controller heartbeat timed out; closing session")
+                    self.closeActiveSession(sendClose: false)
+                    return
+                }
+                self.activeSession?.enqueue(.ping)
+            }
+        }
+    }
+
+    private func startAuthWatchdog(connectionId: UUID) {
+        authWatchdogTask?.cancel()
+        authWatchdogTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.authGracePeriod)
+            guard let self, self.activeConnectionId == connectionId, !self.isAuthorized else { return }
+            Self.logger.info("cast: controller never authorized; closing session")
+            self.closeActiveSession(sendClose: true)
+        }
+    }
+
     private func startStateUpdates() {
         stateTask?.cancel()
+        guard activeSession != nil else { return }
         stateTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(1))
+                try? await Task.sleep(for: .milliseconds(500))
                 self?.sendState()
             }
         }
@@ -281,9 +342,7 @@ final class TVCastReceiver {
         } else {
             state = idleState()
         }
-        Task {
-            try? await session.send(.state(state))
-        }
+        session.enqueue(.state(state))
     }
 
     private func sendLoadingState(for contentId: String) {
@@ -316,16 +375,12 @@ final class TVCastReceiver {
             nextEpisodeTitle: nil,
             error: nil
         )
-        Task {
-            try? await session.send(.state(state))
-        }
+        session.enqueue(.state(state))
     }
 
     private func sendError(code: String, message: String) {
         guard let session = activeSession else { return }
-        Task {
-            try? await session.send(.error(SiloCastErrorMessage(code: code, message: message)))
-        }
+        session.enqueue(.error(SiloCastErrorMessage(code: code, message: message)))
     }
 
     private func makeHello() -> SiloCastMessage {
