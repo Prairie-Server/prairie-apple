@@ -404,8 +404,8 @@ struct TVItemDetailView: View {
         guard let version = effectiveVersion(for: detail, versionFileId: versionFileId) else {
             return nil
         }
-        let available = version.audioTracks?.compactMap(\.index) ?? []
-        return available.contains(candidate) ? candidate : nil
+        let tracks = version.audioTracks ?? []
+        return tracks.indices.contains(candidate) ? candidate : nil
     }
 
     private func sanitizedSubtitleTrackIndex(

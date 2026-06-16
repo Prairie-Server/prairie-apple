@@ -577,10 +577,19 @@ struct FileVersion: Codable, Identifiable, Hashable {
     let presentationGroupKey: String?
     let presentationPartIndex: Int?
     let presentationPartTotal: Int?
-    /// Optional edition label (e.g. "Director's Cut", "Theatrical"). Used by
-    /// `PlaybackEditions` to group versions into editions on tvOS.
+    /// Server-current edition fields. `editionRaw` is the display label,
+    /// while `editionKey` is the stable grouping key.
+    let editionRaw: String?
+    let editionKey: String?
+    /// Legacy pre-`edition_raw` label kept as a decode fallback.
     let edition: String?
+    /// Server-resolved default audio track ordinal for this version.
+    let effectiveAudioTrackIndex: Int?
+    let effectiveAudioLanguage: String?
     var id: Int { fileId }
+    var editionDisplayLabel: String {
+        Self.normalizedEditionLabel(Self.firstNonEmpty(editionRaw, edition))
+    }
 
     init(
         fileId: Int,
@@ -603,7 +612,11 @@ struct FileVersion: Codable, Identifiable, Hashable {
         presentationGroupKey: String? = nil,
         presentationPartIndex: Int? = nil,
         presentationPartTotal: Int? = nil,
-        edition: String? = nil
+        editionRaw: String? = nil,
+        editionKey: String? = nil,
+        edition: String? = nil,
+        effectiveAudioTrackIndex: Int? = nil,
+        effectiveAudioLanguage: String? = nil
     ) {
         self.fileId = fileId
         self.fileName = fileName
@@ -625,7 +638,11 @@ struct FileVersion: Codable, Identifiable, Hashable {
         self.presentationGroupKey = presentationGroupKey
         self.presentationPartIndex = presentationPartIndex
         self.presentationPartTotal = presentationPartTotal
+        self.editionRaw = editionRaw
+        self.editionKey = editionKey
         self.edition = edition
+        self.effectiveAudioTrackIndex = effectiveAudioTrackIndex
+        self.effectiveAudioLanguage = effectiveAudioLanguage
     }
 
     init(from decoder: Decoder) throws {
@@ -650,7 +667,23 @@ struct FileVersion: Codable, Identifiable, Hashable {
         presentationGroupKey = try c.decodeIfPresent(String.self, forKey: .presentationGroupKey)
         presentationPartIndex = try c.decodeIfPresent(Int.self, forKey: .presentationPartIndex)
         presentationPartTotal = try c.decodeIfPresent(Int.self, forKey: .presentationPartTotal)
+        editionRaw = try c.decodeIfPresent(String.self, forKey: .editionRaw)
+        editionKey = try c.decodeIfPresent(String.self, forKey: .editionKey)
         edition = try c.decodeIfPresent(String.self, forKey: .edition)
+        effectiveAudioTrackIndex = try c.decodeIfPresent(Int.self, forKey: .effectiveAudioTrackIndex)
+        effectiveAudioLanguage = try c.decodeIfPresent(String.self, forKey: .effectiveAudioLanguage)
+    }
+
+    private static func normalizedEditionLabel(_ raw: String?) -> String {
+        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? "Standard" : trimmed
+    }
+
+    private static func firstNonEmpty(_ values: String?...) -> String? {
+        values.first { value in
+            guard let value else { return false }
+            return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        } ?? nil
     }
 }
 

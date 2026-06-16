@@ -103,15 +103,17 @@ struct TVDetailHero<Actions: View>: View {
         VStack(alignment: .leading, spacing: 24) {
             editorialColumn
 
-            HStack(alignment: .top, spacing: 0) {
-                actions()
-                    .padding(.top, 8)
-                Spacer(minLength: 0)
-            }
-            // Treat the hero controls as a full-width focus destination so
-            // lower rails can still move "up" into this cluster even when
-            // the currently focused card sits far to the right.
-            .focusSection()
+            // Give the action cluster the full hero width with leading
+            // content (instead of `HStack { actions(); Spacer() }`) so the
+            // selector row inside can stretch its own focus section full-width
+            // for Down navigation — a trailing Spacer would split the width
+            // with that greedy child and leave the section too narrow.
+            // Still a full-width focus destination so lower rails can move
+            // "up" into this cluster even from a far-right card.
+            actions()
+                .padding(.top, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .focusSection()
         }
         .padding(.leading, ContinuumTheme.safePadding)
         .padding(.trailing, ContinuumTheme.safePadding)

@@ -9,8 +9,12 @@ struct TVPrimaryPillButton: View {
     let icon: String
     let title: String
     let action: () -> Void
-    var prefersDefaultFocus: Bool = false
-    var defaultFocusNamespace: Namespace.ID? = nil
+    /// Optional focus binding so the owning detail view can both observe and
+    /// claim this button's focus. Combined with `.defaultFocus(…priority:
+    /// .userInitiated)` on the scroll container, this is the reliable way to
+    /// make Play win initial focus over the geometrically-higher synopsis —
+    /// `prefersDefaultFocus(_:in:)` loses to geometry in practice here.
+    var focused: FocusState<Bool>.Binding? = nil
 
     var body: some View {
         Button(action: action) {
@@ -23,8 +27,19 @@ struct TVPrimaryPillButton: View {
                     .fixedSize(horizontal: true, vertical: false)
             }
         }
-        .buttonStyle(TVPillButtonStyle(kind: .primary))
-        .applyDefaultFocusIfNeeded(prefersDefaultFocus, namespace: defaultFocusNamespace)
+        .buttonStyle(TVPillButtonStyle(kind: .primary, focusTreatment: .compact))
+        .applyOptionalFocus(focused)
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func applyOptionalFocus(_ binding: FocusState<Bool>.Binding?) -> some View {
+        if let binding {
+            self.focused(binding)
+        } else {
+            self
+        }
     }
 }
 
@@ -50,7 +65,7 @@ struct TVSecondaryPillButton: View {
                     .fixedSize(horizontal: true, vertical: false)
             }
         }
-        .buttonStyle(TVPillButtonStyle(kind: .secondary))
+        .buttonStyle(TVPillButtonStyle(kind: .secondary, focusTreatment: .compact))
     }
 }
 
@@ -169,16 +184,25 @@ struct TVCircleActionButton: View {
 /// button's bounds. A custom `ButtonStyle` fully suppresses that.
 struct TVPillButtonStyle: ButtonStyle {
     enum Kind { case primary, secondary }
+    enum FocusTreatment { case hero, compact }
+
     let kind: Kind
+    let focusTreatment: FocusTreatment
+
+    init(kind: Kind, focusTreatment: FocusTreatment = .hero) {
+        self.kind = kind
+        self.focusTreatment = focusTreatment
+    }
 
     func makeBody(configuration: Configuration) -> some View {
-        TVPillButtonBody(configuration: configuration, kind: kind)
+        TVPillButtonBody(configuration: configuration, kind: kind, focusTreatment: focusTreatment)
     }
 }
 
 private struct TVPillButtonBody: View {
     let configuration: ButtonStyleConfiguration
     let kind: TVPillButtonStyle.Kind
+    let focusTreatment: TVPillButtonStyle.FocusTreatment
 
     @Environment(\.isFocused) private var isFocused
 
@@ -259,21 +283,31 @@ private struct TVPillButtonBody: View {
     }
 
     private var focusOutlineWidth: CGFloat {
-        kind == .primary ? 4 : 3.5
+        if focusTreatment == .compact { return 2.5 }
+        return kind == .primary ? 4 : 3.5
     }
 
     private var focusOutlineInset: CGFloat {
-        kind == .primary ? 7 : 6
+        if focusTreatment == .compact { return 3 }
+        return kind == .primary ? 7 : 6
     }
 
     private var scale: CGFloat {
         let base: CGFloat = isFocused
-            ? (kind == .primary ? 1.085 : 1.06)
+            ? focusedScale
             : 1.0
         return configuration.isPressed ? base * 0.98 : base
     }
 
+    private var focusedScale: CGFloat {
+        if focusTreatment == .compact { return 1.025 }
+        return kind == .primary ? 1.085 : 1.06
+    }
+
     private var shadowOpacity: Double {
+        if focusTreatment == .compact {
+            return isFocused ? 0.24 : 0.14
+        }
         switch kind {
         case .primary: return isFocused ? 0.42 : 0.20
         case .secondary: return isFocused ? 0.36 : 0.18
@@ -281,20 +315,34 @@ private struct TVPillButtonBody: View {
     }
 
     private var shadowRadius: CGFloat {
+        if focusTreatment == .compact {
+            return isFocused ? 10 : 4
+        }
         switch kind {
         case .primary: return isFocused ? 24 : 6
         case .secondary: return isFocused ? 20 : 4
         }
     }
 
-    private var shadowY: CGFloat { isFocused ? 10 : 2 }
+    private var shadowY: CGFloat {
+        if focusTreatment == .compact {
+            return isFocused ? 4 : 2
+        }
+        return isFocused ? 10 : 2
+    }
 
     private var focusGlowOpacity: Double {
-        isFocused ? 0.18 : 0
+        if focusTreatment == .compact {
+            return isFocused ? 0.08 : 0
+        }
+        return isFocused ? 0.18 : 0
     }
 
     private var focusGlowRadius: CGFloat {
-        isFocused ? (kind == .primary ? 14 : 12) : 0
+        if focusTreatment == .compact {
+            return isFocused ? 6 : 0
+        }
+        return isFocused ? (kind == .primary ? 14 : 12) : 0
     }
 }
 

@@ -1,8 +1,9 @@
 import Foundation
 
 /// Groups a content's file versions into editions (Director's Cut, Theatrical,
-/// …) and resolves the edition that owns a given file. tvOS has no server-side
-/// `PlaybackVariant` grouping, so editions are derived from `FileVersion.edition`.
+/// …) and resolves the edition that owns a given file. The server's
+/// `edition_key` is the stable grouping identity; display falls back through
+/// `edition_raw`, legacy `edition`, then "Standard".
 /// A version with no edition label is grouped under "Standard".
 enum PlaybackEditions {
     struct Edition: Identifiable, Hashable {
@@ -15,19 +16,20 @@ enum PlaybackEditions {
     static func editions(from versions: [FileVersion]) -> [Edition] {
         var order: [String] = []
         var groups: [String: [FileVersion]] = [:]
+        var labels: [String: String] = [:]
         for version in versions {
-            let label = normalizedLabel(version.edition)
-            let key = label.lowercased()
+            let key = normalizedKey(for: version)
             if groups[key] == nil {
                 order.append(key)
                 groups[key] = []
+                labels[key] = version.editionDisplayLabel
             }
             groups[key]?.append(version)
         }
         return order.map { key in
             Edition(
                 id: key,
-                label: normalizedLabel(groups[key]?.first?.edition),
+                label: labels[key] ?? "Standard",
                 versions: groups[key] ?? []
             )
         }
@@ -41,8 +43,9 @@ enum PlaybackEditions {
         }
     }
 
-    private static func normalizedLabel(_ raw: String?) -> String {
-        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? "Standard" : trimmed
+    private static func normalizedKey(for version: FileVersion) -> String {
+        let key = version.editionKey?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        if !key.isEmpty { return key }
+        return version.editionDisplayLabel.lowercased()
     }
 }

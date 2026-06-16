@@ -16,11 +16,6 @@ struct HomeView: View {
     var onTopMenuFocusRequest: (() -> Void)? = nil
 
     @State private var viewModel = HomeViewModel()
-    #if os(tvOS)
-    /// Skyline folded the For You root into Home (§4.1): its rows render
-    /// after Continue Watching, reusing the recommendations data source.
-    @State private var recommendationsViewModel = RecommendationsViewModel()
-    #endif
     #if !os(tvOS)
     @State private var currentProfile: UserProfile?
     @State private var homeScrollOffset: CGFloat = 0
@@ -44,18 +39,10 @@ struct HomeView: View {
         // utility actions; Home renders the focus marquee over rows, with
         // the backdrop tracking whichever card holds focus (§5.4).
         #if os(tvOS)
-        // The shared Skyline feed — the exact same layout component the
-        // library Browse tabs use, so Home and the library pages are
-        // identical. For You recommendation rows are folded into
-        // `displayedSections` right after Continue Watching (§6.1).
+        // The shared Skyline feed uses the same layout component as the
+        // library Browse tabs; Home supplies only the server-resolved Home rows.
         Group {
-            if viewModel.sections.isEmpty {
-                if let error = viewModel.error {
-                    ErrorView(state: error, onRetry: { Task { await viewModel.loadSections() } })
-                } else {
-                    Color.clear
-                }
-            } else {
+            if !displayedSections.isEmpty {
                 TVSkylineSectionFeed(
                     sections: displayedSections,
                     focusRequest: homeFocusRequest,
@@ -63,13 +50,21 @@ struct HomeView: View {
                     onTopMenuFocusRequest: onTopMenuFocusRequest,
                     onItemTap: { navigateToDetail($0) }
                 )
+            } else if let error = viewModel.error {
+                ErrorView(state: error, onRetry: { Task { await viewModel.loadSections() } })
+            } else if viewModel.isLoading {
+                Color.clear
+            } else {
+                EmptyStateView(
+                    icon: "play.rectangle.on.rectangle",
+                    title: "Nothing to watch yet",
+                    subtitle: "Add media to your libraries or start watching to see it here."
+                )
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task {
-            async let sectionsLoad: Void = viewModel.loadSections()
-            async let recommendationsLoad: Void = recommendationsViewModel.loadRecommendations()
-            _ = await (sectionsLoad, recommendationsLoad)
+            await viewModel.loadSections()
         }
         .onAppear {
             // Refresh on return (e.g. after player dismiss) so
@@ -197,43 +192,10 @@ struct HomeView: View {
         case row(String)
     }
 
-    /// Rows for the vertical list. On tvOS the For You recommendation rows
-    /// fold in right after Continue Watching (Skyline §6.1); other
-    /// platforms keep their dedicated Recommendations tab.
+    /// Rows for the vertical list, in server Home order after filtering empty
+    /// and featured sections. Recommendations stay in the For You tab.
     private var displayedSections: [ResolvedSection] {
-        #if os(tvOS)
-        let home = viewModel.regularSections
-        let recommendations = recommendationsViewModel.sections
-            .filter { !$0.items.isEmpty }
-            .map { section in
-                // Re-key so a recommendations row can never collide with a
-                // home row that shares the same server section id.
-                ResolvedSection(
-                    id: "rec:\(section.id)",
-                    sectionType: section.sectionType,
-                    title: section.title,
-                    featured: false,
-                    itemLimit: section.itemLimit,
-                    totalCount: section.totalCount,
-                    isCustom: section.isCustom,
-                    customized: section.customized,
-                    items: section.items
-                )
-            }
-        guard !recommendations.isEmpty else { return home }
-
-        let continueWatchingIndex = home.lastIndex(where: {
-            $0.sectionType == "continue_watching" || $0.sectionType == "in_progress"
-        })
-        var merged = home
-        merged.insert(
-            contentsOf: recommendations,
-            at: continueWatchingIndex.map { $0 + 1 } ?? 0
-        )
-        return merged
-        #else
         return viewModel.regularSections
-        #endif
     }
 
     #if !os(tvOS)

@@ -13,11 +13,9 @@ class HomeViewModel {
     var isRefreshing = false
     var error: ErrorState?
 
-    /// Sections for the vertical list, filtered to non-empty. `featured`
-    /// sections are intentionally excluded — the resume-first Home drops the
-    /// server's featured section entirely (matching tvOS Skyline) rather than
-    /// surfacing it as a hero. See
-    /// docs/superpowers/specs/2026-06-15-resume-first-home-design.md.
+    /// Sections for Home in server order, filtered to non-empty rows.
+    /// `featured` sections are intentionally excluded so Apple Home respects
+    /// the configured Home rows without rendering a separate hero surface.
     var regularSections: [ResolvedSection] {
         sections.filter { !$0.isFeatured && !$0.items.isEmpty }
     }

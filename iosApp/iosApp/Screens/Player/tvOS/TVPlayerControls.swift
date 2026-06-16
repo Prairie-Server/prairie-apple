@@ -203,29 +203,23 @@ struct TVPlayerControls: View {
     }
 
     private var introSkipButton: some View {
-        VStack(alignment: .trailing, spacing: 12) {
+        VStack(alignment: .trailing, spacing: 16) {
             if let countdown = viewModel.introAutoSkipCountdownSeconds {
-                Text("Skipping intro in \(countdown)")
-                    .font(.system(size: 22, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 10)
-                    .background(Capsule(style: .continuous).fill(.ultraThinMaterial))
-                    .shadow(color: .black.opacity(0.4), radius: 12, y: 5)
+                markerCountdownBadge(countdown)
             }
 
-            HStack(spacing: 14) {
+            HStack(spacing: 18) {
                 if viewModel.introAutoSkipCountdownSeconds != nil {
                     Button {
                         viewModel.cancelIntroAutoSkip()
                     } label: {
-                        Text("Cancel")
-                            .font(.system(size: 26, weight: .semibold, design: .rounded))
+                        Label("Cancel", systemImage: "xmark")
+                            .font(.system(size: 24, weight: .semibold))
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
-                            .frame(width: 120)
+                            .frame(width: 136)
                     }
-                    .buttonStyle(TVPillButtonStyle(kind: .secondary))
+                    .buttonStyle(TVPillButtonStyle(kind: .secondary, focusTreatment: .compact))
                     .focused($focusedIntroAction, equals: .cancel)
                     .accessibilityLabel("Cancel Auto-Skip Intro")
                 }
@@ -243,16 +237,43 @@ struct TVPlayerControls: View {
                 viewModel.introAutoSkipCountdownSeconds == nil ? "Skip Intro" : "Skip Now",
                 systemImage: "forward.end.fill"
             )
-                .font(.system(size: 28, weight: .semibold, design: .rounded))
+                .font(.system(size: 26, weight: .semibold))
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
-                .frame(width: 190)
+                .frame(width: 196)
         }
-        .buttonStyle(TVPillButtonStyle(kind: .primary))
+        .buttonStyle(TVPillButtonStyle(kind: .primary, focusTreatment: .compact))
         .focused($focusedIntroAction, equals: .skip)
         .accessibilityLabel(
             viewModel.introAutoSkipCountdownSeconds == nil ? "Skip Intro" : "Skip Intro Now"
         )
+    }
+
+    private func markerCountdownBadge(_ countdown: Int) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "sparkles.tv")
+                .font(.system(size: 19, weight: .semibold))
+            Text("Intro")
+                .font(.system(size: 17, weight: .bold))
+                .textCase(.uppercase)
+                .tracking(1.0)
+                .foregroundStyle(.white.opacity(0.62))
+            Text("Skipping in \(countdown)")
+                .font(.system(size: 22, weight: .semibold))
+                .monospacedDigit()
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 11)
+        .background(
+            RoundedRectangle(cornerRadius: ContinuumTheme.smallCornerRadius, style: .continuous)
+                .fill(Color.black.opacity(0.46))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: ContinuumTheme.smallCornerRadius, style: .continuous)
+                .stroke(Color.white.opacity(0.24), lineWidth: 1.2)
+        )
+        .shadow(color: .black.opacity(0.32), radius: 10, y: 4)
     }
 
     private enum IntroAction: Hashable {

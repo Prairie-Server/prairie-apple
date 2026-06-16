@@ -31,6 +31,11 @@ struct TVSeriesDetailView: View {
     let onNavigateToItem: (String) -> Void
 
     @Namespace private var detailFocusNamespace
+    @FocusState private var playFocused: Bool
+    /// One-shot so we only auto-claim Play focus the first time the next-up
+    /// episode resolves (it loads asynchronously) — never yank focus back if
+    /// the viewer has already moved on.
+    @State private var didAutoFocusPlay = false
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
@@ -64,6 +69,12 @@ struct TVSeriesDetailView: View {
         }
         .ignoresSafeArea()
         .focusScope(detailFocusNamespace)
+        .defaultFocus($playFocused, true, priority: .userInitiated)
+        .onChange(of: nextUpEpisode?.contentId) { _, newValue in
+            guard newValue != nil, !didAutoFocusPlay else { return }
+            didAutoFocusPlay = true
+            playFocused = true
+        }
     }
 
     // MARK: - Hero actions
@@ -94,14 +105,13 @@ struct TVSeriesDetailView: View {
     }
 
     private var actionRow: some View {
-        HStack(spacing: 28) {
+        HStack(spacing: 36) {
             if let nextUp = nextUpEpisode {
                 TVPrimaryPillButton(
                     icon: "play.fill",
                     title: playButtonLabel(for: nextUp),
                     action: { onPlayEpisode(nextUp.contentId, selectedFileId(for: nextUp), false) },
-                    prefersDefaultFocus: true,
-                    defaultFocusNamespace: detailFocusNamespace
+                    focused: $playFocused
                 )
                 if nextUp.userData?.isInProgress == true {
                     TVSecondaryPillButton(

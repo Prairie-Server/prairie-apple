@@ -31,6 +31,7 @@ struct TVMovieDetailView: View {
     let onEpisodeTap: (String) -> Void
 
     @Namespace private var detailFocusNamespace
+    @FocusState private var playFocused: Bool
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
@@ -68,6 +69,7 @@ struct TVMovieDetailView: View {
         }
         .ignoresSafeArea()
         .focusScope(detailFocusNamespace)
+        .defaultFocus($playFocused, true, priority: .userInitiated)
     }
 
     // MARK: - Hero actions
@@ -94,13 +96,12 @@ struct TVMovieDetailView: View {
     }
 
     private var actionRow: some View {
-        HStack(spacing: 28) {
+        HStack(spacing: 36) {
             TVPrimaryPillButton(
                 icon: "play.fill",
                 title: primaryPlayLabel,
                 action: { onPlay(false) },
-                prefersDefaultFocus: true,
-                defaultFocusNamespace: detailFocusNamespace
+                focused: $playFocused
             )
 
             if hasResumeProgress {

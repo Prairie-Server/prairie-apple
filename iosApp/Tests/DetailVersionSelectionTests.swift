@@ -4,8 +4,16 @@ import Foundation
 struct DetailVersionSelectionTests {
     static func main() {
         testAutoDisplayPrefersBestVersionOverFirstReturnedVersion()
+        testFileVersionDecodesServerEditionFields()
         testEditionsGroupVersionsByEditionLabel()
+        testLegacyEditionFallbackStillGroups()
         testEditionForFileIdFindsOwningEdition()
+        testAudioOptionsUseOrdinalIndexes()
+        testEffectiveAudioLabelPrefersServerEffectiveTrack()
+        testAudioLabelsSimplifyTechnicalTitles()
+        testSubtitleNilIndexDoesNotCollideWithOff()
+        testSubtitleLabelsIncludeTypeAndLanguage()
+        testUntaggedEditionDisplaysStandard()
         testFileVersionDecodesIntroAndCreditsMarkers()
         testAudiobookDetailAndPresentationFieldsDecode()
         testAudiobookMediaTypeNormalization()
@@ -41,8 +49,8 @@ struct DetailVersionSelectionTests {
     private static func testEditionsGroupVersionsByEditionLabel() {
         let versions = decodedVersions("""
         [
-          { "file_id": 1, "edition": "Director's Cut", "resolution": "4K" },
-          { "file_id": 2, "edition": "Director's Cut", "resolution": "1080p" },
+          { "file_id": 1, "edition_raw": "Director's Cut", "edition_key": "directors_cut", "resolution": "4K" },
+          { "file_id": 2, "edition_raw": "Director's Cut", "edition_key": "directors_cut", "resolution": "1080p" },
           { "file_id": 3, "resolution": "1080p" }
         ]
         """)
@@ -53,6 +61,42 @@ struct DetailVersionSelectionTests {
         precondition(editions[0].label == "Director's Cut", "First edition label wrong: \(editions[0].label)")
         precondition(editions[0].versions.count == 2, "Director's Cut should hold 2 versions")
         precondition(editions[1].label == "Standard", "Untitled edition should be labeled Standard; got \(editions[1].label)")
+    }
+
+    private static func testFileVersionDecodesServerEditionFields() {
+        let versions = decodedVersions("""
+        [
+          {
+            "file_id": 10,
+            "edition_raw": "Final Cut",
+            "edition_key": "final_cut",
+            "edition": "Legacy Cut",
+            "resolution": "4K"
+          }
+        ]
+        """)
+
+        let version = versions[0]
+
+        precondition(version.editionRaw == "Final Cut")
+        precondition(version.editionKey == "final_cut")
+        precondition(version.edition == "Legacy Cut")
+        precondition(version.editionDisplayLabel == "Final Cut")
+    }
+
+    private static func testLegacyEditionFallbackStillGroups() {
+        let versions = decodedVersions("""
+        [
+          { "file_id": 1, "edition": "Theatrical", "resolution": "1080p" },
+          { "file_id": 2, "edition": "Theatrical", "resolution": "720p" }
+        ]
+        """)
+
+        let editions = PlaybackEditions.editions(from: versions)
+
+        precondition(editions.count == 1, "Legacy edition field should still group versions")
+        precondition(editions[0].label == "Theatrical")
+        precondition(editions[0].versions.map(\.fileId) == [1, 2])
     }
 
     private static func testEditionForFileIdFindsOwningEdition() {
@@ -66,6 +110,214 @@ struct DetailVersionSelectionTests {
         let edition = PlaybackEditions.edition(forFileId: 2, in: versions)
 
         precondition(edition?.label == "Extended", "fileId 2 should resolve to Extended; got \(edition?.label ?? "nil")")
+    }
+
+    private static func testAudioOptionsUseOrdinalIndexes() {
+        let versions = decodedVersions("""
+        [
+          {
+            "file_id": 1,
+            "audio_tracks": [
+              { "codec": "aac", "language": "eng", "default": true },
+              { "codec": "truehd", "language": "jpn", "layout": "7.1" }
+            ]
+          }
+        ]
+        """)
+
+        let options = DetailPlaybackFormatting.audioOptions(
+            version: versions[0],
+            selectedAudioTrackIndex: 1
+        )
+
+        precondition(options.count == 2)
+        precondition(options[0].ordinal == 0)
+        precondition(options[1].ordinal == 1)
+        precondition(options[1].isSelected)
+    }
+
+    private static func testEffectiveAudioLabelPrefersServerEffectiveTrack() {
+        let versions = decodedVersions("""
+        [
+          {
+            "file_id": 1,
+            "effective_audio_track_index": 1,
+            "audio_tracks": [
+              { "codec": "aac", "language": "eng", "default": true },
+              { "codec": "truehd", "language": "jpn", "layout": "7.1" }
+            ]
+          }
+        ]
+        """)
+
+        let version = versions[0]
+        let effectiveLabel = DetailPlaybackFormatting.audioValueLabel(
+            version: version,
+            selectedAudioTrackIndex: nil
+        )
+        let selectedLabel = DetailPlaybackFormatting.audioValueLabel(
+            version: version,
+            selectedAudioTrackIndex: 0
+        )
+
+        precondition(version.effectiveAudioTrackIndex == 1)
+        precondition(effectiveLabel == "TrueHD 7.1 - Japanese", "Expected effective track label; got \(effectiveLabel)")
+        precondition(selectedLabel == "AAC - English", "Selected ordinal should override effective track; got \(selectedLabel)")
+
+        let defaultFallback = decodedVersions("""
+        [
+          {
+            "file_id": 2,
+            "audio_tracks": [
+              { "codec": "aac", "language": "eng" },
+              { "codec": "ac3", "language": "spa", "default": true }
+            ]
+          }
+        ]
+        """)[0]
+        let defaultLabel = DetailPlaybackFormatting.audioValueLabel(
+            version: defaultFallback,
+            selectedAudioTrackIndex: nil
+        )
+        precondition(defaultLabel == "AC3 - Spanish", "Expected default track label; got \(defaultLabel)")
+
+        let firstFallback = decodedVersions("""
+        [
+          {
+            "file_id": 3,
+            "audio_tracks": [
+              { "codec": "aac", "language": "eng" },
+              { "codec": "ac3", "language": "spa" }
+            ]
+          }
+        ]
+        """)[0]
+        let firstLabel = DetailPlaybackFormatting.audioValueLabel(
+            version: firstFallback,
+            selectedAudioTrackIndex: nil
+        )
+        precondition(firstLabel == "AAC - English", "Expected first track fallback; got \(firstLabel)")
+    }
+
+    private static func testAudioLabelsSimplifyTechnicalTitles() {
+        let versions = decodedVersions("""
+        [
+          {
+            "file_id": 1,
+            "effective_audio_track_index": 0,
+            "audio_tracks": [
+              {
+                "title": "atsc a/52b (ac-3, e-ac-3)",
+                "codec": "eac3",
+                "channels": 6,
+                "language": "eng",
+                "default": true
+              }
+            ]
+          }
+        ]
+        """)
+
+        let label = DetailPlaybackFormatting.audioValueLabel(
+            version: versions[0],
+            selectedAudioTrackIndex: nil
+        )
+        let options = DetailPlaybackFormatting.audioOptions(
+            version: versions[0],
+            selectedAudioTrackIndex: nil
+        )
+
+        precondition(label == "EAC3 5.1 - English", "Expected simplified audio label; got \(label)")
+        precondition(options[0].title == "EAC3 5.1 - English")
+        precondition(options[0].detail == "Default · Preferred")
+    }
+
+    private static func testSubtitleNilIndexDoesNotCollideWithOff() {
+        let versions = decodedVersions("""
+        [
+          {
+            "file_id": 1,
+            "subtitle_tracks": [
+              {
+                "codec": "srt",
+                "language": "eng",
+                "file_name": "/subs/English.srt",
+                "external": true
+              }
+            ]
+          }
+        ]
+        """)
+
+        let options = DetailPlaybackFormatting.subtitleOptions(
+            version: versions[0],
+            selectedSubtitleTrackIndex: -1
+        )
+
+        precondition(options.count == 1)
+        precondition(options[0].selectionIndex == nil)
+        precondition(options[0].title == "SubRip - English")
+        precondition(!options[0].isSelectable)
+        precondition(!options[0].isSelected)
+        precondition(
+            DetailPlaybackFormatting.subtitleValueLabel(
+                version: versions[0],
+                selectedSubtitleTrackIndex: -1
+            ) == "Off"
+        )
+    }
+
+    private static func testSubtitleLabelsIncludeTypeAndLanguage() {
+        let versions = decodedVersions("""
+        [
+          {
+            "file_id": 1,
+            "subtitle_tracks": [
+              {
+                "index": 2,
+                "title": "sdh",
+                "codec": "subrip",
+                "language": "eng",
+                "default": true
+              },
+              {
+                "index": 3,
+                "codec": "srt",
+                "language": "jpn"
+              }
+            ]
+          }
+        ]
+        """)
+
+        let options = DetailPlaybackFormatting.subtitleOptions(
+            version: versions[0],
+            selectedSubtitleTrackIndex: 2
+        )
+        let selectedLabel = DetailPlaybackFormatting.subtitleValueLabel(
+            version: versions[0],
+            selectedSubtitleTrackIndex: 2
+        )
+
+        precondition(options.count == 2)
+        precondition(options[0].title == "SDH - English", "Expected SDH language label; got \(options[0].title)")
+        precondition(options[0].detail == "SubRip · Default", "Expected subtitle type detail; got \(options[0].detail)")
+        precondition(options[1].title == "SubRip - Japanese", "Expected fallback subtitle type and language; got \(options[1].title)")
+        precondition(selectedLabel == "SDH - English", "Expected selected subtitle label; got \(selectedLabel)")
+    }
+
+    private static func testUntaggedEditionDisplaysStandard() {
+        let versions = decodedVersions("""
+        [
+          { "file_id": 1, "resolution": "1080p" }
+        ]
+        """)
+
+        let editions = PlaybackEditions.editions(from: versions)
+
+        precondition(versions[0].editionDisplayLabel == "Standard")
+        precondition(editions.count == 1)
+        precondition(editions[0].label == "Standard")
     }
 
     private static func version(fileId: Int, resolution: String?) -> FileVersion {
