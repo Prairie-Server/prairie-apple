@@ -10,6 +10,7 @@ struct TVExpandableSynopsis: View {
     let tagline: String?
 
     @State private var expanded = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let maxWidth: CGFloat = 1200
 
     var body: some View {
@@ -32,7 +33,7 @@ struct TVExpandableSynopsis: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(TVSynopsisButtonStyle())
-        .animation(.easeOut(duration: ContinuumTheme.normalDuration), value: expanded)
+        .animation(reduceMotion ? nil : .easeOut(duration: ContinuumTheme.normalDuration), value: expanded)
     }
 }
 
