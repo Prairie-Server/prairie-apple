@@ -3,6 +3,9 @@ import SwiftUI
 struct ContentView: View {
     @State private var router = AppRouter()
     @State private var audioStore = AudioPlaybackStore()
+    #if os(iOS)
+    @State private var castController = SiloCastController()
+    #endif
     @State private var debugPlayContentId: String?
     @State private var didAttemptDebugAutoPlay = false
     @State private var didStartInitialStateCheck = false
@@ -25,6 +28,9 @@ struct ContentView: View {
     var body: some View {
         authContent
         .environment(audioStore)
+        #if os(iOS)
+        .environment(castController)
+        #endif
         .environmentObject(overlayPrefs)
         .preferredColorScheme(.dark)
         #if os(iOS)
@@ -463,6 +469,9 @@ struct MainTabView: View {
     @State private var selectedTab: AppTab = .home
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @Environment(AudioPlaybackStore.self) private var audioStore
+    #if os(iOS)
+    @Environment(SiloCastController.self) private var castController
+    #endif
     #if !os(macOS)
     @Environment(\.horizontalSizeClass) private var hSize
     #endif
@@ -498,6 +507,14 @@ struct MainTabView: View {
                 backdropURLHint: payload.backdropURL
             )
         }
+        #if os(iOS)
+        .fullScreenCover(isPresented: Binding(
+            get: { castController.isShowingRemoteControl },
+            set: { if !$0 { castController.hideRemoteControl() } }
+        )) {
+            SiloCastRemoteControlView(controller: castController)
+        }
+        #endif
         #endif
         // Outside the presentation modifiers so presented covers (audio
         // player, video player) inherit the router — ErrorView requires

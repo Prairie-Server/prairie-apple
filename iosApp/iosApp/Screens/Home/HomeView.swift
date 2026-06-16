@@ -24,6 +24,8 @@ struct HomeView: View {
     @State private var refreshHideTask: Task<Void, Never>?
     private let chromeFadeDistance: CGFloat = 72
     #if os(iOS)
+    @State private var isShowingCastPicker = false
+    @Environment(SiloCastController.self) private var castController
     /// Pull the floating header up into the unused safe-area band beside the
     /// Dynamic Island. The logo sits on the left and the action icons on the
     /// right, so the centered island and status-bar glyphs are never overlapped.
@@ -107,6 +109,12 @@ struct HomeView: View {
 
                 Spacer(minLength: 8)
 
+                #if os(iOS)
+                SiloCastControlModeButton(controller: castController) {
+                    isShowingCastPicker = true
+                }
+                #endif
+
                 TabTopBarActions(
                     profile: currentProfile,
                     onSearch: { router.navigate(to: .search) },
@@ -148,6 +156,11 @@ struct HomeView: View {
         .refreshable {
             await refreshHome()
         }
+        #if os(iOS)
+        .sheet(isPresented: $isShowingCastPicker) {
+            SiloCastTargetPickerView(request: nil, controller: castController)
+        }
+        #endif
         #endif
     }
 

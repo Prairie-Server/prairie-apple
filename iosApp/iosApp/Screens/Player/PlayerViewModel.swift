@@ -5281,3 +5281,149 @@ class PlayerViewModel {
         )
     }
 }
+
+private enum SiloCastPlayerControlError: LocalizedError {
+    case missingSeekPosition
+    case missingTrackId
+    case missingSpeed
+    case missingValue
+    case missingEnabledValue
+    case trackNotFound
+    case invalidVideoGravity
+
+    var errorDescription: String? {
+        switch self {
+        case .missingSeekPosition:
+            return "Missing seek position."
+        case .missingTrackId:
+            return "Missing track id."
+        case .missingSpeed:
+            return "Missing playback speed."
+        case .missingValue:
+            return "Missing setting value."
+        case .missingEnabledValue:
+            return "Missing enabled value."
+        case .trackNotFound:
+            return "Track not found."
+        case .invalidVideoGravity:
+            return "Invalid aspect setting."
+        }
+    }
+}
+
+extension PlayerViewModel {
+    @MainActor
+    func applySiloCastControl(_ command: SiloCastControlCommand) throws {
+        switch command.name {
+        case .play:
+            activePlayer.play()
+            scheduleHideControls()
+        case .pause:
+            activePlayer.pause()
+            scheduleHideControls()
+        case .playPause:
+            togglePlayPause()
+        case .seek:
+            guard let seconds = command.seconds else {
+                throw SiloCastPlayerControlError.missingSeekPosition
+            }
+            seekTo(seconds: seconds)
+        case .stop:
+            activePlayer.pause()
+            requestRemoteDismiss()
+        case .selectAudioTrack:
+            guard let trackId = command.trackId else {
+                throw SiloCastPlayerControlError.missingTrackId
+            }
+            guard let track = audioTracks.first(where: { $0.trackId == trackId }) else {
+                throw SiloCastPlayerControlError.trackNotFound
+            }
+            selectAudio(track)
+        case .selectSubtitleTrack:
+            guard let trackId = command.trackId else {
+                disableSubtitles()
+                return
+            }
+            guard let track = subtitleTracks.first(where: { $0.trackId == trackId }) else {
+                throw SiloCastPlayerControlError.trackNotFound
+            }
+            selectSubtitle(track)
+        case .setPlaybackSpeed:
+            guard let speed = command.speed, speed.isFinite, speed > 0 else {
+                throw SiloCastPlayerControlError.missingSpeed
+            }
+            setPlaybackSpeed(speed)
+        case .setQuality:
+            guard let value = command.value else {
+                throw SiloCastPlayerControlError.missingValue
+            }
+            switchQuality(value)
+        case .setVideoGravity:
+            guard let value = command.value else {
+                throw SiloCastPlayerControlError.missingValue
+            }
+            guard let gravity = VideoGravity(rawValue: value) else {
+                throw SiloCastPlayerControlError.invalidVideoGravity
+            }
+            setVideoGravity(gravity)
+        case .setHDREnabled:
+            guard let enabled = command.enabled else {
+                throw SiloCastPlayerControlError.missingEnabledValue
+            }
+            setHDREnabled(enabled)
+        }
+    }
+
+    @MainActor
+    func makeSiloCastPlaybackState(contentId: String?) -> SiloCastPlaybackState {
+        let titleText = metadata.primaryTitle.isEmpty ? title : metadata.primaryTitle
+        let subtitleText = [metadata.seriesTitle, metadata.episodeTag]
+            .compactMap { value -> String? in
+                guard let value, !value.isEmpty else { return nil }
+                return value
+            }
+            .joined(separator: " · ")
+
+        return SiloCastPlaybackState(
+            contentId: contentId,
+            sessionId: activePlaybackSessionId,
+            title: titleText.isEmpty ? "Loading" : titleText,
+            subtitle: subtitleText.isEmpty ? nil : subtitleText,
+            isPlaying: isPlaying,
+            isLoading: isLoading,
+            isBuffering: isBuffering,
+            currentTime: currentTime,
+            duration: duration,
+            audioTracks: audioTracks.map(makeSiloCastTrack),
+            subtitleTracks: subtitleTracks.map(makeSiloCastTrack),
+            selectedAudioTrackId: selectedAudioId,
+            selectedSubtitleTrackId: selectedSubtitleId,
+            qualityOptions: qualityOptions.map(makeSiloCastOption),
+            activeQualityId: activeQualityId,
+            isQualitySwitching: isQualitySwitching,
+            playbackSpeed: settings.playbackSpeed,
+            videoGravity: settings.videoGravity.rawValue,
+            hdrEnabled: settings.hdrEnabled,
+            supportsVideoGravity: backendCapabilities.supportsVideoGravity,
+            supportsHDRToggle: backendCapabilities.supportsHDRToggle,
+            error: error
+        )
+    }
+
+    private func makeSiloCastTrack(_ track: PlayerTrack) -> SiloCastTrack {
+        SiloCastTrack(
+            kind: track.kind.rawValue,
+            trackId: track.trackId,
+            title: track.primaryLabel,
+            detail: track.attributesLabel
+        )
+    }
+
+    private func makeSiloCastOption(_ option: ApplePlaybackQualityOption) -> SiloCastOption {
+        SiloCastOption(
+            id: option.id,
+            label: option.labelWithBitrate,
+            detail: option.subtitle
+        )
+    }
+}

@@ -30,6 +30,9 @@ private struct ItemDetailPhoneContent: View {
     @State private var preferredNextUpSubtitleTrackIndex: Int?
     @State private var nextUpWatchDetail: WatchDetail?
     @State private var refreshOnPlayerDismiss = false
+    #if os(iOS)
+    @Environment(SiloCastController.self) private var castController
+    #endif
     @Environment(AppRouter.self) private var router
 
     var body: some View {
@@ -482,6 +485,23 @@ private struct ItemDetailPhoneContent: View {
         startFromBeginning: Bool,
         resumePosition: Double?
     ) {
+        #if os(iOS)
+        if castController.hasActiveSession {
+            let request = SiloCastPlaybackRequest(
+                contentId: contentId,
+                fileId: fileId,
+                audioTrackIndex: audioTrackIndex,
+                subtitleTrackIndex: subtitleTrackIndex,
+                startFromBeginning: startFromBeginning,
+                resumePosition: resumePosition
+            )
+            Task {
+                await castController.launch(request)
+            }
+            return
+        }
+        #endif
+
         refreshOnPlayerDismiss = true
         // Pass the artwork URLs we already loaded into the detail view so
         // PlayerViewModel.pushNowPlayingArtwork can publish lock-screen art

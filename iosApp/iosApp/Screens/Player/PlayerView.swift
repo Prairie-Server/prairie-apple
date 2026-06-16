@@ -209,8 +209,14 @@ struct PlayerView: View {
                 startFromBeginning: startFromBeginning,
                 resumePositionOverride: resumePositionOverride
             )
+            #if os(tvOS)
+            TVCastReceiver.shared.registerPlayer(viewModel, contentId: contentId)
+            #endif
         }
         .onDisappear {
+            #if os(tvOS)
+            TVCastReceiver.shared.unregisterPlayer(viewModel)
+            #endif
             viewModel.cleanup()
             #if os(iOS)
             orientationCoordinator.deactivatePlayer()
