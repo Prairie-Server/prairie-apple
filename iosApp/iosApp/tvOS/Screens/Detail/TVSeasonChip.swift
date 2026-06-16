@@ -59,11 +59,11 @@ private struct TVSeasonChipBody: View {
     @ViewBuilder
     private var background: some View {
         if isSelected {
-            Capsule().fill(Color.white)
+            RoundedRectangle(cornerRadius: ContinuumTheme.smallCornerRadius, style: .continuous).fill(Color.white)
         } else if isFocused {
-            Capsule().fill(Color.white.opacity(0.18))
+            RoundedRectangle(cornerRadius: ContinuumTheme.smallCornerRadius, style: .continuous).fill(Color.white.opacity(0.18))
         } else {
-            Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1.5)
+            RoundedRectangle(cornerRadius: ContinuumTheme.smallCornerRadius, style: .continuous).stroke(Color.white.opacity(0.25), lineWidth: 1.5)
         }
     }
 
