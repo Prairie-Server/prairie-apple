@@ -10,6 +10,8 @@ final class SiloCastController {
     var errorMessage: String?
     var isShowingRemoteControl = false
 
+    let clock = RemotePlaybackClock()
+
     private var session: SiloCastSession?
     private var readTask: Task<Void, Never>?
     private var connectionId: UUID?
@@ -109,6 +111,20 @@ final class SiloCastController {
         session?.enqueue(.control(command))
     }
 
+    func togglePlayPauseOptimistic() {
+        clock.setOptimisticPlaying(!clock.isPlaying)
+        send(.playPause)
+    }
+
+    func seekOptimistic(to seconds: Double) {
+        clock.setOptimisticTime(seconds)
+        send(.seek(seconds: seconds))
+    }
+
+    func playNext() { send(.playNext) }
+    func setVolume(_ v: Double) { send(.setVolume(min(max(v, 0), 1))) }
+    func setMuted(_ m: Bool) { send(.setMuted(m)) }
+
     func hideRemoteControl() {
         isShowingRemoteControl = false
     }
@@ -164,6 +180,7 @@ final class SiloCastController {
             break
         case .state(let state):
             self.state = state
+            clock.ingest(state)
             isConnecting = false
             errorMessage = nil
         case .error(let error):
