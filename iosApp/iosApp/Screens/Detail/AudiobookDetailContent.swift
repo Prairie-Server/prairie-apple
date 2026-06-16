@@ -103,14 +103,19 @@ struct AudiobookDetailContent: View {
     @ViewBuilder
     private var header: some View {
         #if os(tvOS)
-        HStack(alignment: .top, spacing: 48) {
-            cover(size: coverSize)
-            headerText
-                .frame(maxWidth: 900, alignment: .leading)
-                .padding(.top, 24)
-            Spacer(minLength: 0)
+        ZStack(alignment: .bottomLeading) {
+            audiobookBackdrop
+            HStack(alignment: .center, spacing: 56) {
+                cover(size: coverSize)
+                headerText
+                    .frame(maxWidth: 900, alignment: .leading)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, ContinuumTheme.safePadding)
+            .padding(.bottom, 64)
+            .padding(.top, 120)
         }
-        .padding(.top, 120)
+        .frame(maxWidth: .infinity, alignment: .leading)
         #else
         VStack(spacing: 22) {
             cover(size: coverSize)
@@ -123,6 +128,9 @@ struct AudiobookDetailContent: View {
 
     private var headerText: some View {
         VStack(alignment: headerAlignment, spacing: 14) {
+            #if os(tvOS)
+            audiobookEyebrow
+            #endif
             Text(detail.title)
                 .font(titleFont)
                 .fontWeight(.bold)
@@ -188,6 +196,48 @@ struct AudiobookDetailContent: View {
         }
         #endif
     }
+
+    #if os(tvOS)
+    /// A blurred, darkened wash of the square cover stands in for a 16:9
+    /// backdrop, keeping the audiobook page in the cinematic family.
+    @ViewBuilder
+    private var audiobookBackdrop: some View {
+        ZStack {
+            if let url = detail.posterUrl, !url.isEmpty {
+                AsyncImageView(url: url, thumbhash: detail.posterThumbhash,
+                               targetSize: CGSize(width: 600, height: 600), contentMode: .fill)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 760)
+                    .clipped()
+                    .blur(radius: 60)
+                    .opacity(0.5)
+            } else {
+                Color.continuumSurface.frame(height: 760)
+            }
+            LinearGradient(
+                stops: [
+                    .init(color: Color.continuumBackground.opacity(0.55), location: 0.0),
+                    .init(color: Color.continuumBackground.opacity(0.30), location: 0.5),
+                    .init(color: Color.continuumBackground, location: 1.0),
+                ],
+                startPoint: .top, endPoint: .bottom
+            )
+            .frame(height: 760)
+        }
+        .frame(height: 760)
+        .clipped()
+    }
+
+    private var audiobookEyebrow: some View {
+        HStack(spacing: 12) {
+            Rectangle().fill(Color.white.opacity(0.85))
+                .frame(width: 34, height: 4).cornerRadius(2)
+            Text("AUDIOBOOK")
+                .font(.system(size: 18, weight: .bold)).tracking(3)
+                .foregroundColor(.white.opacity(0.78))
+        }
+    }
+    #endif
 
     @ViewBuilder
     private func cover(size: CGFloat) -> some View {
