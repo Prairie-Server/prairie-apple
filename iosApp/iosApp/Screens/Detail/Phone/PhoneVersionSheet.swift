@@ -1,10 +1,10 @@
 #if !os(tvOS)
 import SwiftUI
 
-/// Version chooser presented as a `.sheet`. Mirrors the tvOS
-/// `TVVersionPillButton` menu — Auto + every available file, with a
-/// trailing checkmark on the active selection — but laid out as a
-/// modal list that fits a phone tap target.
+/// Version chooser presented as a `.sheet`. Mirrors the tvOS version
+/// selector — Auto + every available file, with a trailing checkmark on
+/// the active selection — but laid out as a modal list that fits a phone
+/// tap target.
 struct PhoneVersionSheet: View {
     let title: String
     let versions: [PhoneVersionRow]

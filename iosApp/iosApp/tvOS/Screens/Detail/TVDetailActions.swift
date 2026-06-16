@@ -31,7 +31,7 @@ struct TVPrimaryPillButton: View {
 // MARK: - Secondary pill
 
 /// Apple-TV-style dark secondary pill. Sits next to `TVPrimaryPillButton`
-/// in the hero row. Filled dark capsule with white icon + label — Apple
+/// in the hero row. Filled dark squared tile with white icon + label — Apple
 /// uses this for "Play Free Episode" alongside a white "Subscribe"
 /// button; we use it for "Start Over" alongside a white "Resume …".
 struct TVSecondaryPillButton: View {
@@ -54,37 +54,7 @@ struct TVSecondaryPillButton: View {
     }
 }
 
-// MARK: - Version picker
-
-/// Version-picker pill used in the hero action row. A single consolidated
-/// control — stack icon + the effective version's compact quality label
-/// (e.g. "4K · HDR") — that opens a `Menu` picker. Mirrors the Infuse /
-/// VidHub pattern where one button handles all version selection and
-/// audio/subtitle picking is deferred to the player.
-struct TVVersionPillButton<MenuContent: View>: View {
-    let currentLabel: String
-    @ViewBuilder let menu: () -> MenuContent
-
-    var body: some View {
-        Menu {
-            menu()
-        } label: {
-            HStack(spacing: 14) {
-                Image(systemName: "rectangle.stack.fill")
-                    .font(.system(size: 24, weight: .semibold))
-                Text(currentLabel)
-                    .font(.system(size: 26, weight: .semibold))
-                    .lineLimit(1)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 16, weight: .bold))
-                    .opacity(0.7)
-            }
-            .frame(minWidth: 190)
-        }
-        .menuStyle(.button)
-        .buttonStyle(TVPillButtonStyle(kind: .secondary))
-    }
-}
+// MARK: - Version picker placeholder
 
 /// Non-interactive placeholder that reserves the version picker footprint
 /// while the next-up episode's playback metadata is loading.
