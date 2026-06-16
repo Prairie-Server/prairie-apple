@@ -13,12 +13,20 @@ actor SiloCastSession {
     private let decoder = JSONDecoder()
     private var isOpen = false
 
+    // Ordered outbound queue: enqueue() is nonisolated + FIFO; a single
+    // drain task sends one frame at a time so messages never reorder.
+    private let outbound: AsyncStream<SiloCastMessage>
+    private let outboundContinuation: AsyncStream<SiloCastMessage>.Continuation
+    private var drainTask: Task<Void, Never>?
+
     init(connection: NWConnection) {
         self.connection = connection
+        (outbound, outboundContinuation) = AsyncStream.makeStream()
     }
 
     init(endpoint: NWEndpoint) {
         connection = NWConnection(to: endpoint, using: Self.tlsParameters())
+        (outbound, outboundContinuation) = AsyncStream.makeStream()
     }
 
     static func tlsParameters() -> NWParameters {
@@ -51,7 +59,7 @@ actor SiloCastSession {
                 guard let self else { return }
                 switch state {
                 case .ready:
-                    Task { await self.receiveLoop() }
+                    Task { await self.beginLoops() }
                 case .failed(let error):
                     Task { await self.teardown(error) }
                 case .waiting:
@@ -69,8 +77,35 @@ actor SiloCastSession {
         }
     }
 
+    private func beginLoops() {
+        receiveLoop()
+        drainTask = Task { [weak self] in await self?.startDrainLoop() }
+    }
+
+    /// Fire-and-forget, ordered. Safe to call from any context; FIFO is
+    /// preserved by call order because all call sites are @MainActor.
+    nonisolated func enqueue(_ message: SiloCastMessage) {
+        outboundContinuation.yield(message)
+    }
+
+    private func startDrainLoop() async {
+        for await message in outbound {
+            guard isOpen else { continue }
+            do {
+                try await writeRaw(message)
+            } catch {
+                teardown(error)
+                return
+            }
+        }
+    }
+
     func send(_ message: SiloCastMessage) async throws {
         guard isOpen else { throw SessionError.closed }
+        try await writeRaw(message)
+    }
+
+    private func writeRaw(_ message: SiloCastMessage) async throws {
         let payload = try encoder.encode(message)
         let framed = try PairingFrame.encode(payload)
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
@@ -92,6 +127,9 @@ actor SiloCastSession {
         guard isOpen else { return }
         isOpen = false
         connection.cancel()
+        drainTask?.cancel()
+        drainTask = nil
+        outboundContinuation.finish()
         if let error {
             continuation?.finish(throwing: error)
         } else {
