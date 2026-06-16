@@ -104,9 +104,9 @@ struct TVVersionPillPlaceholder: View {
         .frame(minWidth: 190)
         .padding(.horizontal, 40)
         .padding(.vertical, 22)
-        .background(Capsule().fill(Color.black.opacity(0.42)))
+        .background(RoundedRectangle(cornerRadius: ContinuumTheme.smallCornerRadius, style: .continuous).fill(Color.black.opacity(0.42)))
         .overlay(
-            Capsule().stroke(Color.white.opacity(0.16), lineWidth: 1.2)
+            RoundedRectangle(cornerRadius: ContinuumTheme.smallCornerRadius, style: .continuous).stroke(Color.white.opacity(0.16), lineWidth: 1.2)
         )
         .redacted(reason: .placeholder)
         .focusable(false)
@@ -218,15 +218,17 @@ private struct TVPillButtonBody: View {
             .padding(.horizontal, kind == .primary ? 54 : 40)
             .padding(.vertical, kind == .primary ? 26 : 22)
             .overlay(
-                Capsule().stroke(
+                RoundedRectangle(cornerRadius: ContinuumTheme.smallCornerRadius, style: .continuous).stroke(
                     innerBorderColor,
                     lineWidth: innerBorderWidth
                 )
             )
-            .background(Capsule().fill(background))
+            .background(
+                RoundedRectangle(cornerRadius: ContinuumTheme.smallCornerRadius, style: .continuous).fill(background)
+            )
             .overlay {
                 if isFocused {
-                    Capsule()
+                    RoundedRectangle(cornerRadius: ContinuumTheme.smallCornerRadius + 2, style: .continuous)
                         .stroke(focusOutlineColor, lineWidth: focusOutlineWidth)
                         .padding(-focusOutlineInset)
                 }
@@ -344,19 +346,19 @@ private struct TVCircleButtonBody: View {
             .foregroundColor(isFocused ? .black : .white)
             .frame(width: 72, height: 72)
             .background(
-                Circle().fill(
+                RoundedRectangle(cornerRadius: ContinuumTheme.smallCornerRadius, style: .continuous).fill(
                     isFocused ? .white : Color.white.opacity(0.10)
                 )
             )
             .overlay(
-                Circle().stroke(
+                RoundedRectangle(cornerRadius: ContinuumTheme.smallCornerRadius, style: .continuous).stroke(
                     isFocused ? Color.black.opacity(0.12) : Color.white.opacity(0.34),
                     lineWidth: isFocused ? 1.6 : 1.4
                 )
             )
             .overlay {
                 if isFocused {
-                    Circle()
+                    RoundedRectangle(cornerRadius: ContinuumTheme.smallCornerRadius + 2, style: .continuous)
                         .stroke(Color.white.opacity(0.96), lineWidth: 3)
                         .padding(-5)
                 }
