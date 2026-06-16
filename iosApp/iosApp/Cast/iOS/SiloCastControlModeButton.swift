@@ -34,7 +34,7 @@ struct SiloCastControlModeButton: View {
 
     private func buttonLabel(isActive: Bool) -> some View {
         Image(systemName: "airplayvideo")
-            .font(.system(size: 17, weight: .semibold))
+            .font(.system(size: 18, weight: .semibold))
             .foregroundStyle(isActive ? Color.continuumBackground : Color.continuumOnSurface)
             .frame(width: 40, height: 40)
             .background {

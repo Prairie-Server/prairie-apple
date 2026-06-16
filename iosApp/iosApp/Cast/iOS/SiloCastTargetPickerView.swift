@@ -87,7 +87,7 @@ struct SiloCastTargetPickerView: View {
                     Spacer()
 
                     if controller.isConnecting && controller.activeTarget?.id == target.id {
-                        ProgressView()
+                        ProgressView().accessibilityLabel("Connecting")
                     }
                 }
                 .contentShape(Rectangle())

@@ -284,6 +284,7 @@ private struct RemoteNowPlayingContent: View {
                 }
             }
         } label: { RemoteChipLabel(systemImage: "waveform", caption: "Audio") }
+        .accessibilityValue(state.audioTracks.first(where: { $0.trackId == state.selectedAudioTrackId })?.title ?? "None")
     }
 
     private var subtitleMenu: some View {
@@ -297,6 +298,7 @@ private struct RemoteNowPlayingContent: View {
                 }
             }
         } label: { RemoteChipLabel(systemImage: "captions.bubble", caption: "Subtitles") }
+        .accessibilityValue(state.subtitleTracks.first(where: { $0.trackId == state.selectedSubtitleTrackId })?.title ?? "Off")
     }
 
     private var qualityMenu: some View {
@@ -307,6 +309,7 @@ private struct RemoteNowPlayingContent: View {
                 }
             }
         } label: { RemoteChipLabel(systemImage: "slider.horizontal.3", caption: "Quality") }
+        .accessibilityValue(state.qualityOptions.first(where: { $0.id == state.activeQualityId })?.label ?? state.activeQualityId)
         .disabled(state.isQualitySwitching)
     }
 
@@ -318,6 +321,7 @@ private struct RemoteNowPlayingContent: View {
                 }
             }
         } label: { RemoteChipLabel(systemImage: "speedometer", caption: "Speed") }
+        .accessibilityValue(speedLabel(state.playbackSpeed))
     }
 
     private var displayMenu: some View {
@@ -335,6 +339,7 @@ private struct RemoteNowPlayingContent: View {
                 }
             }
         } label: { RemoteChipLabel(systemImage: "rectangle.inset.filled", caption: "Aspect") }
+        .accessibilityValue(VideoGravity(rawValue: state.videoGravity)?.label ?? state.videoGravity)
     }
 
     private func speedLabel(_ speed: Double) -> String {
