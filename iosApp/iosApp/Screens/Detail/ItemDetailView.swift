@@ -17,6 +17,17 @@ struct ItemDetailView: View {
     }
 }
 
+#if os(iOS)
+/// Identifiable box so a one-shot `SiloCastPlaybackRequest` can drive a
+/// `.sheet(item:)`. `id` keys off `contentId` so re-presenting for the
+/// same item is idempotent.
+private struct CastRequestBox: Identifiable {
+    let request: SiloCastPlaybackRequest
+    var id: String { request.contentId }
+    init(_ request: SiloCastPlaybackRequest) { self.request = request }
+}
+#endif
+
 #if !os(tvOS)
 private struct ItemDetailPhoneContent: View {
     let contentId: String
@@ -32,6 +43,7 @@ private struct ItemDetailPhoneContent: View {
     @State private var refreshOnPlayerDismiss = false
     #if os(iOS)
     @Environment(SiloCastController.self) private var castController
+    @State private var castRequestBox: CastRequestBox?
     #endif
     @Environment(AppRouter.self) private var router
 
@@ -64,7 +76,78 @@ private struct ItemDetailPhoneContent: View {
             refreshOnPlayerDismiss = false
             Task { await viewModel.loadDetail(contentId: contentId) }
         }
+        #if os(iOS)
+        .toolbar {
+            if let detail = viewModel.detail, isDirectlyPlayable(detail) {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        castFromDetail(currentCastRequest(for: detail))
+                    } label: {
+                        Image(systemName: castController.hasActiveSession
+                            ? "airplayvideo.circle.fill"
+                            : "airplayvideo")
+                    }
+                    .tint(.continuumOnSurface)
+                    .accessibilityLabel("Cast to TV")
+                }
+            }
+        }
+        .sheet(item: $castRequestBox) { box in
+            SiloCastTargetPickerView(request: box.request, controller: castController)
+        }
+        #endif
     }
+
+    #if os(iOS)
+    /// True when the loaded detail routes to `MovieDetailContent` — the only
+    /// branch whose primary item maps to a single playback request. Series,
+    /// season, and audiobook containers have no single "this item" to cast.
+    private func isDirectlyPlayable(_ detail: ItemDetail) -> Bool {
+        !detail.isAudiobook && detail.type != "season" && detail.type != "series"
+    }
+
+    /// Builds the cast request for the visible movie/episode using the
+    /// IDENTICAL expressions as the `MovieDetailContent.onPlay` callback
+    /// (resume-aware: play from the saved position when available).
+    private func currentCastRequest(for detail: ItemDetail) -> SiloCastPlaybackRequest {
+        currentCastRequest(
+            contentId: contentId,
+            fileId: playbackFileId(for: detail),
+            audioTrackIndex: preferredAudioTrackIndex,
+            subtitleTrackIndex: preferredSubtitleTrackIndex,
+            startFromBeginning: false,
+            resumePosition: playableResumePosition(for: detail)
+        )
+    }
+
+    private func currentCastRequest(
+        contentId: String,
+        fileId: Int?,
+        audioTrackIndex: Int?,
+        subtitleTrackIndex: Int?,
+        startFromBeginning: Bool,
+        resumePosition: Double?
+    ) -> SiloCastPlaybackRequest {
+        SiloCastPlaybackRequest(
+            contentId: contentId,
+            fileId: fileId,
+            audioTrackIndex: audioTrackIndex,
+            subtitleTrackIndex: subtitleTrackIndex,
+            startFromBeginning: startFromBeginning,
+            resumePosition: resumePosition
+        )
+    }
+
+    private func castFromDetail(_ request: SiloCastPlaybackRequest) {
+        if castController.hasActiveSession {
+            // Already connected ⇒ cast this item now.
+            Task { await castController.launch(request) }
+        } else {
+            // No session ⇒ pick a TV, then cast-and-play in one step.
+            castRequestBox = CastRequestBox(request)
+        }
+    }
+    #endif
 
     @ViewBuilder
     private func content(for detail: ItemDetail) -> some View {
