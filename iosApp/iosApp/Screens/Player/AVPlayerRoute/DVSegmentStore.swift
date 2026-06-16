@@ -63,6 +63,7 @@ final class DVSegmentStore {
         subsystem: Bundle.main.bundleIdentifier ?? "com.continuum.app",
         category: "DVSegmentStore"
     )
+    private static let minimumSegmentsToKeep = 8
 
     let generation: UInt64
     private let memoryBudgetBytes: Int
@@ -159,6 +160,78 @@ final class DVSegmentStore {
         lock.unlock()
         mirror(data, name: name)
         return SegmentAppendResult(evictedSegmentNames: evicted)
+    }
+
+    func retireSegments(names: [String]) -> [String] {
+        guard !names.isEmpty else { return [] }
+        var retired: [String] = []
+        var spillURLsToDelete: [URL] = []
+
+        lock.lock()
+        for name in names {
+            var didRetire = false
+
+            if let segment = segments.removeValue(forKey: name) {
+                memoryBytes -= segment.data.count
+                didRetire = true
+            }
+            if let segment = spillingSegments.removeValue(forKey: name) {
+                tempSpillBytes -= Int64(segment.data.count)
+                didRetire = true
+            }
+            if let spillURL = spilledSegments.removeValue(forKey: name) {
+                let size = spilledSegmentSizes.removeValue(forKey: name) ?? 0
+                tempSpillBytes -= Int64(size)
+                spillURLsToDelete.append(spillURL)
+                didRetire = true
+            }
+
+            if didRetire {
+                segmentOrder.removeAll { $0 == name }
+                evictedResources.insert(name)
+                retired.append(name)
+            }
+        }
+        tempSpillBytes = max(0, tempSpillBytes)
+        lock.broadcast()
+        lock.unlock()
+
+        for url in spillURLsToDelete {
+            try? FileManager.default.removeItem(at: url)
+        }
+        if !retired.isEmpty {
+            Self.logger.info("[CMP-HLS-STORE] generation=\(self.generation, privacy: .public) retired=\(retired.count, privacy: .public) tempSpillBytes=\(self.stats().tempSpillBytes, privacy: .public)")
+        }
+        return retired
+    }
+
+    func canAppendSegment(byteCount: Int) -> Bool {
+        guard byteCount > 0 else { return true }
+        lock.lock()
+        defer { lock.unlock() }
+        guard spillPolicy.isEnabled else { return true }
+        guard memoryBytes + byteCount > memoryBudgetBytes else { return true }
+
+        var projectedMemoryBytes = memoryBytes + byteCount
+        var projectedSpillBytes = tempSpillBytes
+        var projectedSegmentCount = segmentOrder.count + 1
+
+        for name in segmentOrder {
+            guard projectedMemoryBytes > memoryBudgetBytes,
+                  projectedSegmentCount > Self.minimumSegmentsToKeep else {
+                break
+            }
+            guard let segment = segments[name],
+                  segment.pinned == 0 else {
+                break
+            }
+            projectedMemoryBytes -= segment.data.count
+            projectedSpillBytes += Int64(segment.data.count)
+            projectedSegmentCount -= 1
+        }
+
+        guard projectedSpillBytes <= spillPolicy.maxBytes else { return false }
+        return true
     }
 
     func resource(path: String, waitForNearFuture: Bool = true) -> ResourceResult {
@@ -261,8 +334,7 @@ final class DVSegmentStore {
 
     private func evictIfNeededLocked() -> [String] {
         var evicted: [String] = []
-        let minimumSegmentsToKeep = 8
-        while memoryBytes > memoryBudgetBytes, segmentOrder.count > minimumSegmentsToKeep {
+        while memoryBytes > memoryBudgetBytes, segmentOrder.count > Self.minimumSegmentsToKeep {
             guard let candidate = segmentOrder.first,
                   let segment = segments[candidate],
                   segment.pinned == 0 else {

@@ -411,17 +411,21 @@ final class DVSegmentServer {
         // playlist probes (4× /playlist.m3u8 in the first ~50 ms) don't each
         // emit a line. Subsequent requests for the same path are tracked but
         // not logged unless the status, byte count, or range changes — the
-        // unique events that matter for diagnosis. The startup-wide cap
-        // remains as a safety net for pathological per-path traffic.
-        guard requestLogCount < Self.startupRequestLogLimit else { return }
+        // unique events that matter for diagnosis. The startup-wide cap remains
+        // as a safety net for pathological per-path success traffic, but HLS
+        // errors bypass it so late segment misses are never hidden.
         let methodName: String = switch method {
         case .get: "GET"
         case .head: "HEAD"
         }
         let signature = "\(methodName) \(path) \(status) \(bytes) \(range ?? "-")"
-        if loggedRequestSignatures.contains(signature) {
-            return
-        }
+        let signatureAlreadyLogged = loggedRequestSignatures.contains(signature)
+        guard LocalHLSRequestLogPolicy.shouldLog(
+            status: status,
+            requestLogCount: requestLogCount,
+            startupRequestLogLimit: Self.startupRequestLogLimit,
+            signatureAlreadyLogged: signatureAlreadyLogged
+        ) else { return }
         loggedRequestSignatures.insert(signature)
         requestLogCount += 1
         let elapsedMs = (CFAbsoluteTimeGetCurrent() - started) * 1000

@@ -33,5 +33,10 @@ extension PlayerCore {
         /// compressed samples as bad data. This is terminal for H.264 direct
         /// playback; do not mask it with software fallback.
         case videoToolboxBadDataH264
+        /// VideoToolbox accepted the HEVC session but later rejected compressed
+        /// samples as bad data. Route the original source through SiloPlayer's
+        /// AVPlayer loopback so the stream can continue on the presentation
+        /// path used for other HEVC VideoToolbox rejections.
+        case videoToolboxBadDataHEVC
     }
 }

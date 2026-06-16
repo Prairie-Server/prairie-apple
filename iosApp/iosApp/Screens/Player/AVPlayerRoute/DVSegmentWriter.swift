@@ -82,12 +82,11 @@ final class DVSegmentWriter {
     /// sources still wait for a safe run of fragments.
     private static let startupLiveEdgeTargetDurations = 3.0
     private static let minimumStartupPlaylistSegments = 3
-    private static let maximumGeneratedAheadSeconds: Double = 150
-    /// Keep the local EVENT playlist moving while backpressured. AVPlayer can
-    /// stop polling a live playlist after seeing it unchanged for too many
-    /// target-duration reloads; a narrow hysteresis caps generated media while
-    /// still appending a fresh segment every few seconds during playback.
-    private static let resumeGeneratedAheadSeconds: Double = 144
+    /// Keep a generous runway behind current playback before retiring local HLS
+    /// spill files. This turns the spill budget into a current-cache budget
+    /// without removing media AVPlayer may still retry during normal playback.
+    private static let spillRetirementPlaybackSafetyWindowSeconds: Double = 60
+    private static let minimumPlaylistSegmentsToKeep = 8
 
     // MARK: - Lifecycle callbacks (fired on muxQueue)
     /// Fires exactly once, after the init segment + initial media runway are
@@ -156,7 +155,9 @@ final class DVSegmentWriter {
     private var currentSegmentIndex = 0
     private struct SegmentEntry {
         let index: Int
+        let start: Double
         let duration: Double
+        var end: Double { start + duration }
     }
     /// Playlist-visible media segments. We may discard muxer pre-roll fragments
     /// before the first video fragment so AVPlayer does not start on audio-only
@@ -167,28 +168,11 @@ final class DVSegmentWriter {
     /// Running total of media duration written to the playlist so we don't
     /// rescan `segmentEntries` on every append.
     private var totalMediaDuration: Double = 0
-    /// Sliding-window retention for the local fMP4 segments. Disabled by
-    /// default (`0`) because the writer currently emits `EXT-X-PLAYLIST-TYPE:
-    /// EVENT` (append-only per RFC 8216 §4.3.3.5); evicting segments while
-    /// declaring EVENT is a spec violation and can return
-    /// `AVErrorContentIsUnavailable (-12642)` on AVPlayer's next playlist
-    /// refetch. A real sliding window also breaks seek-back beyond the
-    /// retention horizon — particularly painful when
-    /// `canUseNetworkResourcesForLiveStreamingWhilePaused` keeps a paused
-    /// AVPlayer item refreshing the playlist while the user steps away.
-    ///
-    /// Two prerequisites need landing before this can be safely re-enabled:
-    ///   1. Switch the writer to LIVE-style playlists (omit `EXT-X-PLAYLIST-
-    ///      TYPE`) when retention is on, so the spec actually allows
-    ///      monotonic head-eviction.
-    ///   2. Couple the writer to playback state so the window doesn't
-    ///      collapse during paused-while-buffering, and document that
-    ///      seek-back beyond the window is unsupported.
-    ///
-    /// Until then this is a no-op; large sources stay fully on disk for the
-    /// session, which is the pre-existing behavior. The plumbing
-    /// (`firstMediaSequence`, the eviction logic) is kept so the future
-    /// switch is a single-line config change.
+    /// Wall-clock-independent sliding retention remains disabled for the local
+    /// fMP4 segments. Spill cleanup is instead coupled to AVPlayer playback
+    /// position via `retireSegmentsBehindPlaybackIfNeeded()`, but normal spill
+    /// retirement leaves the playlist append-only so AVPlayer keeps EVENT
+    /// timeline semantics instead of switching to a sliding live item midstream.
     private static let segmentRetentionWindowSeconds: Double = 0
     /// Media sequence number of the first segment currently in
     /// `segmentEntries`. Bumped each time the head is evicted; emitted as
@@ -203,7 +187,7 @@ final class DVSegmentWriter {
     private let startupWallTime = CFAbsoluteTimeGetCurrent()
     private var lastSourceStatsWallTime: CFAbsoluteTime?
     private var lastSourceStatsBytesRead: Int64?
-    private var lastGeneratedAheadBackpressureLogWall: CFAbsoluteTime = 0
+    private var lastSpillCapacityBackpressureLogWall: CFAbsoluteTime = 0
 
     private var shouldIncludeAudio: Bool {
         if let explicit = sessionSpec.selectedAudio.ffIndex {
@@ -2725,6 +2709,13 @@ final class DVSegmentWriter {
 
         let name = String(format: "seg_%06d.m4s", currentSegmentIndex)
         let duration = segmentMediaDuration(in: pendingSegmentBytes) ?? targetSegmentDuration
+        waitForSegmentStoreCapacityIfNeeded(nextSegmentBytes: segSize)
+        guard !isCancelled else {
+            pendingSegmentBytes = Data()
+            pendingSegmentHasVideo = false
+            pendingSegmentHasMoof = false
+            return
+        }
         do {
             if Self.traceThroughput {
                 let started = CFAbsoluteTimeGetCurrent()
@@ -2742,7 +2733,7 @@ final class DVSegmentWriter {
             pendingSegmentHasMoof = false
             return
         }
-        segmentEntries.append(SegmentEntry(index: currentSegmentIndex, duration: duration))
+        segmentEntries.append(SegmentEntry(index: currentSegmentIndex, start: totalMediaDuration, duration: duration))
         totalMediaDuration += duration
         let idx = currentSegmentIndex
         currentSegmentIndex += 1
@@ -2750,6 +2741,7 @@ final class DVSegmentWriter {
         pendingSegmentHasVideo = false
         pendingSegmentHasMoof = false
         evictExpiredSegmentsIfNeeded()
+        retireSegmentsBehindPlaybackIfNeeded()
         emitPlaylists(isFinal: false)
         if shouldLogSegmentProgress(index: idx) {
             print("[CMP-AVP] seg \(idx) written (\(segSize) bytes, video=\(segmentHasVideo ? 1 : 0), dur=\(String(format: "%.3f", duration))s), total dur=\(String(format: "%.1f", totalMediaDuration))s)")
@@ -2759,36 +2751,54 @@ final class DVSegmentWriter {
             hasWrittenVideoSegment = true
         }
         markStartupRunwayReadyIfNeeded(force: false)
-        applyGeneratedAheadBackpressureIfNeeded()
     }
 
     private func shouldLogSegmentProgress(index: Int) -> Bool {
         Self.verboseSegmentLogging || index < 4 || index.isMultiple(of: 20)
     }
 
-    private func applyGeneratedAheadBackpressureIfNeeded() {
-        guard segmentStore != nil else { return }
+    private func waitForSegmentStoreCapacityIfNeeded(nextSegmentBytes: Int) {
+        guard let segmentStore else { return }
         while !isCancelled {
-            let playbackPosition = playbackPositionProvider?() ?? 0
-            guard playbackPosition.isFinite else { return }
-            let ahead = totalMediaDuration - max(0, playbackPosition)
-            guard ahead > Self.maximumGeneratedAheadSeconds else { return }
+            retireSegmentsBehindPlaybackIfNeeded()
+            guard !segmentStore.canAppendSegment(byteCount: nextSegmentBytes) else { return }
             let now = CFAbsoluteTimeGetCurrent()
-            if now - lastGeneratedAheadBackpressureLogWall >= 5 {
-                lastGeneratedAheadBackpressureLogWall = now
+            if now - lastSpillCapacityBackpressureLogWall >= 5 {
+                lastSpillCapacityBackpressureLogWall = now
+                let playbackPosition = playbackPositionProvider?() ?? 0
+                let ahead = playbackPosition.isFinite
+                    ? totalMediaDuration - max(0, playbackPosition)
+                    : 0
+                let stats = segmentStore.stats()
                 cmpLog(
-                    "[CMP-HLS-STORE] generation backpressure generatedAhead=\(String(format: "%.1f", ahead))s target=\(String(format: "%.1f", Self.resumeGeneratedAheadSeconds))s"
+                    "[CMP-HLS-STORE] spill-capacity backpressure nextBytes=\(nextSegmentBytes) generatedAhead=\(String(format: "%.1f", ahead))s tempSpillBytes=\(stats.tempSpillBytes)"
                 )
             }
-            while !isCancelled {
-                let updatedPosition = playbackPositionProvider?() ?? playbackPosition
-                guard updatedPosition.isFinite else { return }
-                let updatedAhead = totalMediaDuration - max(0, updatedPosition)
-                if updatedAhead <= Self.resumeGeneratedAheadSeconds {
-                    return
-                }
-                Thread.sleep(forTimeInterval: 0.1)
-            }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+    }
+
+    private func retireSegmentsBehindPlaybackIfNeeded() {
+        guard let segmentStore,
+              let playbackPosition = playbackPositionProvider?(),
+              playbackPosition.isFinite,
+              segmentEntries.count > Self.minimumPlaylistSegmentsToKeep else {
+            return
+        }
+
+        let retireBefore = max(0, playbackPosition - Self.spillRetirementPlaybackSafetyWindowSeconds)
+        guard retireBefore > 0 else { return }
+
+        let maxRetirable = segmentEntries.count - Self.minimumPlaylistSegmentsToKeep
+        let candidates = segmentEntries
+            .prefix(maxRetirable)
+            .prefix { $0.end < retireBefore }
+        let names = candidates.map { String(format: "seg_%06d.m4s", $0.index) }
+        guard !names.isEmpty else { return }
+
+        let retired = segmentStore.retireSegments(names: names)
+        if LocalHLSPlaylistPolicy.shouldRemoveRetiredSegmentsFromPlaylist {
+            removeEvictedSegmentsFromPlaylist(retired)
         }
     }
 
@@ -3023,7 +3033,9 @@ final class DVSegmentWriter {
         lines.append("#EXTM3U")
         lines.append("#EXT-X-VERSION:7")
         lines.append("#EXT-X-INDEPENDENT-SEGMENTS")
-        lines.append("#EXT-X-START:TIME-OFFSET=0,PRECISE=YES")
+        if LocalHLSPlaylistPolicy.shouldEmitStartTag(firstMediaSequence: firstMediaSequence) {
+            lines.append("#EXT-X-START:TIME-OFFSET=0,PRECISE=YES")
+        }
         lines.append("#EXT-X-TARGETDURATION:\(playlistTargetDurationForEmit())")
         lines.append("#EXT-X-MEDIA-SEQUENCE:\(firstMediaSequence)")
         // Use EVENT (append-only, growable) until we've written the final

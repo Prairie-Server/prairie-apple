@@ -10,6 +10,7 @@ struct PlaybackRecoveryPlanner {
         let streamRequest: StreamRequest
         let startTime: Double
         let activePlan: PlaybackExecutionPlan?
+        let hevcLoopbackVideoRange: String?
     }
 
     struct LoopbackRequest {
@@ -37,7 +38,7 @@ struct PlaybackRecoveryPlanner {
             )
         }
 
-        if context.reason == .videoToolboxBadDataH264 {
+        if case .videoToolboxBadDataH264 = context.reason {
             return .terminal(
                 message: "H.264 VideoToolbox rejected the compressed samples.",
                 diagnosticLine: "[CMP-ROUTE] h264 bad-data rejection stayed on compatibility route",
@@ -82,39 +83,63 @@ struct PlaybackRecoveryPlanner {
                 sourceMetadata: sourceMetadata
             )
         case .videoToolboxUnsupportedHEVCPQ:
-            return PlaybackExecutionPlan.hevcHDRLoopback(
-                streamRequest: context.streamRequest,
-                startTime: context.startTime,
-                rejectionReason: String(describing: context.reason),
-                loopbackSession: makeLoopbackSession(LoopbackRequest(
-                    streamRequest: context.streamRequest,
-                    videoMode: .passthroughHEVC,
-                    videoRange: "PQ",
-                    sourceStartTimeSeconds: context.startTime
-                )),
-                routeRequirements: requirements,
-                decisionTrace: decisionTrace,
+            return hevcLoopbackPlan(
+                for: context,
+                videoRange: "PQ",
                 playbackSessionId: playbackSessionId,
-                sourceMetadata: sourceMetadata
+                requirements: requirements,
+                decisionTrace: decisionTrace,
+                sourceMetadata: sourceMetadata,
+                makeLoopbackSession: makeLoopbackSession
             )
         case .videoToolboxUnsupportedHEVCHDR:
-            return PlaybackExecutionPlan.hevcHDRLoopback(
-                streamRequest: context.streamRequest,
-                startTime: context.startTime,
-                rejectionReason: String(describing: context.reason),
-                loopbackSession: makeLoopbackSession(LoopbackRequest(
-                    streamRequest: context.streamRequest,
-                    videoMode: .passthroughHEVC,
-                    videoRange: "HLG",
-                    sourceStartTimeSeconds: context.startTime
-                )),
-                routeRequirements: requirements,
-                decisionTrace: decisionTrace,
+            return hevcLoopbackPlan(
+                for: context,
+                videoRange: "HLG",
                 playbackSessionId: playbackSessionId,
-                sourceMetadata: sourceMetadata
+                requirements: requirements,
+                decisionTrace: decisionTrace,
+                sourceMetadata: sourceMetadata,
+                makeLoopbackSession: makeLoopbackSession
+            )
+        case .videoToolboxBadDataHEVC:
+            return hevcLoopbackPlan(
+                for: context,
+                videoRange: context.hevcLoopbackVideoRange ?? "PQ",
+                playbackSessionId: playbackSessionId,
+                requirements: requirements,
+                decisionTrace: decisionTrace,
+                sourceMetadata: sourceMetadata,
+                makeLoopbackSession: makeLoopbackSession
             )
         case .videoToolboxBadDataH264:
             preconditionFailure("H.264 bad-data is terminal and should be handled before fallback planning")
         }
+    }
+
+    private func hevcLoopbackPlan(
+        for context: Context,
+        videoRange: String,
+        playbackSessionId: String?,
+        requirements: PlaybackRouteRequirements,
+        decisionTrace: [String],
+        sourceMetadata: PlaybackSourceMetadata,
+        makeLoopbackSession: (LoopbackRequest) -> LoopbackSessionSpec?
+    ) -> PlaybackExecutionPlan {
+        PlaybackExecutionPlan.hevcHDRLoopback(
+            streamRequest: context.streamRequest,
+            startTime: context.startTime,
+            rejectionReason: String(describing: context.reason),
+            loopbackSession: makeLoopbackSession(LoopbackRequest(
+                streamRequest: context.streamRequest,
+                videoMode: .passthroughHEVC,
+                videoRange: videoRange,
+                sourceStartTimeSeconds: context.startTime
+            )),
+            routeRequirements: requirements,
+            decisionTrace: decisionTrace,
+            playbackSessionId: playbackSessionId,
+            sourceMetadata: sourceMetadata
+        )
     }
 }

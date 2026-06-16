@@ -379,6 +379,34 @@ final class PlayerCore: NSObject {
     /// the current session started. Same log-milestone treatment.
     private var totalVtFrameDrops: UInt64 = 0
 
+    // MARK: - VideoToolbox `-12909` burst recovery
+    //
+    // Some valid H.264 / HEVC files have local GOP regions that make
+    // VideoToolbox reject a run of frames as bad data while surrounding GOPs
+    // decode cleanly. Rather than abandoning the CoreMedia decoder immediately,
+    // flush and resync at the next IDR -- exactly like a seek. Bounded so a
+    // genuinely undecodable region still falls through to the existing
+    // terminal/fallback behavior instead of looping forever.
+    private static let maxDecodeBurstRecoveryAttempts = 2
+    /// Clean decodes after a resync before the burst is considered ridden out
+    /// and the attempt budget is refreshed (~2 s at 24 fps).
+    private static let decodeBurstRecoveryStableFrames = 48
+    /// Resync attempts since the last sustained-clean run. Touched on VT's
+    /// callback thread + the decode thread (serialized through the VT session),
+    /// same as `consecutiveDecodeFailures`.
+    private var decodeBurstRecoveryAttempts = 0
+    /// Successful decodes since the last resync attempt; resets the attempt
+    /// budget once it clears `decodeBurstRecoveryStableFrames`.
+    private var framesDecodedSinceRecovery = 0
+    /// Set on VT's callback thread when a `-12909` burst is detected there;
+    /// consumed on `videoFeedQueue` before the next packet so the flush/resync
+    /// runs off the callback thread (mirrors `decoderRebuildPending`).
+    private var pendingDecodeBurstResync = false
+    /// Guards the resync path so the in-flight failed decodes that drain during
+    /// `flushVideoDecoderAfterDiscontinuity()` don't each re-trigger recovery
+    /// and burn the attempt budget (mirrors `isRebuildingDecoder` for -12903).
+    private var isRecoveringDecodeBurst = false
+
     // MARK: - Temporary slow-motion-debug instrumentation
     //
     // `print()` rather than Logger.info so `devicectl ... --console` captures
@@ -1128,6 +1156,10 @@ final class PlayerCore: NSObject {
         decoderRebuildPending = false
         totalDecodeErrors = 0
         totalVtFrameDrops = 0
+        decodeBurstRecoveryAttempts = 0
+        framesDecodedSinceRecovery = 0
+        pendingDecodeBurstResync = false
+        isRecoveringDecodeBurst = false
         userPaused = false
         lastStallRecoveryWall = 0
         setPlaybackTimeline(time: .zero, rate: 0)
@@ -3507,6 +3539,9 @@ final class PlayerCore: NSObject {
         if decoderRebuildPending {
             rebuildDecoderAfterInvalidSession()
         }
+        if pendingDecodeBurstResync {
+            performDecodeBurstResync()
+        }
         guard let fd = videoFormatDescription,
               videoToolboxDecoder.isInstalled
         else { return }
@@ -3576,6 +3611,7 @@ final class PlayerCore: NSObject {
                 guard !infoFlags.contains(.frameDropped),
                       let imageBuffer else { return }
                 self.consecutiveDecodeFailures = 0
+                self.noteDecodeSuccessForBurstRecovery()
                 self.handleDecodedVideoFrame(imageBuffer, pts: pts)
             })
         guard let outcome else { return }
@@ -3854,6 +3890,20 @@ final class PlayerCore: NSObject {
         return codecpar.pointee.codec_id == AV_CODEC_ID_H264
     }
 
+    private func currentVideoCodecIsHEVC() -> Bool {
+        if let fd = videoFormatDescription,
+           CMFormatDescriptionGetMediaSubType(fd) == kCMVideoCodecType_HEVC {
+            return true
+        }
+        guard let formatCtx,
+              videoStreamIndex >= 0,
+              let stream = formatCtx.pointee.streams?[Int(videoStreamIndex)],
+              let codecpar = stream.pointee.codecpar else {
+            return false
+        }
+        return codecpar.pointee.codec_id == AV_CODEC_ID_HEVC
+    }
+
     private func currentVideoCodecRequiresRandomAccessForDecoderReset() -> Bool {
         if let fd = videoFormatDescription {
             let subtype = CMFormatDescriptionGetMediaSubType(fd)
@@ -3939,6 +3989,53 @@ final class PlayerCore: NSObject {
         isRebuildingDecoder = false
     }
 
+    /// Flush VideoToolbox and arm a decoder reset so playback resyncs at the
+    /// next random-access frame (IDR), riding out a `-12909` bad-data burst
+    /// without leaving the CoreMedia decoder. Mirrors the post-seek
+    /// discontinuity path: drain async decodes, skip the broken GOP tail, reset
+    /// VT at the next IDR via `ResetDecoderBeforeDecoding`, and widen the
+    /// renderer's late-frame tolerance so it resyncs to the audio clock at the
+    /// resume point. We deliberately do not recreate the VT session here — the
+    /// reset attachment clears VT's stale references, and skipping a session
+    /// recreate keeps this path failure-free. Runs on `videoFeedQueue`.
+    private func performDecodeBurstResync() {
+        pendingDecodeBurstResync = false
+        flushVideoDecoderAfterDiscontinuity()
+        nextSampleNeedsDecoderReset = true
+        postDiscontinuityWallDeadline =
+            CACurrentMediaTime() + Self.postDiscontinuityWindowSeconds
+        // Clear failure state only after the async drain above, so the
+        // in-flight failed callbacks counted during the flush don't leave a
+        // stale tally that immediately re-trips the threshold.
+        consecutiveDecodeFailures = 0
+        hasReportedDecodeFailure = false
+        isRecoveringDecodeBurst = false
+    }
+
+    /// Refreshes the `-12909` recovery attempt budget once enough frames have
+    /// decoded cleanly after a resync, so a later unrelated burst gets a fresh
+    /// set of attempts. Runs on VT's callback thread alongside
+    /// `consecutiveDecodeFailures` (same serialization).
+    private func noteDecodeSuccessForBurstRecovery() {
+        guard decodeBurstRecoveryAttempts > 0 else { return }
+        framesDecodedSinceRecovery += 1
+        guard framesDecodedSinceRecovery >= Self.decodeBurstRecoveryStableFrames else { return }
+        print("[CMP] VT bad-data recovery confirmed stable after "
+            + "\(framesDecodedSinceRecovery) frames; resetting attempt budget")
+        decodeBurstRecoveryAttempts = 0
+        framesDecodedSinceRecovery = 0
+    }
+
+    private func currentDecodeFailureRecoveryCodec() -> DecodeFailureRecoveryPolicy.Codec {
+        if currentVideoCodecIsH264() {
+            return .h264
+        }
+        if currentVideoCodecIsHEVC() {
+            return .hevc
+        }
+        return .other
+    }
+
     private func recordDecodeFailure(
         status: OSStatus,
         canRebuildInline: Bool,
@@ -3964,6 +4061,8 @@ final class PlayerCore: NSObject {
                 + "pts=\(pts)s clock=\(clock)s dur=\(dur)s "
                 + "pktSize=\(packetSize) "
                 + "totalErrors=\(self.totalDecodeErrors) strippedNal=\(self.strippedNalCount) "
+                + "vtIn=\(self.videoToolboxInFlightCount()) vDec=\(self.videoFrameScheduler.count) "
+                + "recovery=\(self.decodeBurstRecoveryAttempts)/\(Self.maxDecodeBurstRecoveryAttempts) "
                 + "rebuildPending=\(self.decoderRebuildPending) "
                 + "isRebuilding=\(self.isRebuildingDecoder) "
                 + "convertNALSize=\(self.isConvertNALSize) stripHEVC=\(self.shouldStripHevcEnhancement) "
@@ -3971,6 +4070,11 @@ final class PlayerCore: NSObject {
                 + "wall=\(wall)"
             Self.logger.error("\(line, privacy: .public)")
         }
+
+        // A -12909 resync is already scheduled or draining: swallow the failures
+        // that pour out of the broken GOP tail so they don't fall through to the
+        // failover/terminal paths below. Cleared by `performDecodeBurstResync()`.
+        if isRecoveringDecodeBurst { return }
 
         // kVTInvalidSessionErr: rebuild the decoder in place. Threshold-gated
         // (same 30-failure threshold the user-facing error uses) so we don't
@@ -3995,6 +4099,33 @@ final class PlayerCore: NSObject {
         // errors after a seek.
         guard consecutiveDecodeFailures >= 30, !hasReportedDecodeFailure else { return }
 
+        // In-place recovery for a recoverable bad-data burst, before we
+        // abandon the CoreMedia decoder. Flush and resync at the next IDR
+        // instead of crashing on a local reference-frame cascade. Bounded so a
+        // genuinely undecodable region still falls through to the
+        // terminal/fallback paths below.
+        let recoveryCodec = currentDecodeFailureRecoveryCodec()
+        if DecodeFailureRecoveryPolicy.shouldAttemptBurstResync(
+            status: status,
+            codec: recoveryCodec,
+            attempts: decodeBurstRecoveryAttempts,
+            maxAttempts: Self.maxDecodeBurstRecoveryAttempts
+        ) {
+            isRecoveringDecodeBurst = true
+            decodeBurstRecoveryAttempts += 1
+            framesDecodedSinceRecovery = 0
+            print("[CMP] \(recoveryCodec.logLabel) VT bad-data burst: in-place resync attempt "
+                + "\(decodeBurstRecoveryAttempts)/\(Self.maxDecodeBurstRecoveryAttempts) "
+                + "status=\(status) "
+                + "canRebuildInline=\(canRebuildInline)")
+            if canRebuildInline {
+                performDecodeBurstResync()
+            } else {
+                pendingDecodeBurstResync = true
+            }
+            return
+        }
+
         if Self.isH264BadDataStatus(status), currentVideoCodecIsH264() {
             if let url = lastLoadURL {
                 print("[CMP] H264 VT bad-data threshold reached; rejecting direct decode status=\(status)")
@@ -4011,6 +4142,25 @@ final class PlayerCore: NSObject {
                 return
             }
             reportTerminalDecodeFailure("H.264 decode failed after VideoToolbox rejected compressed samples.")
+            return
+        }
+
+        if status == -12909, currentVideoCodecIsHEVC() {
+            if let url = lastLoadURL {
+                print("[CMP] HEVC VT bad-data threshold reached; rejecting direct decode status=\(status)")
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.onUnsupportedStream?(
+                        .videoToolboxBadDataHEVC,
+                        url,
+                        self.lastLoadHeaders,
+                        self.lastLoadStartTime
+                    )
+                }
+                hasReportedDecodeFailure = true
+                return
+            }
+            reportTerminalDecodeFailure("HEVC decode failed after VideoToolbox rejected compressed samples.")
             return
         }
 
