@@ -577,6 +577,9 @@ struct FileVersion: Codable, Identifiable, Hashable {
     let presentationGroupKey: String?
     let presentationPartIndex: Int?
     let presentationPartTotal: Int?
+    /// Optional edition label (e.g. "Director's Cut", "Theatrical"). Used by
+    /// `PlaybackEditions` to group versions into editions on tvOS.
+    let edition: String?
     var id: Int { fileId }
 
     init(
@@ -599,7 +602,8 @@ struct FileVersion: Codable, Identifiable, Hashable {
         presentationKind: String? = nil,
         presentationGroupKey: String? = nil,
         presentationPartIndex: Int? = nil,
-        presentationPartTotal: Int? = nil
+        presentationPartTotal: Int? = nil,
+        edition: String? = nil
     ) {
         self.fileId = fileId
         self.fileName = fileName
@@ -621,6 +625,7 @@ struct FileVersion: Codable, Identifiable, Hashable {
         self.presentationGroupKey = presentationGroupKey
         self.presentationPartIndex = presentationPartIndex
         self.presentationPartTotal = presentationPartTotal
+        self.edition = edition
     }
 
     init(from decoder: Decoder) throws {
@@ -645,6 +650,7 @@ struct FileVersion: Codable, Identifiable, Hashable {
         presentationGroupKey = try c.decodeIfPresent(String.self, forKey: .presentationGroupKey)
         presentationPartIndex = try c.decodeIfPresent(Int.self, forKey: .presentationPartIndex)
         presentationPartTotal = try c.decodeIfPresent(Int.self, forKey: .presentationPartTotal)
+        edition = try c.decodeIfPresent(String.self, forKey: .edition)
     }
 }
 

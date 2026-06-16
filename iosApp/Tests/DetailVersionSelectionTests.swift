@@ -4,6 +4,8 @@ import Foundation
 struct DetailVersionSelectionTests {
     static func main() {
         testAutoDisplayPrefersBestVersionOverFirstReturnedVersion()
+        testEditionsGroupVersionsByEditionLabel()
+        testEditionForFileIdFindsOwningEdition()
         testFileVersionDecodesIntroAndCreditsMarkers()
         testAudiobookDetailAndPresentationFieldsDecode()
         testAudiobookMediaTypeNormalization()
@@ -28,6 +30,42 @@ struct DetailVersionSelectionTests {
             selected?.fileId == 20,
             "Auto should display the best version playback will choose; got \(selected?.fileId.description ?? "nil")"
         )
+    }
+
+    private static func decodedVersions(_ json: String) -> [FileVersion] {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try! decoder.decode([FileVersion].self, from: Data(json.utf8))
+    }
+
+    private static func testEditionsGroupVersionsByEditionLabel() {
+        let versions = decodedVersions("""
+        [
+          { "file_id": 1, "edition": "Director's Cut", "resolution": "4K" },
+          { "file_id": 2, "edition": "Director's Cut", "resolution": "1080p" },
+          { "file_id": 3, "resolution": "1080p" }
+        ]
+        """)
+
+        let editions = PlaybackEditions.editions(from: versions)
+
+        precondition(editions.count == 2, "Expected 2 editions; got \(editions.count)")
+        precondition(editions[0].label == "Director's Cut", "First edition label wrong: \(editions[0].label)")
+        precondition(editions[0].versions.count == 2, "Director's Cut should hold 2 versions")
+        precondition(editions[1].label == "Standard", "Untitled edition should be labeled Standard; got \(editions[1].label)")
+    }
+
+    private static func testEditionForFileIdFindsOwningEdition() {
+        let versions = decodedVersions("""
+        [
+          { "file_id": 1, "edition": "Theatrical", "resolution": "1080p" },
+          { "file_id": 2, "edition": "Extended", "resolution": "1080p" }
+        ]
+        """)
+
+        let edition = PlaybackEditions.edition(forFileId: 2, in: versions)
+
+        precondition(edition?.label == "Extended", "fileId 2 should resolve to Extended; got \(edition?.label ?? "nil")")
     }
 
     private static func version(fileId: Int, resolution: String?) -> FileVersion {
