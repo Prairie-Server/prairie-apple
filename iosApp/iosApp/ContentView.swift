@@ -487,6 +487,11 @@ struct MainTabView: View {
         .tint(.continuumOnSurface)
         #if !os(macOS)
         .safeAreaInset(edge: .bottom, spacing: 0) {
+            #if os(iOS)
+            SiloCastMiniBar(controller: castController)
+                .animation(.snappy, value: castController.hasActiveSession)
+                .animation(.snappy, value: castController.isShowingRemoteControl)
+            #endif
             AudioMiniPlayerView()
         }
         .fullScreenCover(isPresented: Binding(
