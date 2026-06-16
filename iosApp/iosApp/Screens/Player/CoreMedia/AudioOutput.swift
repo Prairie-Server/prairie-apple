@@ -174,6 +174,24 @@ final class AudioEngineAudioOutput {
         timePitch.rate = rate
     }
 
+    private var userVolume: Float = 1.0
+    private var userMuted = false
+
+    func setUserVolume(_ v: Float) {
+        userVolume = min(max(v, 0), 1)
+        applyUserGain()
+    }
+    func setUserMuted(_ m: Bool) {
+        userMuted = m
+        applyUserGain()
+    }
+    var currentUserVolume: Float { userVolume }
+    var currentUserMuted: Bool { userMuted }
+
+    func applyUserGain() {
+        engine.mainMixerNode.outputVolume = userMuted ? 0 : userVolume
+    }
+
     func prepare(audioFormat: AVAudioFormat) {
         stateLock.lock()
         let sameFormat = Self.formatMatches(sourceNodeAudioFormat, audioFormat)
@@ -234,6 +252,9 @@ final class AudioEngineAudioOutput {
         sourceNodeAudioFormat = audioFormat
         lastErrorDescription = nil
         stateLock.unlock()
+        // engine.reset() above wiped the main-mixer gain back to 1.0; restore
+        // the user's volume/mute so a format/route change can't blow it away.
+        applyUserGain()
         if wasRunning {
             play()
         }

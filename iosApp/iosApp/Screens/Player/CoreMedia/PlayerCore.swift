@@ -1681,6 +1681,15 @@ final class PlayerCore: NSObject {
         Self.logger.info("setSpeed(\(clamped))")
     }
 
+    func setUserVolume(_ v: Float) {
+        audioOutput.setUserVolume(v)
+    }
+    func setUserMuted(_ m: Bool) {
+        audioOutput.setUserMuted(m)
+    }
+    var currentUserVolume: Float { audioOutput.currentUserVolume }
+    var currentUserMuted: Bool { audioOutput.currentUserMuted }
+
     func setAudioDelay(_ seconds: Double) {
         // Nice-to-have; deferred from this Phase 2 pass. Needs per-frame PTS
         // offsets applied at audio enqueue time, with the cached delay
@@ -1805,6 +1814,9 @@ final class PlayerCore: NSObject {
         guard let audioFormat = audioOutputConfig?.audioFormat else { return }
         audioOutput.prepare(audioFormat: audioFormat)
         Self.logger.info("reloadAudioOutput(): re-prepared AVAudioEngine format")
+        // Re-preparing the engine resets mixer volume to 1.0; restore the
+        // user's volume/mute so a route/format change can't blow it away.
+        audioOutput.applyUserGain()
     }
 
     // MARK: - Internal

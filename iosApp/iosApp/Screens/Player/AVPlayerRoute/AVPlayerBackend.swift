@@ -395,6 +395,27 @@ final class AVPlayerBackend {
         }
     }
 
+    private var userVolume: Float = 1.0
+    private var userMuted = false
+
+    func setUserVolume(_ v: Float) {
+        userVolume = min(max(v, 0), 1)
+        applyUserGain()
+    }
+    func setUserMuted(_ m: Bool) {
+        userMuted = m
+        applyUserGain()
+    }
+    var currentUserVolume: Float { userVolume }
+    var currentUserMuted: Bool { userMuted }
+
+    // User mute is modeled as volume = 0, NOT avPlayer.isMuted: the latter is
+    // owned by the initial-video-display gate (begin/finishInitialVideoDisplayGate)
+    // and its unmute would clobber a user mute.
+    private func applyUserGain() {
+        avPlayer.volume = userMuted ? 0 : userVolume
+    }
+
     func setSubtitleDelay(_ seconds: Double) {
         var params = subtitleSession?.currentParams ?? .default
         params.syncOffsetMs = Int((seconds * 1000.0).rounded())

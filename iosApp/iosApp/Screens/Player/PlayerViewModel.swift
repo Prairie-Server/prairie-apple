@@ -291,6 +291,34 @@ enum ActivePlayer: @unchecked Sendable {
         case .avPlayer(let a): a.setSpeed(rate)
         }
     }
+    func setVolume(_ v: Float) {
+        switch self {
+        case .none: return
+        case .coreMedia(let c): c.setUserVolume(v)
+        case .avPlayer(let a): a.setUserVolume(v)
+        }
+    }
+    func setMuted(_ m: Bool) {
+        switch self {
+        case .none: return
+        case .coreMedia(let c): c.setUserMuted(m)
+        case .avPlayer(let a): a.setUserMuted(m)
+        }
+    }
+    func volume() -> Float {
+        switch self {
+        case .none: return 1.0
+        case .coreMedia(let c): return c.currentUserVolume
+        case .avPlayer(let a): return a.currentUserVolume
+        }
+    }
+    func isMuted() -> Bool {
+        switch self {
+        case .none: return false
+        case .coreMedia(let c): return c.currentUserMuted
+        case .avPlayer(let a): return a.currentUserMuted
+        }
+    }
 
     /// Unwrap the `PlayerCore` if this is the .coreMedia arm. Returns nil
     /// whenever the active route is AVPlayer-backed, so PlayerCore-only
