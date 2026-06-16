@@ -93,7 +93,7 @@ struct TVItemDetailView: View {
                             position: episode?.userData?.positionSeconds,
                             duration: episode?.userData?.durationSeconds
                         )
-                    if let fileId {
+                    if let fileId = nextUpPlaybackFileId(resolvedFileId: fileId) {
                         router.navigate(
                             to: .playerWithFile(
                                 contentId: id,
@@ -186,7 +186,7 @@ struct TVItemDetailView: View {
                     let resumePosition = startFromBeginning
                         ? nil
                         : viewModel.episodes.first(where: { $0.contentId == id })?.userData?.positionSeconds
-                    if let fileId {
+                    if let fileId = nextUpPlaybackFileId(resolvedFileId: fileId) {
                         router.navigate(
                             to: .playerWithFile(
                                 contentId: id,
@@ -347,6 +347,25 @@ struct TVItemDetailView: View {
         return nil
     }
 
+    /// Next-up analogue of `playbackFileId(for:)`. `resolvedFileId` is the
+    /// fileId the season/series view already computed from the selected
+    /// version (non-nil only when the user changed Version). When that is
+    /// nil but an audio/subtitle override is set, resolve the next-up
+    /// effective version's fileId so the chosen tracks can still be carried
+    /// through `.playerWithFile(...)` instead of being dropped by `.player`.
+    private func nextUpPlaybackFileId(resolvedFileId: Int?) -> Int? {
+        if let resolvedFileId {
+            return resolvedFileId
+        }
+        if preferredNextUpAudioTrackIndex != nil || preferredNextUpSubtitleTrackIndex != nil {
+            return effectiveVersion(
+                for: nextUpPlaybackDetail,
+                versionFileId: preferredNextUpFileId
+            )?.fileId
+        }
+        return nil
+    }
+
     private func playableResumePosition(for detail: ItemDetail) -> Double? {
         playableResumePosition(
             position: detail.userData?.positionSeconds,
@@ -369,6 +388,11 @@ struct TVItemDetailView: View {
             lastFileId: detail.userData?.lastFileId,
             preferredQualityId: PlayerSettings.shared.preferredQuality
         )
+    }
+
+    private func effectiveVersion(for detail: ItemDetail?, versionFileId: Int?) -> FileVersion? {
+        guard let detail else { return nil }
+        return effectiveVersion(for: detail, versionFileId: versionFileId)
     }
 
     private func sanitizedAudioTrackIndex(
