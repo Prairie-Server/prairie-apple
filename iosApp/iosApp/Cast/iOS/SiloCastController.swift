@@ -165,7 +165,7 @@ final class SiloCastController {
             isConnecting = false
         case .close:
             clearSession()
-        case .launch, .control:
+        case .launch, .control, .ping, .pong:
             break
         }
     }

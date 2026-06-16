@@ -5371,6 +5371,9 @@ extension PlayerViewModel {
                 throw SiloCastPlayerControlError.missingEnabledValue
             }
             setHDREnabled(enabled)
+        case .setVolume, .setMuted, .playNext:
+            // Handled by a later task; no-op for now so the protocol compiles.
+            break
         }
     }
 
@@ -5406,6 +5409,10 @@ extension PlayerViewModel {
             hdrEnabled: settings.hdrEnabled,
             supportsVideoGravity: backendCapabilities.supportsVideoGravity,
             supportsHDRToggle: backendCapabilities.supportsHDRToggle,
+            volume: 1.0,
+            isMuted: false,
+            hasNextEpisode: false,
+            nextEpisodeTitle: nil,
             error: error
         )
     }

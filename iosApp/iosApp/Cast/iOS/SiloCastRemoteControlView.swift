@@ -397,7 +397,12 @@ private extension SiloCastPlaybackState {
                              SiloCastOption(id: "1080", label: "1080p", detail: nil)],
             activeQualityId: "auto", isQualitySwitching: false,
             playbackSpeed: 1.0, videoGravity: VideoGravity.fit.rawValue, hdrEnabled: false,
-            supportsVideoGravity: true, supportsHDRToggle: true, error: nil
+            supportsVideoGravity: true, supportsHDRToggle: true,
+            volume: 1.0,
+            isMuted: false,
+            hasNextEpisode: false,
+            nextEpisodeTitle: nil,
+            error: nil
         )
     }
 }

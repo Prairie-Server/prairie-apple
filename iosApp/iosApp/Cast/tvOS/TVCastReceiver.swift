@@ -170,7 +170,7 @@ final class TVCastReceiver {
             handleControl(command)
         case .close:
             closeActiveSession(sendClose: false)
-        case .state, .error:
+        case .state, .error, .ping, .pong:
             break
         }
     }
@@ -310,6 +310,10 @@ final class TVCastReceiver {
             hdrEnabled: PlayerSettings.shared.hdrEnabled,
             supportsVideoGravity: false,
             supportsHDRToggle: false,
+            volume: 1.0,
+            isMuted: false,
+            hasNextEpisode: false,
+            nextEpisodeTitle: nil,
             error: nil
         )
         Task {
@@ -360,6 +364,10 @@ final class TVCastReceiver {
             hdrEnabled: PlayerSettings.shared.hdrEnabled,
             supportsVideoGravity: false,
             supportsHDRToggle: false,
+            volume: 1.0,
+            isMuted: false,
+            hasNextEpisode: false,
+            nextEpisodeTitle: nil,
             error: nil
         )
     }

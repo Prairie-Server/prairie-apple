@@ -70,6 +70,10 @@ struct SiloCastPlaybackState: Codable, Equatable, Sendable {
     let hdrEnabled: Bool
     let supportsVideoGravity: Bool
     let supportsHDRToggle: Bool
+    let volume: Double
+    let isMuted: Bool
+    let hasNextEpisode: Bool
+    let nextEpisodeTitle: String?
     let error: String?
 }
 
@@ -86,12 +90,16 @@ struct SiloCastControlCommand: Codable, Equatable, Sendable {
         case setQuality = "set_quality"
         case setVideoGravity = "set_video_gravity"
         case setHDREnabled = "set_hdr_enabled"
+        case setVolume = "set_volume"
+        case setMuted = "set_muted"
+        case playNext = "play_next"
     }
 
     let name: Name
     let seconds: Double?
     let trackId: Int64?
     let speed: Double?
+    let volume: Double?
     let value: String?
     let enabled: Bool?
 
@@ -100,6 +108,7 @@ struct SiloCastControlCommand: Codable, Equatable, Sendable {
         seconds: Double? = nil,
         trackId: Int64? = nil,
         speed: Double? = nil,
+        volume: Double? = nil,
         value: String? = nil,
         enabled: Bool? = nil
     ) {
@@ -107,6 +116,7 @@ struct SiloCastControlCommand: Codable, Equatable, Sendable {
         self.seconds = seconds
         self.trackId = trackId
         self.speed = speed
+        self.volume = volume
         self.value = value
         self.enabled = enabled
     }
@@ -143,6 +153,16 @@ struct SiloCastControlCommand: Codable, Equatable, Sendable {
     static func setHDREnabled(_ enabled: Bool) -> SiloCastControlCommand {
         SiloCastControlCommand(name: .setHDREnabled, enabled: enabled)
     }
+
+    static let playNext = SiloCastControlCommand(name: .playNext)
+
+    static func setVolume(_ volume: Double) -> SiloCastControlCommand {
+        SiloCastControlCommand(name: .setVolume, volume: volume)
+    }
+
+    static func setMuted(_ muted: Bool) -> SiloCastControlCommand {
+        SiloCastControlCommand(name: .setMuted, enabled: muted)
+    }
 }
 
 struct SiloCastErrorMessage: Codable, Equatable, Sendable {
@@ -156,6 +176,8 @@ enum SiloCastMessage: Equatable, Sendable {
     case control(SiloCastControlCommand)
     case state(SiloCastPlaybackState)
     case error(SiloCastErrorMessage)
+    case ping
+    case pong
     case close
 }
 
@@ -171,6 +193,8 @@ extension SiloCastMessage: Codable {
         case control
         case state
         case error
+        case ping
+        case pong
         case close
     }
 
@@ -193,6 +217,10 @@ extension SiloCastMessage: Codable {
         case .error(let error):
             try c.encode(Kind.error, forKey: .type)
             try c.encode(error, forKey: .error)
+        case .ping:
+            try c.encode(Kind.ping, forKey: .type)
+        case .pong:
+            try c.encode(Kind.pong, forKey: .type)
         case .close:
             try c.encode(Kind.close, forKey: .type)
         }
@@ -212,6 +240,10 @@ extension SiloCastMessage: Codable {
             self = .state(try c.decode(SiloCastPlaybackState.self, forKey: .state))
         case .error:
             self = .error(try c.decode(SiloCastErrorMessage.self, forKey: .error))
+        case .ping:
+            self = .ping
+        case .pong:
+            self = .pong
         case .close:
             self = .close
         }
