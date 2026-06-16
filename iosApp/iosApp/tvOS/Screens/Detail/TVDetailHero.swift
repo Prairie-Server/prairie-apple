@@ -26,6 +26,8 @@ struct TVDetailHero<Actions: View>: View {
     let ratingChip: String?
     /// Short description shown in the hero. Clamped to 3 lines.
     let overview: String?
+    /// Optional tagline shown above the overview when the synopsis is expanded.
+    let tagline: String?
     /// Inline facts row shown above the action buttons. Mixes plain text
     /// (year / runtime / maturity) and outlined quality chips
     /// (4K / HDR / ATMOS / CC).
@@ -125,13 +127,7 @@ struct TVDetailHero<Actions: View>: View {
                 .padding(.top, eyebrow == nil ? 0 : 4)
             sourceRow
             if let overview, !overview.isEmpty {
-                Text(overview)
-                    .font(.system(size: 26, weight: .regular))
-                    .foregroundColor(Color.white.opacity(0.82))
-                    .lineSpacing(8)
-                    .lineLimit(3)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: contentMaxWidth, alignment: .leading)
+                TVExpandableSynopsis(overview: overview, tagline: tagline)
             }
             factsRow
         }
