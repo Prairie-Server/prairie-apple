@@ -204,22 +204,7 @@ private struct VersionGlassCard: ViewModifier {
         content
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
-            .background {
-                if #available(iOS 26, macOS 26, *) {
-                    shape
-                        .fill(Color.clear)
-                        .glassEffect(
-                            isInteractive
-                                ? Glass.regular.tint(tint).interactive()
-                                : Glass.regular.tint(tint),
-                            in: .rect(cornerRadius: cornerRadius)
-                        )
-                } else {
-                    shape
-                        .fill(Color.continuumSurfaceElevated.opacity(isSelected ? 0.34 : 0.22))
-                        .background(.ultraThinMaterial, in: shape)
-                }
-            }
+            .siloGlass(in: .rect(cornerRadius: cornerRadius), tint: tint, interactive: isInteractive)
             .overlay {
                 shape.stroke(Color.white.opacity(isSelected ? 0.18 : 0.08), lineWidth: 1)
             }

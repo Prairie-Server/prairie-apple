@@ -18,7 +18,7 @@ struct NowPlayingBarChrome: ViewModifier {
         switch style {
         case .card:
             content
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .siloGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .strokeBorder(Color.continuumOutline, lineWidth: 1)

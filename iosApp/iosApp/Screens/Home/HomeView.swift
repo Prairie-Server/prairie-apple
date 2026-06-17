@@ -221,29 +221,13 @@ struct HomeView: View {
     private var homeHeaderChrome: some View {
         let borderOpacity = 0.06 + (0.04 * headerChromeOpacity)
 
-        if #available(iOS 26, macOS 26, *) {
-            Color.clear
-                .glassEffect(
-                    Glass.regular.tint(Color.black.opacity(0.08)),
-                    in: .rect
-                )
-                .overlay(alignment: .bottom) {
-                    Rectangle()
-                        .fill(Color.white.opacity(borderOpacity))
-                        .frame(height: 0.75)
-                }
-        } else {
-            Rectangle()
-                .fill(.ultraThinMaterial)
-                .overlay {
-                    Color.continuumSurfaceElevated.opacity(0.32)
-                }
-                .overlay(alignment: .bottom) {
-                    Rectangle()
-                        .fill(Color.white.opacity(borderOpacity))
-                        .frame(height: 0.75)
-                }
-        }
+        Color.clear
+            .siloGlass(in: .rect, tint: Color.black.opacity(0.08))
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(Color.white.opacity(borderOpacity))
+                    .frame(height: 0.75)
+            }
     }
 
     private func refreshHome() async {
