@@ -36,6 +36,9 @@ struct SiloCastTargetPickerView: View {
             .onDisappear { browser.stop() }
         }
         .preferredColorScheme(.dark)
+        .presentationDetents(browser.found.count > 3 ? [.medium, .large] : [.medium])
+        .presentationDragIndicator(.visible)
+        .presentationCornerRadius(24)
     }
 
     private var searchingState: some View {
