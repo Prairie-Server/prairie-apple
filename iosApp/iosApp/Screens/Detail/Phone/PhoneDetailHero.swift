@@ -63,7 +63,11 @@ struct PhoneDetailHero<Actions: View>: View {
         }
         .frame(height: backdropHeight)
         .frame(maxWidth: .infinity)
-        .clipped()
+        // Intentionally no hard rectangle clip here. The backdrop's background
+        // extension (applied below) mirrors/blurs the artwork past its frame into
+        // the top safe area and the horizontal screen edges (the callers apply
+        // ignoresSafeArea on the top edge). Clipping to the fixed-height rectangle
+        // would defeat that edge-to-edge bleed.
     }
 
     private var backdrop: some View {
@@ -76,6 +80,11 @@ struct PhoneDetailHero<Actions: View>: View {
         }
         .frame(height: backdropHeight)
         .frame(maxWidth: .infinity)
+        // iOS 26: mirror + blur the source artwork to fill behind the status bar /
+        // Dynamic Island and out to the screen edges — the Apple TV / Music
+        // detail-page continuation, instead of a hard banner edge. iOS min is 26
+        // (plan 001), so this is unconditional.
+        .backgroundExtensionEffect()
     }
 
     /// Soft single-direction fade — only enough to let text below sit
