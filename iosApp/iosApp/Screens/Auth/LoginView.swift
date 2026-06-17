@@ -1,140 +1,109 @@
 import SwiftUI
 
-/// Sign-in screen shown when the user has a configured server but no
-/// active session. iOS-only now — tvOS uses `TVLoginView` which adds a
-/// persistent QR pairing panel alongside the form.
+#if !os(tvOS)
+/// Password-first sign-in (Aurora). iOS/macOS only — tvOS uses `TVLoginView`,
+/// which leads with QR device-login. Here the phone *is* the device, so we go
+/// straight to username/password over the plum backdrop.
 struct LoginView: View {
     var router: AppRouter
     @State private var viewModel = LoginViewModel()
-    @State private var showPassword: Bool = false
     @FocusState private var focusedField: Field?
 
-    private enum Field: Hashable {
-        case username
-        case password
-    }
+    private enum Field: Hashable { case username, password }
 
     var body: some View {
-        ZStack {
-            Color.continuumBackground.ignoresSafeArea()
+        AuroraScreen(variant: .signIn, scrim: .soft) {
+            SiloWordmarkView(width: 132)
+                .frame(maxWidth: .infinity)
+                .padding(.bottom, 30)
 
-            ScrollView {
-                VStack(spacing: 28) {
-                    Spacer().frame(height: 40)
-
-                    // Header
-                    VStack(spacing: 4) {
-                        Text("Welcome Back")
-                            .font(.continuumTitle)
-                            .foregroundColor(.continuumOnSurface)
-
-                        Text("Sign in to continue")
-                            .font(.continuumBody)
-                            .foregroundColor(.continuumSecondaryText)
-                    }
-
-                    // Form fields
-                    VStack(spacing: ContinuumTheme.padding) {
-                        // Username
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Username")
-                                .font(.continuumCaption)
-                                .foregroundColor(.continuumSecondaryText)
-
-                            TextField("Username", text: $viewModel.username)
-                                .textFieldStyle(ContinuumTextFieldStyle())
-                                .focused($focusedField, equals: .username)
-                                .textContentType(.username)
-                                #if !os(macOS)
-                                .autocorrectionDisabled()
-                                .textInputAutocapitalization(.never)
-                                #endif
-                        }
-
-                        // Password
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Password")
-                                .font(.continuumCaption)
-                                .foregroundColor(.continuumSecondaryText)
-
-                            HStack(spacing: 0) {
-                                Group {
-                                    if showPassword {
-                                        TextField("Password", text: $viewModel.password)
-                                    } else {
-                                        SecureField("Password", text: $viewModel.password)
-                                    }
-                                }
-                                .focused($focusedField, equals: .password)
-                                .textContentType(.password)
-                                #if !os(macOS)
-                                .autocorrectionDisabled()
-                                .textInputAutocapitalization(.never)
-                                #endif
-
-                                Button {
-                                    showPassword.toggle()
-                                } label: {
-                                    Image(systemName: showPassword ? "eye.slash" : "eye")
-                                        .foregroundColor(.continuumSecondaryText)
-                                }
-                                .padding(.trailing, 4)
-                            }
-                            .font(.continuumBody)
-                            // tvOS paints a white focus platter under the
-                            // text field; flip text color to dark on focus
-                            // so dots / typed text remain legible on the
-                            // inverted surface. Matches
-                            // `ContinuumTextFieldBody` above.
-                            .foregroundColor(passwordTextColor)
-                            .padding(.horizontal, ContinuumTheme.padding)
-                            .padding(.vertical, 14)
-                            .continuumInputChrome(isFocused: focusedField == .password)
-                            .tint(focusedField == .password ? .continuumBackground : .continuumPrimary)
-                        }
-                    }
-
-                    // Error
-                    if let error = viewModel.error {
-                        Text(error)
-                            .font(.continuumCaption)
-                            .foregroundColor(.continuumError)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-
-                    // Sign In button
-                    Button("Sign In") {
-                        Task { await viewModel.login(router: router) }
-                    }
-                    .buttonStyle(ContinuumPrimaryButtonStyle(isLoading: viewModel.isLoading))
-                    .disabled(viewModel.isLoading)
-
-                    // Signup link
-                    if viewModel.signupEnabled {
-                        Button("Create Account") {
-                            router.navigate(to: .signup)
-                        }
-                        .buttonStyle(ContinuumTextButtonStyle())
-                    }
-
-                    // Change server
-                    Button("Change Server") {
-                        router.resetToServerSetup()
-                    }
-                    .buttonStyle(ContinuumTextButtonStyle())
-                    .padding(.top, 8)
+            VStack(spacing: 12) {
+                AuroraEyebrow(text: "Step 02 — Sign in", centered: true)
+                Text("Welcome back")
+                    .font(.continuumTitle)
+                    .foregroundStyle(Color.auroraInk)
+                if let host = hostLabel {
+                    Text(host)
+                        .font(.system(size: 14, weight: .regular, design: .monospaced))
+                        .foregroundStyle(Color.auroraInkTertiary)
                 }
-                .padding(.horizontal, ContinuumTheme.largePadding)
-                .continuumFormWidth()
             }
+            .frame(maxWidth: .infinity)
+            .padding(.bottom, 24)
+
+            VStack(alignment: .leading, spacing: 18) {
+                AuroraTextField(
+                    label: "Username",
+                    text: $viewModel.username,
+                    placeholder: "yourname",
+                    focus: $focusedField,
+                    equals: .username,
+                    contentType: .username,
+                    submitLabel: .next,
+                    onSubmit: { focusedField = .password }
+                )
+
+                AuroraTextField(
+                    label: "Password",
+                    text: $viewModel.password,
+                    placeholder: "••••••",
+                    focus: $focusedField,
+                    equals: .password,
+                    isSecure: true,
+                    showsRevealToggle: true,
+                    contentType: .password,
+                    submitLabel: .go,
+                    onSubmit: { signIn() }
+                )
+
+                if let error = viewModel.error {
+                    AuroraErrorLabel(error)
+                }
+
+                Button {
+                    signIn()
+                } label: {
+                    Text(viewModel.isLoading ? "Signing in…" : "Sign in")
+                }
+                .buttonStyle(AuroraPrimaryButtonStyle(isLoading: viewModel.isLoading))
+                .disabled(viewModel.isLoading)
+                .padding(.top, 4)
+
+                HStack(spacing: 14) {
+                    if viewModel.signupEnabled {
+                        Button("Create account") { router.navigate(to: .signup) }
+                            .buttonStyle(AuroraGhostButtonStyle())
+                    }
+                    Button("Change server") { router.resetToServerSetup() }
+                        .buttonStyle(AuroraGhostButtonStyle())
+                }
+                .frame(maxWidth: .infinity)
+                .disabled(viewModel.isLoading)
+                .padding(.top, 4)
+            }
+            .padding(22)
+            .auroraGlass(cornerRadius: 24, emphasized: true)
+            .animation(.easeInOut(duration: 0.2), value: viewModel.error)
         }
         .navigationBarBackButtonHidden()
-        .task {
-            await viewModel.checkSignupStatus()
-        }
+        .task { await viewModel.checkSignupStatus() }
     }
 
-    private var passwordTextColor: Color {
-        Color.continuumOnSurface
+    private func signIn() {
+        guard !viewModel.isLoading else { return }
+        Task { await viewModel.login(router: router) }
+    }
+
+    /// Host pulled out of the active server URL so the user sees which server
+    /// they're signing into. Mirrors `TVLoginView.hostLabel`.
+    private var hostLabel: String? {
+        let url = AuthService.shared.serverUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !url.isEmpty else { return nil }
+        if let parsed = URL(string: url), let host = parsed.host, !host.isEmpty {
+            return host
+        }
+        return url.replacingOccurrences(of: "https://", with: "")
+            .replacingOccurrences(of: "http://", with: "")
     }
 }
+#endif

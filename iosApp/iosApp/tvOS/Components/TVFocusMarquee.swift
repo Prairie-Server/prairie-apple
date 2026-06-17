@@ -31,6 +31,10 @@ struct TVMarqueeContent: Equatable {
     let synopsis: String?
     let backdropUrl: String?
     let backdropThumbhash: String?
+    /// Episodes carry only their low-res still in the section payload, so the
+    /// root hero upgrades to the series backdrop from detail enrichment rather
+    /// than blowing the still up full-width.
+    let isEpisode: Bool
 }
 
 extension TVMarqueeContent {
@@ -77,7 +81,8 @@ extension TVMarqueeContent {
             backdropUrl: Self.nonEmpty(item.backdropUrl) ?? item.posterUrl,
             backdropThumbhash: Self.nonEmpty(item.backdropUrl) != nil
                 ? item.backdropThumbhash
-                : item.posterThumbhash
+                : item.posterThumbhash,
+            isEpisode: isEpisode
         )
     }
 
@@ -101,7 +106,8 @@ extension TVMarqueeContent {
             metaParts: meta,
             synopsis: nil,
             backdropUrl: collection.posterUrl,
-            backdropThumbhash: collection.posterThumbhash
+            backdropThumbhash: collection.posterThumbhash,
+            isEpisode: false
         )
     }
 
@@ -188,8 +194,15 @@ extension TVMarqueeContent {
 struct TVMarqueeEnrichment: Equatable {
     /// `Aired Mar 12, 2026 · Pedro Pascal, Bella Ramsey, Anna Torv`
     let detailLine: String?
+    /// The detail-level backdrop. For episodes this is the series backdrop —
+    /// far higher-res than the episode still the section payload carries — so
+    /// the root hero swaps to it once enrichment arrives.
+    let backdropUrl: String?
+    let backdropThumbhash: String?
 
     init(detail: ItemDetail) {
+        backdropUrl = detail.backdropUrl
+        backdropThumbhash = detail.backdropThumbhash
         var parts: [String] = []
         if let airDate = Self.airDateText(detail.airDate) {
             parts.append("Aired \(airDate)")
@@ -237,6 +250,26 @@ final class TVFocusMarqueeModel {
     /// backdrop (same palette pipeline the hero carousel used).
     private(set) var tintColor: Color = .continuumBackground
 
+    /// Backdrop art for the root hero. Episodes carry only their low-res still
+    /// in the section payload (§9); once detail enrichment lands we upgrade to
+    /// the series backdrop it provides rather than blowing the still up
+    /// full-width. Non-episodes always use their own section backdrop.
+    var backdropURL: String? {
+        if content?.isEpisode == true,
+           let enriched = enrichment?.backdropUrl, !enriched.isEmpty {
+            return enriched
+        }
+        return content?.backdropUrl
+    }
+
+    var backdropThumbhash: String? {
+        if content?.isEpisode == true,
+           let enriched = enrichment?.backdropUrl, !enriched.isEmpty {
+            return enrichment?.backdropThumbhash ?? content?.backdropThumbhash
+        }
+        return content?.backdropThumbhash
+    }
+
     private var debounceTask: Task<Void, Never>?
     private var tintTask: Task<Void, Never>?
     private var enrichTask: Task<Void, Never>?
@@ -275,6 +308,7 @@ final class TVFocusMarqueeModel {
         }
         if let cached = enrichmentCache[contentId] {
             enrichment = cached
+            sampleTintIfNeeded(for: backdropURL)
             return
         }
 
@@ -286,6 +320,7 @@ final class TVFocusMarqueeModel {
             self.enrichmentCache[contentId] = enrichment
             if self.content?.contentId == contentId {
                 self.enrichment = enrichment
+                self.sampleTintIfNeeded(for: self.backdropURL)
             }
         }
     }

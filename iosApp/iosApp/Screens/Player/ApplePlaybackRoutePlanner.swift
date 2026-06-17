@@ -446,6 +446,12 @@ private struct SiloRouteAssessment {
     let reason: String
 }
 
+extension ApplePlaybackRoutePlanner {
+    static func hevcLoopbackVideoRange(for version: FileVersion) -> String {
+        videoRange(for: .passthroughHEVC, source: version)
+    }
+}
+
 private extension ApplePlaybackRoutePlanner {
     static func assessNativeDirectRoute(
         selectedVersion: FileVersion,

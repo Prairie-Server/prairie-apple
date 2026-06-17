@@ -791,8 +791,8 @@ final class AVPlayerBackend {
             avPlayer.automaticallyWaitsToMinimizeStalling = false
             item.preferredForwardBufferDuration = Self.loopbackStartupForwardBuffer
             // Do not let AVPlayer poll the local EVENT playlist while paused.
-            // The writer intentionally backpressures when generated media is
-            // far ahead of playback; paused polling can therefore see an
+            // Under disk pressure the writer may pause appends until playback
+            // frees spill capacity; paused polling can therefore see an
             // unchanged playlist long enough for CoreMedia to fail the item.
             item.canUseNetworkResourcesForLiveStreamingWhilePaused = false
         }

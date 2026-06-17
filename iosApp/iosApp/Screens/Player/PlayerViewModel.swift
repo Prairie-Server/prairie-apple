@@ -1966,13 +1966,17 @@ class PlayerViewModel {
 
         let streamRequest = activeExecutionPlan?.sourceStreamRequest
             ?? StreamRequest(url: url, headers: headers, serverUrl: resolvedServerUrl)
+        let hevcLoopbackVideoRange = currentSelectedVersion.map {
+            ApplePlaybackRoutePlanner.hevcLoopbackVideoRange(for: $0)
+        }
         let decision = recoveryPlanner.decide(
             context: PlaybackRecoveryPlanner.Context(
                 reason: reason,
                 currentDelivery: currentDeliveryStrategy,
                 streamRequest: streamRequest,
                 startTime: startTime,
-                activePlan: activeExecutionPlan
+                activePlan: activeExecutionPlan,
+                hevcLoopbackVideoRange: hevcLoopbackVideoRange
             ),
             makeLoopbackSession: { [weak self] request in
                 self?.makeFallbackLoopbackSession(
@@ -4811,6 +4815,8 @@ class PlayerViewModel {
             return "unsupported HEVC PQ"
         case "videoToolboxUnsupportedHEVCHDR":
             return "unsupported HEVC HDR"
+        case "videoToolboxBadDataHEVC":
+            return "HEVC VideoToolbox bad-data"
         default:
             return token.replacingOccurrences(of: "_", with: " ")
         }

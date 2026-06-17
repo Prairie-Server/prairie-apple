@@ -17,6 +17,7 @@ struct TVServerSetupView: View {
 
     private enum Field: Hashable {
         case host
+        case advanced
         case scheme(ServerSetupScheme)
         case port
         case connect
@@ -183,22 +184,39 @@ struct TVServerSetupView: View {
                 )
             }
 
-            HStack(alignment: .top, spacing: 20) {
-                VStack(alignment: .leading, spacing: 10) {
-                    fieldLabel("Protocol")
-                    protocolSegments
+            Button {
+                withAnimation(ContinuumTheme.springAnimation) {
+                    viewModel.showsAdvancedOptions.toggle()
                 }
-                VStack(alignment: .leading, spacing: 10) {
-                    fieldLabel("Port")
-                    AuroraInputField(
-                        text: $viewModel.port,
-                        placeholder: "8096",
-                        focus: $focusedField,
-                        equals: .port,
-                        keyboard: .numberPad
-                    )
+            } label: {
+                HStack(spacing: 10) {
+                    Text("Advanced options")
+                    Image(systemName: "chevron.down")
+                        .rotationEffect(.degrees(viewModel.showsAdvancedOptions ? 180 : 0))
                 }
-                .frame(width: 190)
+            }
+            .buttonStyle(AuroraGhostButtonStyle())
+            .focused($focusedField, equals: .advanced)
+
+            if viewModel.showsAdvancedOptions {
+                HStack(alignment: .top, spacing: 20) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        fieldLabel("Protocol")
+                        protocolSegments
+                    }
+                    VStack(alignment: .leading, spacing: 10) {
+                        fieldLabel("Port")
+                        AuroraInputField(
+                            text: $viewModel.port,
+                            placeholder: "8096",
+                            focus: $focusedField,
+                            equals: .port,
+                            keyboard: .numberPad
+                        )
+                    }
+                    .frame(width: 190)
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
 
             if let error = viewModel.error {
@@ -228,6 +246,7 @@ struct TVServerSetupView: View {
         .frame(maxHeight: .infinity, alignment: .top)
         .auroraGlass(cornerRadius: 28, emphasized: true)
         .animation(.easeInOut(duration: 0.2), value: viewModel.error)
+        .animation(ContinuumTheme.springAnimation, value: viewModel.showsAdvancedOptions)
     }
 
     private var protocolSegments: some View {

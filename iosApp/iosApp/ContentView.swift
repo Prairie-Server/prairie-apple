@@ -341,14 +341,28 @@ struct ContentView: View {
     @ViewBuilder
     private func destinationView(for route: Route) -> some View {
         switch route {
-        case .setup:
-            SetupView(router: router)
+        case .serverNeedsSetup:
+            #if os(tvOS)
+            EmptyStateView(icon: "gearshape.2", title: "Finish setup in your browser", subtitle: nil)
+                .continuumBackground()
+            #else
+            ServerNeedsSetupView(router: router)
+            #endif
         case .signup:
+            #if os(tvOS)
+            EmptyStateView(icon: "person.badge.plus", title: "Sign up from a phone or the web", subtitle: nil)
+                .continuumBackground()
+            #else
             SignupView(router: router)
+            #endif
         case .login:
-            LoginView(router: router)
+            loginRoot
         case .serverSetup:
+            #if os(tvOS)
+            TVServerSetupView(router: router)
+            #else
             ServerSetupView(router: router)
+            #endif
         default:
             // Routes handled inside the authenticated tab view
             EmptyStateView(
@@ -383,10 +397,20 @@ struct ContentView: View {
             #else
             LoginView(router: router)
             #endif
-        case .setup:
-            SetupView(router: router)
+        case .serverNeedsSetup:
+            #if os(tvOS)
+            EmptyStateView(icon: "gearshape.2", title: "Finish setup in your browser", subtitle: nil)
+                .continuumBackground()
+            #else
+            ServerNeedsSetupView(router: router)
+            #endif
         case .signup:
+            #if os(tvOS)
+            EmptyStateView(icon: "person.badge.plus", title: "Sign up from a phone or the web", subtitle: nil)
+                .continuumBackground()
+            #else
             SignupView(router: router)
+            #endif
         default:
             EmptyStateView(icon: "questionmark.circle", title: "Unknown", subtitle: nil)
                 .continuumBackground()

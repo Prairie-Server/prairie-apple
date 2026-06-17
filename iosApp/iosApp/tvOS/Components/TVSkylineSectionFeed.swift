@@ -52,8 +52,8 @@ struct TVSkylineSectionFeed: View {
         ZStack(alignment: .top) {
             TVRootHeroBackdrop(
                 tintColor: marqueeModel.tintColor,
-                artworkURL: marqueeModel.content?.backdropUrl,
-                artworkThumbhash: marqueeModel.content?.backdropThumbhash,
+                artworkURL: marqueeModel.backdropURL,
+                artworkThumbhash: marqueeModel.backdropThumbhash,
                 isVisible: marqueeModel.content != nil,
                 crossfadeDuration: ContinuumTheme.Skyline.marqueeCrossfadeDuration
             )
