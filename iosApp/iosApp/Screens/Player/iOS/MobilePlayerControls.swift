@@ -71,48 +71,50 @@ struct MobilePlayerControls: View {
     // MARK: - Top bar
 
     private var topBar: some View {
-        HStack(spacing: 16) {
-            controlButton(systemName: "chevron.left", action: onDismiss)
+        GlassEffectContainer {
+            HStack(spacing: 16) {
+                controlButton(systemName: "chevron.left", action: onDismiss)
 
-            Spacer()
+                Spacer()
 
-            Text(viewModel.title)
-                .font(.subheadline)
-                .foregroundStyle(.white)
-                .lineLimit(1)
+                Text(viewModel.title)
+                    .font(.subheadline)
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
 
-            Spacer()
+                Spacer()
 
-            controlButton(
-                systemName: orientationCoordinator.isLandscapeLocked ? "lock.fill" : "lock.open"
-            ) {
-                orientationCoordinator.togglePlayerMode()
-            }
-            .accessibilityLabel(
-                orientationCoordinator.isLandscapeLocked ? "Landscape Locked" : "Rotate Freely"
-            )
-            .accessibilityHint(
-                orientationCoordinator.isLandscapeLocked
-                    ? "Allows portrait rotation during playback"
-                    : "Locks playback to landscape"
-            )
-
-            // Chapters: only show if the file has them
-            if !viewModel.chapters.isEmpty {
-                controlButton(systemName: "list.bullet") {
-                    activeSheet = .chapters
+                controlButton(
+                    systemName: orientationCoordinator.isLandscapeLocked ? "lock.fill" : "lock.open"
+                ) {
+                    orientationCoordinator.togglePlayerMode()
                 }
-            }
+                .accessibilityLabel(
+                    orientationCoordinator.isLandscapeLocked ? "Landscape Locked" : "Rotate Freely"
+                )
+                .accessibilityHint(
+                    orientationCoordinator.isLandscapeLocked
+                        ? "Allows portrait rotation during playback"
+                        : "Locks playback to landscape"
+                )
 
-            // Tracks: disable if there's literally nothing to choose
-            controlButton(systemName: "captions.bubble") {
-                activeSheet = .tracks
-            }
-            .disabled(viewModel.audioTracks.isEmpty && viewModel.subtitleTracks.isEmpty)
-            .opacity(viewModel.audioTracks.isEmpty && viewModel.subtitleTracks.isEmpty ? 0.3 : 1)
+                // Chapters: only show if the file has them
+                if !viewModel.chapters.isEmpty {
+                    controlButton(systemName: "list.bullet") {
+                        activeSheet = .chapters
+                    }
+                }
 
-            controlButton(systemName: "gearshape") {
-                activeSheet = .settings
+                // Tracks: disable if there's literally nothing to choose
+                controlButton(systemName: "captions.bubble") {
+                    activeSheet = .tracks
+                }
+                .disabled(viewModel.audioTracks.isEmpty && viewModel.subtitleTracks.isEmpty)
+                .opacity(viewModel.audioTracks.isEmpty && viewModel.subtitleTracks.isEmpty ? 0.3 : 1)
+
+                controlButton(systemName: "gearshape") {
+                    activeSheet = .settings
+                }
             }
         }
     }
@@ -143,12 +145,8 @@ struct MobilePlayerControls: View {
                                     .foregroundStyle(.white)
                                     .padding(.horizontal, 16)
                                     .padding(.vertical, 11)
-                                    .background(Capsule().fill(.black.opacity(0.65)))
-                                    .overlay(
-                                        Capsule().stroke(.white.opacity(0.28), lineWidth: 1)
-                                    )
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(.glass)
                             .accessibilityLabel("Cancel Auto-Skip Intro")
                         }
 
@@ -160,13 +158,10 @@ struct MobilePlayerControls: View {
                                 systemImage: "forward.end.fill"
                             )
                             .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(.black)
                             .padding(.horizontal, 18)
                             .padding(.vertical, 12)
-                            .background(Capsule().fill(.white))
-                            .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.glassProminent)
                         .accessibilityLabel(
                             viewModel.introAutoSkipCountdownSeconds == nil ? "Skip Intro" : "Skip Intro Now"
                         )
@@ -182,36 +177,41 @@ struct MobilePlayerControls: View {
     // MARK: - Center
 
     private var centerControls: some View {
-        HStack(spacing: 48) {
-            Button {
-                viewModel.skipBackward()
-            } label: {
-                Image(systemName: "gobackward.10")
-                    .font(.system(size: 32))
-                    .foregroundStyle(.white)
-            }
-
-            Button {
-                viewModel.togglePlayPause()
-            } label: {
-                if viewModel.isBuffering {
-                    ProgressView()
-                        .tint(.white)
-                        .scaleEffect(1.5)
-                        .frame(width: 60, height: 60)
-                } else {
-                    Image(systemName: viewModel.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 48))
+        GlassEffectContainer {
+            HStack(spacing: 48) {
+                Button {
+                    viewModel.skipBackward()
+                } label: {
+                    Image(systemName: "gobackward.10")
+                        .font(.system(size: 32))
                         .foregroundStyle(.white)
                 }
-            }
+                .buttonStyle(.glass)
 
-            Button {
-                viewModel.skipForward()
-            } label: {
-                Image(systemName: "goforward.10")
-                    .font(.system(size: 32))
-                    .foregroundStyle(.white)
+                Button {
+                    viewModel.togglePlayPause()
+                } label: {
+                    if viewModel.isBuffering {
+                        ProgressView()
+                            .tint(.white)
+                            .scaleEffect(1.5)
+                            .frame(width: 60, height: 60)
+                    } else {
+                        Image(systemName: viewModel.isPlaying ? "pause.fill" : "play.fill")
+                            .font(.system(size: 48))
+                            .foregroundStyle(.white)
+                    }
+                }
+                .buttonStyle(.glassProminent)
+
+                Button {
+                    viewModel.skipForward()
+                } label: {
+                    Image(systemName: "goforward.10")
+                        .font(.system(size: 32))
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(.glass)
             }
         }
     }
@@ -332,6 +332,7 @@ struct MobilePlayerControls: View {
                 .foregroundStyle(.white)
                 .frame(width: 44, height: 44)
         }
+        .buttonStyle(.glass)
     }
 
     private func formatTime(_ seconds: Double) -> String {

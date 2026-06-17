@@ -345,14 +345,7 @@ struct PlayerView: View {
             .scaleEffect(1.3)
             .frame(width: 62, height: 62)
             #endif
-            .background {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(.ultraThinMaterial)
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(.white.opacity(0.16), lineWidth: 1)
-            }
+            .siloGlass(in: .rect(cornerRadius: 8))
             .shadow(color: .black.opacity(0.45), radius: 24, y: 10)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             .allowsHitTesting(false)
