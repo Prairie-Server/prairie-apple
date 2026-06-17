@@ -19,6 +19,11 @@ struct EpisodeThumbCard: View {
 
     @State private var playedOverride: Bool?
     @EnvironmentObject private var overlayStore: OverlayPrefsStore
+    /// iOS 26 zoom transition namespace, shared from `MainTabView`. Lets the
+    /// tapped thumbnail act as the `.matchedTransitionSource` for the zoom into
+    /// the episode's item detail, keyed on `item.contentId`. `nil` (tvOS/macOS
+    /// or unset) falls back to a plain push. (iOS branch only.)
+    @Environment(\.zoomNamespace) private var zoomNamespace
 
     private var cardWidth: CGFloat { ContinuumTheme.thumbnailCardWidth }
     private var cardHeight: CGFloat { ContinuumTheme.thumbnailCardHeight }
@@ -68,6 +73,7 @@ struct EpisodeThumbCard: View {
                         .lineLimit(1)
                 }
             }
+            .zoomTransitionSource(id: item.contentId, in: zoomNamespace)
         }
         .buttonStyle(.plain)
         .frame(width: cardWidth)

@@ -462,12 +462,35 @@ private enum DebugAutoPlayError: LocalizedError {
     }
 }
 
+// MARK: - Zoom transition namespace
+
+/// Carries the `@Namespace.ID` used by the iOS 26 poster → detail zoom
+/// transition. Published by `MainTabView` so card components (the
+/// `.matchedTransitionSource` sources) and the central
+/// `navigationDestination` (the `.navigationTransition(.zoom)` destination)
+/// can share one namespace without routing it through `Route`/`router.path`.
+/// `nil` when unset (e.g. tvOS / macOS) so callers fall back to a plain push.
+struct ZoomNamespaceEnvironmentKey: EnvironmentKey {
+    static let defaultValue: Namespace.ID? = nil
+}
+
+extension EnvironmentValues {
+    var zoomNamespace: Namespace.ID? {
+        get { self[ZoomNamespaceEnvironmentKey.self] }
+        set { self[ZoomNamespaceEnvironmentKey.self] = newValue }
+    }
+}
+
 // MARK: - Main Tab View
 
 struct MainTabView: View {
     @Bindable var router: AppRouter
     @State private var selectedTab: AppTab = .home
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    /// Shared namespace for the poster → detail zoom transition. Injected into
+    /// the environment (`\.zoomNamespace`) so both the cards and the central
+    /// detail destination resolve the same identity.
+    @Namespace private var zoomNamespace
     @Environment(AudioPlaybackStore.self) private var audioStore
     #if os(iOS)
     @Environment(SiloCastController.self) private var castController
@@ -559,6 +582,7 @@ struct MainTabView: View {
             .modifier(NowPlayingShelfAttachment())
             #endif
         }
+        .environment(\.zoomNamespace, zoomNamespace)
     }
 
     /// iPad regular width: sidebar list + detail pane.
@@ -595,6 +619,7 @@ struct MainTabView: View {
             }
         }
         .environment(\.sidebarToggle, toggleSidebar)
+        .environment(\.zoomNamespace, zoomNamespace)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             NowPlayingShelf(style: .card)
         }
@@ -649,6 +674,13 @@ struct MainTabView: View {
             )
         case .itemDetail(let contentId):
             ItemDetailView(contentId: contentId)
+                #if os(iOS)
+                // Destination half of the iOS 26 poster → detail zoom. Keys off
+                // the same `contentId` the card published via
+                // `.matchedTransitionSource`. SwiftUI falls back to a normal
+                // push when no matching source is on screen.
+                .navigationTransition(.zoom(sourceID: contentId, in: zoomNamespace))
+                #endif
         case .personDetail(let personId):
             PersonDetailView(personId: personId)
         case .player(let contentId, let startFromBeginning, let resumePosition):

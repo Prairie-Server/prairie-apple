@@ -45,6 +45,12 @@ struct MediaCard: View {
 
     @State private var playedOverride: Bool?
     @EnvironmentObject private var overlayStore: OverlayPrefsStore
+    /// iOS 26 zoom transition namespace, shared from `MainTabView`. When
+    /// present (and `contentId` is non-nil) the poster acts as the
+    /// `.matchedTransitionSource` for the zoom into item detail. `nil` on
+    /// tvOS/macOS or when unset, in which case the tap falls back to a plain
+    /// push. (iOS branch only — tvOS uses focus-driven `.card` style.)
+    @Environment(\.zoomNamespace) private var zoomNamespace
 
     private var cardWidth: CGFloat { cardWidthOverride ?? ContinuumTheme.posterCardWidth }
     private var cardHeight: CGFloat {
@@ -86,6 +92,7 @@ struct MediaCard: View {
             if let contentId {
                 NavigationLink(value: Route.itemDetail(contentId: contentId)) {
                     cardContent
+                        .zoomTransitionSource(id: contentId, in: zoomNamespace)
                 }
                 .buttonStyle(.plain)
             } else {
@@ -246,6 +253,24 @@ struct MediaCard: View {
         #else
         return 6
         #endif
+    }
+}
+
+// MARK: - Zoom transition source helper
+
+extension View {
+    /// Marks this view as the `.matchedTransitionSource` for the iOS 26
+    /// poster → detail zoom, keyed on the item's `contentId`. No-ops when the
+    /// namespace is `nil` (tvOS/macOS, or when the shared namespace is unset),
+    /// so callers get a plain push with no crash. Shared by `MediaCard` and
+    /// `EpisodeThumbCard` (both in this module).
+    @ViewBuilder
+    func zoomTransitionSource(id: String, in namespace: Namespace.ID?) -> some View {
+        if let namespace {
+            self.matchedTransitionSource(id: id, in: namespace)
+        } else {
+            self
+        }
     }
 }
 
