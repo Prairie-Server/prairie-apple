@@ -9,8 +9,8 @@ import SwiftUI
 ///
 /// Paging: there is no scroll view, so the focus engine never moves the row
 /// while navigating across cards. Up/Down page the focused row explicitly and
-/// the stack crossfades. Entry focus lands on the first row's first card,
-/// which the marquee previews immediately.
+/// the next-row preview animates into the focused slot. Entry focus lands on
+/// the first row's first card, which the marquee previews immediately.
 struct TVSkylineSectionFeed: View {
     /// Section rows to page through, in order (already filtered to
     /// non-empty, non-featured by the caller).
@@ -42,11 +42,9 @@ struct TVSkylineSectionFeed: View {
     /// async, so the initial hand-down would land on nothing.
     @State private var pendingFocusRequest: Int?
     @State private var lastAppliedRequest = 0
-    /// Direction of the most recent row page request. Drives the visual
-    /// transition only; focus is still claimed by the newly-mounted row.
-    @State private var pageTransitionDelta = 0
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var rowPagingNamespace
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -84,7 +82,6 @@ struct TVSkylineSectionFeed: View {
             // would fall out of range and the band would render nothing,
             // stranding the page blank. Clamp it back into range and re-claim
             // focus so the now-visible row's first card re-primes the marquee.
-            pageTransitionDelta = 0
             if !sections.isEmpty, pageIndex >= sections.count {
                 pageIndex = sections.count - 1
                 contentFocusToken += 1
@@ -98,7 +95,7 @@ struct TVSkylineSectionFeed: View {
     /// One interactive section plus a non-focusable next-row preview in the
     /// lower half of the screen. No scroll view, so the focus engine can't
     /// move the row when navigating across cards. Up/Down page the featured
-    /// row and the stack crossfades.
+    /// row by animating the existing next-row preview into the focused slot.
     @ViewBuilder
     private var pagedBand: some View {
         GeometryReader { proxy in
@@ -116,11 +113,12 @@ struct TVSkylineSectionFeed: View {
                                 section: previewSection,
                                 cardWidth: ContinuumTheme.Skyline.densePosterCardWidth
                             )
+                            .modifier(rowPagingGeometry(for: previewSection))
                         }
                     }
                     .fixedSize(horizontal: false, vertical: true)
                     .id(section.id)
-                    .transition(rowStackTransition)
+                    .transition(.opacity)
                 }
             }
             .frame(width: proxy.size.width, height: visibleBandHeight, alignment: .topLeading)
@@ -154,25 +152,13 @@ struct TVSkylineSectionFeed: View {
         // Natural height so the row hugs its header and top-aligns in the
         // lower-half band rather than stretching.
         .fixedSize(horizontal: false, vertical: true)
+        .modifier(rowPagingGeometry(for: section))
     }
 
     private var nextPreviewSection: ResolvedSection? {
         let nextIndex = pageIndex + 1
         guard sections.indices.contains(nextIndex) else { return nil }
         return sections[nextIndex]
-    }
-
-    private var rowStackTransition: AnyTransition {
-        guard !reduceMotion, pageTransitionDelta != 0 else {
-            return .opacity
-        }
-
-        let insertionEdge: Edge = pageTransitionDelta > 0 ? .bottom : .top
-        let removalEdge: Edge = pageTransitionDelta > 0 ? .top : .bottom
-        return .asymmetric(
-            insertion: .move(edge: insertionEdge).combined(with: .opacity),
-            removal: .move(edge: removalEdge).combined(with: .opacity)
-        )
     }
 
     private var rowPageAnimation: Animation {
@@ -190,7 +176,6 @@ struct TVSkylineSectionFeed: View {
     private func pageBand(by delta: Int) {
         let target = pageIndex + delta
         guard sections.indices.contains(target) else { return }
-        pageTransitionDelta = delta
         pageIndex = target
         contentFocusToken += 1
     }
@@ -213,9 +198,31 @@ struct TVSkylineSectionFeed: View {
         if isTopMenuFocused { return }
         guard request != lastAppliedRequest else { return }
         lastAppliedRequest = request
-        pageTransitionDelta = 0
         pageIndex = 0
         contentFocusToken += 1
+    }
+
+    private func rowPagingGeometry(for section: ResolvedSection) -> TVRowPagingGeometry {
+        TVRowPagingGeometry(
+            id: section.id,
+            namespace: rowPagingNamespace,
+            isEnabled: !reduceMotion
+        )
+    }
+}
+
+private struct TVRowPagingGeometry: ViewModifier {
+    let id: String
+    let namespace: Namespace.ID
+    let isEnabled: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content.matchedGeometryEffect(id: id, in: namespace)
+        } else {
+            content
+        }
     }
 }
 

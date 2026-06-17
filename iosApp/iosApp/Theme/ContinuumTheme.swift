@@ -277,7 +277,7 @@ struct ContinuumTheme {
         /// space in standard scroll layouts.
         static let rowBandCardVerticalPadding: CGFloat = 14
         /// Duration for the vertical row-stack scroll when paging up/down.
-        static let rowBandScrollDuration: Double = 0.24
+        static let rowBandScrollDuration: Double = 0.18
         /// Passive row preview tint so it reads as available content without
         /// competing with the focused row.
         static let rowPreviewOpacity: Double = 0.74
