@@ -3,7 +3,7 @@ import SwiftUI
 /// Layout mode for a horizontal media row.
 /// Poster rows use tall (2:3) poster cards; thumbnail rows use wide 16:9
 /// episode stills — pick thumbnail for episode-centric sections like
-/// "Next Up" and for Continue Watching entries that are episodes. Square
+/// "Next Up" and resume rows like Continue Watching. Square
 /// rows use 1:1 tiles for audiobook covers.
 enum MediaRowLayout {
     case poster
@@ -82,9 +82,10 @@ struct MediaRow: View {
     #if os(tvOS)
     private func applyFocusRequest(_ request: Int) {
         guard request > 0, request != lastAppliedFocusRequest,
-              let firstId = items.first?.contentId else { return }
+              let firstItem = items.first else { return }
         lastAppliedFocusRequest = request
-        focusedItemId = firstId
+        focusedItemId = firstItem.contentId
+        onItemFocus?(firstItem)
     }
     #endif
 
