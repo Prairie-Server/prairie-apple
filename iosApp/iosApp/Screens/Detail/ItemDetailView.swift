@@ -84,11 +84,11 @@ private struct ItemDetailPhoneContent: View {
                         castFromDetail(currentCastRequest(for: detail))
                     } label: {
                         Image(systemName: castController.hasActiveSession
-                            ? "airplayvideo.circle.fill"
-                            : "airplayvideo")
+                            ? "appletvremote.gen4.fill"
+                            : "appletvremote.gen4")
                     }
                     .tint(.continuumOnSurface)
-                    .accessibilityLabel("Cast to TV")
+                    .accessibilityLabel("Remote Control")
                 }
             }
         }

@@ -28,12 +28,12 @@ struct SiloCastControlModeButton: View {
                 buttonLabel(isActive: false)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Cast to TV")
+            .accessibilityLabel("Remote Control")
         }
     }
 
     private func buttonLabel(isActive: Bool) -> some View {
-        Image(systemName: "airplayvideo")
+        Image(systemName: "appletvremote.gen4")
             .font(.system(size: 18, weight: .semibold))
             .foregroundStyle(isActive ? Color.continuumBackground : Color.continuumOnSurface)
             .frame(width: 40, height: 40)

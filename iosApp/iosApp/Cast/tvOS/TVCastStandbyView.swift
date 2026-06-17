@@ -13,7 +13,7 @@ struct TVCastStandbyView: View {
                 .ignoresSafeArea()
 
             VStack(spacing: 34) {
-                Image(systemName: "airplayvideo")
+                Image(systemName: "appletvremote.gen4")
                     .font(.system(size: 86, weight: .medium))
                     .foregroundStyle(Color.continuumOnSurface)
                     .frame(width: 150, height: 150)

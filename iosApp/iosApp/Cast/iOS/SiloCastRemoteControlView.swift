@@ -91,7 +91,7 @@ struct SiloCastRemoteControlView: View {
 
     private func idleConnectedView(state: SiloCastPlaybackState) -> some View {
         VStack(spacing: 18) {
-            Image(systemName: "airplayvideo")
+            Image(systemName: "appletvremote.gen4")
                 .font(.system(size: 44, weight: .medium))
                 .foregroundStyle(Color.continuumOnSurface)
             Text("Connected to \(controller.activeTarget?.name ?? "Silo TV")")
@@ -216,7 +216,7 @@ private struct RemoteNowPlayingContent: View {
     private var playingOnPill: some View {
         if let targetName, !targetName.isEmpty {
             HStack(spacing: 6) {
-                Image(systemName: "airplayvideo")
+                Image(systemName: "appletvremote.gen4")
                     .font(.system(size: 12, weight: .semibold))
                 Text("Playing on \(targetName)")
                     .font(.caption.weight(.medium))

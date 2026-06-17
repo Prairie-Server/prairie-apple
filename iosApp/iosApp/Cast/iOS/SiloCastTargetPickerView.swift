@@ -21,7 +21,7 @@ struct SiloCastTargetPickerView: View {
                 }
             }
             .background(Color.continuumBackground.ignoresSafeArea())
-            .navigationTitle("Cast")
+            .navigationTitle("Remote Control")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
