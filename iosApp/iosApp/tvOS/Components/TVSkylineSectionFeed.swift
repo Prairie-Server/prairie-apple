@@ -8,9 +8,8 @@ import SwiftUI
 /// feeds in.
 ///
 /// Row movement is owned by tvOS focus + the vertical scroll view. Each row
-/// remains a native focus section whose first card is the user-initiated
-/// default focus target, so entering a new row starts at the left edge without
-/// custom page-section animation.
+/// remains a native focus section, so row-to-row movement preserves tvOS'
+/// geometric focus behavior instead of forcing the first item.
 struct TVSkylineSectionFeed: View {
     /// Section rows to page through, in order (already filtered to
     /// non-empty, non-featured by the caller).
@@ -18,8 +17,7 @@ struct TVSkylineSectionFeed: View {
     /// Marquee scale. Both call sites pass `.home` so the pages render
     /// identically; kept as a parameter only for call-site clarity.
     var marqueeScale: TVFocusMarquee.Scale = .home
-    /// Focus hand-down token from the shell — claims the first card on entry
-    /// and on every page change.
+    /// Focus hand-down token from the shell — claims the first card on entry.
     var focusRequest: Int = 0
     /// Whether the top menu currently holds focus. A late content load must
     /// not steal focus while the user is up in the menu.
@@ -115,7 +113,7 @@ struct TVSkylineSectionFeed: View {
         SectionRow(
             section: section,
             onItemTap: onItemTap,
-            prefersDefaultFocusOnFirstItem: true,
+            prefersDefaultFocusOnFirstItem: false,
             focusRequest: isFirstRow ? contentFocusToken : 0,
             onMoveUp: nil,
             onItemFocus: { item in
