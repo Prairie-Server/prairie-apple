@@ -1,6 +1,5 @@
 #if os(tvOS)
 import SwiftUI
-import UIKit
 
 /// Shared Skyline landing layout (§6.1): an ambient backdrop, a focus
 /// marquee that passively previews the focused card, and native vertically
@@ -32,9 +31,6 @@ struct TVSkylineSectionFeed: View {
     @State private var marqueeModel = TVFocusMarqueeModel()
     /// Token handed to row 1 so its first card claims focus on shell entry.
     @State private var contentFocusToken = 0
-    /// The row currently owning card focus. Bound to the vertical scroll view
-    /// so each focused row lands at the top of the clipped lower band.
-    @State private var focusedSectionID: String?
     /// Entry tokens that arrived before any row mounted — sections load
     /// async, so the initial hand-down would land on nothing.
     @State private var pendingFocusRequest: Int?
@@ -72,13 +68,6 @@ struct TVSkylineSectionFeed: View {
         .onChange(of: sections.map(\.id)) { _, _ in
             if let pending = pendingFocusRequest { requestEntryFocus(pending) }
         }
-        .background(
-            TVSkylineUpPressCatcher(
-                isUpActive: !isTopMenuFocused && isFocusedOnFirstSection,
-                onMoveUp: { onTopMenuFocusRequest?() }
-            )
-            .frame(width: 0, height: 0)
-        )
     }
 
     // MARK: - Rows
@@ -122,7 +111,7 @@ struct TVSkylineSectionFeed: View {
             onItemTap: onItemTap,
             prefersDefaultFocusOnFirstItem: false,
             focusRequest: isFirstRow ? contentFocusToken : 0,
-            onMoveUp: nil,
+            onMoveUp: isFirstRow ? onTopMenuFocusRequest : nil,
             onItemFocus: { item in
                 previewFocusedItem(item, in: section)
             },
@@ -157,89 +146,8 @@ struct TVSkylineSectionFeed: View {
 
     private func previewFocusedItem(_ item: SectionItem, in section: ResolvedSection) {
         marqueeModel.preview(TVMarqueeContent(item: item, rowTitle: section.title))
-
-        guard focusedSectionID != section.id else { return }
-        focusedSectionID = section.id
     }
 
-    private var isFocusedOnFirstSection: Bool {
-        guard let firstSection = sections.first else { return false }
-        return focusedSectionID == firstSection.id
-    }
-
-}
-
-private struct TVSkylineUpPressCatcher: UIViewRepresentable {
-    var isUpActive: Bool
-    let onMoveUp: () -> Void
-
-    func makeUIView(context: Context) -> TVSkylineUpPressUIView {
-        let view = TVSkylineUpPressUIView()
-        apply(to: view)
-        return view
-    }
-
-    func updateUIView(_ uiView: TVSkylineUpPressUIView, context: Context) {
-        apply(to: uiView)
-    }
-
-    private func apply(to view: TVSkylineUpPressUIView) {
-        view.isUpActive = isUpActive
-        view.onMoveUp = onMoveUp
-    }
-}
-
-private final class TVSkylineUpPressUIView: UIView, UIGestureRecognizerDelegate {
-    var isUpActive = false
-    var onMoveUp: () -> Void = {}
-
-    private weak var attachedWindow: UIWindow?
-    private var upRecognizer: UITapGestureRecognizer?
-
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        attachRecognizersIfNeeded()
-    }
-
-    deinit {
-        detachRecognizers()
-    }
-
-    private func attachRecognizersIfNeeded() {
-        guard attachedWindow !== window else { return }
-        detachRecognizers()
-
-        guard let window else { return }
-
-        let upRecognizer = UITapGestureRecognizer(target: self, action: #selector(handleUpPress(_:)))
-        upRecognizer.allowedPressTypes = [NSNumber(value: UIPress.PressType.upArrow.rawValue)]
-        upRecognizer.cancelsTouchesInView = true
-        upRecognizer.delegate = self
-
-        window.addGestureRecognizer(upRecognizer)
-        attachedWindow = window
-        self.upRecognizer = upRecognizer
-    }
-
-    private func detachRecognizers() {
-        if let upRecognizer, let attachedWindow {
-            attachedWindow.removeGestureRecognizer(upRecognizer)
-        }
-        upRecognizer = nil
-        attachedWindow = nil
-    }
-
-    @objc private func handleUpPress(_ recognizer: UITapGestureRecognizer) {
-        guard isUpActive, recognizer.state == .ended else { return }
-        onMoveUp()
-    }
-
-    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        if gestureRecognizer === upRecognizer {
-            return isUpActive
-        }
-        return false
-    }
 }
 
 #endif
