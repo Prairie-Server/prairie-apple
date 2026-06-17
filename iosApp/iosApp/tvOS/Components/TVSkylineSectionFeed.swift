@@ -24,6 +24,9 @@ struct TVSkylineSectionFeed: View {
     var isTopMenuFocused: Bool = false
     /// Up at the first page hands focus to the top bar.
     let onTopMenuFocusRequest: (() -> Void)?
+    /// Home uses Back/Menu as a focus ladder: content -> first row/card ->
+    /// top menu. Other Skyline hosts keep the shell's default exit behavior.
+    var resetsToFirstItemOnExit: Bool = false
     /// Open a content item (detail).
     let onItemTap: (String) -> Void
 
@@ -34,6 +37,9 @@ struct TVSkylineSectionFeed: View {
     /// The row currently owning card focus. Bound to the vertical scroll view
     /// so each focused row lands at the top of the clipped lower band.
     @State private var focusedSectionID: String?
+    /// The card currently owning focus. Used by Home's Back/Menu focus ladder
+    /// to distinguish "already on row 1/card 1" from any other content focus.
+    @State private var focusedItemID: String?
     /// Entry tokens that arrived before any row mounted — sections load
     /// async, so the initial hand-down would land on nothing.
     @State private var pendingFocusRequest: Int?
@@ -71,6 +77,9 @@ struct TVSkylineSectionFeed: View {
         .onChange(of: sections.map(\.id)) { _, _ in
             if let pending = pendingFocusRequest { requestEntryFocus(pending) }
         }
+        .modifier(TVSkylineExitHandler(isEnabled: resetsToFirstItemOnExit) {
+            handleExitCommand()
+        })
     }
 
     // MARK: - Rows
@@ -150,10 +159,51 @@ struct TVSkylineSectionFeed: View {
 
     private func previewFocusedItem(_ item: SectionItem, in section: ResolvedSection) {
         marqueeModel.preview(TVMarqueeContent(item: item, rowTitle: section.title))
+        focusedItemID = item.contentId
 
         guard focusedSectionID != section.id else { return }
         withAnimation(.easeOut(duration: ContinuumTheme.Skyline.rowBandScrollDuration)) {
             focusedSectionID = section.id
+        }
+    }
+
+    private func handleExitCommand() {
+        guard !isFocusedOnFirstItem else {
+            onTopMenuFocusRequest?()
+            return
+        }
+        focusFirstItem()
+    }
+
+    private var isFocusedOnFirstItem: Bool {
+        guard let firstSection = sections.first,
+              let firstItem = firstSection.items.first else { return false }
+        return focusedSectionID == firstSection.id && focusedItemID == firstItem.contentId
+    }
+
+    private func focusFirstItem() {
+        guard let firstSection = sections.first else {
+            onTopMenuFocusRequest?()
+            return
+        }
+
+        withAnimation(.easeOut(duration: ContinuumTheme.Skyline.rowBandScrollDuration)) {
+            focusedSectionID = firstSection.id
+        }
+        contentFocusToken += 1
+    }
+}
+
+private struct TVSkylineExitHandler: ViewModifier {
+    let isEnabled: Bool
+    let onExit: () -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content.onExitCommand(perform: onExit)
+        } else {
+            content
         }
     }
 }

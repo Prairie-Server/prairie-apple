@@ -50,6 +50,7 @@ struct HomeView: View {
                     focusRequest: homeFocusRequest,
                     isTopMenuFocused: isTopMenuFocused,
                     onTopMenuFocusRequest: onTopMenuFocusRequest,
+                    resetsToFirstItemOnExit: true,
                     onItemTap: { navigateToDetail($0) }
                 )
             } else if let error = viewModel.error {
