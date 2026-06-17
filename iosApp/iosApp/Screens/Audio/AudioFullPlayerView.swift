@@ -574,7 +574,7 @@ private struct AudioTransportControls: View {
                     Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
                         .font(.system(size: 32, weight: .heavy))
                         .foregroundStyle(Color.black.opacity(0.85))
-                        .contentTransition(.symbolEffect(.replace))
+                        .contentTransition(.symbolEffect(.replace.magic(fallback: .replace)))
                 }
                 .frame(width: 82, height: 82)
                 .shadow(color: player.palette.accent.opacity(0.35), radius: 16, y: 6)

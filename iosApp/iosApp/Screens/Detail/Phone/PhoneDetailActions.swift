@@ -113,7 +113,7 @@ struct PhoneCircleActionButton: View {
                             )
                         )
                 )
-                .contentTransition(.symbolEffect(.replace))
+                .contentTransition(.symbolEffect(.replace.magic(fallback: .replace)))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(accessibilityLabel)
