@@ -3,7 +3,7 @@ options:
   bundleIdPrefix: com.continuum.play
   deploymentTarget:
     iOS: "26.0"
-    macOS: "15.0"
+    macOS: "26.0"
     tvOS: "26.0"
   createIntermediateGroups: true
   generateEmptyDirectories: true

@@ -62,13 +62,14 @@ extension View {
     }
 
     /// Soft native scroll-edge blur at the top, where content passes under a
-    /// floating bar. No-op on tvOS (no floating bars there).
+    /// floating bar. iOS/macOS minimums are 26 so it's unconditional there;
+    /// no-op on tvOS (no floating bars in the 10-foot UI).
     @ViewBuilder
-    func continuumScrollEdgeEffect(_ style: ScrollEdgeEffectStyle = .soft, for edge: Edge.Set = .top) -> some View {
+    func continuumScrollEdgeEffect() -> some View {
         #if os(tvOS)
         self
         #else
-        self.scrollEdgeEffectStyle(style, for: edge)
+        self.scrollEdgeEffectStyle(.soft, for: .top)
         #endif
     }
 

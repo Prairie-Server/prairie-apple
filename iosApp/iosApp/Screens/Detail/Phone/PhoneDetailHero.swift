@@ -80,10 +80,10 @@ struct PhoneDetailHero<Actions: View>: View {
         }
         .frame(height: backdropHeight)
         .frame(maxWidth: .infinity)
-        // iOS 26: mirror + blur the source artwork to fill behind the status bar /
+        // Mirror + blur the source artwork to fill behind the status bar /
         // Dynamic Island and out to the screen edges — the Apple TV / Music
-        // detail-page continuation, instead of a hard banner edge. iOS min is 26
-        // (plan 001), so this is unconditional.
+        // detail-page continuation, instead of a hard banner edge. All Apple
+        // targets are at the 26 minimum, so this is unconditional.
         .backgroundExtensionEffect()
     }
 
