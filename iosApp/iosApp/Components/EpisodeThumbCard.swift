@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Horizontal (16:9) media card for episode content — used in "Next Up",
-/// "Continue Watching" (when items are episodes), etc.
+/// Horizontal (16:9) media card for episode and resume content — used in
+/// "Next Up", "Continue Watching", etc.
 ///
 /// Shows the episode still / backdrop, the series title + episode code
 /// (e.g. "S2 · E3") as an overlay, and the episode title plus runtime beneath.
@@ -161,7 +161,7 @@ struct EpisodeThumbCard: View {
 
     // MARK: - Derived data
 
-    /// Prefer backdrop/still for episodes; fall back to poster.
+    /// Prefer backdrop/still artwork; fall back to poster.
     private var imageUrl: String {
         if let backdrop = item.backdropUrl, !backdrop.isEmpty {
             return backdrop
@@ -169,12 +169,12 @@ struct EpisodeThumbCard: View {
         return item.posterUrl ?? ""
     }
 
-    /// Series title if this is an episode, otherwise the item title.
+    /// Series title for episodes, otherwise the item title.
     private var displayTitle: String {
         item.seriesTitle ?? item.title
     }
 
-    /// Secondary line — episode title with a runtime or year.
+    /// Secondary line — episode title for episodes, otherwise year.
     private var subtitleLine: String? {
         if item.seriesTitle != nil {
             return item.title
@@ -196,7 +196,7 @@ struct EpisodeThumbCard: View {
     private var progressValue: Double? {
         // Watched items store position 0 server-side (the watched latch and
         // the resume point are independent), so a nonzero position is always
-        // a live resume point — including a rewatch of a played episode.
+        // a live resume point — including a rewatch of a played item.
         guard let pos = item.positionSeconds,
               let dur = item.durationSeconds,
               dur > 0, pos > 0 else { return nil }

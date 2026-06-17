@@ -240,6 +240,7 @@ private struct TVSectionRowPreview: View {
     }
 
     private var layout: MediaRowLayout {
+        if isContinueWatching { return .thumbnail }
         if isEpisodeRow { return .thumbnail }
         if isAudiobookRow { return .square }
         return .poster
