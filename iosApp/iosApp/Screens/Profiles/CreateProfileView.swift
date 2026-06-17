@@ -336,7 +336,7 @@ struct CreateProfileView: View {
                         Button("Create Profile") {
                             Task { await createProfile() }
                         }
-                        .buttonStyle(ContinuumPrimaryButtonStyle(isLoading: isLoading))
+                        .siloPrimaryButton(isLoading: isLoading)
                         .disabled(isLoading || name.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
                     .padding(.horizontal, ContinuumTheme.largePadding)
@@ -723,41 +723,5 @@ private struct ChildProfileRow: View {
     }
 }
 
-// MARK: - Ghost chip (shared styling)
-
-/// Duplicated locally so this file is independent of `ProfileSelectionView`.
-/// A future refactor could move both copies into a shared component file,
-/// but while the treatment is still evolving keeping the style tight to
-/// its use site is safer than pre-maturely abstracting.
-private struct GhostChipButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        GhostChipBody(configuration: configuration)
-    }
-}
-
-private struct GhostChipBody: View {
-    let configuration: ButtonStyle.Configuration
-    @Environment(\.isFocused) private var isFocused
-
-    var body: some View {
-        configuration.label
-            .foregroundStyle(isFocused ? Color.continuumBackground : Color.white.opacity(0.75))
-            .padding(.horizontal, 18)
-            .padding(.vertical, 10)
-            .background(
-                Capsule().fill(isFocused ? Color.white : Color.white.opacity(0.08))
-            )
-            .overlay(
-                Capsule().stroke(
-                    isFocused ? Color.clear : Color.white.opacity(0.22),
-                    lineWidth: 1
-                )
-            )
-            .scaleEffect(isFocused ? 1.04 : 1.0)
-            .opacity(configuration.isPressed ? 0.75 : 1.0)
-            #if os(tvOS)
-            .focusEffectDisabled()
-            #endif
-            .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
-    }
-}
+// `GhostChipButtonStyle` now lives in `Theme/ContinuumButtonStyles.swift`
+// (shared with `ProfileSelectionView`).

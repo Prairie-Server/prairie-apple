@@ -110,7 +110,7 @@ struct EditProfileView: View {
                         Button("Save Changes") {
                             Task { await saveProfile() }
                         }
-                        .buttonStyle(ContinuumPrimaryButtonStyle(isLoading: isLoading))
+                        .siloPrimaryButton(isLoading: isLoading)
                         .disabled(isLoading || name.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
                     .padding(.horizontal, ContinuumTheme.largePadding)

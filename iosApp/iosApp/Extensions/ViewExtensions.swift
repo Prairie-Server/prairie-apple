@@ -203,6 +203,12 @@ extension View {
 
 // MARK: - Continuum Button Styles
 
+// NOTE: On the migrated paths these styles now serve tvOS only — iOS/macOS
+// route to native `.glass`/`.glassProminent` via the `silo*Button()` view
+// extensions below. They stay defined because tvOS focus appearance (scale,
+// glow, focus stroke, `.focusEffectDisabled()`) depends on them. If tvOS later
+// adopts glass too, they can be retired.
+
 /// Primary action button — filled pill with dark text. At rest the pill is
 /// a dimmed white so focus can brighten it to solid white; on tvOS focus
 /// also adds a scale + glow so the button is distinguishable even when
@@ -359,6 +365,45 @@ private struct TextButtonBody: View {
             #endif
             .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: configuration.isPressed)
             .animation(ContinuumTheme.springAnimation, value: isFocused)
+    }
+}
+
+// MARK: - Silo button style routing (glass on iOS/macOS, Continuum on tvOS)
+
+extension View {
+    /// Primary action button: native Liquid Glass on iOS/macOS, focus-reactive
+    /// `ContinuumPrimaryButtonStyle` on tvOS (its scale/glow/focus stroke encodes
+    /// 10-foot focus, which glass does not provide). All Apple targets are 26+,
+    /// so `.glassProminent` is unconditional on the non-tvOS path.
+    @ViewBuilder
+    func siloPrimaryButton(isLoading: Bool = false) -> some View {
+        #if os(tvOS)
+        self.buttonStyle(ContinuumPrimaryButtonStyle(isLoading: isLoading))
+        #else
+        self.buttonStyle(.glassProminent)
+        #endif
+    }
+
+    /// Secondary action button: native glass on iOS/macOS, `ContinuumSecondaryButtonStyle`
+    /// on tvOS.
+    @ViewBuilder
+    func siloSecondaryButton() -> some View {
+        #if os(tvOS)
+        self.buttonStyle(ContinuumSecondaryButtonStyle())
+        #else
+        self.buttonStyle(.glass)
+        #endif
+    }
+
+    /// Tertiary / text action button: native glass on iOS/macOS, `ContinuumTextButtonStyle`
+    /// on tvOS.
+    @ViewBuilder
+    func siloTextButton() -> some View {
+        #if os(tvOS)
+        self.buttonStyle(ContinuumTextButtonStyle())
+        #else
+        self.buttonStyle(.glass)
+        #endif
     }
 }
 

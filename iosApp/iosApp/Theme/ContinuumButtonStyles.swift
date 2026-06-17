@@ -22,3 +22,44 @@ extension ButtonStyle where Self == ContinuumFlatButtonStyle {
     /// App-wide flat style that does not add any platform focus chrome.
     static var continuumFlat: ContinuumFlatButtonStyle { .init() }
 }
+
+// MARK: - Ghost chip button style (shared)
+
+/// Translucent pill with a focus-aware outline. Used for utility actions
+/// (Sign Out / Cancel) so they read as "secondary" next to the identity
+/// tiles and primary buttons. Shared by `ProfileSelectionView` and
+/// `CreateProfileView` (previously duplicated byte-for-byte in both).
+struct GhostChipButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        GhostChipBody(configuration: configuration)
+    }
+}
+
+private struct GhostChipBody: View {
+    let configuration: ButtonStyle.Configuration
+    @Environment(\.isFocused) private var isFocused
+
+    var body: some View {
+        configuration.label
+            .foregroundStyle(isFocused ? Color.continuumBackground : Color.white.opacity(0.75))
+            .padding(.horizontal, 18)
+            .padding(.vertical, 10)
+            .background(
+                Capsule().fill(
+                    isFocused ? Color.white : Color.white.opacity(0.08)
+                )
+            )
+            .overlay(
+                Capsule().stroke(
+                    isFocused ? Color.clear : Color.white.opacity(0.22),
+                    lineWidth: 1
+                )
+            )
+            .scaleEffect(isFocused ? 1.04 : 1.0)
+            .opacity(configuration.isPressed ? 0.75 : 1.0)
+            #if os(tvOS)
+            .focusEffectDisabled()
+            #endif
+            .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
+    }
+}

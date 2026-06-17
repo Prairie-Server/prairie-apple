@@ -370,11 +370,11 @@ struct PlayerView: View {
                 Button("Retry") {
                     viewModel.retry()
                 }
-                .buttonStyle(ContinuumPrimaryButtonStyle())
+                .siloPrimaryButton()
                 .frame(minWidth: 140)
 
                 Button("Go Back") { dismissPlayer() }
-                    .buttonStyle(ContinuumPrimaryButtonStyle())
+                    .siloPrimaryButton()
                     .frame(minWidth: 140)
             }
         }
@@ -676,7 +676,7 @@ private struct PlayerNextUpScreen<MiniPlayer: View>: View {
                 Button(action: { viewModel.playNextEpisodeNow() }) {
                     Label("Play Now", systemImage: "play.fill")
                 }
-                .buttonStyle(ContinuumPrimaryButtonStyle())
+                .siloPrimaryButton()
                 .frame(maxWidth: .infinity)
             }
 
@@ -684,14 +684,14 @@ private struct PlayerNextUpScreen<MiniPlayer: View>: View {
                 Button(action: { viewModel.keepWatchingCurrentEpisode() }) {
                     Label("Keep Watching", systemImage: "rectangle.inset.filled")
                 }
-                .buttonStyle(ContinuumSecondaryButtonStyle())
+                .siloSecondaryButton()
                 .frame(maxWidth: .infinity)
             }
 
             Button(action: onBack) {
                 Label("Back", systemImage: "chevron.left")
             }
-            .buttonStyle(ContinuumSecondaryButtonStyle())
+            .siloSecondaryButton()
             .frame(maxWidth: .infinity)
 
             if let seconds = viewModel.nextUpCountdownSeconds {
