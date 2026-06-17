@@ -78,6 +78,7 @@ struct LoginView: View {
                         .buttonStyle(AuroraGhostButtonStyle())
                 }
                 .frame(maxWidth: .infinity)
+                .disabled(viewModel.isLoading)
                 .padding(.top, 4)
             }
             .padding(22)

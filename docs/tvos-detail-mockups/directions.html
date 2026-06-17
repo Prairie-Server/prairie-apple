@@ -1,4 +1,10 @@
-<style>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Detail Page Directions</title>
+  <style>
   .tvwrap { margin-top: 14px; }
   .tvf {
     position: relative; width: 100%; aspect-ratio: 16 / 9;
@@ -89,7 +95,11 @@
   .tag.now { background:rgba(255,255,255,0.14); color:#fff; }
   .tag.new { background:rgba(120,180,255,0.18); color:#bcd6ff; }
   .tag.big { background:rgba(255,170,90,0.16); color:#ffcaa0; }
+  .option { cursor:pointer; }
+  .option.selected { outline:2px solid rgba(255,255,255,0.72); outline-offset:6px; border-radius:12px; }
 </style>
+</head>
+<body>
 
 <h2>Three directions for the detail page</h2>
 <p class="subtitle">All shown in the Skyline language (OLED black, monochrome chrome, white-pill Play). Only the artwork carries color. Pick the structure that feels right — we'll refine the chosen one.</p>
@@ -170,3 +180,20 @@
   </div>
 
 </div>
+<script>
+  function toggleSelect(option) {
+    const group = option.closest(".options");
+    if (!group) return;
+    const wasSelected = option.classList.contains("selected");
+    group.querySelectorAll(".option.selected").forEach((candidate) => {
+      candidate.classList.remove("selected");
+      candidate.setAttribute("aria-pressed", "false");
+    });
+    if (!wasSelected) {
+      option.classList.add("selected");
+      option.setAttribute("aria-pressed", "true");
+    }
+  }
+</script>
+</body>
+</html>

@@ -4074,7 +4074,15 @@ final class PlayerCore: NSObject {
         // A -12909 resync is already scheduled or draining: swallow the failures
         // that pour out of the broken GOP tail so they don't fall through to the
         // failover/terminal paths below. Cleared by `performDecodeBurstResync()`.
-        if isRecoveringDecodeBurst { return }
+        if isRecoveringDecodeBurst,
+           DecodeFailureRecoveryPolicy.shouldAttemptBurstResync(
+               status: status,
+               codec: currentDecodeFailureRecoveryCodec(),
+               attempts: 0,
+               maxAttempts: 1
+           ) {
+            return
+        }
 
         // kVTInvalidSessionErr: rebuild the decoder in place. Threshold-gated
         // (same 30-failure threshold the user-facing error uses) so we don't

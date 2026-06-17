@@ -1,5 +1,9 @@
 import SwiftUI
 
+#if os(macOS)
+import AppKit
+#endif
+
 #if !os(tvOS)
 /// Shown when the chosen server has no account yet (`/api/v1/auth/setup`
 /// reports `needsSetup`). iOS no longer creates the admin account in-app —
@@ -45,9 +49,9 @@ struct ServerNeedsSetupView: View {
             .padding(.bottom, 22)
 
             VStack(spacing: 16) {
-                if let host {
+                if let setupURL {
                     HStack(spacing: 10) {
-                        Text(host)
+                        Text(setupURL)
                             .font(.system(size: 15, weight: .regular, design: .monospaced))
                             .foregroundStyle(Color.auroraInk)
                             .lineLimit(1)
@@ -92,17 +96,18 @@ struct ServerNeedsSetupView: View {
         .navigationBarBackButtonHidden()
     }
 
-    private var host: String? {
+    private var setupURL: String? {
         let url = AuthService.shared.serverUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !url.isEmpty else { return nil }
-        if let parsed = URL(string: url), let host = parsed.host, !host.isEmpty { return host }
-        return url.replacingOccurrences(of: "https://", with: "")
-            .replacingOccurrences(of: "http://", with: "")
+        return url.isEmpty ? nil : url
     }
 
     private func copyURL() {
+        guard let setupURL else { return }
         #if os(iOS)
-        UIPasteboard.general.string = AuthService.shared.serverUrl
+        UIPasteboard.general.string = setupURL
+        #elseif os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(setupURL, forType: .string)
         #endif
     }
 

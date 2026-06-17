@@ -120,10 +120,11 @@ tertiary label, white value, tertiary chevron):
 | **Audio** | selected version has ≥2 audio tracks | "English 5.1" + `AUTO` tag | `Auto · <resolved>` when auto-picked; badges Atmos/TrueHD/DTS, channels, Default. |
 | **Subtitles** | a version is selected (always) | "Off" / "English" | `Auto` / `Off` entries; badges Forced / HI / Default. |
 
-The whole row hides when nothing is selectable (single version, single audio, no
-subs). Each selector opens a focus-managed `glass.strong` squared menu listing
-options with a check on the current one and the badges above — same strings as
-the webapp (`Auto`, `Off`, `Default`, `Forced`, `HI`).
+The whole row hides only when no selector exists at all (single edition, single
+version, single audio, no subs). Each selector opens a focus-managed
+`glass.strong` squared menu listing options with a check on the current one and
+the badges above — same strings as the webapp (`Auto`, `Off`, `Default`,
+`Forced`, `HI`).
 
 **Default resolution (what the row shows before any change):**
 - Version: existing logic — sticky `lastFileId`, else quality-preference best
