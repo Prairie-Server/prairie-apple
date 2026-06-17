@@ -170,9 +170,7 @@ struct BrowseView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
-        .background(
-            Capsule().fill(Color.continuumSurfaceElevated)
-        )
+        .siloGlass(in: .capsule)
     }
 }
 
@@ -333,10 +331,6 @@ private class LibraryRecommendedViewModel {
 
 struct LibraryRecommendedView: View {
     let libraryId: Int
-    /// Reports the current vertical scroll offset (≥0, 0 at the top) so the
-    /// parent can fade a chrome scrim in as the rows scroll up behind the
-    /// top bar.
-    var onScrollOffsetChange: (CGFloat) -> Void = { _ in }
 
     @State private var viewModel = LibraryRecommendedViewModel()
     @State private var isRefreshing = false
@@ -391,14 +385,7 @@ struct LibraryRecommendedView: View {
             }
             .padding(.bottom, ContinuumTheme.largePadding)
         }
-        // Report the distance scrolled from the resting top position. We add
-        // the top content inset so the value starts at 0 at rest regardless
-        // of whether a safe-area inset is applied.
-        .onScrollGeometryChange(for: CGFloat.self) { geometry in
-            geometry.contentOffset.y + geometry.contentInsets.top
-        } action: { _, newValue in
-            onScrollOffsetChange(max(0, newValue))
-        }
+        .continuumScrollEdgeEffect()
     }
 
     private var refreshStatusTopPadding: CGFloat {

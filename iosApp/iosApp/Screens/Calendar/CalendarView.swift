@@ -113,11 +113,11 @@ struct CalendarView: View {
                             )
                         }
                         .padding(.vertical, ContinuumTheme.smallPadding)
-                        .background(Color.continuumBackground)
                     }
                 }
                 .padding(.bottom, ContinuumTheme.largePadding)
             }
+            .continuumScrollEdgeEffect()
         }
     }
     #endif

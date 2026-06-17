@@ -189,6 +189,7 @@ struct HomeView: View {
                 }
                 .padding(.bottom, ContinuumTheme.largePadding)
             }
+            .continuumScrollEdgeEffect()
         }
         // Keep the overlay chrome transparent at rest, then fade in a subtle
         // glass surface once content has moved underneath it.

@@ -61,6 +61,17 @@ extension View {
         #endif
     }
 
+    /// Soft native scroll-edge blur at the top, where content passes under a
+    /// floating bar. No-op on tvOS (no floating bars there).
+    @ViewBuilder
+    func continuumScrollEdgeEffect(_ style: ScrollEdgeEffectStyle = .soft, for edge: Edge.Set = .top) -> some View {
+        #if os(tvOS)
+        self
+        #else
+        self.scrollEdgeEffectStyle(style, for: edge)
+        #endif
+    }
+
     @ViewBuilder
     func continuumStatusBarHidden() -> some View {
         #if os(tvOS) || os(macOS)
