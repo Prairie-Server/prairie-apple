@@ -48,7 +48,6 @@ final class SiloCastController {
 
         if activeTarget?.id == target.id, session != nil {
             errorMessage = nil
-            isShowingRemoteControl = true
             return true
         }
 
@@ -59,7 +58,9 @@ final class SiloCastController {
         activeTarget = target
         lastTarget = target
         state = nil
-        isShowingRemoteControl = true
+        // Connecting alone doesn't take over the screen — the mini-bar surfaces
+        // the session. The full remote only auto-presents once content launches
+        // (see `launch()`) or when the user taps the mini-bar.
 
         let session = SiloCastSession(endpoint: target.endpoint)
         let connectionId = UUID()
@@ -80,6 +81,9 @@ final class SiloCastController {
     }
 
     func cast(to target: SiloCastTarget, request: SiloCastPlaybackRequest) async {
+        // Casting content always opens the remote — show it up front so the
+        // connect handshake renders inside the cover, not behind a mini-bar.
+        isShowingRemoteControl = true
         guard await connect(to: target) else { return }
         await launch(request)
     }
@@ -239,6 +243,9 @@ final class SiloCastController {
     private func fail(_ message: String, connectionId: UUID?) {
         guard connectionId == nil || self.connectionId == connectionId else { return }
         errorMessage = message
+        // Surface connect/cast failures in the remote cover; otherwise a bare
+        // connect (which no longer auto-presents) would fail silently.
+        isShowingRemoteControl = true
         isConnecting = false
         session = nil
         readTask?.cancel()
