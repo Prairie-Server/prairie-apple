@@ -25,9 +25,6 @@ struct TVSkylineSectionFeed: View {
     var isTopMenuFocused: Bool = false
     /// Up at the first page hands focus to the top bar.
     let onTopMenuFocusRequest: (() -> Void)?
-    /// Home uses Back/Menu as a focus ladder: content -> first row/card ->
-    /// top menu. Other Skyline hosts keep the shell's default exit behavior.
-    var resetsToFirstItemOnExit: Bool = false
     /// Open a content item (detail).
     let onItemTap: (String) -> Void
 
@@ -38,9 +35,6 @@ struct TVSkylineSectionFeed: View {
     /// The row currently owning card focus. Bound to the vertical scroll view
     /// so each focused row lands at the top of the clipped lower band.
     @State private var focusedSectionID: String?
-    /// The card currently owning focus. Used by Home's Back/Menu focus ladder
-    /// to distinguish "already on row 1/card 1" from any other content focus.
-    @State private var focusedItemID: String?
     /// Entry tokens that arrived before any row mounted — sections load
     /// async, so the initial hand-down would land on nothing.
     @State private var pendingFocusRequest: Int?
@@ -79,10 +73,8 @@ struct TVSkylineSectionFeed: View {
             if let pending = pendingFocusRequest { requestEntryFocus(pending) }
         }
         .background(
-            TVSkylineRemotePressCatcher(
-                isExitActive: resetsToFirstItemOnExit && !isTopMenuFocused,
+            TVSkylineUpPressCatcher(
                 isUpActive: !isTopMenuFocused && isFocusedOnFirstSection,
-                onExit: handleExitCommand,
                 onMoveUp: { onTopMenuFocusRequest?() }
             )
             .frame(width: 0, height: 0)
@@ -165,24 +157,9 @@ struct TVSkylineSectionFeed: View {
 
     private func previewFocusedItem(_ item: SectionItem, in section: ResolvedSection) {
         marqueeModel.preview(TVMarqueeContent(item: item, rowTitle: section.title))
-        focusedItemID = item.contentId
 
         guard focusedSectionID != section.id else { return }
         focusedSectionID = section.id
-    }
-
-    private func handleExitCommand() {
-        guard !isFocusedOnFirstItem else {
-            onTopMenuFocusRequest?()
-            return
-        }
-        focusFirstItem()
-    }
-
-    private var isFocusedOnFirstItem: Bool {
-        guard let firstSection = sections.first,
-              let firstItem = firstSection.items.first else { return false }
-        return focusedSectionID == firstSection.id && focusedItemID == firstItem.contentId
     }
 
     private var isFocusedOnFirstSection: Bool {
@@ -190,50 +167,33 @@ struct TVSkylineSectionFeed: View {
         return focusedSectionID == firstSection.id
     }
 
-    private func focusFirstItem() {
-        guard let firstSection = sections.first else {
-            onTopMenuFocusRequest?()
-            return
-        }
-
-        focusedSectionID = firstSection.id
-        contentFocusToken += 1
-    }
-
 }
 
-private struct TVSkylineRemotePressCatcher: UIViewRepresentable {
-    var isExitActive: Bool
+private struct TVSkylineUpPressCatcher: UIViewRepresentable {
     var isUpActive: Bool
-    let onExit: () -> Void
     let onMoveUp: () -> Void
 
-    func makeUIView(context: Context) -> TVSkylineRemotePressUIView {
-        let view = TVSkylineRemotePressUIView()
+    func makeUIView(context: Context) -> TVSkylineUpPressUIView {
+        let view = TVSkylineUpPressUIView()
         apply(to: view)
         return view
     }
 
-    func updateUIView(_ uiView: TVSkylineRemotePressUIView, context: Context) {
+    func updateUIView(_ uiView: TVSkylineUpPressUIView, context: Context) {
         apply(to: uiView)
     }
 
-    private func apply(to view: TVSkylineRemotePressUIView) {
-        view.isExitActive = isExitActive
+    private func apply(to view: TVSkylineUpPressUIView) {
         view.isUpActive = isUpActive
-        view.onExit = onExit
         view.onMoveUp = onMoveUp
     }
 }
 
-private final class TVSkylineRemotePressUIView: UIView, UIGestureRecognizerDelegate {
-    var isExitActive = false
+private final class TVSkylineUpPressUIView: UIView, UIGestureRecognizerDelegate {
     var isUpActive = false
-    var onExit: () -> Void = {}
     var onMoveUp: () -> Void = {}
 
     private weak var attachedWindow: UIWindow?
-    private var exitRecognizer: UITapGestureRecognizer?
     private var upRecognizer: UITapGestureRecognizer?
 
     override func didMoveToWindow() {
@@ -251,38 +211,22 @@ private final class TVSkylineRemotePressUIView: UIView, UIGestureRecognizerDeleg
 
         guard let window else { return }
 
-        let exitRecognizer = UITapGestureRecognizer(target: self, action: #selector(handleExitPress(_:)))
-        exitRecognizer.allowedPressTypes = [NSNumber(value: UIPress.PressType.menu.rawValue)]
-        exitRecognizer.cancelsTouchesInView = true
-        exitRecognizer.delegate = self
-
         let upRecognizer = UITapGestureRecognizer(target: self, action: #selector(handleUpPress(_:)))
         upRecognizer.allowedPressTypes = [NSNumber(value: UIPress.PressType.upArrow.rawValue)]
         upRecognizer.cancelsTouchesInView = true
         upRecognizer.delegate = self
 
-        window.addGestureRecognizer(exitRecognizer)
         window.addGestureRecognizer(upRecognizer)
         attachedWindow = window
-        self.exitRecognizer = exitRecognizer
         self.upRecognizer = upRecognizer
     }
 
     private func detachRecognizers() {
-        if let exitRecognizer, let attachedWindow {
-            attachedWindow.removeGestureRecognizer(exitRecognizer)
-        }
         if let upRecognizer, let attachedWindow {
             attachedWindow.removeGestureRecognizer(upRecognizer)
         }
-        exitRecognizer = nil
         upRecognizer = nil
         attachedWindow = nil
-    }
-
-    @objc private func handleExitPress(_ recognizer: UITapGestureRecognizer) {
-        guard isExitActive, recognizer.state == .ended else { return }
-        onExit()
     }
 
     @objc private func handleUpPress(_ recognizer: UITapGestureRecognizer) {
@@ -291,9 +235,6 @@ private final class TVSkylineRemotePressUIView: UIView, UIGestureRecognizerDeleg
     }
 
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        if gestureRecognizer === exitRecognizer {
-            return isExitActive
-        }
         if gestureRecognizer === upRecognizer {
             return isUpActive
         }

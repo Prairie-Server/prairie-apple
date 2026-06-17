@@ -82,9 +82,10 @@ struct MediaRow: View {
     #if os(tvOS)
     private func applyFocusRequest(_ request: Int) {
         guard request > 0, request != lastAppliedFocusRequest,
-              let firstId = items.first?.contentId else { return }
+              let firstItem = items.first else { return }
         lastAppliedFocusRequest = request
-        focusedItemId = firstId
+        focusedItemId = firstItem.contentId
+        onItemFocus?(firstItem)
     }
     #endif
 
