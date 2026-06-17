@@ -1,4 +1,10 @@
-<style>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Playback Selection</title>
+  <style>
   .area { position:relative; margin-top:14px; padding:4.5cqw 4cqw; border-radius:14px; overflow:hidden;
     container-type:inline-size;
     background: radial-gradient(120% 120% at 80% 8%, rgba(70,90,120,0.34), transparent 55%), linear-gradient(180deg,#0a0c10,#000);
@@ -50,7 +56,11 @@
   .crow .ck { font-size:1.2cqw; color:rgba(255,255,255,0.55); font-weight:600; }
   .crow .cvv { display:flex; align-items:center; gap:0.8cqw; font-size:1.25cqw; color:#fff; font-weight:600; }
   .note { font-size:11px; color:#8a9099; margin-top:6px; line-height:1.5; }
+  .option { cursor:pointer; }
+  .option.selected { outline:2px solid rgba(255,255,255,0.72); outline-offset:6px; border-radius:12px; }
 </style>
+</head>
+<body>
 
 <h2>Showing edition / version / audio / subtitles before Play</h2>
 <p class="subtitle">Same model &amp; terms as the webapp (Edition · Version · Audio · Subs, with Auto/Off). Values show the <b>resolved auto-pick</b> the user can override. Three placements — the tradeoff is hero focus-stops vs. visibility. Pick one.</p>
@@ -139,3 +149,20 @@
   </div>
 
 </div>
+<script>
+  function toggleSelect(option) {
+    const group = option.closest(".options");
+    if (!group) return;
+    const wasSelected = option.classList.contains("selected");
+    group.querySelectorAll(".option.selected").forEach((candidate) => {
+      candidate.classList.remove("selected");
+      candidate.setAttribute("aria-pressed", "false");
+    });
+    if (!wasSelected) {
+      option.classList.add("selected");
+      option.setAttribute("aria-pressed", "true");
+    }
+  }
+</script>
+</body>
+</html>

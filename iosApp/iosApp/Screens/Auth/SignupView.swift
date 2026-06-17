@@ -69,6 +69,7 @@ struct SignupView: View {
                 Button("Back to sign in") { router.goBack() }
                     .buttonStyle(AuroraGhostButtonStyle())
                     .frame(maxWidth: .infinity)
+                    .disabled(viewModel.isLoading)
                     .padding(.top, 2)
             }
             .padding(22)

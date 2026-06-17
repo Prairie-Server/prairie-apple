@@ -1,4 +1,10 @@
-<style>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Button Treatments</title>
+  <style>
   .strip { position:relative; margin-top:14px; padding:5cqw 4cqw 4cqw; border-radius:14px;
     overflow:hidden; container-type:inline-size;
     background:
@@ -36,7 +42,11 @@
   .focus  { box-shadow:0 0 0 0.4cqw rgba(255,255,255,0.9), 0 14px 34px rgba(0,0,0,0.5);
             transform:translateY(-2px); }
   .note { font-size:11px; color:#8a9099; margin-top:6px; }
+  .option { cursor:pointer; }
+  .option.selected { outline:2px solid rgba(255,255,255,0.72); outline-offset:6px; border-radius:12px; }
 </style>
+</head>
+<body>
 
 <h2>Button treatments — round → squared</h2>
 <p class="subtitle">Same action row (Play · Watchlist · Favorite · More), shown under a hero title so it reads in context. The leftmost Play shows the focused state. Click the one that feels right — or tell me what specifically bugs you about today's.</p>
@@ -125,3 +135,20 @@
   </div>
 
 </div>
+<script>
+  function toggleSelect(option) {
+    const group = option.closest(".options");
+    if (!group) return;
+    const wasSelected = option.classList.contains("selected");
+    group.querySelectorAll(".option.selected").forEach((candidate) => {
+      candidate.classList.remove("selected");
+      candidate.setAttribute("aria-pressed", "false");
+    });
+    if (!wasSelected) {
+      option.classList.add("selected");
+      option.setAttribute("aria-pressed", "true");
+    }
+  }
+</script>
+</body>
+</html>

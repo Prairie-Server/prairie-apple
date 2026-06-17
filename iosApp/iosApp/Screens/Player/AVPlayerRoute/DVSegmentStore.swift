@@ -387,7 +387,17 @@ final class DVSegmentStore {
         spilled: Bool,
         evicted: inout [String]
     ) {
-        spillingSegments.removeValue(forKey: segment.name)
+        let wasSpilling = spillingSegments.removeValue(forKey: segment.name) != nil
+        if evictedResources.contains(segment.name) {
+            if wasSpilling {
+                tempSpillBytes -= Int64(segment.data.count)
+                tempSpillBytes = max(0, tempSpillBytes)
+            }
+            if spilled {
+                try? FileManager.default.removeItem(at: url)
+            }
+            return
+        }
         if spilled {
             spilledSegments[segment.name] = url
             spilledSegmentSizes[segment.name] = segment.data.count

@@ -40,8 +40,8 @@ networking, persistence, and the `AppRouter` state machine are **not** changing.
 
 Tokens and components are defined in the shipped tvOS code and must be reused:
 
-- `iosApp/iosApp/tvOS/Aurora/AuroraStyle.swift`
-- `iosApp/iosApp/tvOS/Aurora/AuroraBackdrop.swift`
+- `iosApp/iosApp/DesignSystem/Aurora/AuroraStyle.swift`
+- `iosApp/iosApp/DesignSystem/Aurora/AuroraBackdrop.swift`
 
 **Palette**
 - Ink (primary text): `#F3EFE9`; secondary = ink @ 0.62; tertiary = ink @ 0.40
@@ -71,11 +71,10 @@ exactly as on tvOS.
 
 ## 4. Code organization
 
-**Decision: promote the Aurora design system to shared code** (one source of truth).
+**Decision: keep the Aurora design system in shared code** (one source of truth).
 
-- Move `AuroraStyle.swift` and `AuroraBackdrop.swift` out of `tvOS/Aurora/` into a
-  shared folder (proposed: `iosApp/iosApp/DesignSystem/Aurora/`) and remove the
-  `#if os(tvOS)` gate.
+- Keep `AuroraStyle.swift` and `AuroraBackdrop.swift` in
+  `iosApp/iosApp/DesignSystem/Aurora/` with no `#if os(tvOS)` gate.
 - Update `iosApp/project.yml` source paths and target membership so the files
   build into **both** the `Silo` (iOS) and `SiloTV` targets, then rerun
   `xcodegen generate`.

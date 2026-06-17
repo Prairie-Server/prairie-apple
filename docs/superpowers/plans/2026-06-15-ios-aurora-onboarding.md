@@ -55,7 +55,7 @@
 - [ ] **Step 1: Move the two Aurora files with git**
 
 ```bash
-cd /Volumes/NVMe/dev/github/SiloServer/silo-apple/iosApp/iosApp
+cd iosApp/iosApp
 mkdir -p DesignSystem/Aurora
 git mv tvOS/Aurora/AuroraStyle.swift DesignSystem/Aurora/AuroraStyle.swift
 git mv tvOS/Aurora/AuroraBackdrop.swift DesignSystem/Aurora/AuroraBackdrop.swift
@@ -191,14 +191,14 @@ Everything else (the `Color` palette extension, `AuroraEyebrow`, `AuroraGlassPan
 
 - [ ] **Step 5: Regenerate the project**
 
-Run: `cd /Volumes/NVMe/dev/github/SiloServer/silo-apple/iosApp && xcodegen generate`
+Run: `cd iosApp && xcodegen generate`
 Expected: `Created project at .../Silo.xcodeproj` with no errors.
 
 - [ ] **Step 6: Build all three targets**
 
 Run each and expect `** BUILD SUCCEEDED **`:
 ```bash
-cd /Volumes/NVMe/dev/github/SiloServer/silo-apple/iosApp
+cd iosApp
 xcodebuild build -project Silo.xcodeproj -scheme SiloTV -destination 'platform=tvOS Simulator,name=Apple TV' CODE_SIGNING_ALLOWED=NO
 xcodebuild build -project Silo.xcodeproj -scheme Silo -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO
 xcodebuild build -project Silo.xcodeproj -scheme SiloMac -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
@@ -417,14 +417,14 @@ struct AuroraScreen<Content: View>: View {
 
 - [ ] **Step 2: Regenerate the project (new file)**
 
-Run: `cd /Volumes/NVMe/dev/github/SiloServer/silo-apple/iosApp && xcodegen generate`
+Run: `cd iosApp && xcodegen generate`
 Expected: success.
 
 - [ ] **Step 3: Build iOS + macOS**
 
 Run (expect `** BUILD SUCCEEDED **`):
 ```bash
-cd /Volumes/NVMe/dev/github/SiloServer/silo-apple/iosApp
+cd iosApp
 xcodebuild build -project Silo.xcodeproj -scheme Silo -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO
 xcodebuild build -project Silo.xcodeproj -scheme SiloMac -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
 ```
@@ -572,7 +572,7 @@ struct ServerSetupView: View {
 
 Run (expect `** BUILD SUCCEEDED **`):
 ```bash
-cd /Volumes/NVMe/dev/github/SiloServer/silo-apple/iosApp
+cd iosApp
 xcodebuild build -project Silo.xcodeproj -scheme Silo -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO
 xcodebuild build -project Silo.xcodeproj -scheme SiloMac -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
 ```
@@ -688,7 +688,7 @@ to:
 
 Run (expect `** BUILD SUCCEEDED **`):
 ```bash
-cd /Volumes/NVMe/dev/github/SiloServer/silo-apple/iosApp
+cd iosApp
 xcodebuild build -project Silo.xcodeproj -scheme SiloTV -destination 'platform=tvOS Simulator,name=Apple TV' CODE_SIGNING_ALLOWED=NO
 ```
 
@@ -823,7 +823,7 @@ struct LoginView: View {
 
 Run (expect `** BUILD SUCCEEDED **`):
 ```bash
-cd /Volumes/NVMe/dev/github/SiloServer/silo-apple/iosApp
+cd iosApp
 xcodebuild build -project Silo.xcodeproj -scheme Silo -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO
 xcodebuild build -project Silo.xcodeproj -scheme SiloMac -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
 ```
@@ -937,7 +937,7 @@ struct SignupView: View {
 
 Run (expect `** BUILD SUCCEEDED **`):
 ```bash
-cd /Volumes/NVMe/dev/github/SiloServer/silo-apple/iosApp
+cd iosApp
 xcodebuild build -project Silo.xcodeproj -scheme Silo -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO
 xcodebuild build -project Silo.xcodeproj -scheme SiloMac -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
 ```
@@ -1024,7 +1024,7 @@ with:
 
 Run (expect `** BUILD SUCCEEDED **` for each):
 ```bash
-cd /Volumes/NVMe/dev/github/SiloServer/silo-apple/iosApp
+cd iosApp
 xcodebuild build -project Silo.xcodeproj -scheme Silo -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO
 xcodebuild build -project Silo.xcodeproj -scheme SiloMac -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
 xcodebuild build -project Silo.xcodeproj -scheme SiloTV -destination 'platform=tvOS Simulator,name=Apple TV' CODE_SIGNING_ALLOWED=NO
@@ -1298,7 +1298,7 @@ And gate the `.signup` arm in `profileFlowDestination` the same way (it currentl
 - [ ] **Step 5: Delete the Create-Admin view and view model**
 
 ```bash
-cd /Volumes/NVMe/dev/github/SiloServer/silo-apple/iosApp/iosApp
+cd iosApp/iosApp
 git rm Screens/Auth/SetupView.swift Screens/Auth/SetupViewModel.swift
 ```
 
@@ -1306,13 +1306,13 @@ Note: `AuthService.setupAdmin(...)` is now unused but is left in place (the spec
 
 - [ ] **Step 6: Confirm no stragglers**
 
-Run: `cd /Volumes/NVMe/dev/github/SiloServer/silo-apple/iosApp && rg -n "SetupView|SetupViewModel|Route\.setup|case \.setup|navigate\(to: \.setup\)|createAdmin" iosApp`
+Run: `cd iosApp && rg -n "SetupView|SetupViewModel|Route\.setup|case \.setup|navigate\(to: \.setup\)|createAdmin" iosApp`
 Expected: **no matches** in `iosApp/` app sources except (a) `setupAdmin` in `AuthService.swift`, and (b) pairing-state `.setup` in `Pairing/…` and `PairingProtocol.swift` (unrelated — leave them). If any `Route`/`ContentView`/view-model reference to the old admin `.setup` remains, fix it.
 
 - [ ] **Step 7: Regenerate and build all three targets**
 
 ```bash
-cd /Volumes/NVMe/dev/github/SiloServer/silo-apple/iosApp
+cd iosApp
 xcodegen generate
 xcodebuild build -project Silo.xcodeproj -scheme Silo -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO
 xcodebuild build -project Silo.xcodeproj -scheme SiloTV -destination 'platform=tvOS Simulator,name=Apple TV' CODE_SIGNING_ALLOWED=NO
@@ -1336,7 +1336,7 @@ git commit -m "Replace iOS Create-Admin with a 'finish setup in your browser' sc
 - [ ] **Step 1: Clean build of every scheme**
 
 ```bash
-cd /Volumes/NVMe/dev/github/SiloServer/silo-apple/iosApp
+cd iosApp
 xcodebuild clean build -project Silo.xcodeproj -scheme Silo -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO
 xcodebuild clean build -project Silo.xcodeproj -scheme SiloTV -destination 'platform=tvOS Simulator,name=Apple TV' CODE_SIGNING_ALLOWED=NO
 xcodebuild clean build -project Silo.xcodeproj -scheme SiloMac -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
@@ -1352,7 +1352,7 @@ Boot the iPhone simulator, install, and launch the `Silo` scheme. Verify visuall
 - **Sign up** (if the dev server allows it): all fields render and scroll; create-account works.
 - **Server needs setup**: point the app at a fresh/unconfigured server → the gear screen appears (not a Create-Admin form); "Change server" works; "retry" re-probes.
 
-Reference the `silotv-simulator-debugging` memory for boot/install/sign-in mechanics (the same `xcrun simctl` patterns apply to the iOS simulator; dev creds `admin` / `water1234`).
+Reference the `silotv-simulator-debugging` memory for boot/install/sign-in mechanics (the same `xcrun simctl` patterns apply to the iOS simulator; use local dev credentials such as `<username>` / `<password>`).
 
 - [ ] **Step 3: Verify Reduce Motion**
 

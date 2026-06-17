@@ -75,6 +75,7 @@ struct AuroraTextField<F: Hashable>: View {
                             .allowsHitTesting(false)
                     }
                     inputField
+                        .accessibilityLabel(Text(label))
                         .focused(focus, equals: equals)
                         .foregroundStyle(isFocused ? AuroraControl.activeInk : Color.auroraInk)
                         .tint(isFocused ? AuroraControl.activeInk : Color.auroraAccent)
