@@ -532,26 +532,30 @@ struct MainTabView: View {
         NavigationStack(path: $router.path) {
             TabView(selection: $selectedTab) {
                 ForEach(AppTab.visibleCases) { tab in
+                    #if os(tvOS)
+                    // Text-only tabs on tvOS keep the top bar compact — adding an
+                    // icon blows up each tab's focus pill. The value-based `Tab`
+                    // initializer requires an image on tvOS, so this arm stays on
+                    // the `.tabItem { Text }` form to preserve the text-only look.
                     tabContent(for: tab)
-                        .tabItem {
-                            #if os(tvOS)
-                            // Text-only tabs on tvOS keep the top bar compact —
-                            // adding an icon blows up each tab's focus pill.
-                            Text(tab.rawValue)
-                            #else
-                            Label(
-                                tab.rawValue,
-                                systemImage: selectedTab == tab ? tab.selectedIcon : tab.icon
-                            )
-                            #endif
-                        }
+                        .tabItem { Text(tab.rawValue) }
                         .tag(tab)
+                    #else
+                    Tab(
+                        tab.rawValue,
+                        systemImage: selectedTab == tab ? tab.selectedIcon : tab.icon,
+                        value: tab
+                    ) {
+                        tabContent(for: tab)
+                    }
+                    #endif
                 }
             }
             .navigationDestination(for: Route.self) { route in
                 routeContent(for: route)
             }
             #if os(iOS)
+            .tabBarMinimizeBehavior(.onScrollDown)
             .modifier(NowPlayingShelfAttachment())
             #endif
         }

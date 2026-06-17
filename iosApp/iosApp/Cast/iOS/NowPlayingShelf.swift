@@ -44,11 +44,10 @@ struct NowPlayingShelf: View {
 }
 
 #if os(iOS)
-/// Hosts `NowPlayingShelf` on a `TabView` so it rests above the tab bar.
-/// iOS 26: native `tabViewBottomAccessory` (Liquid Glass, chromeless content).
-/// iOS 18: a bottom `safeAreaInset` carrying the card-styled shelf.
-/// The accessory is only attached while something is playing, so no empty bar
-/// shows when idle.
+/// Hosts `NowPlayingShelf` on a `TabView` so it rests above the tab bar via the
+/// native `tabViewBottomAccessory` (Liquid Glass, chromeless content). The
+/// accessory is only attached while something is playing, so no empty bar shows
+/// when idle.
 struct NowPlayingShelfAttachment: ViewModifier {
     @Environment(SiloCastController.self) private var castController
     @Environment(AudioPlaybackStore.self) private var audioStore
@@ -58,20 +57,12 @@ struct NowPlayingShelfAttachment: ViewModifier {
     }
 
     func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            if isActive {
-                content.tabViewBottomAccessory {
-                    NowPlayingShelf(style: .accessory)
-                }
-            } else {
-                content
+        if isActive {
+            content.tabViewBottomAccessory {
+                NowPlayingShelf(style: .accessory)
             }
         } else {
-            content.safeAreaInset(edge: .bottom, spacing: 0) {
-                if isActive {
-                    NowPlayingShelf(style: .card)
-                }
-            }
+            content
         }
     }
 }

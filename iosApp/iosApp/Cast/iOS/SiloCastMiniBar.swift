@@ -7,6 +7,11 @@ struct SiloCastMiniBar: View {
     @Bindable var controller: SiloCastController
     var style: NowPlayingBarStyle = .card
     @State private var artwork = SiloCastArtworkResolver()
+    @Environment(\.tabViewBottomAccessoryPlacement) private var placement
+
+    /// `.inline` is the minimized-tab-bar slot — collapse to a single line so the
+    /// bar fits the compact pill without truncating.
+    private var isInline: Bool { placement == .inline }
 
     var body: some View {
         if controller.hasActiveSession && !controller.isShowingRemoteControl {
@@ -17,10 +22,12 @@ struct SiloCastMiniBar: View {
                         Text(controller.state?.title ?? "Connected")
                             .font(.subheadline.weight(.semibold))
                             .lineLimit(1)
-                        Text("Playing on \(controller.activeTarget?.name ?? "Silo TV")")
-                            .font(.caption)
-                            .foregroundStyle(Color.continuumSecondaryText)
-                            .lineLimit(1)
+                        if !isInline {
+                            Text("Playing on \(controller.activeTarget?.name ?? "Silo TV")")
+                                .font(.caption)
+                                .foregroundStyle(Color.continuumSecondaryText)
+                                .lineLimit(1)
+                        }
                     }
                     Spacer(minLength: 8)
                     Button {
@@ -34,7 +41,7 @@ struct SiloCastMiniBar: View {
                     .accessibilityLabel(controller.clock.isPlaying ? "Pause" : "Play")
                 }
                 .padding(.horizontal, 14)
-                .padding(.vertical, 8)
+                .padding(.vertical, isInline ? 4 : 8)
                 .modifier(NowPlayingBarChrome(style: style))
                 .foregroundStyle(Color.continuumOnSurface)
                 .contentShape(Rectangle())
