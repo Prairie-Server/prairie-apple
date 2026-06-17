@@ -1,5 +1,6 @@
 #if os(tvOS)
 import SwiftUI
+import UIKit
 
 /// Shared Skyline landing layout (§6.1): an ambient backdrop, a focus
 /// marquee that passively previews the focused card, and native vertically
@@ -77,9 +78,15 @@ struct TVSkylineSectionFeed: View {
         .onChange(of: sections.map(\.id)) { _, _ in
             if let pending = pendingFocusRequest { requestEntryFocus(pending) }
         }
-        .modifier(TVSkylineExitHandler(isEnabled: resetsToFirstItemOnExit) {
-            handleExitCommand()
-        })
+        .background(
+            TVSkylineRemotePressCatcher(
+                isExitActive: resetsToFirstItemOnExit && !isTopMenuFocused,
+                isUpActive: !isTopMenuFocused && isFocusedOnFirstSection,
+                onExit: handleExitCommand,
+                onMoveUp: { onTopMenuFocusRequest?() }
+            )
+            .frame(width: 0, height: 0)
+        )
     }
 
     // MARK: - Rows
@@ -110,7 +117,6 @@ struct TVSkylineSectionFeed: View {
                 .padding(.bottom, trailingPreviewPadding)
             }
             .scrollTargetBehavior(.viewAligned)
-            .scrollPosition(id: $focusedSectionID, anchor: .top)
             .frame(width: proxy.size.width, height: visibleBandHeight, alignment: .topLeading)
             .clipped()
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .bottomLeading)
@@ -162,9 +168,7 @@ struct TVSkylineSectionFeed: View {
         focusedItemID = item.contentId
 
         guard focusedSectionID != section.id else { return }
-        withAnimation(.easeOut(duration: ContinuumTheme.Skyline.rowBandScrollDuration)) {
-            focusedSectionID = section.id
-        }
+        focusedSectionID = section.id
     }
 
     private func handleExitCommand() {
@@ -181,30 +185,119 @@ struct TVSkylineSectionFeed: View {
         return focusedSectionID == firstSection.id && focusedItemID == firstItem.contentId
     }
 
+    private var isFocusedOnFirstSection: Bool {
+        guard let firstSection = sections.first else { return false }
+        return focusedSectionID == firstSection.id
+    }
+
     private func focusFirstItem() {
         guard let firstSection = sections.first else {
             onTopMenuFocusRequest?()
             return
         }
 
-        withAnimation(.easeOut(duration: ContinuumTheme.Skyline.rowBandScrollDuration)) {
-            focusedSectionID = firstSection.id
-        }
+        focusedSectionID = firstSection.id
         contentFocusToken += 1
+    }
+
+}
+
+private struct TVSkylineRemotePressCatcher: UIViewRepresentable {
+    var isExitActive: Bool
+    var isUpActive: Bool
+    let onExit: () -> Void
+    let onMoveUp: () -> Void
+
+    func makeUIView(context: Context) -> TVSkylineRemotePressUIView {
+        let view = TVSkylineRemotePressUIView()
+        apply(to: view)
+        return view
+    }
+
+    func updateUIView(_ uiView: TVSkylineRemotePressUIView, context: Context) {
+        apply(to: uiView)
+    }
+
+    private func apply(to view: TVSkylineRemotePressUIView) {
+        view.isExitActive = isExitActive
+        view.isUpActive = isUpActive
+        view.onExit = onExit
+        view.onMoveUp = onMoveUp
     }
 }
 
-private struct TVSkylineExitHandler: ViewModifier {
-    let isEnabled: Bool
-    let onExit: () -> Void
+private final class TVSkylineRemotePressUIView: UIView, UIGestureRecognizerDelegate {
+    var isExitActive = false
+    var isUpActive = false
+    var onExit: () -> Void = {}
+    var onMoveUp: () -> Void = {}
 
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if isEnabled {
-            content.onExitCommand(perform: onExit)
-        } else {
-            content
+    private weak var attachedWindow: UIWindow?
+    private var exitRecognizer: UITapGestureRecognizer?
+    private var upRecognizer: UITapGestureRecognizer?
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        attachRecognizersIfNeeded()
+    }
+
+    deinit {
+        detachRecognizers()
+    }
+
+    private func attachRecognizersIfNeeded() {
+        guard attachedWindow !== window else { return }
+        detachRecognizers()
+
+        guard let window else { return }
+
+        let exitRecognizer = UITapGestureRecognizer(target: self, action: #selector(handleExitPress(_:)))
+        exitRecognizer.allowedPressTypes = [NSNumber(value: UIPress.PressType.menu.rawValue)]
+        exitRecognizer.cancelsTouchesInView = true
+        exitRecognizer.delegate = self
+
+        let upRecognizer = UITapGestureRecognizer(target: self, action: #selector(handleUpPress(_:)))
+        upRecognizer.allowedPressTypes = [NSNumber(value: UIPress.PressType.upArrow.rawValue)]
+        upRecognizer.cancelsTouchesInView = true
+        upRecognizer.delegate = self
+
+        window.addGestureRecognizer(exitRecognizer)
+        window.addGestureRecognizer(upRecognizer)
+        attachedWindow = window
+        self.exitRecognizer = exitRecognizer
+        self.upRecognizer = upRecognizer
+    }
+
+    private func detachRecognizers() {
+        if let exitRecognizer, let attachedWindow {
+            attachedWindow.removeGestureRecognizer(exitRecognizer)
         }
+        if let upRecognizer, let attachedWindow {
+            attachedWindow.removeGestureRecognizer(upRecognizer)
+        }
+        exitRecognizer = nil
+        upRecognizer = nil
+        attachedWindow = nil
+    }
+
+    @objc private func handleExitPress(_ recognizer: UITapGestureRecognizer) {
+        guard isExitActive, recognizer.state == .ended else { return }
+        onExit()
+    }
+
+    @objc private func handleUpPress(_ recognizer: UITapGestureRecognizer) {
+        guard isUpActive, recognizer.state == .ended else { return }
+        onMoveUp()
+    }
+
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if gestureRecognizer === exitRecognizer {
+            return isExitActive
+        }
+        if gestureRecognizer === upRecognizer {
+            return isUpActive
+        }
+        return false
     }
 }
 
