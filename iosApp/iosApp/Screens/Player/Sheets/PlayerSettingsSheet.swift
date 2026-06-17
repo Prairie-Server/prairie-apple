@@ -123,8 +123,9 @@ struct PlayerSettingsSheet: View {
             }
             #if !os(tvOS)
             .scrollContentBackground(.hidden)
-            #endif
+            #else
             .background(Color.black.opacity(0.85).ignoresSafeArea())
+            #endif
             #if os(iOS)
             .navigationTitle("Playback Settings")
             .navigationBarTitleDisplayMode(.inline)

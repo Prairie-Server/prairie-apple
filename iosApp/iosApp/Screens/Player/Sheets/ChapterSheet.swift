@@ -19,7 +19,9 @@ struct ChapterSheet: View {
             ContentUnavailableView("No chapters", systemImage: "bookmark.slash")
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                #if os(tvOS)
                 .background(Color.black.opacity(0.85).ignoresSafeArea())
+                #endif
         } else {
             #if os(tvOS)
             tvOSGrid(chapters)
@@ -83,7 +85,6 @@ struct ChapterSheet: View {
             }
         }
         .listStyle(.plain)
-        .background(Color.black.opacity(0.85).ignoresSafeArea())
     }
 }
 
