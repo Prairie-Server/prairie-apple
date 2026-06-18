@@ -2,15 +2,14 @@
 import SwiftUI
 
 /// Shared Skyline landing layout (§6.1): an ambient backdrop, a focus
-/// marquee that passively previews the focused card, and a lower-half row
-/// stack that shows the active section plus a clipped preview of the next
-/// section. Used by **both** Home and the library Browse tabs so the two stay
-/// pixel-identical — the only difference is the sections each feeds in.
+/// marquee that passively previews the focused card, and native vertically
+/// scrolling section rows. Used by **both** Home and the library Browse tabs
+/// so the two stay pixel-identical — the only difference is the sections each
+/// feeds in.
 ///
-/// Paging: there is no scroll view, so the focus engine never moves the row
-/// while navigating across cards. Up/Down page the focused row explicitly and
-/// the stack crossfades. Entry focus lands on the first row's first card,
-/// which the marquee previews immediately.
+/// Row movement is owned by tvOS focus + the vertical scroll view. Each row
+/// remains a native focus section, so row-to-row movement preserves tvOS'
+/// geometric focus behavior instead of forcing the first item.
 struct TVSkylineSectionFeed: View {
     /// Section rows to page through, in order (already filtered to
     /// non-empty, non-featured by the caller).
@@ -18,8 +17,7 @@ struct TVSkylineSectionFeed: View {
     /// Marquee scale. Both call sites pass `.home` so the pages render
     /// identically; kept as a parameter only for call-site clarity.
     var marqueeScale: TVFocusMarquee.Scale = .home
-    /// Focus hand-down token from the shell — claims the first card on entry
-    /// and on every page change.
+    /// Focus hand-down token from the shell — claims the first card on entry.
     var focusRequest: Int = 0
     /// Whether the top menu currently holds focus. A late content load must
     /// not steal focus while the user is up in the menu.
@@ -31,22 +29,12 @@ struct TVSkylineSectionFeed: View {
 
     /// Debounced focused-card state driving the marquee + backdrop.
     @State private var marqueeModel = TVFocusMarqueeModel()
-    /// The section currently featured at the top of the lower-half row stack.
-    /// The feed pages one at a time (no scroll view) so the focus engine never
-    /// scrolls the row.
-    @State private var pageIndex = 0
-    /// Token handed to the visible row so its first card claims focus on
-    /// entry and on every page change.
+    /// Token handed to row 1 so its first card claims focus on shell entry.
     @State private var contentFocusToken = 0
     /// Entry tokens that arrived before any row mounted — sections load
     /// async, so the initial hand-down would land on nothing.
     @State private var pendingFocusRequest: Int?
     @State private var lastAppliedRequest = 0
-    /// Direction of the most recent row page request. Drives the visual
-    /// transition only; focus is still claimed by the newly-mounted row.
-    @State private var pageTransitionDelta = 0
-
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -58,10 +46,10 @@ struct TVSkylineSectionFeed: View {
                 crossfadeDuration: ContinuumTheme.Skyline.marqueeCrossfadeDuration
             )
 
-            // The lower half is a row stack: one interactive focused row plus
-            // a passive peek of the next row below it. It reaches into the
-            // bottom overscan and re-insets via rowBandBottomInset.
-            pagedBand
+            // Native scrolling lives only in the bottom row band. The viewport
+            // clips at its top edge so rows do not paint through the marquee
+            // title, description, and metadata while they scroll upward.
+            scrollingRows
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .ignoresSafeArea(edges: .bottom)
 
@@ -78,122 +66,62 @@ struct TVSkylineSectionFeed: View {
         // Rows mount only after the async section load; a deferred entry
         // token re-fires once they exist.
         .onChange(of: sections.map(\.id)) { _, _ in
-            // Home/library refresh their rows on return (e.g. player dismiss).
-            // If the user had paged down to a row that vanished (Continue
-            // Watching shrinks, permissions/data change), the stale pageIndex
-            // would fall out of range and the band would render nothing,
-            // stranding the page blank. Clamp it back into range and re-claim
-            // focus so the now-visible row's first card re-primes the marquee.
-            pageTransitionDelta = 0
-            if !sections.isEmpty, pageIndex >= sections.count {
-                pageIndex = sections.count - 1
-                contentFocusToken += 1
-            }
             if let pending = pendingFocusRequest { requestEntryFocus(pending) }
         }
     }
 
-    // MARK: - Band
+    // MARK: - Rows
 
-    /// One interactive section plus a non-focusable next-row preview in the
-    /// lower half of the screen. No scroll view, so the focus engine can't
-    /// move the row when navigating across cards. Up/Down page the featured
-    /// row and the stack crossfades.
+    /// Native vertical row scrolling, clipped to the lower band so rows always
+    /// appear from the same bottom area and disappear before the marquee text.
     @ViewBuilder
-    private var pagedBand: some View {
+    private var scrollingRows: some View {
         GeometryReader { proxy in
             let bandHeight = proxy.size.height * ContinuumTheme.Skyline.rowBandHeightFraction
-            let visibleBandHeight = max(0, bandHeight - ContinuumTheme.Skyline.rowBandBottomInset)
+            let visibleBandHeight = max(0, bandHeight)
+            let trailingPreviewPadding = max(
+                0,
+                visibleBandHeight - ContinuumTheme.Skyline.rowBandBottomInset
+            )
 
-            ZStack(alignment: .topLeading) {
-                if sections.indices.contains(pageIndex) {
-                    let section = sections[pageIndex]
-                    VStack(alignment: .leading, spacing: ContinuumTheme.Skyline.rowBandPreviewSpacing) {
-                        featuredRow(section)
-
-                        if let previewSection = nextPreviewSection {
-                            TVSectionRowPreview(
-                                section: previewSection,
-                                cardWidth: ContinuumTheme.Skyline.densePosterCardWidth
-                            )
-                        }
+            ScrollView(.vertical, showsIndicators: false) {
+                LazyVStack(alignment: .leading, spacing: ContinuumTheme.Skyline.rowBandPreviewSpacing) {
+                    ForEach(Array(sections.enumerated()), id: \.element.id) { index, section in
+                        featuredRow(section, isFirstRow: index == 0)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .id(section.id)
                     }
-                    .fixedSize(horizontal: false, vertical: true)
-                    .id(section.id)
-                    .transition(rowStackTransition)
                 }
+                .scrollTargetLayout()
+                // Allows the final row to top-align like every prior row,
+                // with a blank preview area underneath instead of clamping.
+                .padding(.bottom, trailingPreviewPadding)
             }
+            .scrollTargetBehavior(.viewAligned)
             .frame(width: proxy.size.width, height: visibleBandHeight, alignment: .topLeading)
             .clipped()
-            .padding(.bottom, ContinuumTheme.Skyline.rowBandBottomInset)
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .bottomLeading)
         }
-        .animation(
-            rowPageAnimation,
-            value: pageIndex
-        )
     }
 
     @ViewBuilder
-    private func featuredRow(_ section: ResolvedSection) -> some View {
-        // Row 1 is an items row so entry focus gives the marquee something
-        // rich to preview.
+    private func featuredRow(_ section: ResolvedSection, isFirstRow: Bool) -> some View {
         SectionRow(
             section: section,
             onItemTap: onItemTap,
-            prefersDefaultFocusOnFirstItem: true,
-            focusRequest: contentFocusToken,
-            onMoveUp: pageIndex == 0 ? onTopMenuFocusRequest : { pageBand(by: -1) },
+            prefersDefaultFocusOnFirstItem: false,
+            focusRequest: isFirstRow ? contentFocusToken : 0,
+            onMoveUp: isFirstRow ? onTopMenuFocusRequest : nil,
             onItemFocus: { item in
-                marqueeModel.preview(TVMarqueeContent(item: item, rowTitle: section.title))
+                previewFocusedItem(item, in: section)
             },
             cardWidth: ContinuumTheme.Skyline.densePosterCardWidth,
             cardVerticalPadding: ContinuumTheme.Skyline.rowBandCardVerticalPadding,
-            onMoveDown: { pageBand(by: 1) }
-        )
-        // Natural height so the row hugs its header and top-aligns in the
-        // lower-half band rather than stretching.
-        .fixedSize(horizontal: false, vertical: true)
-    }
-
-    private var nextPreviewSection: ResolvedSection? {
-        let nextIndex = pageIndex + 1
-        guard sections.indices.contains(nextIndex) else { return nil }
-        return sections[nextIndex]
-    }
-
-    private var rowStackTransition: AnyTransition {
-        guard !reduceMotion, pageTransitionDelta != 0 else {
-            return .opacity
-        }
-
-        let insertionEdge: Edge = pageTransitionDelta > 0 ? .bottom : .top
-        let removalEdge: Edge = pageTransitionDelta > 0 ? .top : .bottom
-        return .asymmetric(
-            insertion: .move(edge: insertionEdge).combined(with: .opacity),
-            removal: .move(edge: removalEdge).combined(with: .opacity)
+            onMoveDown: nil
         )
     }
 
-    private var rowPageAnimation: Animation {
-        if reduceMotion {
-            return .easeInOut(duration: ContinuumTheme.fastDuration)
-        }
-        return .easeInOut(duration: ContinuumTheme.Skyline.rowBandScrollDuration)
-    }
-
-    // MARK: - Paging & focus
-
-    /// Page the visible band by ±1. Clamps at the ends; Up past the first
-    /// row is handled by the row's onMoveUp (to the top bar). Each page hands
-    /// focus to the new row's first card via the focus token.
-    private func pageBand(by delta: Int) {
-        let target = pageIndex + delta
-        guard sections.indices.contains(target) else { return }
-        pageTransitionDelta = delta
-        pageIndex = target
-        contentFocusToken += 1
-    }
+    // MARK: - Focus
 
     /// Entry focus → the first row's first card. Tokens that arrive before
     /// the rows mount wait as a pending claim. A claim is dropped while the
@@ -213,284 +141,13 @@ struct TVSkylineSectionFeed: View {
         if isTopMenuFocused { return }
         guard request != lastAppliedRequest else { return }
         lastAppliedRequest = request
-        pageTransitionDelta = 0
-        pageIndex = 0
         contentFocusToken += 1
     }
+
+    private func previewFocusedItem(_ item: SectionItem, in section: ResolvedSection) {
+        marqueeModel.preview(TVMarqueeContent(item: item, rowTitle: section.title))
+    }
+
 }
 
-private struct TVSectionRowPreview: View {
-    let section: ResolvedSection
-    let cardWidth: CGFloat
-
-    private var isContinueWatching: Bool {
-        section.sectionType == "continue_watching" || section.sectionType == "in_progress"
-    }
-
-    private var isEpisodeRow: Bool {
-        let type = section.sectionType.lowercased()
-        if type.contains("next") || type.contains("up_next") || type.contains("next_up") {
-            return true
-        }
-        return section.items.contains { $0.type.lowercased() == "episode" }
-    }
-
-    private var isAudiobookRow: Bool {
-        !section.items.isEmpty && section.items.allSatisfy(\.isAudiobook)
-    }
-
-    private var layout: MediaRowLayout {
-        if isEpisodeRow { return .thumbnail }
-        if isAudiobookRow { return .square }
-        return .poster
-    }
-
-    private var showProgress: Bool {
-        isContinueWatching || isEpisodeRow
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            header
-
-            HStack(spacing: 40) {
-                ForEach(Array(section.items.prefix(ContinuumTheme.Skyline.rowPreviewItemLimit))) { item in
-                    TVPassivePreviewCard(
-                        item: item,
-                        layout: layout,
-                        showProgress: showProgress,
-                        cardWidth: cardWidth
-                    )
-                }
-            }
-            .padding(.horizontal, ContinuumTheme.safePadding)
-            .padding(.vertical, 24)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .opacity(ContinuumTheme.Skyline.rowPreviewOpacity)
-        .allowsHitTesting(false)
-        .focusEffectDisabled()
-        .accessibilityHidden(true)
-    }
-
-    private var header: some View {
-        HStack(spacing: 14) {
-            if isContinueWatching {
-                Image(systemName: "play.circle.fill")
-                    .font(.system(size: 32, weight: .semibold))
-                    .foregroundColor(.continuumOnSurface)
-            }
-
-            Text(section.title)
-                .font(.continuumHeadline)
-                .foregroundColor(.continuumOnSurface)
-
-            Spacer()
-        }
-        .padding(.horizontal, ContinuumTheme.safePadding)
-    }
-}
-
-private struct TVPassivePreviewCard: View {
-    let item: SectionItem
-    let layout: MediaRowLayout
-    let showProgress: Bool
-    let cardWidth: CGFloat
-
-    var body: some View {
-        switch layout {
-        case .poster, .square:
-            posterCard
-        case .thumbnail:
-            thumbnailCard
-        }
-    }
-
-    private var posterCard: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            posterArtwork
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(item.title)
-                    .font(.continuumSubheadline)
-                    .foregroundColor(.continuumOnSurface.opacity(0.85))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-
-                if let year = item.year {
-                    Text(String(year))
-                        .font(.continuumCaption)
-                        .foregroundColor(.continuumSecondaryText)
-                }
-            }
-            .frame(width: posterWidth, alignment: .leading)
-        }
-        .frame(width: posterWidth)
-    }
-
-    private var thumbnailCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            thumbnailArtwork
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(thumbnailTitle)
-                    .font(.continuumSubheadline)
-                    .foregroundColor(.continuumOnSurface.opacity(0.85))
-                    .lineLimit(1)
-
-                if let subtitle = thumbnailSubtitle {
-                    Text(subtitle)
-                        .font(.continuumCaption)
-                        .foregroundColor(.continuumSecondaryText)
-                        .lineLimit(1)
-                }
-            }
-            .frame(width: ContinuumTheme.thumbnailCardWidth, alignment: .leading)
-        }
-        .frame(width: ContinuumTheme.thumbnailCardWidth)
-    }
-
-    private var posterArtwork: some View {
-        ZStack(alignment: .bottom) {
-            AsyncImageView(
-                url: item.posterUrl ?? "",
-                thumbhash: item.posterThumbhash,
-                targetSize: CGSize(width: posterWidth, height: posterHeight),
-                contentMode: .fill
-            )
-            .frame(width: posterWidth, height: posterHeight)
-            .clipped()
-            .clipShape(RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius))
-
-            if let progress = progressValue, progress > 0 {
-                VStack {
-                    Spacer()
-                    ProgressBar(value: progress)
-                }
-                .frame(width: posterWidth, height: posterHeight)
-                .clipShape(RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius))
-            }
-
-            if item.userState?.played == true {
-                watchedBadge
-                    .padding(12)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-            }
-        }
-        .frame(width: posterWidth, height: posterHeight)
-    }
-
-    private var thumbnailArtwork: some View {
-        ZStack(alignment: .bottomLeading) {
-            AsyncImageView(
-                url: thumbnailImageURL,
-                thumbhash: item.backdropThumbhash ?? item.posterThumbhash,
-                targetSize: CGSize(width: ContinuumTheme.thumbnailCardWidth, height: ContinuumTheme.thumbnailCardHeight),
-                contentMode: .fill
-            )
-            .frame(width: ContinuumTheme.thumbnailCardWidth, height: ContinuumTheme.thumbnailCardHeight)
-            .clipped()
-            .clipShape(RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius))
-
-            LinearGradient(
-                colors: [.clear, .black.opacity(0.75)],
-                startPoint: .center,
-                endPoint: .bottom
-            )
-            .frame(width: ContinuumTheme.thumbnailCardWidth, height: ContinuumTheme.thumbnailCardHeight)
-            .clipShape(RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius))
-
-            if let badge = episodeBadge {
-                Text(badge)
-                    .font(.continuumCaption)
-                    .bold()
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 7)
-                    .background(Capsule().fill(Color.black.opacity(0.65)))
-                    .padding(14)
-            }
-
-            if let progress = progressValue, progress > 0 {
-                VStack {
-                    Spacer()
-                    ProgressBar(value: progress)
-                }
-                .frame(width: ContinuumTheme.thumbnailCardWidth, height: ContinuumTheme.thumbnailCardHeight)
-                .clipShape(RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius))
-            }
-
-            if item.userState?.played == true {
-                watchedBadge
-                    .padding(14)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-            }
-        }
-        .frame(width: ContinuumTheme.thumbnailCardWidth, height: ContinuumTheme.thumbnailCardHeight)
-    }
-
-    private var watchedBadge: some View {
-        ZStack {
-            Circle()
-                .fill(Color.continuumOnSurface)
-                .frame(width: 40, height: 40)
-                .shadow(color: .black.opacity(0.3), radius: 4)
-            Image(systemName: "checkmark")
-                .font(.system(size: 20, weight: .bold))
-                .foregroundColor(Color.continuumBackground)
-        }
-    }
-
-    private var posterWidth: CGFloat {
-        cardWidth
-    }
-
-    private var posterHeight: CGFloat {
-        switch layout {
-        case .square:
-            return cardWidth
-        case .poster, .thumbnail:
-            return cardWidth * (ContinuumTheme.posterCardHeight / ContinuumTheme.posterCardWidth)
-        }
-    }
-
-    private var thumbnailImageURL: String {
-        if let backdrop = item.backdropUrl, !backdrop.isEmpty {
-            return backdrop
-        }
-        return item.posterUrl ?? ""
-    }
-
-    private var thumbnailTitle: String {
-        item.seriesTitle ?? item.title
-    }
-
-    private var thumbnailSubtitle: String? {
-        if item.seriesTitle != nil {
-            return item.title
-        }
-        if let year = item.year {
-            return String(year)
-        }
-        return nil
-    }
-
-    private var episodeBadge: String? {
-        guard let season = item.seasonNumber, let episode = item.episodeNumber else {
-            return nil
-        }
-        return "S\(season) · E\(episode)"
-    }
-
-    private var progressValue: Double? {
-        guard showProgress,
-              let position = item.positionSeconds,
-              let duration = item.durationSeconds,
-              duration > 0,
-              position > 0 else {
-            return nil
-        }
-        return position / duration
-    }
-}
 #endif
