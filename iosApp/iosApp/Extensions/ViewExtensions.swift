@@ -380,7 +380,19 @@ extension View {
         #if os(tvOS)
         self.buttonStyle(ContinuumPrimaryButtonStyle(isLoading: isLoading))
         #else
-        self.buttonStyle(.glassProminent)
+        // `.glassProminent` can't take the in-flight state, so surface it the
+        // only way a modifier can: disable the button and overlay a spinner
+        // while loading. Without this the iOS save buttons gave no feedback
+        // during a request (regression vs ContinuumPrimaryButtonStyle).
+        self
+            .buttonStyle(.glassProminent)
+            .disabled(isLoading)
+            .overlay {
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
         #endif
     }
 

@@ -44,9 +44,27 @@ extension SiloCastTests {
         let t0 = Date(timeIntervalSince1970: 1000)
         clock.ingest(.fixture(isPlaying: false), asOf: t0)
         clock.setOptimisticPlaying(true, asOf: t0)
-        XCTAssertTrue(clock.isPlaying)
+        // Optimistic override wins within the window (evaluated against the
+        // injected clock, not the wall clock).
+        XCTAssertTrue(clock.isPlaying(asOf: t0))
         clock.ingest(.fixture(isPlaying: true), asOf: t0.addingTimeInterval(0.5))
-        XCTAssertTrue(clock.isPlaying)
+        XCTAssertTrue(clock.isPlaying(asOf: t0.addingTimeInterval(0.5)))
+    }
+
+    @MainActor func testOptimisticSeekHoldsUntilSnapshotCatchesUp() {
+        let clock = RemotePlaybackClock()
+        let t0 = Date(timeIntervalSince1970: 1000)
+        clock.ingest(.fixture(isPlaying: false, currentTime: 10), asOf: t0)
+        // Scrub to 1200s; a stale snapshot still reporting ~10s must not snap
+        // the scrubber back.
+        clock.setOptimisticTime(1200, asOf: t0)
+        clock.ingest(.fixture(isPlaying: false, currentTime: 10, duration: 3000),
+                     asOf: t0.addingTimeInterval(0.5))
+        XCTAssertEqual(clock.displayTime(asOf: t0.addingTimeInterval(0.5)), 1200, accuracy: 0.01)
+        // Once the TV confirms the seek, the clock tracks it again.
+        clock.ingest(.fixture(isPlaying: false, currentTime: 1200, duration: 3000),
+                     asOf: t0.addingTimeInterval(1.0))
+        XCTAssertEqual(clock.displayTime(asOf: t0.addingTimeInterval(1.0)), 1200, accuracy: 0.01)
     }
 }
 

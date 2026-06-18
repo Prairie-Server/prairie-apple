@@ -676,10 +676,12 @@ struct MainTabView: View {
             ItemDetailView(contentId: contentId)
                 #if os(iOS)
                 // Destination half of the iOS 26 poster → detail zoom. Keys off
-                // the same `contentId` the card published via
-                // `.matchedTransitionSource`. SwiftUI falls back to a normal
-                // push when no matching source is on screen.
-                .navigationTransition(.zoom(sourceID: contentId, in: zoomNamespace))
+                // the unique per-card source id the tapped card recorded in
+                // `pendingZoomSourceID` (falling back to `contentId`), so the
+                // zoom animates from the exact card even when the same item is
+                // visible in two rows. SwiftUI falls back to a normal push when
+                // no matching source is on screen.
+                .navigationTransition(.zoom(sourceID: router.pendingZoomSourceID ?? contentId, in: zoomNamespace))
                 #endif
         case .personDetail(let personId):
             PersonDetailView(personId: personId)

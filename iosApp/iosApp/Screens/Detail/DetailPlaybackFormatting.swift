@@ -187,7 +187,11 @@ enum DetailPlaybackFormatting {
               let match = (version?.subtitleTracks ?? []).enumerated().first(where: { _, track in
                   track.index == selectedSubtitleTrackIndex
               }) else {
-            return "Auto"
+            // An explicit positive selection that doesn't resolve in this
+            // version's track list (e.g. the displayed version was re-scoped):
+            // a subtitle IS requested, so don't mislabel it as "Auto" (no
+            // selection). "On" reflects the active-but-unnamed selection.
+            return "On"
         }
         return subtitleTitle(match.element, ordinal: match.offset)
     }

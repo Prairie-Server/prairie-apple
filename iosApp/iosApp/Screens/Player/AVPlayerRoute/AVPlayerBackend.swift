@@ -400,6 +400,10 @@ final class AVPlayerBackend {
 
     func setUserVolume(_ v: Float) {
         userVolume = min(max(v, 0), 1)
+        // An explicit volume change requests an audible level, so it clears
+        // mute — otherwise the gain stays at 0 and the slider disagrees with
+        // the silent output.
+        userMuted = false
         applyUserGain()
     }
     func setUserMuted(_ m: Bool) {

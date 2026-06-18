@@ -37,10 +37,12 @@ struct TVSeasonDetailView: View {
 
     @Namespace private var detailFocusNamespace
     @FocusState private var playFocused: Bool
-    /// One-shot so we only auto-claim Play focus the first time the next-up
-    /// episode resolves (it loads asynchronously) — never yank focus back if
-    /// the viewer has already moved on.
-    @State private var didAutoFocusPlay = false
+    /// Season whose next-up Play button has already auto-claimed focus. Keyed on
+    /// the season (not a bare Bool) so we auto-focus Play once per season: the
+    /// first async next-up resolve AND an in-place season switch — same view
+    /// instance, `selectedSeason` mutates — both re-focus Play, while never
+    /// yanking focus back within the same season once the viewer moves on.
+    @State private var autoFocusedSeasonKey: String?
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
@@ -75,8 +77,10 @@ struct TVSeasonDetailView: View {
         .focusScope(detailFocusNamespace)
         .defaultFocus($playFocused, true, priority: .userInitiated)
         .onChange(of: nextUpEpisode?.contentId) { _, newValue in
-            guard newValue != nil, !didAutoFocusPlay else { return }
-            didAutoFocusPlay = true
+            guard newValue != nil else { return }
+            let seasonKey = selectedSeason?.contentId ?? ""
+            guard autoFocusedSeasonKey != seasonKey else { return }
+            autoFocusedSeasonKey = seasonKey
             playFocused = true
         }
     }

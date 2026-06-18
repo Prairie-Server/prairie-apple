@@ -14,6 +14,17 @@ struct ChapterSheet: View {
     }
 
     var body: some View {
+        chapterContent
+            // The list/empty-state force white text. The iOS-26 glass restyle
+            // dropped the explicit dark backing, leaving legibility dependent on
+            // the sheet inheriting dark mode. Pin the sheet to dark so the
+            // system material renders dark (white text stays readable) without
+            // re-adding an opaque background that would defeat the glass look.
+            .preferredColorScheme(.dark)
+    }
+
+    @ViewBuilder
+    private var chapterContent: some View {
         let chapters = viewModel.chapters
         if chapters.isEmpty {
             ContentUnavailableView("No chapters", systemImage: "bookmark.slash")

@@ -87,6 +87,13 @@ final class DVSegmentWriter {
     /// without removing media AVPlayer may still retry during normal playback.
     private static let spillRetirementPlaybackSafetyWindowSeconds: Double = 60
     private static let minimumPlaylistSegmentsToKeep = 8
+    /// Upper bound on how long the mux thread will park waiting for the store
+    /// to free spill capacity. Capacity only frees as the playhead advances
+    /// past retired segments; if the position provider wedges, the wait would
+    /// otherwise spin forever. On timeout the writer proceeds and lets the
+    /// store evict, trading a possible over-budget blip for guaranteed
+    /// forward progress.
+    private static let maxSegmentStoreCapacityWaitSeconds: Double = 30
 
     // MARK: - Lifecycle callbacks (fired on muxQueue)
     /// Fires exactly once, after the init segment + initial media runway are
@@ -2759,9 +2766,22 @@ final class DVSegmentWriter {
 
     private func waitForSegmentStoreCapacityIfNeeded(nextSegmentBytes: Int) {
         guard let segmentStore else { return }
+        let waitDeadline = CFAbsoluteTimeGetCurrent() + Self.maxSegmentStoreCapacityWaitSeconds
         while !isCancelled {
             retireSegmentsBehindPlaybackIfNeeded()
             guard !segmentStore.canAppendSegment(byteCount: nextSegmentBytes) else { return }
+            // Defensive escape: capacity only frees as the playhead advances
+            // past retired segments. If the position provider is wedged the
+            // loop would spin the mux thread indefinitely, so bound it and
+            // proceed — the store evicts to satisfy the append rather than
+            // livelocking the writer (and, with the live-playlist policy, the
+            // evicted segments leave the manifest cleanly).
+            if CFAbsoluteTimeGetCurrent() >= waitDeadline {
+                cmpLog(
+                    "[CMP-HLS-STORE] spill-capacity wait exceeded \(Int(Self.maxSegmentStoreCapacityWaitSeconds))s; proceeding to avoid mux-thread livelock nextBytes=\(nextSegmentBytes)"
+                )
+                return
+            }
             let now = CFAbsoluteTimeGetCurrent()
             if now - lastSpillCapacityBackpressureLogWall >= 5 {
                 lastSpillCapacityBackpressureLogWall = now

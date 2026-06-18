@@ -174,21 +174,46 @@ final class AudioEngineAudioOutput {
         timePitch.rate = rate
     }
 
+    // Guarded by `stateLock`: read/written from the caller thread (volume
+    // slider / cast remote) and re-applied from `prepare()`, which can run on
+    // the feed/decode thread after a format or output-configuration change.
     private var userVolume: Float = 1.0
     private var userMuted = false
 
     func setUserVolume(_ v: Float) {
+        stateLock.lock()
         userVolume = min(max(v, 0), 1)
-        applyUserGain()
+        // An explicit volume change is a request for an audible level, so it
+        // clears mute — otherwise the gain stays pinned at 0 and the slider
+        // disagrees with the (silent) output.
+        userMuted = false
+        applyUserGainLocked()
+        stateLock.unlock()
     }
     func setUserMuted(_ m: Bool) {
+        stateLock.lock()
         userMuted = m
-        applyUserGain()
+        applyUserGainLocked()
+        stateLock.unlock()
     }
-    var currentUserVolume: Float { userVolume }
-    var currentUserMuted: Bool { userMuted }
+    var currentUserVolume: Float {
+        stateLock.lock(); defer { stateLock.unlock() }
+        return userVolume
+    }
+    var currentUserMuted: Bool {
+        stateLock.lock(); defer { stateLock.unlock() }
+        return userMuted
+    }
 
     func applyUserGain() {
+        stateLock.lock()
+        applyUserGainLocked()
+        stateLock.unlock()
+    }
+
+    /// Caller must hold `stateLock`. Reads the user gain and applies it
+    /// atomically so a concurrent `prepare()` can't latch a stale value.
+    private func applyUserGainLocked() {
         engine.mainMixerNode.outputVolume = userMuted ? 0 : userVolume
     }
 

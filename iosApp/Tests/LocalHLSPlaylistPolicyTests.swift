@@ -1,28 +1,24 @@
+import XCTest
 import Foundation
+@testable import Silo
 
-@main
-struct LocalHLSPlaylistPolicyTests {
-    static func main() {
-        testStartTagIsStartupOnly()
-        testSpillRetirementKeepsPlaylistAppendOnly()
-        print("LocalHLSPlaylistPolicyTests: all passed")
-    }
-
-    private static func testStartTagIsStartupOnly() {
-        precondition(
+final class LocalHLSPlaylistPolicyTests: XCTestCase {
+    func testStartTagIsStartupOnly() {
+        XCTAssertTrue(
             LocalHLSPlaylistPolicy.shouldEmitStartTag(firstMediaSequence: 0),
             "initial EVENT playlist should keep EXT-X-START for the first AVPlayer attach"
         )
-        precondition(
-            !LocalHLSPlaylistPolicy.shouldEmitStartTag(firstMediaSequence: 1),
+        XCTAssertFalse(
+            LocalHLSPlaylistPolicy.shouldEmitStartTag(firstMediaSequence: 1),
             "sliding live playlist should not keep EXT-X-START anchored at the moving head"
         )
     }
 
-    private static func testSpillRetirementKeepsPlaylistAppendOnly() {
-        precondition(
-            !LocalHLSPlaylistPolicy.shouldRemoveRetiredSegmentsFromPlaylist,
-            "retiring old segment bytes from the store must not turn the manifest into a sliding live playlist"
+    func testSpillRetirementDropsSegmentsFromPlaylist() {
+        XCTAssertTrue(
+            LocalHLSPlaylistPolicy.shouldRemoveRetiredSegmentsFromPlaylist,
+            "retiring old segment bytes from the store must also drop them from the manifest, "
+                + "otherwise AVPlayer fetches a retired (.gone) URI and fails with HTTP 410 on a backward seek"
         )
     }
 }

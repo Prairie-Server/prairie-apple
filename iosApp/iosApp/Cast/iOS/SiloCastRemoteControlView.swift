@@ -279,13 +279,13 @@ private struct RemoteNowPlayingContent: View {
                     if state.isLoading || state.isBuffering {
                         ProgressView().tint(Color.continuumBackground)
                     } else {
-                        Image(systemName: clock.isPlaying ? "pause.fill" : "play.fill")
+                        Image(systemName: clock.isPlaying() ? "pause.fill" : "play.fill")
                             .font(.system(size: 28, weight: .medium))
                             .foregroundStyle(Color.continuumBackground)
                     }
                 }
             }
-            .accessibilityLabel(clock.isPlaying ? "Pause" : "Play")
+            .accessibilityLabel(clock.isPlaying() ? "Pause" : "Play")
 
             Button {
                 let base = clock.displayTime()

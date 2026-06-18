@@ -19,6 +19,9 @@ final class SiloCastController {
     private(set) var isReconnecting = false
     private var heartbeatTask: Task<Void, Never>?
     private var reconnectTask: Task<Void, Never>?
+    /// Guards against a double-tap on "Cast" sending two `.launch` frames (and
+    /// presenting the player twice) for the same in-flight connection.
+    private var launchInFlight = false
     private var missedHeartbeats = 0
     private var lastTarget: SiloCastTarget?
     private static let heartbeatInterval: Duration = .seconds(3)
@@ -97,6 +100,11 @@ final class SiloCastController {
             errorMessage = "Choose a TV from Home before playing."
             return
         }
+        // De-dup a double-tap: a second launch while one is already in flight
+        // would send a duplicate `.launch` and re-present the player.
+        guard !launchInFlight else { return }
+        launchInFlight = true
+        defer { launchInFlight = false }
 
         isConnecting = true
         errorMessage = nil
@@ -116,7 +124,7 @@ final class SiloCastController {
     }
 
     func togglePlayPauseOptimistic() {
-        clock.setOptimisticPlaying(!clock.isPlaying)
+        clock.setOptimisticPlaying(!clock.isPlaying())
         send(.playPause)
     }
 
@@ -173,7 +181,10 @@ final class SiloCastController {
 
     private func handle(_ message: SiloCastMessage, connectionId: UUID) {
         guard self.connectionId == connectionId else { return }
-        missedHeartbeats = 0
+        // Liveness resets only on `.pong` (the TV's reply to our ping), not on
+        // every inbound message — otherwise a half-open connection (our receive
+        // path dead, send path alive) keeps the session pinned open. See the
+        // matching note in TVCastReceiver.handle.
         switch message {
         case .hello:
             break
@@ -190,7 +201,7 @@ final class SiloCastController {
         case .ping:
             session?.enqueue(.pong)
         case .pong:
-            break
+            missedHeartbeats = 0
         case .launch, .control:
             break
         }

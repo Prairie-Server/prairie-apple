@@ -463,6 +463,12 @@ class PlayerViewModel {
     /// pattern-match on this.
     private(set) var activePlayer: ActivePlayer
     private var activeRouteKind: PlaybackEngineKind
+    /// Canonical user volume/mute, owned by the VM rather than the backend.
+    /// Backends are rebuilt on every quality switch / loopback fallback and
+    /// come up at full volume, so the VM re-applies these after each swap and
+    /// reports them to the cast UI — otherwise a remote-set level is lost.
+    private var userVolume: Float = 1.0
+    private var userMuted = false
     private(set) var activeExecutionPlan: PlaybackExecutionPlan?
     private var sourceProxy: PlaybackSourceProxy?
     private var streamLoadGeneration: UInt64 = 0
@@ -873,6 +879,28 @@ class PlayerViewModel {
         let installed = playbackCoordinator.installEngine(for: engine)
         activePlayer = ActivePlayer(renderTarget: installed.renderTarget)
         activeRouteKind = engine
+        reapplyUserGain()
+    }
+
+    /// Records the user's volume/mute as the VM-level source of truth and
+    /// pushes it to the live backend.
+    func applyUserVolume(_ v: Float) {
+        userVolume = min(max(v, 0), 1)
+        // Setting a volume clears mute (mirrors the backend), so keep the
+        // canonical mute in sync.
+        userMuted = false
+        activePlayer.setVolume(userVolume)
+    }
+    func applyUserMuted(_ m: Bool) {
+        userMuted = m
+        activePlayer.setMuted(m)
+    }
+
+    /// Re-applies the canonical user volume/mute to the current backend after
+    /// a swap (quality switch, loopback fallback, fresh primary core).
+    private func reapplyUserGain() {
+        activePlayer.setVolume(userVolume)
+        activePlayer.setMuted(userMuted)
     }
 
     /// Subtitle-specific callbacks for PlayerCore's shared subtitle session.
@@ -1753,6 +1781,7 @@ class PlayerViewModel {
         do {
             try playbackCoordinator.load(plan: loadPlan)
             activePlayer = ActivePlayer(renderTarget: playbackCoordinator.renderTarget)
+            reapplyUserGain()
         } catch {
             finalizeTerminalPlaybackError(error.localizedDescription)
         }
@@ -5403,12 +5432,12 @@ extension PlayerViewModel {
             guard let volume = command.volume, volume.isFinite else {
                 throw SiloCastPlayerControlError.missingValue
             }
-            activePlayer.setVolume(Float(min(max(volume, 0), 1)))
+            applyUserVolume(Float(volume))
         case .setMuted:
             guard let enabled = command.enabled else {
                 throw SiloCastPlayerControlError.missingEnabledValue
             }
-            activePlayer.setMuted(enabled)
+            applyUserMuted(enabled)
         case .playNext:
             playNextEpisodeNow()
         }
@@ -5447,8 +5476,8 @@ extension PlayerViewModel {
             hdrEnabled: settings.hdrEnabled,
             supportsVideoGravity: backendCapabilities.supportsVideoGravity,
             supportsHDRToggle: backendCapabilities.supportsHDRToggle,
-            volume: Double(activePlayer.volume()),
-            isMuted: activePlayer.isMuted(),
+            volume: Double(userVolume),
+            isMuted: userMuted,
             hasNextEpisode: nextUpEpisode != nil,
             nextEpisodeTitle: nextUpEpisode?.title,
             error: error

@@ -1,28 +1,9 @@
+import XCTest
 import Foundation
+@testable import Silo
 
-@main
-struct DetailVersionSelectionTests {
-    static func main() {
-        testAutoDisplayPrefersBestVersionOverFirstReturnedVersion()
-        testFileVersionDecodesServerEditionFields()
-        testEditionsGroupVersionsByEditionLabel()
-        testLegacyEditionFallbackStillGroups()
-        testEditionForFileIdFindsOwningEdition()
-        testAudioOptionsUseOrdinalIndexes()
-        testEffectiveAudioLabelPrefersServerEffectiveTrack()
-        testAudioLabelsSimplifyTechnicalTitles()
-        testSubtitleNilIndexDoesNotCollideWithOff()
-        testSubtitleLabelsIncludeTypeAndLanguage()
-        testUntaggedEditionDisplaysStandard()
-        testFileVersionDecodesIntroAndCreditsMarkers()
-        testAudiobookDetailAndPresentationFieldsDecode()
-        testAudiobookMediaTypeNormalization()
-        testLibrariesResponseDecodesBareArray()
-        testAudioPlaybackTimelineMapsGlobalAndLocalTime()
-        testRealtimeMarkersUpdatedEventDecodesPayload()
-    }
-
-    private static func testAutoDisplayPrefersBestVersionOverFirstReturnedVersion() {
+final class DetailVersionSelectionTests: XCTestCase {
+    func testAutoDisplayPrefersBestVersionOverFirstReturnedVersion() {
         let versions = [
             version(fileId: 10, resolution: "1080p"),
             version(fileId: 20, resolution: "4K")
@@ -34,19 +15,19 @@ struct DetailVersionSelectionTests {
             lastFileId: nil
         )
 
-        precondition(
+        XCTAssertTrue(
             selected?.fileId == 20,
             "Auto should display the best version playback will choose; got \(selected?.fileId.description ?? "nil")"
         )
     }
 
-    private static func decodedVersions(_ json: String) -> [FileVersion] {
+    private func decodedVersions(_ json: String) -> [FileVersion] {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         return try! decoder.decode([FileVersion].self, from: Data(json.utf8))
     }
 
-    private static func testEditionsGroupVersionsByEditionLabel() {
+    func testEditionsGroupVersionsByEditionLabel() {
         let versions = decodedVersions("""
         [
           { "file_id": 1, "edition_raw": "Director's Cut", "edition_key": "directors_cut", "resolution": "4K" },
@@ -57,13 +38,13 @@ struct DetailVersionSelectionTests {
 
         let editions = PlaybackEditions.editions(from: versions)
 
-        precondition(editions.count == 2, "Expected 2 editions; got \(editions.count)")
-        precondition(editions[0].label == "Director's Cut", "First edition label wrong: \(editions[0].label)")
-        precondition(editions[0].versions.count == 2, "Director's Cut should hold 2 versions")
-        precondition(editions[1].label == "Standard", "Untitled edition should be labeled Standard; got \(editions[1].label)")
+        XCTAssertTrue(editions.count == 2, "Expected 2 editions; got \(editions.count)")
+        XCTAssertTrue(editions[0].label == "Director's Cut", "First edition label wrong: \(editions[0].label)")
+        XCTAssertTrue(editions[0].versions.count == 2, "Director's Cut should hold 2 versions")
+        XCTAssertTrue(editions[1].label == "Standard", "Untitled edition should be labeled Standard; got \(editions[1].label)")
     }
 
-    private static func testFileVersionDecodesServerEditionFields() {
+    func testFileVersionDecodesServerEditionFields() {
         let versions = decodedVersions("""
         [
           {
@@ -78,13 +59,13 @@ struct DetailVersionSelectionTests {
 
         let version = versions[0]
 
-        precondition(version.editionRaw == "Final Cut")
-        precondition(version.editionKey == "final_cut")
-        precondition(version.edition == "Legacy Cut")
-        precondition(version.editionDisplayLabel == "Final Cut")
+        XCTAssertTrue(version.editionRaw == "Final Cut")
+        XCTAssertTrue(version.editionKey == "final_cut")
+        XCTAssertTrue(version.edition == "Legacy Cut")
+        XCTAssertTrue(version.editionDisplayLabel == "Final Cut")
     }
 
-    private static func testLegacyEditionFallbackStillGroups() {
+    func testLegacyEditionFallbackStillGroups() {
         let versions = decodedVersions("""
         [
           { "file_id": 1, "edition": "Theatrical", "resolution": "1080p" },
@@ -94,12 +75,12 @@ struct DetailVersionSelectionTests {
 
         let editions = PlaybackEditions.editions(from: versions)
 
-        precondition(editions.count == 1, "Legacy edition field should still group versions")
-        precondition(editions[0].label == "Theatrical")
-        precondition(editions[0].versions.map(\.fileId) == [1, 2])
+        XCTAssertTrue(editions.count == 1, "Legacy edition field should still group versions")
+        XCTAssertTrue(editions[0].label == "Theatrical")
+        XCTAssertTrue(editions[0].versions.map(\.fileId) == [1, 2])
     }
 
-    private static func testEditionForFileIdFindsOwningEdition() {
+    func testEditionForFileIdFindsOwningEdition() {
         let versions = decodedVersions("""
         [
           { "file_id": 1, "edition": "Theatrical", "resolution": "1080p" },
@@ -109,10 +90,10 @@ struct DetailVersionSelectionTests {
 
         let edition = PlaybackEditions.edition(forFileId: 2, in: versions)
 
-        precondition(edition?.label == "Extended", "fileId 2 should resolve to Extended; got \(edition?.label ?? "nil")")
+        XCTAssertTrue(edition?.label == "Extended", "fileId 2 should resolve to Extended; got \(edition?.label ?? "nil")")
     }
 
-    private static func testAudioOptionsUseOrdinalIndexes() {
+    func testAudioOptionsUseOrdinalIndexes() {
         let versions = decodedVersions("""
         [
           {
@@ -130,13 +111,13 @@ struct DetailVersionSelectionTests {
             selectedAudioTrackIndex: 1
         )
 
-        precondition(options.count == 2)
-        precondition(options[0].ordinal == 0)
-        precondition(options[1].ordinal == 1)
-        precondition(options[1].isSelected)
+        XCTAssertTrue(options.count == 2)
+        XCTAssertTrue(options[0].ordinal == 0)
+        XCTAssertTrue(options[1].ordinal == 1)
+        XCTAssertTrue(options[1].isSelected)
     }
 
-    private static func testEffectiveAudioLabelPrefersServerEffectiveTrack() {
+    func testEffectiveAudioLabelPrefersServerEffectiveTrack() {
         let versions = decodedVersions("""
         [
           {
@@ -160,9 +141,9 @@ struct DetailVersionSelectionTests {
             selectedAudioTrackIndex: 0
         )
 
-        precondition(version.effectiveAudioTrackIndex == 1)
-        precondition(effectiveLabel == "TrueHD 7.1 - Japanese", "Expected effective track label; got \(effectiveLabel)")
-        precondition(selectedLabel == "AAC - English", "Selected ordinal should override effective track; got \(selectedLabel)")
+        XCTAssertTrue(version.effectiveAudioTrackIndex == 1)
+        XCTAssertTrue(effectiveLabel == "TrueHD 7.1 - Japanese", "Expected effective track label; got \(effectiveLabel)")
+        XCTAssertTrue(selectedLabel == "AAC - English", "Selected ordinal should override effective track; got \(selectedLabel)")
 
         let defaultFallback = decodedVersions("""
         [
@@ -179,7 +160,7 @@ struct DetailVersionSelectionTests {
             version: defaultFallback,
             selectedAudioTrackIndex: nil
         )
-        precondition(defaultLabel == "AC3 - Spanish", "Expected default track label; got \(defaultLabel)")
+        XCTAssertTrue(defaultLabel == "AC3 - Spanish", "Expected default track label; got \(defaultLabel)")
 
         let firstFallback = decodedVersions("""
         [
@@ -196,10 +177,10 @@ struct DetailVersionSelectionTests {
             version: firstFallback,
             selectedAudioTrackIndex: nil
         )
-        precondition(firstLabel == "AAC - English", "Expected first track fallback; got \(firstLabel)")
+        XCTAssertTrue(firstLabel == "AAC - English", "Expected first track fallback; got \(firstLabel)")
     }
 
-    private static func testAudioLabelsSimplifyTechnicalTitles() {
+    func testAudioLabelsSimplifyTechnicalTitles() {
         let versions = decodedVersions("""
         [
           {
@@ -227,12 +208,12 @@ struct DetailVersionSelectionTests {
             selectedAudioTrackIndex: nil
         )
 
-        precondition(label == "EAC3 5.1 - English", "Expected simplified audio label; got \(label)")
-        precondition(options[0].title == "EAC3 5.1 - English")
-        precondition(options[0].detail == "Default · Preferred")
+        XCTAssertTrue(label == "EAC3 5.1 - English", "Expected simplified audio label; got \(label)")
+        XCTAssertTrue(options[0].title == "EAC3 5.1 - English")
+        XCTAssertTrue(options[0].detail == "Default · Preferred")
     }
 
-    private static func testSubtitleNilIndexDoesNotCollideWithOff() {
+    func testSubtitleNilIndexDoesNotCollideWithOff() {
         let versions = decodedVersions("""
         [
           {
@@ -249,17 +230,30 @@ struct DetailVersionSelectionTests {
         ]
         """)
 
+        // The external subtitle's path must actually decode (it feeds the
+        // track id); under `.convertFromSnakeCase` the wire key `file_name`
+        // becomes `fileName`, which the CodingKey now matches. Without this the
+        // id collapses to "-1|" and collides with any other external sub.
+        XCTAssertTrue(
+            versions[0].subtitleTracks?.first?.externalPath == "/subs/English.srt",
+            "external subtitle file_name should decode into externalPath"
+        )
+        XCTAssertTrue(
+            versions[0].subtitleTracks?.first?.id == "-1|/subs/English.srt",
+            "external subtitle id should incorporate the decoded path so it stays unique"
+        )
+
         let options = DetailPlaybackFormatting.subtitleOptions(
             version: versions[0],
             selectedSubtitleTrackIndex: -1
         )
 
-        precondition(options.count == 1)
-        precondition(options[0].selectionIndex == nil)
-        precondition(options[0].title == "SubRip - English")
-        precondition(!options[0].isSelectable)
-        precondition(!options[0].isSelected)
-        precondition(
+        XCTAssertTrue(options.count == 1)
+        XCTAssertTrue(options[0].selectionIndex == nil)
+        XCTAssertTrue(options[0].title == "SubRip - English")
+        XCTAssertFalse(options[0].isSelectable)
+        XCTAssertFalse(options[0].isSelected)
+        XCTAssertTrue(
             DetailPlaybackFormatting.subtitleValueLabel(
                 version: versions[0],
                 selectedSubtitleTrackIndex: -1
@@ -267,7 +261,7 @@ struct DetailVersionSelectionTests {
         )
     }
 
-    private static func testSubtitleLabelsIncludeTypeAndLanguage() {
+    func testSubtitleLabelsIncludeTypeAndLanguage() {
         let versions = decodedVersions("""
         [
           {
@@ -299,14 +293,14 @@ struct DetailVersionSelectionTests {
             selectedSubtitleTrackIndex: 2
         )
 
-        precondition(options.count == 2)
-        precondition(options[0].title == "SDH - English", "Expected SDH language label; got \(options[0].title)")
-        precondition(options[0].detail == "SubRip · Default", "Expected subtitle type detail; got \(options[0].detail)")
-        precondition(options[1].title == "SubRip - Japanese", "Expected fallback subtitle type and language; got \(options[1].title)")
-        precondition(selectedLabel == "SDH - English", "Expected selected subtitle label; got \(selectedLabel)")
+        XCTAssertTrue(options.count == 2)
+        XCTAssertTrue(options[0].title == "SDH - English", "Expected SDH language label; got \(options[0].title)")
+        XCTAssertTrue(options[0].detail == "SubRip · Default", "Expected subtitle type detail; got \(options[0].detail)")
+        XCTAssertTrue(options[1].title == "SubRip - Japanese", "Expected fallback subtitle type and language; got \(options[1].title)")
+        XCTAssertTrue(selectedLabel == "SDH - English", "Expected selected subtitle label; got \(selectedLabel)")
     }
 
-    private static func testUntaggedEditionDisplaysStandard() {
+    func testUntaggedEditionDisplaysStandard() {
         let versions = decodedVersions("""
         [
           { "file_id": 1, "resolution": "1080p" }
@@ -315,12 +309,12 @@ struct DetailVersionSelectionTests {
 
         let editions = PlaybackEditions.editions(from: versions)
 
-        precondition(versions[0].editionDisplayLabel == "Standard")
-        precondition(editions.count == 1)
-        precondition(editions[0].label == "Standard")
+        XCTAssertTrue(versions[0].editionDisplayLabel == "Standard")
+        XCTAssertTrue(editions.count == 1)
+        XCTAssertTrue(editions[0].label == "Standard")
     }
 
-    private static func version(fileId: Int, resolution: String?) -> FileVersion {
+    private func version(fileId: Int, resolution: String?) -> FileVersion {
         FileVersion(
             fileId: fileId,
             fileName: nil,
@@ -341,7 +335,7 @@ struct DetailVersionSelectionTests {
         )
     }
 
-    private static func testFileVersionDecodesIntroAndCreditsMarkers() {
+    func testFileVersionDecodesIntroAndCreditsMarkers() {
         let json = """
         {
           "file_id": 42,
@@ -355,14 +349,14 @@ struct DetailVersionSelectionTests {
 
         let version = try! decoder.decode(FileVersion.self, from: Data(json.utf8))
 
-        precondition(version.fileId == 42)
-        precondition(version.intro?.start == 12.5)
-        precondition(version.intro?.end == 74.25)
-        precondition(version.credits?.start == 1440.0)
-        precondition(version.credits?.end == 1500.0)
+        XCTAssertTrue(version.fileId == 42)
+        XCTAssertTrue(version.intro?.start == 12.5)
+        XCTAssertTrue(version.intro?.end == 74.25)
+        XCTAssertTrue(version.credits?.start == 1440.0)
+        XCTAssertTrue(version.credits?.end == 1500.0)
     }
 
-    private static func testAudiobookDetailAndPresentationFieldsDecode() {
+    func testAudiobookDetailAndPresentationFieldsDecode() {
         let json = """
         {
           "content_id": "book-1",
@@ -399,23 +393,23 @@ struct DetailVersionSelectionTests {
 
         let detail = try! decoder.decode(ItemDetail.self, from: Data(json.utf8))
 
-        precondition(detail.type == "audiobook")
-        precondition(detail.audiobook?.authors.first?.name == "Ada Writer")
-        precondition(detail.audiobook?.narrators.first?.name == "Nia Voice")
-        precondition(detail.audiobook?.publisher == "Silo Press")
-        precondition(detail.audiobook?.totalDurationSeconds == 1800)
-        precondition(detail.versions?.first?.presentationKind == "audiobook_part")
-        precondition(detail.versions?.first?.presentationGroupKey == "book-1")
-        precondition(detail.versions?.first?.presentationPartIndex == 1)
-        precondition(detail.versions?.first?.presentationPartTotal == 2)
+        XCTAssertTrue(detail.type == "audiobook")
+        XCTAssertTrue(detail.audiobook?.authors.first?.name == "Ada Writer")
+        XCTAssertTrue(detail.audiobook?.narrators.first?.name == "Nia Voice")
+        XCTAssertTrue(detail.audiobook?.publisher == "Silo Press")
+        XCTAssertTrue(detail.audiobook?.totalDurationSeconds == 1800)
+        XCTAssertTrue(detail.versions?.first?.presentationKind == "audiobook_part")
+        XCTAssertTrue(detail.versions?.first?.presentationGroupKey == "book-1")
+        XCTAssertTrue(detail.versions?.first?.presentationPartIndex == 1)
+        XCTAssertTrue(detail.versions?.first?.presentationPartTotal == 2)
     }
 
-    private static func testAudiobookMediaTypeNormalization() {
-        precondition(SiloMediaType.isAudiobook("audiobook"))
-        precondition(SiloMediaType.isAudiobook("audiobooks"))
-        precondition(SiloMediaType.isAudiobook("book"))
-        precondition(SiloMediaType.isAudiobook("books"))
-        precondition(!SiloMediaType.isAudiobook("movies"))
+    func testAudiobookMediaTypeNormalization() {
+        XCTAssertTrue(SiloMediaType.isAudiobook("audiobook"))
+        XCTAssertTrue(SiloMediaType.isAudiobook("audiobooks"))
+        XCTAssertTrue(SiloMediaType.isAudiobook("book"))
+        XCTAssertTrue(SiloMediaType.isAudiobook("books"))
+        XCTAssertFalse(SiloMediaType.isAudiobook("movies"))
 
         let library = Library(
             id: 10,
@@ -424,10 +418,10 @@ struct DetailVersionSelectionTests {
             sortOrder: nil,
             posterUrl: nil
         )
-        precondition(library.isAudiobookLibrary)
+        XCTAssertTrue(library.isAudiobookLibrary)
     }
 
-    private static func testLibrariesResponseDecodesBareArray() {
+    func testLibrariesResponseDecodesBareArray() {
         let json = """
         [
           { "id": 1, "name": "Movies", "type": "movies" },
@@ -439,11 +433,11 @@ struct DetailVersionSelectionTests {
 
         let response = try! decoder.decode(LibrariesResponse.self, from: Data(json.utf8))
 
-        precondition(response.libraries.count == 2)
-        precondition(response.libraries[1].isAudiobookLibrary)
+        XCTAssertTrue(response.libraries.count == 2)
+        XCTAssertTrue(response.libraries[1].isAudiobookLibrary)
     }
 
-    private static func testAudioPlaybackTimelineMapsGlobalAndLocalTime() {
+    func testAudioPlaybackTimelineMapsGlobalAndLocalTime() {
         let tracks = [
             AudioPlaybackTrack(
                 index: 0,
@@ -461,19 +455,19 @@ struct DetailVersionSelectionTests {
             ),
         ]
 
-        precondition(AudioPlaybackTimeline.trackIndex(at: -10, tracks: tracks) == 0)
-        precondition(AudioPlaybackTimeline.trackIndex(at: 119.9, tracks: tracks) == 0)
-        precondition(AudioPlaybackTimeline.trackIndex(at: 120, tracks: tracks) == 1)
-        precondition(AudioPlaybackTimeline.trackIndex(at: 500, tracks: tracks) == 1)
+        XCTAssertTrue(AudioPlaybackTimeline.trackIndex(at: -10, tracks: tracks) == 0)
+        XCTAssertTrue(AudioPlaybackTimeline.trackIndex(at: 119.9, tracks: tracks) == 0)
+        XCTAssertTrue(AudioPlaybackTimeline.trackIndex(at: 120, tracks: tracks) == 1)
+        XCTAssertTrue(AudioPlaybackTimeline.trackIndex(at: 500, tracks: tracks) == 1)
 
         let second = tracks[1]
-        precondition(AudioPlaybackTimeline.localTime(for: 135, in: second) == 15)
-        precondition(AudioPlaybackTimeline.localTime(for: 999, in: second) == 180)
-        precondition(AudioPlaybackTimeline.globalTime(for: 45, in: second) == 165)
-        precondition(AudioPlaybackTimeline.globalTime(for: -1, in: second) == 120)
+        XCTAssertTrue(AudioPlaybackTimeline.localTime(for: 135, in: second) == 15)
+        XCTAssertTrue(AudioPlaybackTimeline.localTime(for: 999, in: second) == 180)
+        XCTAssertTrue(AudioPlaybackTimeline.globalTime(for: 45, in: second) == 165)
+        XCTAssertTrue(AudioPlaybackTimeline.globalTime(for: -1, in: second) == 120)
     }
 
-    private static func testRealtimeMarkersUpdatedEventDecodesPayload() {
+    func testRealtimeMarkersUpdatedEventDecodesPayload() {
         let json = """
         {
           "type": "event",
@@ -489,27 +483,29 @@ struct DetailVersionSelectionTests {
         """
 
         guard case .event(let event)? = parsePlaybackRealtimeInboundMessage(Data(json.utf8)) else {
-            preconditionFailure("Expected markers_updated event")
+            XCTFail("Expected markers_updated event")
+            return
         }
 
-        precondition(event.sessionId == "session-1")
-        precondition(event.name == .markersUpdated)
+        XCTAssertTrue(event.sessionId == "session-1")
+        XCTAssertTrue(event.name == .markersUpdated)
 
         guard let payload = PlaybackRealtimeMarkersUpdatedPayload(payload: event.payload) else {
-            preconditionFailure("Expected markers_updated payload")
+            XCTFail("Expected markers_updated payload")
+            return
         }
-        precondition(payload.sessionId == "session-1")
-        precondition(payload.fileId == 42)
-        precondition(payload.intro?.start == 12.0)
-        precondition(payload.intro?.end == 75.0)
-        precondition(payload.credits == nil)
-        precondition(payload.introUpdate == .set(TimeRange(start: 12.0, end: 75.0)))
-        precondition(payload.creditsUpdate == .clear)
+        XCTAssertTrue(payload.sessionId == "session-1")
+        XCTAssertTrue(payload.fileId == 42)
+        XCTAssertTrue(payload.intro?.start == 12.0)
+        XCTAssertTrue(payload.intro?.end == 75.0)
+        XCTAssertTrue(payload.credits == nil)
+        XCTAssertTrue(payload.introUpdate == .set(TimeRange(start: 12.0, end: 75.0)))
+        XCTAssertTrue(payload.creditsUpdate == .clear)
 
         let missingMarkersPayload = PlaybackRealtimeMarkersUpdatedPayload(
             payload: ["file_id": .number(42)]
         )
-        precondition(missingMarkersPayload?.introUpdate == .unchanged)
-        precondition(missingMarkersPayload?.creditsUpdate == .unchanged)
+        XCTAssertTrue(missingMarkersPayload?.introUpdate == .unchanged)
+        XCTAssertTrue(missingMarkersPayload?.creditsUpdate == .unchanged)
     }
 }

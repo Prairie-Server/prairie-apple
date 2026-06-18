@@ -13,10 +13,17 @@ actor SiloCastSession {
     private let decoder = JSONDecoder()
     private var isOpen = false
 
-    // Ordered outbound queue: enqueue() is nonisolated + FIFO; a single
-    // drain task sends one frame at a time so messages never reorder.
-    private let outbound: AsyncStream<SiloCastMessage>
-    private let outboundContinuation: AsyncStream<SiloCastMessage>.Continuation
+    // Ordered outbound queue: enqueue() is nonisolated + FIFO; a single drain
+    // task sends one frame at a time so messages never reorder. `send()` goes
+    // through the SAME queue (carrying a completion continuation) so an awaited
+    // send — hello/launch — can't race ahead of, or behind, an enqueued
+    // control/ping frame.
+    private struct OutboundItem {
+        let message: SiloCastMessage
+        let completion: CheckedContinuation<Void, Error>?
+    }
+    private let outbound: AsyncStream<OutboundItem>
+    private let outboundContinuation: AsyncStream<OutboundItem>.Continuation
     private var drainTask: Task<Void, Never>?
 
     init(connection: NWConnection) {
@@ -85,24 +92,37 @@ actor SiloCastSession {
     /// Fire-and-forget, ordered. Safe to call from any context; FIFO is
     /// preserved by call order because all call sites are @MainActor.
     nonisolated func enqueue(_ message: SiloCastMessage) {
-        outboundContinuation.yield(message)
+        outboundContinuation.yield(OutboundItem(message: message, completion: nil))
     }
 
     private func startDrainLoop() async {
-        for await message in outbound {
-            guard isOpen else { continue }
+        for await item in outbound {
+            guard isOpen else {
+                item.completion?.resume(throwing: SessionError.closed)
+                continue
+            }
             do {
-                try await writeRaw(message)
+                try await writeRaw(item.message)
+                item.completion?.resume()
             } catch {
+                item.completion?.resume(throwing: error)
                 teardown(error)
-                return
+                // Keep draining after teardown: the `guard isOpen` branch fails
+                // any already-queued sends fast instead of leaving their
+                // awaiters hung. The loop ends when `teardown` finishes the
+                // stream and the buffered items drain.
             }
         }
     }
 
+    /// Awaited, ordered send. Routes through the same FIFO as `enqueue` so the
+    /// write can't reorder relative to queued frames, and surfaces the write
+    /// result to the caller.
     func send(_ message: SiloCastMessage) async throws {
         guard isOpen else { throw SessionError.closed }
-        try await writeRaw(message)
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            outboundContinuation.yield(OutboundItem(message: message, completion: cont))
+        }
     }
 
     private func writeRaw(_ message: SiloCastMessage) async throws {
@@ -139,7 +159,10 @@ actor SiloCastSession {
         guard isOpen else { return }
         isOpen = false
         connection.cancel()
-        drainTask?.cancel()
+        // Don't cancel the drain task — finishing the stream lets it drain any
+        // buffered items and resume their `send` continuations with
+        // `SessionError.closed` (the `guard isOpen` branch) instead of leaking
+        // a hung awaiter. The task self-completes once the buffer empties.
         drainTask = nil
         outboundContinuation.finish()
         if let error {

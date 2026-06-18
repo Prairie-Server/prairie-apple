@@ -163,7 +163,12 @@ final class TVCastReceiver {
 
     private func handle(_ message: SiloCastMessage, connectionId: UUID) {
         guard activeConnectionId == connectionId else { return }
-        missedHeartbeats = 0
+        // NOTE: liveness is reset only on `.pong` (below), not on every inbound
+        // message. A `.pong` is the controller's reply to our ping, so it's the
+        // only message that proves the controller can still *receive* from us.
+        // Resetting on any inbound (e.g. the controller's own pings) would let a
+        // half-open connection — controller's receive path dead but its send
+        // path alive — keep the session pinned open forever.
         switch message {
         case .hello(let hello):
             guard let serverId = hello.serverId, !serverId.isEmpty,
@@ -192,7 +197,9 @@ final class TVCastReceiver {
             handleControl(command)
         case .ping:
             activeSession?.enqueue(.pong)
-        case .pong, .state, .error:
+        case .pong:
+            missedHeartbeats = 0
+        case .state, .error:
             break
         case .close:
             closeActiveSession(sendClose: false)

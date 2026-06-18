@@ -205,15 +205,36 @@ targets:
     dependencies:
       - sdk: TVServices.framework
 
+  # Unit-test bundle for the iOS Silo app. Hosts the XCTest cases under
+  # Tests/ and loads the Silo.app binary so `@testable import Silo` can
+  # reach the app's internal types (policies, codecs, formatting helpers).
+  SiloTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: Silo
+    settings:
+      base:
+        PRODUCT_NAME: SiloTests
+        GENERATE_INFOPLIST_FILE: "YES"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Silo.app/Silo"
+        SWIFT_OBJC_BRIDGING_HEADER: iosApp/Screens/Player/CoreMedia/SiloPlayerBridging.h
+
 schemes:
   Silo:
     build:
       targets:
         Silo: all
+        SiloTests: [test]
     run:
       config: Debug
     test:
       config: Debug
+      targets:
+        - SiloTests
     archive:
       config: Release
     analyze:

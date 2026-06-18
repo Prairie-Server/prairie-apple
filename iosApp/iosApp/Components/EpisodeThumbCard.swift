@@ -24,6 +24,12 @@ struct EpisodeThumbCard: View {
     /// the episode's item detail, keyed on `item.contentId`. `nil` (tvOS/macOS
     /// or unset) falls back to a plain push. (iOS branch only.)
     @Environment(\.zoomNamespace) private var zoomNamespace
+    #if !os(tvOS)
+    @Environment(AppRouter.self) private var router
+    /// Unique per-placement zoom source id (see MediaCard) so the same episode
+    /// in two on-screen rows doesn't collide on `contentId`.
+    @State private var zoomInstanceID = UUID()
+    #endif
 
     private var cardWidth: CGFloat { ContinuumTheme.thumbnailCardWidth }
     private var cardHeight: CGFloat { ContinuumTheme.thumbnailCardHeight }
@@ -59,7 +65,10 @@ struct EpisodeThumbCard: View {
             playedOverride = nil
         }
         #else
-        Button(action: action) {
+        Button {
+            router.pendingZoomSourceID = zoomInstanceID.uuidString
+            action()
+        } label: {
             VStack(alignment: .leading, spacing: 6) {
                 thumbnail
                 Text(displayTitle)
@@ -73,7 +82,7 @@ struct EpisodeThumbCard: View {
                         .lineLimit(1)
                 }
             }
-            .zoomTransitionSource(id: item.contentId, in: zoomNamespace)
+            .zoomTransitionSource(id: zoomInstanceID.uuidString, in: zoomNamespace)
         }
         .buttonStyle(.plain)
         .frame(width: cardWidth)

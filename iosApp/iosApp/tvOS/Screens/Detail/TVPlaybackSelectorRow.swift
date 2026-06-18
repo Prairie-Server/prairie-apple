@@ -65,7 +65,7 @@ struct TVPlaybackSelectorRow: View {
     }
 
     private var editionSelector: some View {
-        TVSelectorButton(icon: "rectangle.stack", label: "Edition", value: currentEdition?.label ?? "Standard") {
+        TVSelectorButton(icon: "rectangle.stack", label: "Edition", value: currentEdition?.label ?? currentVersion?.editionDisplayLabel ?? "Standard") {
             if editions.isEmpty {
                 Button("Standard") { }.disabled(true)
             } else {

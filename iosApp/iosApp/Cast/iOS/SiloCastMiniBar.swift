@@ -33,12 +33,12 @@ struct SiloCastMiniBar: View {
                     Button {
                         controller.togglePlayPauseOptimistic()
                     } label: {
-                        Image(systemName: controller.clock.isPlaying ? "pause.fill" : "play.fill")
+                        Image(systemName: controller.clock.isPlaying() ? "pause.fill" : "play.fill")
                             .font(.system(size: 18, weight: .semibold))
                             .frame(width: 32, height: 32)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel(controller.clock.isPlaying ? "Pause" : "Play")
+                    .accessibilityLabel(controller.clock.isPlaying() ? "Pause" : "Play")
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, isInline ? 4 : 8)

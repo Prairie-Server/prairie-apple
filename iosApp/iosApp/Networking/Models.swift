@@ -768,7 +768,12 @@ struct SubtitleTrack: Codable, Identifiable, Hashable {
         case forced
         case isDefault = "default"
         case external
-        case externalPath = "file_name"
+        // The API decoder runs `.convertFromSnakeCase`, which rewrites the wire
+        // key `file_name` to `fileName` *before* matching CodingKeys — so the
+        // raw value must be the converted camelCase form. With the old
+        // `"file_name"` raw value this field never decoded, collapsing every
+        // external subtitle's `id` to `"-1|"` (a collision).
+        case externalPath = "fileName"
     }
 }
 

@@ -223,7 +223,7 @@ struct MobilePlayerControls: View {
             progressSlider
 
             HStack {
-                Text(formatTime(displayTime))
+                Text(PlayerTimeFormatter.formatHMS(displayTime))
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.8))
                     .monospacedDigit()
@@ -231,7 +231,7 @@ struct MobilePlayerControls: View {
                 Spacer()
 
                 if viewModel.sleepTimer.isActive {
-                    Label(formatCountdown(viewModel.sleepTimer.remainingSeconds), systemImage: "moon.zzz.fill")
+                    Label(PlayerTimeFormatter.formatCountdown(viewModel.sleepTimer.remainingSeconds), systemImage: "moon.zzz.fill")
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.8))
                         .monospacedDigit()
@@ -239,7 +239,7 @@ struct MobilePlayerControls: View {
 
                 Spacer()
 
-                Text(formatTime(viewModel.duration))
+                Text(PlayerTimeFormatter.formatHMS(viewModel.duration))
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.8))
                     .monospacedDigit()
@@ -333,20 +333,6 @@ struct MobilePlayerControls: View {
                 .frame(width: 44, height: 44)
         }
         .buttonStyle(.glass)
-    }
-
-    private func formatTime(_ seconds: Double) -> String {
-        guard seconds.isFinite, seconds >= 0 else { return "0:00" }
-        let total = Int(seconds)
-        let h = total / 3600, m = (total % 3600) / 60, s = total % 60
-        return h > 0
-            ? String(format: "%d:%02d:%02d", h, m, s)
-            : String(format: "%d:%02d", m, s)
-    }
-
-    private func formatCountdown(_ seconds: Int) -> String {
-        let m = seconds / 60, s = seconds % 60
-        return String(format: "%d:%02d", m, s)
     }
 
     // MARK: - Sheet identifier
