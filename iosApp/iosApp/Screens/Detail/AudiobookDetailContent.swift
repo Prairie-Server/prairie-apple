@@ -103,14 +103,19 @@ struct AudiobookDetailContent: View {
     @ViewBuilder
     private var header: some View {
         #if os(tvOS)
-        HStack(alignment: .top, spacing: 48) {
-            cover(size: coverSize)
-            headerText
-                .frame(maxWidth: 900, alignment: .leading)
-                .padding(.top, 24)
-            Spacer(minLength: 0)
+        ZStack(alignment: .bottomLeading) {
+            audiobookBackdrop
+            HStack(alignment: .center, spacing: 56) {
+                cover(size: coverSize)
+                headerText
+                    .frame(maxWidth: 900, alignment: .leading)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, ContinuumTheme.safePadding)
+            .padding(.bottom, 64)
+            .padding(.top, 120)
         }
-        .padding(.top, 120)
+        .frame(maxWidth: .infinity, alignment: .leading)
         #else
         VStack(spacing: 22) {
             cover(size: coverSize)
@@ -123,6 +128,9 @@ struct AudiobookDetailContent: View {
 
     private var headerText: some View {
         VStack(alignment: headerAlignment, spacing: 14) {
+            #if os(tvOS)
+            audiobookEyebrow
+            #endif
             Text(detail.title)
                 .font(titleFont)
                 .fontWeight(.bold)
@@ -165,6 +173,26 @@ struct AudiobookDetailContent: View {
             TVSecondaryPillButton(icon: "arrow.counterclockwise", title: "Start Over") {
                 audioStore.play(contentId: detail.contentId, restart: true)
             }
+
+            if !otherNarrations.isEmpty {
+                Menu {
+                    ForEach(otherNarrations) { narration in
+                        Button { onNavigateToItem(narration.contentId) } label: {
+                            Text(narration.narrators.isEmpty ? narration.title
+                                 : narration.narrators.joined(separator: ", "))
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "person.wave.2").font(.system(size: 22, weight: .semibold))
+                        Text("NARRATION").font(.system(size: 18, weight: .bold)).tracking(1.0).opacity(0.6)
+                        Text(currentNarratorLabel).font(.system(size: 22, weight: .semibold)).lineLimit(1)
+                        Image(systemName: "chevron.down").font(.system(size: 15, weight: .bold)).opacity(0.6)
+                    }
+                }
+                .menuStyle(.button)
+                .buttonStyle(TVPillButtonStyle(kind: .secondary))
+            }
         }
         #else
         HStack(spacing: 12) {
@@ -188,6 +216,48 @@ struct AudiobookDetailContent: View {
         }
         #endif
     }
+
+    #if os(tvOS)
+    /// A blurred, darkened wash of the square cover stands in for a 16:9
+    /// backdrop, keeping the audiobook page in the cinematic family.
+    @ViewBuilder
+    private var audiobookBackdrop: some View {
+        ZStack {
+            if let url = detail.posterUrl, !url.isEmpty {
+                AsyncImageView(url: url, thumbhash: detail.posterThumbhash,
+                               targetSize: CGSize(width: 600, height: 600), contentMode: .fill)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 760)
+                    .clipped()
+                    .blur(radius: 60)
+                    .opacity(0.5)
+            } else {
+                Color.continuumSurface.frame(height: 760)
+            }
+            LinearGradient(
+                stops: [
+                    .init(color: Color.continuumBackground.opacity(0.55), location: 0.0),
+                    .init(color: Color.continuumBackground.opacity(0.30), location: 0.5),
+                    .init(color: Color.continuumBackground, location: 1.0),
+                ],
+                startPoint: .top, endPoint: .bottom
+            )
+            .frame(height: 760)
+        }
+        .frame(height: 760)
+        .clipped()
+    }
+
+    private var audiobookEyebrow: some View {
+        HStack(spacing: 12) {
+            Rectangle().fill(Color.white.opacity(0.85))
+                .frame(width: 34, height: 4).cornerRadius(2)
+            Text("AUDIOBOOK")
+                .font(.system(size: 18, weight: .bold)).tracking(3)
+                .foregroundColor(.white.opacity(0.78))
+        }
+    }
+    #endif
 
     @ViewBuilder
     private func cover(size: CGFloat) -> some View {
@@ -385,6 +455,13 @@ struct AudiobookDetailContent: View {
         detail.audiobook?.otherNarrations ?? []
     }
 
+    private var currentNarratorLabel: String {
+        guard let names = joinedNames(detail.audiobook?.narrators), !names.isEmpty else {
+            return "Default"
+        }
+        return names
+    }
+
     private var metadataLine: String {
         var tokens: [String] = []
         if let authors = joinedNames(detail.audiobook?.authors), !authors.isEmpty {
@@ -571,7 +648,7 @@ private struct TVAudiobookRowBody: View {
         configuration.label
             .foregroundColor(isFocused ? .black : .white)
             .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                RoundedRectangle(cornerRadius: ContinuumTheme.smallCornerRadius, style: .continuous)
                     .fill(isFocused ? Color.white : Color.white.opacity(0.06))
             )
             .shadow(

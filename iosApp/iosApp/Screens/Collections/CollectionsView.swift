@@ -193,7 +193,7 @@ struct CollectionsView: View {
                 Button("Create Collection") {
                     Task { await viewModel.createCollection() }
                 }
-                .buttonStyle(ContinuumPrimaryButtonStyle())
+                .siloPrimaryButton()
                 .disabled(viewModel.newCollectionName.trimmingCharacters(in: .whitespaces).isEmpty)
 
                 Spacer()

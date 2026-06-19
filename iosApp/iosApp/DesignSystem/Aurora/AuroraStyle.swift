@@ -54,14 +54,8 @@ struct AuroraGlassPanel: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .background {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(.ultraThinMaterial)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .fill(Color.auroraGlassTint.opacity(0.5))
-                    )
-            }
+            .siloGlass(in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous),
+                       tint: Color.auroraGlassTint.opacity(0.5))
             .overlay {
                 // gradient hairline border
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)

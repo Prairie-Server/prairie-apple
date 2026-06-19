@@ -33,40 +33,6 @@ struct PhonePrimaryPillButton: View {
     }
 }
 
-// MARK: - Secondary pill
-
-/// Outlined dark capsule sitting next to the primary play button.
-/// Used for "Start Over" alongside "Resume …".
-struct PhoneSecondaryPillButton: View {
-    let icon: String
-    let title: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: icon)
-                    .font(.system(size: 14, weight: .semibold))
-                Text(title)
-                    .font(.system(size: 15, weight: .semibold))
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-            }
-            .foregroundColor(.white)
-            .padding(.horizontal, 18)
-            .frame(height: 48)
-            .background(
-                Capsule()
-                    .fill(Color.black.opacity(0.45))
-                    .overlay(
-                        Capsule().stroke(Color.white.opacity(0.35), lineWidth: 1.2)
-                    )
-            )
-        }
-        .buttonStyle(.plain)
-    }
-}
-
 // MARK: - Circle action button
 
 /// Compact icon-only circle button (favorite, watchlist, watched). Used
@@ -113,7 +79,7 @@ struct PhoneCircleActionButton: View {
                             )
                         )
                 )
-                .contentTransition(.symbolEffect(.replace))
+                .contentTransition(.symbolEffect(.replace.magic(fallback: .replace)))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(accessibilityLabel)
@@ -159,57 +125,4 @@ struct PhoneCircleMenuButton<MenuContent: View>: View {
     }
 }
 
-// MARK: - Version pill
-
-/// Single consolidated version-picker button rendered under the action
-/// row. Tapping presents the version sheet; the label shows the
-/// effective version's compact quality string ("4K · HDR" / "1080p").
-struct PhoneVersionPillButton: View {
-    let icon: String
-    let label: String
-    let currentValue: String
-    let action: () -> Void
-
-    init(
-        icon: String = "rectangle.stack.fill",
-        label: String = "Version",
-        currentValue: String,
-        action: @escaping () -> Void
-    ) {
-        self.icon = icon
-        self.label = label
-        self.currentValue = currentValue
-        self.action = action
-    }
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: icon)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.78))
-                Text(label)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.white.opacity(0.7))
-                Text(currentValue)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(.white)
-                    .lineLimit(1)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundColor(.white.opacity(0.6))
-            }
-            .padding(.horizontal, 14)
-            .frame(height: 36)
-            .background(
-                Capsule()
-                    .fill(Color.white.opacity(0.10))
-                    .overlay(
-                        Capsule().stroke(Color.white.opacity(0.20), lineWidth: 1)
-                    )
-            )
-        }
-        .buttonStyle(.plain)
-    }
-}
 #endif

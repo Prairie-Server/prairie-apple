@@ -26,8 +26,7 @@ struct CalendarFilterBar: View {
             }
         }
         .padding(containerPadding)
-        .background(Capsule().fill(Color.white.opacity(0.06)))
-        .overlay(Capsule().stroke(Color.white.opacity(0.10), lineWidth: 1))
+        .siloGlass(in: .capsule)
         #if os(tvOS)
         .focusSection()
         .onMoveCommand { direction in

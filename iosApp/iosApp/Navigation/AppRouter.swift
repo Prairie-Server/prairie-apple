@@ -37,6 +37,13 @@ class AppRouter {
     /// Navigation path for push/pop within the current flow.
     var path = NavigationPath()
 
+    /// Zoom-transition source id of the most recently tapped card, handed to
+    /// the item-detail destination so the iOS 26 poster→detail zoom animates
+    /// from the exact card tapped. A bare `contentId` collides when the same
+    /// item is visible in two rows; each card uses a unique per-instance id and
+    /// records it here on tap. Transient hand-off, not observable UI state.
+    @ObservationIgnored var pendingZoomSourceID: String?
+
     // MARK: - Player Presentation
 
     /// Identifiable payload for presenting the player as a full-screen cover.

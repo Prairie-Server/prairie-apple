@@ -15,12 +15,16 @@ struct MovieDetailContent: View {
     let inWatchlist: Bool
     let isWatched: Bool
     let selectedVersionFileId: Int?
+    let selectedAudioTrackIndex: Int?
+    let selectedSubtitleTrackIndex: Int?
     let seasons: [Season]
     let selectedSeason: Season?
     let seasonEpisodes: [EpisodeListItem]
     let isLoadingEpisodes: Bool
     let onPlay: (_ startFromBeginning: Bool) -> Void
     let onSelectVersion: (Int?) -> Void
+    let onSelectAudioTrack: (Int?) -> Void
+    let onSelectSubtitleTrack: (Int?) -> Void
     let onSelectSeason: (Season) -> Void
     let onToggleFavorite: () -> Void
     let onToggleWatchlist: () -> Void
@@ -29,7 +33,6 @@ struct MovieDetailContent: View {
     let onNavigateToItem: (String) -> Void
     let onEpisodeTap: (String) -> Void
 
-    @State private var showVersionSheet = false
     @State private var showResumeDialog = false
 
     var body: some View {
@@ -41,14 +44,6 @@ struct MovieDetailContent: View {
             .padding(.bottom, 40)
         }
         .ignoresSafeArea(edges: .top)
-        .sheet(isPresented: $showVersionSheet) {
-            PhoneVersionSheet(
-                title: "Version",
-                versions: versionRows,
-                selectedFileId: selectedVersionFileId,
-                onSelect: onSelectVersion
-            )
-        }
         .continuumResumePlaybackAlert(
             isPresented: $showResumeDialog,
             stoppedAt: resumeTimestamp
@@ -88,10 +83,16 @@ struct MovieDetailContent: View {
                 fullWidth: true
             )
             circleRow
-            if availableVersions.count > 1 {
-                PhoneVersionPillButton(
-                    currentValue: currentVersionLabel,
-                    action: { showVersionSheet = true }
+            if let effectiveVersion {
+                PhonePlaybackSelectorRow(
+                    versions: availableVersions,
+                    currentVersion: effectiveVersion,
+                    selectedVersionFileId: selectedVersionFileId,
+                    selectedAudioTrackIndex: selectedAudioTrackIndex,
+                    selectedSubtitleTrackIndex: selectedSubtitleTrackIndex,
+                    onSelectVersion: onSelectVersion,
+                    onSelectAudioTrack: onSelectAudioTrack,
+                    onSelectSubtitleTrack: onSelectSubtitleTrack
                 )
             }
         }
@@ -313,31 +314,13 @@ struct MovieDetailContent: View {
         detail.versions ?? []
     }
 
-    private var selectedVersion: FileVersion? {
-        availableVersions.first(where: { $0.fileId == selectedVersionFileId })
-    }
-
     private var effectiveVersion: FileVersion? {
-        if let selectedVersion { return selectedVersion }
-        if let lastFileId = detail.userData?.lastFileId,
-           let lastVersion = availableVersions.first(where: { $0.fileId == lastFileId }) {
-            return lastVersion
-        }
-        return availableVersions.first
-    }
-
-    private var currentVersionLabel: String {
-        PhoneVersionFormatting.versionMenuLabel(selectedVersion ?? effectiveVersion) ?? "Auto"
-    }
-
-    private var versionRows: [PhoneVersionRow] {
-        availableVersions.map { version in
-            PhoneVersionRow(
-                fileId: version.fileId,
-                title: PhoneVersionFormatting.versionPrimaryText(version),
-                detail: PhoneVersionFormatting.versionSecondaryText(version)
-            )
-        }
+        DetailVersionSelection.displayVersion(
+            versions: availableVersions,
+            selectedFileId: selectedVersionFileId,
+            lastFileId: detail.userData?.lastFileId,
+            preferredQualityId: PlayerSettings.shared.preferredQuality
+        )
     }
 }
 #endif

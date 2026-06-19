@@ -19,18 +19,21 @@ struct SeasonDetailContent: View {
     let episodes: [EpisodeListItem]
     let isLoadingEpisodes: Bool
     let selectedNextUpFileId: Int?
+    let selectedNextUpAudioTrackIndex: Int?
+    let selectedNextUpSubtitleTrackIndex: Int?
     let nextUpWatchDetail: WatchDetail?
     let onPlayEpisode: (_ contentId: String, _ fileId: Int?, _ startFromBeginning: Bool) -> Void
     let onEpisodeTap: (String) -> Void
     let onSelectSeason: (Season) -> Void
     let onSelectNextUpVersion: (Int?) -> Void
+    let onSelectNextUpAudioTrack: (Int?) -> Void
+    let onSelectNextUpSubtitleTrack: (Int?) -> Void
     let onToggleFavorite: () -> Void
     let onToggleWatchlist: () -> Void
     let onToggleWatched: () -> Void
     let onPersonTap: (String) -> Void
     let onNavigateToItem: (String) -> Void
 
-    @State private var showVersionSheet = false
     @State private var showResumeDialog = false
 
     var body: some View {
@@ -42,14 +45,6 @@ struct SeasonDetailContent: View {
             .padding(.bottom, 40)
         }
         .ignoresSafeArea(edges: .top)
-        .sheet(isPresented: $showVersionSheet) {
-            PhoneVersionSheet(
-                title: "Version",
-                versions: nextUpVersionRows,
-                selectedFileId: selectedNextUpFileId,
-                onSelect: onSelectNextUpVersion
-            )
-        }
         .continuumResumePlaybackAlert(
             isPresented: $showResumeDialog,
             stoppedAt: resumeTimestamp
@@ -96,10 +91,16 @@ struct SeasonDetailContent: View {
                 )
             }
             circleRow
-            if nextUpEpisode != nil, nextUpVersionRows.count > 1 {
-                PhoneVersionPillButton(
-                    currentValue: currentNextUpVersionLabel,
-                    action: { showVersionSheet = true }
+            if nextUpEpisode != nil, let effectiveNextUpVersion {
+                PhonePlaybackSelectorRow(
+                    versions: nextUpVersions,
+                    currentVersion: effectiveNextUpVersion,
+                    selectedVersionFileId: selectedNextUpFileId,
+                    selectedAudioTrackIndex: selectedNextUpAudioTrackIndex,
+                    selectedSubtitleTrackIndex: selectedNextUpSubtitleTrackIndex,
+                    onSelectVersion: onSelectNextUpVersion,
+                    onSelectAudioTrack: onSelectNextUpAudioTrack,
+                    onSelectSubtitleTrack: onSelectNextUpSubtitleTrack
                 )
             }
         }
@@ -181,42 +182,17 @@ struct SeasonDetailContent: View {
         return pos
     }
 
-    private func currentNextUpFile(in episode: EpisodeListItem) -> EpisodeFile? {
-        let files = episode.files ?? []
-        return files.first(where: { $0.fileId == selectedNextUpFileId }) ?? files.first
+    private var nextUpVersions: [FileVersion] {
+        nextUpWatchDetail?.versions ?? []
     }
 
-    private var currentNextUpVersionLabel: String {
-        if let effective = DetailVersionSelection.displayVersion(
-            versions: nextUpWatchDetail?.versions ?? [],
+    private var effectiveNextUpVersion: FileVersion? {
+        DetailVersionSelection.displayVersion(
+            versions: nextUpVersions,
             selectedFileId: selectedNextUpFileId,
             lastFileId: nextUpWatchDetail?.userData?.lastFileId,
             preferredQualityId: PlayerSettings.shared.preferredQuality
-        ) {
-            return PhoneVersionFormatting.versionMenuLabel(effective) ?? "Auto"
-        }
-        guard let nextUp = nextUpEpisode else { return "Auto" }
-        return PhoneVersionFormatting.episodeFileLabel(currentNextUpFile(in: nextUp))
-    }
-
-    private var nextUpVersionRows: [PhoneVersionRow] {
-        if let versions = nextUpWatchDetail?.versions, !versions.isEmpty {
-            return versions.map { version in
-                PhoneVersionRow(
-                    fileId: version.fileId,
-                    title: PhoneVersionFormatting.versionPrimaryText(version),
-                    detail: PhoneVersionFormatting.versionSecondaryText(version)
-                )
-            }
-        }
-        guard let files = nextUpEpisode?.files, !files.isEmpty else { return [] }
-        return files.map { file in
-            PhoneVersionRow(
-                fileId: file.fileId,
-                title: PhoneVersionFormatting.episodeFileTitle(file),
-                detail: PhoneVersionFormatting.episodeFileDetail(file)
-            )
-        }
+        )
     }
 
     // MARK: - Below the fold

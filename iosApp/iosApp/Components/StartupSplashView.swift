@@ -28,8 +28,7 @@ struct StartupSplashView: View {
             Color.continuumBackground.ignoresSafeArea()
 
             if isVideoAvailable {
-                StartupSplashPlayerSurface(player: player)
-                    .ignoresSafeArea()
+                startupVideo
             } else {
                 fallbackContent
             }
@@ -37,6 +36,23 @@ struct StartupSplashView: View {
         .accessibilityLabel("Loading Continuum")
         .onAppear(perform: startPlayback)
         .onDisappear(perform: stopPlayback)
+    }
+
+    @ViewBuilder
+    private var startupVideo: some View {
+        #if os(tvOS)
+        GeometryReader { proxy in
+            let videoWidth = min(proxy.size.width * 0.25, 440)
+
+            StartupSplashPlayerSurface(player: player)
+                .frame(width: videoWidth, height: videoWidth * 9.0 / 16.0)
+                .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
+        }
+        .ignoresSafeArea()
+        #else
+        StartupSplashPlayerSurface(player: player)
+            .ignoresSafeArea()
+        #endif
     }
 
     private var fallbackContent: some View {

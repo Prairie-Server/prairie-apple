@@ -411,7 +411,7 @@ struct TVTopMenuBar: View {
         !isFocusSuppressed
             && focusedItem != nil
             && !panelHasFocus
-            && (openPanel != nil || onExit != nil)
+            && (openPanel != nil || isFocusedAwayFromHome || onExit != nil)
     }
 
     private func handleExitPress() {
@@ -419,7 +419,20 @@ struct TVTopMenuBar: View {
             onDwell(nil)
             return
         }
+        if isFocusedAwayFromHome {
+            if selectedRoot == .home {
+                focusedItem = .root(.home)
+                isMenuFocused = true
+            } else {
+                onExit?()
+            }
+            return
+        }
         onExit?()
+    }
+
+    private var isFocusedAwayFromHome: Bool {
+        focusedItem != nil && focusedItem != .root(.home)
     }
 
     // MARK: - Dwell (§5.3, §5.8)

@@ -209,8 +209,14 @@ struct PlayerView: View {
                 startFromBeginning: startFromBeginning,
                 resumePositionOverride: resumePositionOverride
             )
+            #if os(tvOS)
+            TVCastReceiver.shared.registerPlayer(viewModel, contentId: contentId)
+            #endif
         }
         .onDisappear {
+            #if os(tvOS)
+            TVCastReceiver.shared.unregisterPlayer(viewModel)
+            #endif
             viewModel.cleanup()
             #if os(iOS)
             orientationCoordinator.deactivatePlayer()
@@ -339,14 +345,7 @@ struct PlayerView: View {
             .scaleEffect(1.3)
             .frame(width: 62, height: 62)
             #endif
-            .background {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(.ultraThinMaterial)
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(.white.opacity(0.16), lineWidth: 1)
-            }
+            .siloGlass(in: .rect(cornerRadius: 8))
             .shadow(color: .black.opacity(0.45), radius: 24, y: 10)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             .allowsHitTesting(false)
@@ -371,11 +370,11 @@ struct PlayerView: View {
                 Button("Retry") {
                     viewModel.retry()
                 }
-                .buttonStyle(ContinuumPrimaryButtonStyle())
+                .siloPrimaryButton()
                 .frame(minWidth: 140)
 
                 Button("Go Back") { dismissPlayer() }
-                    .buttonStyle(ContinuumPrimaryButtonStyle())
+                    .siloPrimaryButton()
                     .frame(minWidth: 140)
             }
         }
@@ -677,7 +676,7 @@ private struct PlayerNextUpScreen<MiniPlayer: View>: View {
                 Button(action: { viewModel.playNextEpisodeNow() }) {
                     Label("Play Now", systemImage: "play.fill")
                 }
-                .buttonStyle(ContinuumPrimaryButtonStyle())
+                .siloPrimaryButton()
                 .frame(maxWidth: .infinity)
             }
 
@@ -685,14 +684,14 @@ private struct PlayerNextUpScreen<MiniPlayer: View>: View {
                 Button(action: { viewModel.keepWatchingCurrentEpisode() }) {
                     Label("Keep Watching", systemImage: "rectangle.inset.filled")
                 }
-                .buttonStyle(ContinuumSecondaryButtonStyle())
+                .siloSecondaryButton()
                 .frame(maxWidth: .infinity)
             }
 
             Button(action: onBack) {
                 Label("Back", systemImage: "chevron.left")
             }
-            .buttonStyle(ContinuumSecondaryButtonStyle())
+            .siloSecondaryButton()
             .frame(maxWidth: .infinity)
 
             if let seconds = viewModel.nextUpCountdownSeconds {

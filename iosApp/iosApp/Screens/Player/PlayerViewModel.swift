@@ -291,6 +291,34 @@ enum ActivePlayer: @unchecked Sendable {
         case .avPlayer(let a): a.setSpeed(rate)
         }
     }
+    func setVolume(_ v: Float) {
+        switch self {
+        case .none: return
+        case .coreMedia(let c): c.setUserVolume(v)
+        case .avPlayer(let a): a.setUserVolume(v)
+        }
+    }
+    func setMuted(_ m: Bool) {
+        switch self {
+        case .none: return
+        case .coreMedia(let c): c.setUserMuted(m)
+        case .avPlayer(let a): a.setUserMuted(m)
+        }
+    }
+    func volume() -> Float {
+        switch self {
+        case .none: return 1.0
+        case .coreMedia(let c): return c.currentUserVolume
+        case .avPlayer(let a): return a.currentUserVolume
+        }
+    }
+    func isMuted() -> Bool {
+        switch self {
+        case .none: return false
+        case .coreMedia(let c): return c.currentUserMuted
+        case .avPlayer(let a): return a.currentUserMuted
+        }
+    }
 
     /// Unwrap the `PlayerCore` if this is the .coreMedia arm. Returns nil
     /// whenever the active route is AVPlayer-backed, so PlayerCore-only
@@ -435,6 +463,12 @@ class PlayerViewModel {
     /// pattern-match on this.
     private(set) var activePlayer: ActivePlayer
     private var activeRouteKind: PlaybackEngineKind
+    /// Canonical user volume/mute, owned by the VM rather than the backend.
+    /// Backends are rebuilt on every quality switch / loopback fallback and
+    /// come up at full volume, so the VM re-applies these after each swap and
+    /// reports them to the cast UI — otherwise a remote-set level is lost.
+    private var userVolume: Float = 1.0
+    private var userMuted = false
     private(set) var activeExecutionPlan: PlaybackExecutionPlan?
     private var sourceProxy: PlaybackSourceProxy?
     private var streamLoadGeneration: UInt64 = 0
@@ -845,6 +879,28 @@ class PlayerViewModel {
         let installed = playbackCoordinator.installEngine(for: engine)
         activePlayer = ActivePlayer(renderTarget: installed.renderTarget)
         activeRouteKind = engine
+        reapplyUserGain()
+    }
+
+    /// Records the user's volume/mute as the VM-level source of truth and
+    /// pushes it to the live backend.
+    func applyUserVolume(_ v: Float) {
+        userVolume = min(max(v, 0), 1)
+        // Setting a volume clears mute (mirrors the backend), so keep the
+        // canonical mute in sync.
+        userMuted = false
+        activePlayer.setVolume(userVolume)
+    }
+    func applyUserMuted(_ m: Bool) {
+        userMuted = m
+        activePlayer.setMuted(m)
+    }
+
+    /// Re-applies the canonical user volume/mute to the current backend after
+    /// a swap (quality switch, loopback fallback, fresh primary core).
+    private func reapplyUserGain() {
+        activePlayer.setVolume(userVolume)
+        activePlayer.setMuted(userMuted)
     }
 
     /// Subtitle-specific callbacks for PlayerCore's shared subtitle session.
@@ -1725,6 +1781,7 @@ class PlayerViewModel {
         do {
             try playbackCoordinator.load(plan: loadPlan)
             activePlayer = ActivePlayer(renderTarget: playbackCoordinator.renderTarget)
+            reapplyUserGain()
         } catch {
             finalizeTerminalPlaybackError(error.localizedDescription)
         }
@@ -5278,6 +5335,169 @@ class PlayerViewModel {
             progressPosition: nil,
             resumePositionOverride: suspendedPlayback.resumePosition,
             allowNearEndResume: true
+        )
+    }
+}
+
+private enum SiloCastPlayerControlError: LocalizedError {
+    case missingSeekPosition
+    case missingTrackId
+    case missingSpeed
+    case missingValue
+    case missingEnabledValue
+    case trackNotFound
+    case invalidVideoGravity
+
+    var errorDescription: String? {
+        switch self {
+        case .missingSeekPosition:
+            return "Missing seek position."
+        case .missingTrackId:
+            return "Missing track id."
+        case .missingSpeed:
+            return "Missing playback speed."
+        case .missingValue:
+            return "Missing setting value."
+        case .missingEnabledValue:
+            return "Missing enabled value."
+        case .trackNotFound:
+            return "Track not found."
+        case .invalidVideoGravity:
+            return "Invalid aspect setting."
+        }
+    }
+}
+
+extension PlayerViewModel {
+    @MainActor
+    func applySiloCastControl(_ command: SiloCastControlCommand) throws {
+        switch command.name {
+        case .play:
+            activePlayer.play()
+            scheduleHideControls()
+        case .pause:
+            activePlayer.pause()
+            scheduleHideControls()
+        case .playPause:
+            togglePlayPause()
+        case .seek:
+            guard let seconds = command.seconds else {
+                throw SiloCastPlayerControlError.missingSeekPosition
+            }
+            seekTo(seconds: seconds)
+        case .stop:
+            activePlayer.pause()
+            requestRemoteDismiss()
+        case .selectAudioTrack:
+            guard let trackId = command.trackId else {
+                throw SiloCastPlayerControlError.missingTrackId
+            }
+            guard let track = audioTracks.first(where: { $0.trackId == trackId }) else {
+                throw SiloCastPlayerControlError.trackNotFound
+            }
+            selectAudio(track)
+        case .selectSubtitleTrack:
+            guard let trackId = command.trackId else {
+                disableSubtitles()
+                return
+            }
+            guard let track = subtitleTracks.first(where: { $0.trackId == trackId }) else {
+                throw SiloCastPlayerControlError.trackNotFound
+            }
+            selectSubtitle(track)
+        case .setPlaybackSpeed:
+            guard let speed = command.speed, speed.isFinite, speed > 0 else {
+                throw SiloCastPlayerControlError.missingSpeed
+            }
+            setPlaybackSpeed(speed)
+        case .setQuality:
+            guard let value = command.value else {
+                throw SiloCastPlayerControlError.missingValue
+            }
+            switchQuality(value)
+        case .setVideoGravity:
+            guard let value = command.value else {
+                throw SiloCastPlayerControlError.missingValue
+            }
+            guard let gravity = VideoGravity(rawValue: value) else {
+                throw SiloCastPlayerControlError.invalidVideoGravity
+            }
+            setVideoGravity(gravity)
+        case .setHDREnabled:
+            guard let enabled = command.enabled else {
+                throw SiloCastPlayerControlError.missingEnabledValue
+            }
+            setHDREnabled(enabled)
+        case .setVolume:
+            guard let volume = command.volume, volume.isFinite else {
+                throw SiloCastPlayerControlError.missingValue
+            }
+            applyUserVolume(Float(volume))
+        case .setMuted:
+            guard let enabled = command.enabled else {
+                throw SiloCastPlayerControlError.missingEnabledValue
+            }
+            applyUserMuted(enabled)
+        case .playNext:
+            playNextEpisodeNow()
+        }
+    }
+
+    @MainActor
+    func makeSiloCastPlaybackState(contentId: String?) -> SiloCastPlaybackState {
+        let liveContentId = lastLoadRequest?.contentId ?? contentId
+        let titleText = metadata.primaryTitle.isEmpty ? title : metadata.primaryTitle
+        let subtitleText = [metadata.seriesTitle, metadata.episodeTag]
+            .compactMap { value -> String? in
+                guard let value, !value.isEmpty else { return nil }
+                return value
+            }
+            .joined(separator: " · ")
+
+        return SiloCastPlaybackState(
+            contentId: liveContentId,
+            sessionId: activePlaybackSessionId,
+            title: titleText.isEmpty ? "Loading" : titleText,
+            subtitle: subtitleText.isEmpty ? nil : subtitleText,
+            isPlaying: isPlaying,
+            isLoading: isLoading,
+            isBuffering: isBuffering,
+            currentTime: currentTime,
+            duration: duration,
+            audioTracks: audioTracks.map(makeSiloCastTrack),
+            subtitleTracks: subtitleTracks.map(makeSiloCastTrack),
+            selectedAudioTrackId: selectedAudioId,
+            selectedSubtitleTrackId: selectedSubtitleId,
+            qualityOptions: qualityOptions.map(makeSiloCastOption),
+            activeQualityId: activeQualityId,
+            isQualitySwitching: isQualitySwitching,
+            playbackSpeed: settings.playbackSpeed,
+            videoGravity: settings.videoGravity.rawValue,
+            hdrEnabled: settings.hdrEnabled,
+            supportsVideoGravity: backendCapabilities.supportsVideoGravity,
+            supportsHDRToggle: backendCapabilities.supportsHDRToggle,
+            volume: Double(userVolume),
+            isMuted: userMuted,
+            hasNextEpisode: nextUpEpisode != nil,
+            nextEpisodeTitle: nextUpEpisode?.title,
+            error: error
+        )
+    }
+
+    private func makeSiloCastTrack(_ track: PlayerTrack) -> SiloCastTrack {
+        SiloCastTrack(
+            kind: track.kind.rawValue,
+            trackId: track.trackId,
+            title: track.primaryLabel,
+            detail: track.attributesLabel
+        )
+    }
+
+    private func makeSiloCastOption(_ option: ApplePlaybackQualityOption) -> SiloCastOption {
+        SiloCastOption(
+            id: option.id,
+            label: option.labelWithBitrate,
+            detail: option.subtitle
         )
     }
 }

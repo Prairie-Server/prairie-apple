@@ -3,7 +3,7 @@ import SwiftUI
 /// A single section row on the home screen.
 /// Wraps MediaRow and handles "continue watching" progress display.
 /// Picks the thumbnail layout for episode-centric sections (Next Up,
-/// and Continue Watching when the items are episodes).
+/// and Continue Watching resume rows).
 struct SectionRow: View {
     let section: ResolvedSection
     let onItemTap: (String) -> Void
@@ -37,14 +37,19 @@ struct SectionRow: View {
     /// True when the row should render 16:9 episode stills instead of posters.
     /// A dedicated "Next Up" row always does. For other episode-bearing rows
     /// the platforms differ: tvOS Skyline keeps every episode row as a still,
-    /// while iOS/iPadOS/macOS reserve stills for the resume context (Continue
-    /// Watching) and render episode-discovery rows (e.g. "Recently Released
-    /// Episodes") as ordinary series posters with an S·E badge.
+    /// and keeps Continue Watching as a still-based resume row even when the
+    /// row currently contains movies only. iOS/iPadOS/macOS reserve stills for
+    /// Continue Watching rows that actually contain episodes and render
+    /// episode-discovery rows (e.g. "Recently Released Episodes") as ordinary
+    /// series posters with an S·E badge.
     private var isEpisodeRow: Bool {
         if section.sectionType.lowercased().contains("next") {
             return true
         }
         #if os(tvOS)
+        if isContinueWatching {
+            return true
+        }
         return hasEpisodeItems
         #else
         return isContinueWatching && hasEpisodeItems

@@ -113,11 +113,11 @@ struct CalendarView: View {
                             )
                         }
                         .padding(.vertical, ContinuumTheme.smallPadding)
-                        .background(Color.continuumBackground)
                     }
                 }
                 .padding(.bottom, ContinuumTheme.largePadding)
             }
+            .continuumScrollEdgeEffect()
         }
     }
     #endif
@@ -230,7 +230,7 @@ struct CalendarView: View {
                 Button("Show Everything") {
                     viewModel.select(filter: .everything)
                 }
-                .buttonStyle(ContinuumPrimaryButtonStyle())
+                .siloPrimaryButton()
                 .frame(width: emptyButtonWidth)
                 .padding(.top, ContinuumTheme.smallPadding)
             } else {

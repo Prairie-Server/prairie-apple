@@ -42,6 +42,7 @@ struct TVMainTabView: View {
     @State private var panelFocusEntryToken = 0
     @State private var panelHasFocus = false
     @State private var panelFocusExitTask: Task<Void, Never>?
+    @State private var castReceiver = TVCastReceiver.shared
     /// Bar element to re-focus after Menu-ing out of a panel — its own
     /// anchor, so focus returns to the dwelled tab/avatar (§7).
     @State private var panelReturnFocus: TVTopMenuPanel?
@@ -91,6 +92,12 @@ struct TVMainTabView: View {
                     onExit: selectedRoot == .home ? nil : returnToHomeInMenu
                 )
             }
+
+            if let standbyState = castReceiver.standbyState {
+                TVCastStandbyView(receiver: castReceiver, state: standbyState)
+                    .transition(reduceMotion ? .identity : .opacity)
+                    .zIndex(20)
+            }
         }
         // The anchored cascade / profile panel renders here (not as a ZStack
         // sibling) so its `overlayPreferenceValue` can see the bar's
@@ -105,6 +112,18 @@ struct TVMainTabView: View {
             set: { if !$0 { audioStore.dismissFullPlayer() } }
         )) {
             AudioFullPlayerView()
+        }
+        .fullScreenCover(item: $router.presentedPlayer) { payload in
+            PlayerView(
+                contentId: payload.contentId,
+                preferredFileId: payload.fileId,
+                preferredAudioTrackIndex: payload.audioTrackIndex,
+                preferredSubtitleTrackIndex: payload.subtitleTrackIndex,
+                startFromBeginning: payload.startFromBeginning,
+                resumePositionOverride: payload.resumePosition,
+                posterURLHint: payload.posterURL,
+                backdropURLHint: payload.backdropURL
+            )
         }
         .confirmationDialog(
             "Switch Server",
@@ -128,10 +147,17 @@ struct TVMainTabView: View {
         // when it's absent.
         .environment(router)
         .task {
+            castReceiver.start(router: router)
             async let profileTask: Void = loadCurrentProfile()
             async let librariesTask: Void = loadLibraries()
             async let adminTask: Void = loadAdminFlag()
             _ = await (profileTask, librariesTask, adminTask)
+        }
+        .onDisappear {
+            castReceiver.stop()
+        }
+        .onChange(of: ServerRegistry.shared.activeServerId) {
+            castReceiver.start(router: router)
         }
     }
 

@@ -1,14 +1,9 @@
+import XCTest
 import Foundation
+@testable import Silo
 
-@main
-struct DVSegmentStoreTests {
-    static func main() {
-        testRetiringSpilledSegmentReclaimsSpillBudget()
-        testAppendCapacityReflectsCurrentSpillBudget()
-        print("DVSegmentStoreTests: all passed")
-    }
-
-    private static func testRetiringSpilledSegmentReclaimsSpillBudget() {
+final class DVSegmentStoreTests: XCTestCase {
+    func testRetiringSpilledSegmentReclaimsSpillBudget() {
         let store = DVSegmentStore(
             generation: UInt64(Date().timeIntervalSince1970 * 1000),
             memoryBudgetBytes: 20,
@@ -25,22 +20,23 @@ struct DVSegmentStoreTests {
         }
 
         let before = store.stats()
-        precondition(before.tempSpillBytes == 20, "expected two 10-byte spilled segments, got \(before.tempSpillBytes)")
-        precondition(before.spilledSegmentCount == 2, "expected two spilled segments, got \(before.spilledSegmentCount)")
+        XCTAssertTrue(before.tempSpillBytes == 20, "expected two 10-byte spilled segments, got \(before.tempSpillBytes)")
+        XCTAssertTrue(before.spilledSegmentCount == 2, "expected two spilled segments, got \(before.spilledSegmentCount)")
 
         let retired = store.retireSegments(names: ["seg_000000.m4s"])
-        precondition(retired == ["seg_000000.m4s"], "expected retired segment name")
+        XCTAssertTrue(retired == ["seg_000000.m4s"], "expected retired segment name")
 
         let after = store.stats()
-        precondition(after.tempSpillBytes == 10, "retiring a spilled segment must reclaim spill bytes")
-        precondition(after.spilledSegmentCount == 1, "retiring a spilled segment must remove its spill entry")
+        XCTAssertTrue(after.tempSpillBytes == 10, "retiring a spilled segment must reclaim spill bytes")
+        XCTAssertTrue(after.spilledSegmentCount == 1, "retiring a spilled segment must remove its spill entry")
 
         guard case .gone = store.resource(path: "seg_000000.m4s", waitForNearFuture: false) else {
-            preconditionFailure("retired segment should be reported gone")
+            XCTFail("retired segment should be reported gone")
+            return
         }
     }
 
-    private static func testAppendCapacityReflectsCurrentSpillBudget() {
+    func testAppendCapacityReflectsCurrentSpillBudget() {
         let store = DVSegmentStore(
             generation: UInt64(Date().timeIntervalSince1970 * 1000) + 1,
             memoryBudgetBytes: 20,
@@ -56,13 +52,13 @@ struct DVSegmentStoreTests {
             )
         }
 
-        precondition(
-            !store.canAppendSegment(byteCount: 10),
+        XCTAssertFalse(
+            store.canAppendSegment(byteCount: 10),
             "spill-full store should apply backpressure before appending a segment that would require another spill"
         )
 
         _ = store.retireSegments(names: ["seg_000000.m4s"])
-        precondition(
+        XCTAssertTrue(
             store.canAppendSegment(byteCount: 10),
             "retiring a spilled segment should free enough spill budget for one more append"
         )

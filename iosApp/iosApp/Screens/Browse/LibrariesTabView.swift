@@ -14,16 +14,6 @@ struct LibrariesTabView: View {
     @State private var error: ErrorState?
     @State private var showPicker = false
     @State private var currentProfile: UserProfile?
-    /// How far the Recommended tab has been scrolled from the top (in pt).
-    /// Drives the fade-in of the chrome scrim so the header is fully
-    /// transparent at the resting top, then matches the current gradient
-    /// once the user scrolls the rows up behind the top bar.
-    @State private var recommendedScrollOffset: CGFloat = 0
-
-    /// Distance (pt) over which the chrome scrim fades in as the user
-    /// scrolls away from the resting top. Chosen to feel responsive without
-    /// flickering on tiny rubber-band movements.
-    private let chromeScrimFadeDistance: CGFloat = 80
 
     /// Persist the last-selected library across launches so the user lands
     /// back where they left off. Stored as Int because `@AppStorage` does
@@ -87,24 +77,12 @@ struct LibrariesTabView: View {
     private func tabContent(activeLibrary: Library) -> some View {
         switch selectedTab {
         case .recommended:
-            LibraryRecommendedView(
-                libraryId: activeLibrary.id,
-                onScrollOffsetChange: { recommendedScrollOffset = $0 }
-            )
+            LibraryRecommendedView(libraryId: activeLibrary.id)
         case .library:
             BrowseView(libraryId: activeLibrary.id, title: nil, showsSearchShortcut: false)
         case .collections:
             LibraryCollectionsView(libraryId: activeLibrary.id)
         }
-    }
-
-    /// Opacity applied to the Recommended-tab chrome scrim. 0 at the resting
-    /// top (header is fully transparent); climbs linearly to 1 once
-    /// the user has scrolled `chromeScrimFadeDistance` past the top.
-    private var chromeScrimOpacity: Double {
-        guard selectedTab == .recommended else { return 0 }
-        let progress = recommendedScrollOffset / chromeScrimFadeDistance
-        return min(max(Double(progress), 0), 1)
     }
 
     @ViewBuilder
@@ -130,25 +108,6 @@ struct LibrariesTabView: View {
 
             LibraryPageTabSelector(selectedTab: $selectedTab)
                 .padding(.bottom, ContinuumTheme.padding)
-        }
-        // On the Recommended tab the chrome sits over the scrolling rows.
-        // The scrim is transparent at rest and fades in as the user scrolls,
-        // so rows passing behind the top bar stay legible.
-        .background {
-            if selectedTab == .recommended {
-                LinearGradient(
-                    colors: [
-                        Color.black.opacity(0.55),
-                        Color.black.opacity(0.25),
-                        .clear,
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .ignoresSafeArea(edges: .top)
-                .allowsHitTesting(false)
-                .opacity(chromeScrimOpacity)
-            }
         }
     }
 

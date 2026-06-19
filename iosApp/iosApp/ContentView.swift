@@ -3,6 +3,9 @@ import SwiftUI
 struct ContentView: View {
     @State private var router = AppRouter()
     @State private var audioStore = AudioPlaybackStore()
+    #if os(iOS)
+    @State private var castController = SiloCastController()
+    #endif
     @State private var debugPlayContentId: String?
     @State private var didAttemptDebugAutoPlay = false
     @State private var didStartInitialStateCheck = false
@@ -25,6 +28,9 @@ struct ContentView: View {
     var body: some View {
         authContent
         .environment(audioStore)
+        #if os(iOS)
+        .environment(castController)
+        #endif
         .environmentObject(overlayPrefs)
         .preferredColorScheme(.dark)
         #if os(iOS)
@@ -456,13 +462,39 @@ private enum DebugAutoPlayError: LocalizedError {
     }
 }
 
+// MARK: - Zoom transition namespace
+
+/// Carries the `@Namespace.ID` used by the iOS 26 poster → detail zoom
+/// transition. Published by `MainTabView` so card components (the
+/// `.matchedTransitionSource` sources) and the central
+/// `navigationDestination` (the `.navigationTransition(.zoom)` destination)
+/// can share one namespace without routing it through `Route`/`router.path`.
+/// `nil` when unset (e.g. tvOS / macOS) so callers fall back to a plain push.
+struct ZoomNamespaceEnvironmentKey: EnvironmentKey {
+    static let defaultValue: Namespace.ID? = nil
+}
+
+extension EnvironmentValues {
+    var zoomNamespace: Namespace.ID? {
+        get { self[ZoomNamespaceEnvironmentKey.self] }
+        set { self[ZoomNamespaceEnvironmentKey.self] = newValue }
+    }
+}
+
 // MARK: - Main Tab View
 
 struct MainTabView: View {
     @Bindable var router: AppRouter
     @State private var selectedTab: AppTab = .home
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    /// Shared namespace for the poster → detail zoom transition. Injected into
+    /// the environment (`\.zoomNamespace`) so both the cards and the central
+    /// detail destination resolve the same identity.
+    @Namespace private var zoomNamespace
     @Environment(AudioPlaybackStore.self) private var audioStore
+    #if os(iOS)
+    @Environment(SiloCastController.self) private var castController
+    #endif
     #if !os(macOS)
     @Environment(\.horizontalSizeClass) private var hSize
     #endif
@@ -477,9 +509,6 @@ struct MainTabView: View {
         }
         .tint(.continuumOnSurface)
         #if !os(macOS)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            AudioMiniPlayerView()
-        }
         .fullScreenCover(isPresented: Binding(
             get: { audioStore.isShowingFullPlayer },
             set: { if !$0 { audioStore.dismissFullPlayer() } }
@@ -498,6 +527,14 @@ struct MainTabView: View {
                 backdropURLHint: payload.backdropURL
             )
         }
+        #if os(iOS)
+        .fullScreenCover(isPresented: Binding(
+            get: { castController.isShowingRemoteControl },
+            set: { if !$0 { castController.hideRemoteControl() } }
+        )) {
+            SiloCastRemoteControlView(controller: castController)
+        }
+        #endif
         #endif
         // Outside the presentation modifiers so presented covers (audio
         // player, video player) inherit the router — ErrorView requires
@@ -518,26 +555,34 @@ struct MainTabView: View {
         NavigationStack(path: $router.path) {
             TabView(selection: $selectedTab) {
                 ForEach(AppTab.visibleCases) { tab in
+                    #if os(tvOS)
+                    // Text-only tabs on tvOS keep the top bar compact — adding an
+                    // icon blows up each tab's focus pill. The value-based `Tab`
+                    // initializer requires an image on tvOS, so this arm stays on
+                    // the `.tabItem { Text }` form to preserve the text-only look.
                     tabContent(for: tab)
-                        .tabItem {
-                            #if os(tvOS)
-                            // Text-only tabs on tvOS keep the top bar compact —
-                            // adding an icon blows up each tab's focus pill.
-                            Text(tab.rawValue)
-                            #else
-                            Label(
-                                tab.rawValue,
-                                systemImage: selectedTab == tab ? tab.selectedIcon : tab.icon
-                            )
-                            #endif
-                        }
+                        .tabItem { Text(tab.rawValue) }
                         .tag(tab)
+                    #else
+                    Tab(
+                        tab.rawValue,
+                        systemImage: selectedTab == tab ? tab.selectedIcon : tab.icon,
+                        value: tab
+                    ) {
+                        tabContent(for: tab)
+                    }
+                    #endif
                 }
             }
             .navigationDestination(for: Route.self) { route in
                 routeContent(for: route)
             }
+            #if os(iOS)
+            .tabBarMinimizeBehavior(.onScrollDown)
+            .modifier(NowPlayingShelfAttachment())
+            #endif
         }
+        .environment(\.zoomNamespace, zoomNamespace)
     }
 
     /// iPad regular width: sidebar list + detail pane.
@@ -574,6 +619,10 @@ struct MainTabView: View {
             }
         }
         .environment(\.sidebarToggle, toggleSidebar)
+        .environment(\.zoomNamespace, zoomNamespace)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            NowPlayingShelf(style: .card)
+        }
     }
 
     /// Collapses or re-expands the sidebar. Animated so the detail pane
@@ -625,6 +674,15 @@ struct MainTabView: View {
             )
         case .itemDetail(let contentId):
             ItemDetailView(contentId: contentId)
+                #if os(iOS)
+                // Destination half of the iOS 26 poster → detail zoom. Keys off
+                // the unique per-card source id the tapped card recorded in
+                // `pendingZoomSourceID` (falling back to `contentId`), so the
+                // zoom animates from the exact card even when the same item is
+                // visible in two rows. SwiftUI falls back to a normal push when
+                // no matching source is on screen.
+                .navigationTransition(.zoom(sourceID: router.pendingZoomSourceID ?? contentId, in: zoomNamespace))
+                #endif
         case .personDetail(let personId):
             PersonDetailView(personId: personId)
         case .player(let contentId, let startFromBeginning, let resumePosition):

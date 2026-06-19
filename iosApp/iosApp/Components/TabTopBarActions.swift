@@ -15,16 +15,34 @@ struct TabTopBarActions: View {
     let onSignOut: () -> Void
 
     var body: some View {
-        HStack(spacing: 4) {
-            TopBarIconButton(systemImage: "magnifyingglass", accessibilityLabel: "Search", action: onSearch)
-            ProfileAvatarMenu(
-                profile: profile,
-                onOpenSettings: onOpenSettings,
-                onSwitchProfile: onSwitchProfile,
-                onSwitchServer: onSwitchServer,
-                onSignOut: onSignOut
-            )
+        glassCluster {
+            HStack(spacing: 4) {
+                TopBarIconButton(systemImage: "magnifyingglass", accessibilityLabel: "Search", action: onSearch)
+                ProfileAvatarMenu(
+                    profile: profile,
+                    onOpenSettings: onOpenSettings,
+                    onSwitchProfile: onSwitchProfile,
+                    onSwitchServer: onSwitchServer,
+                    onSignOut: onSignOut
+                )
+            }
         }
+    }
+
+    /// Wraps the search/profile pair in a `GlassEffectContainer` so their
+    /// individual glass capsules blend into one another. Falls back to a
+    /// plain container where the API is unavailable (macOS < 26).
+    @ViewBuilder
+    private func glassCluster<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        #if os(macOS)
+        if #available(macOS 26, *) {
+            GlassEffectContainer { content() }
+        } else {
+            content()
+        }
+        #else
+        GlassEffectContainer { content() }
+        #endif
     }
 }
 
@@ -40,6 +58,7 @@ private struct TopBarIconButton: View {
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundColor(.continuumOnSurface)
                 .frame(width: 40, height: 40)
+                .siloGlass(in: .circle)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

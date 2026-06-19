@@ -93,7 +93,7 @@ struct TVItemDetailView: View {
                             position: episode?.userData?.positionSeconds,
                             duration: episode?.userData?.durationSeconds
                         )
-                    if let fileId {
+                    if let fileId = nextUpPlaybackFileId(resolvedFileId: fileId) {
                         router.navigate(
                             to: .playerWithFile(
                                 contentId: id,
@@ -174,6 +174,8 @@ struct TVItemDetailView: View {
                 episodes: viewModel.episodes,
                 isLoadingEpisodes: viewModel.isLoadingEpisodes,
                 selectedNextUpFileId: preferredNextUpFileId,
+                selectedNextUpAudioTrackIndex: preferredNextUpAudioTrackIndex,
+                selectedNextUpSubtitleTrackIndex: preferredNextUpSubtitleTrackIndex,
                 nextUpPlaybackDetail: nextUpPlaybackDetail,
                 isLoadingNextUpPlaybackDetail: isLoadingNextUpPlaybackDetail,
                 didLoadNextUpPlaybackDetail: didLoadNextUpPlaybackDetail,
@@ -184,13 +186,13 @@ struct TVItemDetailView: View {
                     let resumePosition = startFromBeginning
                         ? nil
                         : viewModel.episodes.first(where: { $0.contentId == id })?.userData?.positionSeconds
-                    if let fileId {
+                    if let fileId = nextUpPlaybackFileId(resolvedFileId: fileId) {
                         router.navigate(
                             to: .playerWithFile(
                                 contentId: id,
                                 fileId: fileId,
-                                audioTrackIndex: nil,
-                                subtitleTrackIndex: nil,
+                                audioTrackIndex: preferredNextUpAudioTrackIndex,
+                                subtitleTrackIndex: preferredNextUpSubtitleTrackIndex,
                                 startFromBeginning: startFromBeginning,
                                 resumePosition: resumePosition
                             )
@@ -210,6 +212,30 @@ struct TVItemDetailView: View {
                 },
                 onSelectNextUpVersion: { fileId in
                     preferredNextUpFileId = fileId
+                    preferredNextUpAudioTrackIndex = sanitizedAudioTrackIndex(
+                        for: nextUpPlaybackDetail,
+                        versionFileId: fileId,
+                        candidate: preferredNextUpAudioTrackIndex
+                    )
+                    preferredNextUpSubtitleTrackIndex = sanitizedSubtitleTrackIndex(
+                        for: nextUpPlaybackDetail,
+                        versionFileId: fileId,
+                        candidate: preferredNextUpSubtitleTrackIndex
+                    )
+                },
+                onSelectNextUpAudioTrack: { index in
+                    preferredNextUpAudioTrackIndex = sanitizedAudioTrackIndex(
+                        for: nextUpPlaybackDetail,
+                        versionFileId: preferredNextUpFileId,
+                        candidate: index
+                    )
+                },
+                onSelectNextUpSubtitleTrack: { index in
+                    preferredNextUpSubtitleTrackIndex = sanitizedSubtitleTrackIndex(
+                        for: nextUpPlaybackDetail,
+                        versionFileId: preferredNextUpFileId,
+                        candidate: index
+                    )
                 },
                 onToggleFavorite: { Task { await viewModel.toggleFavorite() } },
                 onToggleWatchlist: { Task { await viewModel.toggleWatchlist() } },
@@ -321,6 +347,25 @@ struct TVItemDetailView: View {
         return nil
     }
 
+    /// Next-up analogue of `playbackFileId(for:)`. `resolvedFileId` is the
+    /// fileId the season/series view already computed from the selected
+    /// version (non-nil only when the user changed Version). When that is
+    /// nil but an audio/subtitle override is set, resolve the next-up
+    /// effective version's fileId so the chosen tracks can still be carried
+    /// through `.playerWithFile(...)` instead of being dropped by `.player`.
+    private func nextUpPlaybackFileId(resolvedFileId: Int?) -> Int? {
+        if let resolvedFileId {
+            return resolvedFileId
+        }
+        if preferredNextUpAudioTrackIndex != nil || preferredNextUpSubtitleTrackIndex != nil {
+            return effectiveVersion(
+                for: nextUpPlaybackDetail,
+                versionFileId: preferredNextUpFileId
+            )?.fileId
+        }
+        return nil
+    }
+
     private func playableResumePosition(for detail: ItemDetail) -> Double? {
         playableResumePosition(
             position: detail.userData?.positionSeconds,
@@ -345,6 +390,11 @@ struct TVItemDetailView: View {
         )
     }
 
+    private func effectiveVersion(for detail: ItemDetail?, versionFileId: Int?) -> FileVersion? {
+        guard let detail else { return nil }
+        return effectiveVersion(for: detail, versionFileId: versionFileId)
+    }
+
     private func sanitizedAudioTrackIndex(
         for detail: ItemDetail,
         versionFileId: Int?,
@@ -354,8 +404,8 @@ struct TVItemDetailView: View {
         guard let version = effectiveVersion(for: detail, versionFileId: versionFileId) else {
             return nil
         }
-        let available = version.audioTracks?.compactMap(\.index) ?? []
-        return available.contains(candidate) ? candidate : nil
+        let tracks = version.audioTracks ?? []
+        return tracks.indices.contains(candidate) ? candidate : nil
     }
 
     private func sanitizedSubtitleTrackIndex(
@@ -459,6 +509,8 @@ struct TVItemDetailView: View {
             isLoadingNextUpPlaybackDetail = false
             didLoadNextUpPlaybackDetail = false
             preferredNextUpFileId = nil
+            preferredNextUpAudioTrackIndex = nil
+            preferredNextUpSubtitleTrackIndex = nil
             return
         }
 
@@ -466,6 +518,8 @@ struct TVItemDetailView: View {
         isLoadingNextUpPlaybackDetail = true
         didLoadNextUpPlaybackDetail = false
         preferredNextUpFileId = nil
+        preferredNextUpAudioTrackIndex = nil
+        preferredNextUpSubtitleTrackIndex = nil
 
         do {
             let item = try await ContinuumAPI.shared.itemDetail(contentId: nextUp.contentId)

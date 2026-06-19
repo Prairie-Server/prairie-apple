@@ -47,17 +47,13 @@ struct PlayerNoticeOverlay: View {
         .padding(.horizontal, ContinuumTheme.padding)
         .padding(.vertical, ContinuumTheme.spacing)
         .frame(maxWidth: 720)
-        .background(.ultraThinMaterial, in: RoundedRectangle(
-            cornerRadius: ContinuumTheme.cardCornerRadius,
-            style: .continuous
-        ))
-        .overlay {
-            RoundedRectangle(
+        .siloGlass(
+            in: RoundedRectangle(
                 cornerRadius: ContinuumTheme.cardCornerRadius,
                 style: .continuous
-            )
-            .stroke(notice.tone.accentColor.opacity(0.28), lineWidth: 1)
-        }
+            ),
+            tint: notice.tone.accentColor.opacity(0.28)
+        )
         .shadow(color: .black.opacity(0.28), radius: 24, y: 12)
         .padding(.horizontal, ContinuumTheme.safePadding)
         .padding(.top, ContinuumTheme.safePadding)

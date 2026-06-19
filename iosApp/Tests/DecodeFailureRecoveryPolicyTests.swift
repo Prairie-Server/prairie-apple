@@ -1,19 +1,10 @@
+import XCTest
 import Foundation
+@testable import Silo
 
-@main
-struct DecodeFailureRecoveryPolicyTests {
-    static func main() {
-        testH264BadDataUsesRecoveryBeforeTerminalRejection()
-        testH264BadDataStopsRecoveringAfterAttemptBudget()
-        testOtherH264ErrorsDoNotUseBurstRecovery()
-        testHEVCBadDataUsesRecoveryBeforeTerminalRejection()
-        testHEVCBadDataStopsRecoveringAfterAttemptBudget()
-        testOtherHEVCErrorsDoNotUseBurstRecovery()
-        print("DecodeFailureRecoveryPolicyTests: all passed")
-    }
-
-    private static func testH264BadDataUsesRecoveryBeforeTerminalRejection() {
-        precondition(
+final class DecodeFailureRecoveryPolicyTests: XCTestCase {
+    func testH264BadDataUsesRecoveryBeforeTerminalRejection() {
+        XCTAssertTrue(
             DecodeFailureRecoveryPolicy.shouldAttemptBurstResync(
                 status: -12909,
                 codec: .h264,
@@ -24,9 +15,9 @@ struct DecodeFailureRecoveryPolicyTests {
         )
     }
 
-    private static func testH264BadDataStopsRecoveringAfterAttemptBudget() {
-        precondition(
-            !DecodeFailureRecoveryPolicy.shouldAttemptBurstResync(
+    func testH264BadDataStopsRecoveringAfterAttemptBudget() {
+        XCTAssertFalse(
+            DecodeFailureRecoveryPolicy.shouldAttemptBurstResync(
                 status: -12909,
                 codec: .h264,
                 attempts: 2,
@@ -36,9 +27,9 @@ struct DecodeFailureRecoveryPolicyTests {
         )
     }
 
-    private static func testOtherH264ErrorsDoNotUseBurstRecovery() {
-        precondition(
-            !DecodeFailureRecoveryPolicy.shouldAttemptBurstResync(
+    func testOtherH264ErrorsDoNotUseBurstRecovery() {
+        XCTAssertFalse(
+            DecodeFailureRecoveryPolicy.shouldAttemptBurstResync(
                 status: -12903,
                 codec: .h264,
                 attempts: 0,
@@ -48,8 +39,29 @@ struct DecodeFailureRecoveryPolicyTests {
         )
     }
 
-    private static func testHEVCBadDataUsesRecoveryBeforeTerminalRejection() {
-        precondition(
+    func testH264MalfunctionStatusUsesRecovery() {
+        XCTAssertTrue(
+            DecodeFailureRecoveryPolicy.shouldAttemptBurstResync(
+                status: -8969,
+                codec: .h264,
+                attempts: 0,
+                maxAttempts: 2
+            ),
+            "H.264 -8969 (compressed-sample rejection) is a bad-data burst and should resync"
+        )
+        XCTAssertFalse(
+            DecodeFailureRecoveryPolicy.shouldAttemptBurstResync(
+                status: -8969,
+                codec: .hevc,
+                attempts: 0,
+                maxAttempts: 2
+            ),
+            "-8969 is an H.264-only bad-data status; HEVC must not treat it as a resync trigger"
+        )
+    }
+
+    func testHEVCBadDataUsesRecoveryBeforeTerminalRejection() {
+        XCTAssertTrue(
             DecodeFailureRecoveryPolicy.shouldAttemptBurstResync(
                 status: -12909,
                 codec: .hevc,
@@ -60,9 +72,9 @@ struct DecodeFailureRecoveryPolicyTests {
         )
     }
 
-    private static func testHEVCBadDataStopsRecoveringAfterAttemptBudget() {
-        precondition(
-            !DecodeFailureRecoveryPolicy.shouldAttemptBurstResync(
+    func testHEVCBadDataStopsRecoveringAfterAttemptBudget() {
+        XCTAssertFalse(
+            DecodeFailureRecoveryPolicy.shouldAttemptBurstResync(
                 status: -12909,
                 codec: .hevc,
                 attempts: 2,
@@ -72,9 +84,9 @@ struct DecodeFailureRecoveryPolicyTests {
         )
     }
 
-    private static func testOtherHEVCErrorsDoNotUseBurstRecovery() {
-        precondition(
-            !DecodeFailureRecoveryPolicy.shouldAttemptBurstResync(
+    func testOtherHEVCErrorsDoNotUseBurstRecovery() {
+        XCTAssertFalse(
+            DecodeFailureRecoveryPolicy.shouldAttemptBurstResync(
                 status: -12903,
                 codec: .hevc,
                 attempts: 0,

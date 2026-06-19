@@ -32,9 +32,12 @@ struct SettingsView: View {
             aboutSection
             signOutSection
         }
+        // iOS-26 restyle (plan 010, PENDING REVIEW): let the native grouped-list
+        // glass show through instead of forcing flat OLED black. The previous
+        // `.continuumScrollContentBackgroundHidden()` + `Color.continuumBackground`
+        // page override and per-section `.listRowBackground(Color.continuumSurfaceElevated)`
+        // were intentionally dropped here. If brand-black must win, restore those.
         .continuumGroupedListStyle()
-        .continuumScrollContentBackgroundHidden()
-        .background(Color.continuumBackground.ignoresSafeArea())
         .navigationTitle("Settings")
         .continuumNavigationTitleDisplayMode(.large)
         .continuumToolbarColorSchemeDark()
@@ -103,7 +106,6 @@ struct SettingsView: View {
                     .foregroundStyle(Color.continuumSecondaryText)
             }
         }
-        .listRowBackground(Color.continuumSurfaceElevated)
     }
 
     private func switchProfile() {
@@ -179,7 +181,6 @@ struct SettingsView: View {
                 )
             }
         }
-        .listRowBackground(Color.continuumSurfaceElevated)
     }
 
     private func subtitleLanguageName(_ tag: String) -> String {
@@ -215,7 +216,6 @@ struct SettingsView: View {
                 SettingsRowLabel(title: "Collections", systemImage: "square.stack.fill", color: .purple)
             }
         }
-        .listRowBackground(Color.continuumSurfaceElevated)
     }
 
     // MARK: - Connection
@@ -238,7 +238,6 @@ struct SettingsView: View {
             }
             .buttonStyle(.plain)
         }
-        .listRowBackground(Color.continuumSurfaceElevated)
     }
 
     // MARK: - About
@@ -253,7 +252,6 @@ struct SettingsView: View {
                     .foregroundStyle(Color.continuumOnSurface)
             }
         }
-        .listRowBackground(Color.continuumSurfaceElevated)
     }
 
     private var versionString: String {
@@ -275,7 +273,6 @@ struct SettingsView: View {
                     .frame(maxWidth: .infinity)
             }
         }
-        .listRowBackground(Color.continuumSurfaceElevated)
     }
     #endif
 }

@@ -26,6 +26,8 @@ struct TVDetailHero<Actions: View>: View {
     let ratingChip: String?
     /// Short description shown in the hero. Clamped to 3 lines.
     let overview: String?
+    /// Optional tagline shown above the overview when the synopsis is expanded.
+    let tagline: String?
     /// Inline facts row shown above the action buttons. Mixes plain text
     /// (year / runtime / maturity) and outlined quality chips
     /// (4K / HDR / ATMOS / CC).
@@ -101,15 +103,17 @@ struct TVDetailHero<Actions: View>: View {
         VStack(alignment: .leading, spacing: 24) {
             editorialColumn
 
-            HStack(alignment: .top, spacing: 0) {
-                actions()
-                    .padding(.top, 8)
-                Spacer(minLength: 0)
-            }
-            // Treat the hero controls as a full-width focus destination so
-            // lower rails can still move "up" into this cluster even when
-            // the currently focused card sits far to the right.
-            .focusSection()
+            // Give the action cluster the full hero width with leading
+            // content (instead of `HStack { actions(); Spacer() }`) so the
+            // selector row inside can stretch its own focus section full-width
+            // for Down navigation — a trailing Spacer would split the width
+            // with that greedy child and leave the section too narrow.
+            // Still a full-width focus destination so lower rails can move
+            // "up" into this cluster even from a far-right card.
+            actions()
+                .padding(.top, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .focusSection()
         }
         .padding(.leading, ContinuumTheme.safePadding)
         .padding(.trailing, ContinuumTheme.safePadding)
@@ -125,13 +129,7 @@ struct TVDetailHero<Actions: View>: View {
                 .padding(.top, eyebrow == nil ? 0 : 4)
             sourceRow
             if let overview, !overview.isEmpty {
-                Text(overview)
-                    .font(.system(size: 26, weight: .regular))
-                    .foregroundColor(Color.white.opacity(0.82))
-                    .lineSpacing(8)
-                    .lineLimit(3)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: contentMaxWidth, alignment: .leading)
+                TVExpandableSynopsis(overview: overview, tagline: tagline)
             }
             factsRow
         }

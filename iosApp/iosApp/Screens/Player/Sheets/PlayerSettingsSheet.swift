@@ -123,8 +123,9 @@ struct PlayerSettingsSheet: View {
             }
             #if !os(tvOS)
             .scrollContentBackground(.hidden)
-            #endif
+            #else
             .background(Color.black.opacity(0.85).ignoresSafeArea())
+            #endif
             #if os(iOS)
             .navigationTitle("Playback Settings")
             .navigationBarTitleDisplayMode(.inline)
@@ -320,7 +321,7 @@ struct PlayerSettingsSheet: View {
                 HStack {
                     Text("Remaining")
                     Spacer()
-                    Text(formatCountdown(sleepTimer.remainingSeconds))
+                    Text(PlayerTimeFormatter.formatHMS(Double(sleepTimer.remainingSeconds)))
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
@@ -462,12 +463,6 @@ struct PlayerSettingsSheet: View {
         return "\(sign)\(ms) ms"
     }
 
-    private func formatCountdown(_ seconds: Int) -> String {
-        let h = seconds / 3600, m = (seconds % 3600) / 60, s = seconds % 60
-        return h > 0
-            ? String(format: "%d:%02d:%02d", h, m, s)
-            : String(format: "%d:%02d", m, s)
-    }
 
     /// Map the timer's remaining seconds back to the nearest whole-minute
     /// option tag for the picker. Picker values are the initial minute count,
