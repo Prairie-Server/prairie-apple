@@ -69,8 +69,15 @@ Personal Apple Developer teams cannot join the production App Group, so Top Shel
 
 Fastlane lanes are defined in `fastlane/Fastfile`. All Apple IDs, team IDs, signing repo URLs, and App Store Connect credentials must come from CI environment variables.
 
-## License
+## License & Trademarks
 
 Silo Apple is licensed under `AGPL-3.0-or-later`. See [LICENSE](LICENSE).
+
+The **Silo name, logo, and wordmark are trademarks of Silo Media L.L.C.** and
+are **not** covered by the AGPL. You're free to fork and redistribute the code,
+but forks and redistributions must not use the Silo brand as their identity and
+must remove or replace the brand assets. Publishing a Silo-branded app to an app
+store requires written permission. See [TRADEMARK.md](TRADEMARK.md) for what's
+permitted — including referential use like "compatible with Silo."
 
 FFmpeg, Nuke, fastlane, and other third-party dependencies retain their own licenses. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
