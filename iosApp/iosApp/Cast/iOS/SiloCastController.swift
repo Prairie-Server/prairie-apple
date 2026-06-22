@@ -1,5 +1,6 @@
 #if os(iOS)
 import Foundation
+import UIKit
 
 @MainActor
 @Observable
@@ -27,6 +28,8 @@ final class SiloCastController {
     private var launchInFlight = false
     private var missedHeartbeats = 0
     private var lastTarget: SiloCastTarget?
+    private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+    private var wasBackgroundedWithActiveSession = false
     private static let heartbeatInterval: Duration = .seconds(3)
     private static let maxMissedHeartbeats = 3
     private static let maxReconnectAttempts = 5
@@ -159,6 +162,24 @@ final class SiloCastController {
         clearSession()
     }
 
+    func appDidEnterBackground() {
+        guard session != nil else { return }
+        wasBackgroundedWithActiveSession = true
+        beginBackgroundRemoteControlGracePeriod()
+    }
+
+    func appDidBecomeActive() {
+        endBackgroundRemoteControlGracePeriod()
+        guard wasBackgroundedWithActiveSession else { return }
+        wasBackgroundedWithActiveSession = false
+
+        if session == nil {
+            beginReconnect(reason: "Lost connection to the TV.")
+        } else {
+            session?.enqueue(.ping)
+        }
+    }
+
     private func startReadLoop(
         stream: AsyncThrowingStream<SiloCastMessage, Error>,
         connectionId: UUID
@@ -242,7 +263,9 @@ final class SiloCastController {
         reconnectTask = Task { @MainActor [weak self] in
             guard let self else { return }
             for attempt in 1...Self.maxReconnectAttempts {
-                try? await Task.sleep(for: .seconds(Double(attempt)))   // backoff 1,2,3,4,5s
+                if attempt > 1 {
+                    try? await Task.sleep(for: .seconds(Double(attempt - 1)))   // backoff 1,2,3,4s
+                }
                 if Task.isCancelled { return }
                 if await self.connect(to: target, isReconnectAttempt: true) {
                     self.isReconnecting = false
@@ -267,6 +290,8 @@ final class SiloCastController {
         readTask?.cancel()
         readTask = nil
         self.connectionId = nil
+        endBackgroundRemoteControlGracePeriod()
+        wasBackgroundedWithActiveSession = false
     }
 
     private func clearSession() {
@@ -284,6 +309,8 @@ final class SiloCastController {
         detachNowPlaying()
         isConnecting = false
         isShowingRemoteControl = false
+        endBackgroundRemoteControlGracePeriod()
+        wasBackgroundedWithActiveSession = false
     }
 
     private func closeCurrentSession(sendClose: Bool) async {
@@ -303,6 +330,24 @@ final class SiloCastController {
         state = nil
         activeTarget = nil
         detachNowPlaying()
+        endBackgroundRemoteControlGracePeriod()
+        wasBackgroundedWithActiveSession = false
+    }
+
+    private func beginBackgroundRemoteControlGracePeriod() {
+        endBackgroundRemoteControlGracePeriod()
+        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "SiloCastRemoteControl") { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.endBackgroundRemoteControlGracePeriod()
+            }
+        }
+    }
+
+    private func endBackgroundRemoteControlGracePeriod() {
+        guard backgroundTask != .invalid else { return }
+        let task = backgroundTask
+        backgroundTask = .invalid
+        UIApplication.shared.endBackgroundTask(task)
     }
 
     private func makeHello() -> SiloCastMessage {

@@ -69,6 +69,17 @@ struct ContentView: View {
             }
         }
         .onChange(of: scenePhase) { _, newPhase in
+            #if os(iOS)
+            switch newPhase {
+            case .active:
+                castController.appDidBecomeActive()
+            case .background:
+                castController.appDidEnterBackground()
+            default:
+                break
+            }
+            #endif
+
             // Cover the transient-failure case Codex flagged on #41:
             // initial overlay hydration runs once in the auth-state
             // task above. If that fetch transiently failed and the
