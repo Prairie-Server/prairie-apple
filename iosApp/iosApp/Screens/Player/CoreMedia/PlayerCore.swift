@@ -2625,41 +2625,57 @@ final class PlayerCore: NSObject {
 
         var optCtx: UnsafeMutablePointer<AVFormatContext>? = ctx
 
-        // Build AVDictionary for HTTP headers (Authorization etc.). ffmpeg
-        // accepts `headers` as a \r\n-separated string in the options dict.
+        // Every option below is HTTP(S)-specific. For local `file://`
+        // playback (offline downloads) they must NOT be set: FFmpeg's `file`
+        // protocol rejects `seekable=1` (valid range is [-1, 0]) and the
+        // resulting ERANGE — surfaced as "Result too large" — aborts
+        // `avformat_open_input`. Local files are natively seekable and need
+        // no header/reconnect/range/timeout tuning.
         var options: OpaquePointer?
-        if !headers.isEmpty {
-            let joined = headers
-                .sorted(by: { $0.key < $1.key })
-                .map { "\($0.key): \($0.value)" }
-                .joined(separator: "\r\n") + "\r\n"
-            av_dict_set(&options, "headers", joined, 0)
+        let isRemote = url.scheme == "http" || url.scheme == "https"
+        if isRemote {
+            // Build AVDictionary for HTTP headers (Authorization etc.). ffmpeg
+            // accepts `headers` as a \r\n-separated string in the options dict.
+            if !headers.isEmpty {
+                let joined = headers
+                    .sorted(by: { $0.key < $1.key })
+                    .map { "\($0.key): \($0.value)" }
+                    .joined(separator: "\r\n") + "\r\n"
+                av_dict_set(&options, "headers", joined, 0)
+            }
+            // Enable reconnection for flaky HTTP.
+            av_dict_set(&options, "reconnect", "1", 0)
+            av_dict_set(&options, "reconnect_streamed", "1", 0)
+            av_dict_set(&options, "reconnect_on_network_error", "1", 0)
+            // reconnect_at_eof is deliberately NOT set: FFmpeg documents it for
+            // live/endless streams — it treats a finite file's natural EOF as an
+            // error and reconnects, which delays or breaks end-of-playback.
+            av_dict_set(&options, "reconnect_on_http_error", "5xx", 0)
+            av_dict_set(&options, "reconnect_delay_max", "5", 0)
+            // Matroska over HTTP needs frequent small seeks during probing and
+            // startup. Keep requests bounded so CDN/proxy TLS connections are not
+            // held as one large open-ended range while the demuxer seeks around.
+            av_dict_set(&options, "seekable", "1", 0)
+            av_dict_set(&options, "multiple_requests", "1", 0)
+            av_dict_set(&options, "initial_request_size", "2097152", 0)
+            av_dict_set(&options, "request_size", "2097152", 0)
+            av_dict_set(&options, "short_seek_size", "2097152", 0)
+            // Per-operation socket timeout (microseconds). 10s matches the
+            // interrupt callback so either mechanism can unstick us first.
+            av_dict_set(&options, "rw_timeout", "10000000", 0)
+            // TCP-specific hint: stop retrying the connect() if the remote is
+            // quiet for 10s. Belt-and-braces with rw_timeout.
+            av_dict_set(&options, "stimeout", "10000000", 0)
         }
-        // Enable reconnection for flaky HTTP.
-        av_dict_set(&options, "reconnect", "1", 0)
-        av_dict_set(&options, "reconnect_streamed", "1", 0)
-        av_dict_set(&options, "reconnect_on_network_error", "1", 0)
-        // reconnect_at_eof is deliberately NOT set: FFmpeg documents it for
-        // live/endless streams — it treats a finite file's natural EOF as an
-        // error and reconnects, which delays or breaks end-of-playback.
-        av_dict_set(&options, "reconnect_on_http_error", "5xx", 0)
-        av_dict_set(&options, "reconnect_delay_max", "5", 0)
-        // Matroska over HTTP needs frequent small seeks during probing and
-        // startup. Keep requests bounded so CDN/proxy TLS connections are not
-        // held as one large open-ended range while the demuxer seeks around.
-        av_dict_set(&options, "seekable", "1", 0)
-        av_dict_set(&options, "multiple_requests", "1", 0)
-        av_dict_set(&options, "initial_request_size", "2097152", 0)
-        av_dict_set(&options, "request_size", "2097152", 0)
-        av_dict_set(&options, "short_seek_size", "2097152", 0)
-        // Per-operation socket timeout (microseconds). 10s matches the
-        // interrupt callback so either mechanism can unstick us first.
-        av_dict_set(&options, "rw_timeout", "10000000", 0)
-        // TCP-specific hint: stop retrying the connect() if the remote is
-        // quiet for 10s. Belt-and-braces with rw_timeout.
-        av_dict_set(&options, "stimeout", "10000000", 0)
 
-        let urlC = url.absoluteString.cString(using: .utf8)
+        // FFmpeg's `file` protocol takes a raw filesystem path and does NOT
+        // percent-decode it: handing it `url.absoluteString`
+        // (`file:///…/Application%20Support/…`) makes it look for a literal
+        // "Application%20Support" directory and fail with ENOENT. For local
+        // files pass the decoded `url.path`; remote URLs keep their encoded
+        // absolute string.
+        let ffmpegInput = url.isFileURL ? url.path : url.absoluteString
+        let urlC = ffmpegInput.cString(using: .utf8)
         let openResult = avformat_open_input(&optCtx, urlC, nil, &options)
         av_dict_free(&options)
         // avformat_open_input keeps our pre-allocated context on success and

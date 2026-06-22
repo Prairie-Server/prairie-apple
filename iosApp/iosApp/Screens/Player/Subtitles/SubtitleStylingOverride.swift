@@ -182,8 +182,8 @@ enum SubtitleStylingOverride {
     /// - Parameter isNativeASS: true iff the active track was authored
     ///   as ASS/SSA (codec == AV_CODEC_ID_ASS / _SSA). For native ASS we
     ///   skip color/font/border overrides so the creative work renders
-    ///   as the author intended. Line position + sync offset still apply
-    ///   because those are player-level preferences, not content-level.
+    ///   as the author intended. Sync offset still applies in the overlay
+    ///   pump, outside libass style overrides.
     static func apply(
         renderer: OpaquePointer?,
         params: Parameters,
@@ -194,6 +194,12 @@ enum SubtitleStylingOverride {
         // libass line_position collapses multi-line cues onto the override
         // position. Use margins/alignment from the style override instead.
         ass_set_line_position(renderer, 0)
+
+        if isNativeASS {
+            ass_set_font_scale(renderer, 1.0)
+            ass_set_selective_style_override_enabled(renderer, 0)
+            return
+        }
 
         // Controlled text subtitles render through libass regardless of
         // source. Use renderer font scale for live size changes, but do not

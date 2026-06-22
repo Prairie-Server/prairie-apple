@@ -6,6 +6,7 @@ struct DVSegmentStoreStats: Equatable {
     let memoryBytes: Int64
     let memoryBudgetBytes: Int64
     let tempSpillBytes: Int64
+    let tempSpillBudgetBytes: Int64
     let debugMirrorBytes: Int64
     let generatedMediaSeconds: Double
     let segmentCount: Int
@@ -42,9 +43,30 @@ final class DVSegmentStore {
     }
 
     enum ResourceResult {
-        case found(data: Data, mimeType: String)
+        case found(Resource)
         case missing
         case gone
+    }
+
+    enum Resource {
+        case memory(data: Data, mimeType: String)
+        case disk(url: URL, byteCount: Int, mimeType: String)
+
+        var mimeType: String {
+            switch self {
+            case .memory(_, let mimeType), .disk(_, _, let mimeType):
+                return mimeType
+            }
+        }
+
+        var byteCount: Int {
+            switch self {
+            case .memory(let data, _):
+                return data.count
+            case .disk(_, let byteCount, _):
+                return byteCount
+            }
+        }
     }
 
     struct SegmentAppendResult {
@@ -91,7 +113,7 @@ final class DVSegmentStore {
 
     private enum ResourceLocation {
         case memory(data: Data, mimeType: String)
-        case disk(url: URL, mimeType: String)
+        case disk(url: URL, byteCount: Int, mimeType: String)
         case missing
         case gone
     }
@@ -253,13 +275,9 @@ final class DVSegmentStore {
         let result: ResourceResult
         switch location {
         case .memory(let data, let mimeType):
-            result = .found(data: data, mimeType: mimeType)
-        case .disk(let url, let mimeType):
-            if let data = try? Data(contentsOf: url) {
-                result = .found(data: data, mimeType: mimeType)
-            } else {
-                result = .missing
-            }
+            result = .found(.memory(data: data, mimeType: mimeType))
+        case .disk(let url, let byteCount, let mimeType):
+            result = .found(.disk(url: url, byteCount: byteCount, mimeType: mimeType))
         case .missing:
             result = .missing
         case .gone:
@@ -269,8 +287,8 @@ final class DVSegmentStore {
         lock.lock()
         requestCount += 1
         switch result {
-        case .found(let data, _):
-            bytesServed += Int64(data.count)
+        case .found(let resource):
+            bytesServed += Int64(resource.byteCount)
         case .missing, .gone:
             break
         }
@@ -286,6 +304,7 @@ final class DVSegmentStore {
             memoryBytes: Int64(memoryBytes),
             memoryBudgetBytes: Int64(memoryBudgetBytes),
             tempSpillBytes: tempSpillBytes,
+            tempSpillBudgetBytes: spillPolicy.maxBytes,
             debugMirrorBytes: debugMirrorBytes,
             generatedMediaSeconds: generatedMediaSeconds,
             segmentCount: segments.count,
@@ -326,10 +345,20 @@ final class DVSegmentStore {
                 return .memory(data: segment.data, mimeType: mimeType(for: path))
             }
             if let url = spilledSegments[path] {
-                return .disk(url: url, mimeType: mimeType(for: path))
+                let byteCount = spilledSegmentSizes[path] ?? fileSize(at: url) ?? 0
+                guard byteCount > 0 else { return .missing }
+                return .disk(url: url, byteCount: byteCount, mimeType: mimeType(for: path))
             }
             return evictedResources.contains(path) ? .gone : .missing
         }
+    }
+
+    private func fileSize(at url: URL) -> Int? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attributes[.size] as? NSNumber else {
+            return nil
+        }
+        return size.intValue
     }
 
     private func evictIfNeededLocked() -> [String] {

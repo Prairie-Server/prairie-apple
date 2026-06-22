@@ -115,7 +115,9 @@ struct ApplePlaybackRoutePlanner {
     private static let nativeDirectContainers: Set<String> = ["mp4", "mov", "m4v"]
     private static let nativeDirectVideoCodecs: Set<String> = ["h264", "hevc"]
     private static let nativeDirectAudioCodecs: Set<String> = ["aac", "ac3", "eac3", "alac", "mp3"]
-    private static let nativeDirectSubtitleCodecs: Set<String> = ["mov_text", "tx3g", "wvtt", "webvtt"]
+    private static let nativeDirectSubtitleCodecs: Set<String> = [
+        "ass", "ssa", "mov_text", "tx3g", "wvtt", "webvtt"
+    ]
     private static let siloSourceContainers: Set<String> = ["mkv", "matroska", "ts", "m2ts", "mts", "mpegts"]
     private static let siloVideoCodecs: Set<String> = ["h264", "hevc"]
     private static let siloTextSubtitleCodecs: Set<String> = [

@@ -2,10 +2,12 @@
 //  SubtitleRenderer.swift
 //  Continuum (iOS + tvOS)
 //
-//  libass wrapper and frame compositor. Owns the singleton
-//  `ASS_Library` + `ASS_Renderer` for the current playback session, plus
-//  up to two `ASS_Track`s (primary / secondary). All libass API calls are
-//  serialised through `sessionQueue` because libass is not thread-safe.
+//  libass wrapper and frame compositor. Owns the singleton `ASS_Library`
+//  plus one `ASS_Renderer` per subtitle slot for the current playback
+//  session. libass style overrides are renderer-scoped, so primary and
+//  secondary tracks must not share a renderer when one track is authored
+//  ASS and the other is Silo-styled generated ASS. All libass API calls
+//  are serialised through `sessionQueue` because libass is not thread-safe.
 //
 //  The compositor path:
 //
@@ -84,8 +86,9 @@ final class SubtitleRenderer {
     // Opaque pointers to the underlying C objects. `OpaquePointer` is
     // required because the libass C types aren't importable as Swift
     // types through the binary xcframework.
-    private var library: OpaquePointer?      // ASS_Library*
-    private var renderer: OpaquePointer?     // ASS_Renderer*
+    private var library: OpaquePointer?          // ASS_Library*
+    private var primaryRenderer: OpaquePointer?  // ASS_Renderer*
+    private var secondaryRenderer: OpaquePointer? // ASS_Renderer*
 
     // Slot tracks. Protected by `handleLock` so main-thread reads
     // (triggered from `layoutSubviews` for frame-size invalidation) can
@@ -131,33 +134,19 @@ final class SubtitleRenderer {
                 _ = level
             }, nil)
 
-            guard let rend = ass_renderer_init(lib) else {
-                Self.logger.error("ass_renderer_init failed")
+            guard let primary = ass_renderer_init(lib) else {
+                Self.logger.error("ass_renderer_init failed for primary")
                 return
             }
-            renderer = rend
+            primaryRenderer = primary
+            configureRenderer(primary)
 
-            // Sensible defaults until the overlay view calls
-            // `updateFrameSize` with real dimensions.
-            ass_set_frame_size(rend, 1920, 1080)
-            ass_set_storage_size(rend, 1920, 1080)
-            ass_set_pixel_aspect(rend, 1.0)
-            ass_set_use_margins(rend, 1)
-
-            // Font lookup via the AUTODETECT provider, which resolves to
-            // CoreText on Apple platforms when libass is built without
-            // fontconfig (as mpvkit's iOS/tvOS xcframework is). Passing
-            // `nil` for the config path and `update=1` scans the system
-            // font database immediately so the first render doesn't
-            // stall on lookup.
-            ass_set_fonts(
-                rend,
-                nil,                                       // default_font path
-                "Arial",                                   // default_family fallback
-                Int32(ASS_FONTPROVIDER_AUTODETECT.rawValue),
-                nil,                                       // config path
-                1                                          // update now
-            )
+            guard let secondary = ass_renderer_init(lib) else {
+                Self.logger.error("ass_renderer_init failed for secondary")
+                return
+            }
+            secondaryRenderer = secondary
+            configureRenderer(secondary)
         }
     }
 
@@ -167,9 +156,13 @@ final class SubtitleRenderer {
         let teardown = { [self] in
             self.primary = nil
             self.secondary = nil
-            if let r = self.renderer {
+            if let r = self.primaryRenderer {
                 ass_renderer_done(r)
-                self.renderer = nil
+                self.primaryRenderer = nil
+            }
+            if let r = self.secondaryRenderer {
+                ass_renderer_done(r)
+                self.secondaryRenderer = nil
             }
             if let l = self.library {
                 ass_library_done(l)
@@ -234,7 +227,7 @@ final class SubtitleRenderer {
 
             // Apply current styling overrides now that the slot is live.
             SubtitleStylingOverride.apply(
-                renderer: self.renderer,
+                renderer: self.renderer(for: slot),
                 params: self.currentParams,
                 isNativeASS: isNativeASS
             )
@@ -283,7 +276,7 @@ final class SubtitleRenderer {
             self.handleLock.unlock()
 
             SubtitleStylingOverride.apply(
-                renderer: self.renderer,
+                renderer: self.renderer(for: slot),
                 params: self.currentParams,
                 isNativeASS: isNativeASS
             )
@@ -398,11 +391,13 @@ final class SubtitleRenderer {
         let w = Int32(max(1, size.width * scale))
         let h = Int32(max(1, size.height * scale))
         sessionQueue.async { [weak self] in
-            guard let self, let rend = self.renderer else { return }
+            guard let self else { return }
             if w == self.lastWidth && h == self.lastHeight { return }
-            ass_set_frame_size(rend, w, h)
-            ass_set_storage_size(rend, w, h)
-            ass_set_pixel_aspect(rend, 1.0)
+            self.forEachRenderer {
+                ass_set_frame_size($0, w, h)
+                ass_set_storage_size($0, w, h)
+                ass_set_pixel_aspect($0, 1.0)
+            }
             self.lastWidth = w
             self.lastHeight = h
             self.frameSizeDirty = true
@@ -420,17 +415,19 @@ final class SubtitleRenderer {
         sessionQueue.async { [weak self] in
             guard let self else { return }
             self.currentParams = params
-            // Determine native-ASS status from the primary slot. Secondary
-            // tracks get the same renderer-level overrides regardless —
-            // libass only supports one override set per renderer, so we
-            // make the policy decision based on the primary track.
             self.handleLock.lock()
-            let isNative = self.primary?.isNativeASS ?? false
+            let primaryHandle = self.primary
+            let secondaryHandle = self.secondary
             self.handleLock.unlock()
             SubtitleStylingOverride.apply(
-                renderer: self.renderer,
+                renderer: self.primaryRenderer,
                 params: params,
-                isNativeASS: isNative
+                isNativeASS: primaryHandle?.isNativeASS ?? false
+            )
+            SubtitleStylingOverride.apply(
+                renderer: self.secondaryRenderer,
+                params: params,
+                isNativeASS: secondaryHandle?.isNativeASS ?? false
             )
             self.frameSizeDirty = true  // force repaint on next tick
         }
@@ -446,10 +443,10 @@ final class SubtitleRenderer {
         frameSize: CGSize,
         scale: CGFloat
     ) -> SubtitleRenderOutput {
-        guard let rend = renderer else {
+        guard primaryRenderer != nil || secondaryRenderer != nil else {
             return SubtitleRenderOutput(image: nil, isDirty: false)
         }
-        ensureFrameSizeOnSessionQueue(frameSize, scale: scale, renderer: rend)
+        ensureFrameSizeOnSessionQueue(frameSize, scale: scale)
 
         handleLock.lock()
         let primaryHandle = primary
@@ -465,10 +462,12 @@ final class SubtitleRenderer {
         var changeSecondary: Int32 = 0
         var changePrimary: Int32 = 0
         let imgSecondary: UnsafeMutablePointer<ASS_Image>? = secondaryHandle.flatMap {
-            ass_render_frame(rend, $0.ptr, now, &changeSecondary)
+            guard let renderer = secondaryRenderer else { return nil }
+            return ass_render_frame(renderer, $0.ptr, now, &changeSecondary)
         }
         let imgPrimary: UnsafeMutablePointer<ASS_Image>? = primaryHandle.flatMap {
-            ass_render_frame(rend, $0.ptr, now, &changePrimary)
+            guard let renderer = primaryRenderer else { return nil }
+            return ass_render_frame(renderer, $0.ptr, now, &changePrimary)
         }
         let anyChange = changePrimary != 0 || changeSecondary != 0 || frameSizeDirty
         if !anyChange {
@@ -490,20 +489,63 @@ final class SubtitleRenderer {
 
     private func ensureFrameSizeOnSessionQueue(
         _ size: CGSize,
-        scale: CGFloat,
-        renderer rend: OpaquePointer
+        scale: CGFloat
     ) {
         let safeScale = scale.isFinite && scale > 0 ? scale : 1
         let w = Int32(max(1, size.width * safeScale))
         let h = Int32(max(1, size.height * safeScale))
         if w == lastWidth && h == lastHeight { return }
-        ass_set_frame_size(rend, w, h)
-        ass_set_storage_size(rend, w, h)
-        ass_set_pixel_aspect(rend, 1.0)
+        forEachRenderer {
+            ass_set_frame_size($0, w, h)
+            ass_set_storage_size($0, w, h)
+            ass_set_pixel_aspect($0, 1.0)
+        }
         lastWidth = w
         lastHeight = h
         frameSizeDirty = true
         canvas = nil
+    }
+
+    private func configureRenderer(_ renderer: OpaquePointer) {
+        // Sensible defaults until the overlay view calls `updateFrameSize`
+        // with real dimensions.
+        ass_set_frame_size(renderer, 1920, 1080)
+        ass_set_storage_size(renderer, 1920, 1080)
+        ass_set_pixel_aspect(renderer, 1.0)
+        ass_set_use_margins(renderer, 1)
+
+        // Font lookup via the AUTODETECT provider, which resolves to
+        // CoreText on Apple platforms when libass is built without
+        // fontconfig (as mpvkit's iOS/tvOS xcframework is). Passing
+        // `nil` for the config path and `update=1` scans the system
+        // font database immediately so the first render doesn't
+        // stall on lookup.
+        ass_set_fonts(
+            renderer,
+            nil,                                       // default_font path
+            "Arial",                                   // default_family fallback
+            Int32(ASS_FONTPROVIDER_AUTODETECT.rawValue),
+            nil,                                       // config path
+            1                                          // update now
+        )
+    }
+
+    private func renderer(for slot: SubtitleSlot) -> OpaquePointer? {
+        switch slot {
+        case .primary:
+            return primaryRenderer
+        case .secondary:
+            return secondaryRenderer
+        }
+    }
+
+    private func forEachRenderer(_ body: (OpaquePointer) -> Void) {
+        if let primaryRenderer {
+            body(primaryRenderer)
+        }
+        if let secondaryRenderer {
+            body(secondaryRenderer)
+        }
     }
 
     private func ensureCanvas(widthPx: Int, heightPx: Int) -> CompositorCanvas {

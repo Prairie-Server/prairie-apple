@@ -342,7 +342,7 @@ extension ApplePlaybackRouteCapabilities {
         ),
         primarySubtitleSelection: .init(
             state: .repoVerified,
-            note: "Native-direct subtitle selection is allowed only for assets that match the Native Player allowlist."
+            note: "Native-direct subtitle selection is allowed only for assets that match the Native Player allowlist; ASS/SSA text tracks are Silo-rendered through the extractor."
         ),
         sidecarPrimarySubtitles: .init(
             state: .repoVerified,
@@ -358,11 +358,11 @@ extension ApplePlaybackRouteCapabilities {
         ),
         subtitleDelay: .init(
             state: .repoVerified,
-            note: "Silo-rendered sidecar subtitles honor subtitle delay on Native Player Direct assets."
+            note: "Silo-rendered extracted and sidecar subtitles honor subtitle delay on Native Player Direct assets."
         ),
         subtitleStyling: .init(
             state: .repoVerified,
-            note: "Silo-rendered sidecar subtitles honor shared subtitle styling on Native Player Direct assets."
+            note: "Silo-rendered extracted and sidecar subtitles honor shared subtitle styling on Native Player Direct assets."
         ),
         audioDelay: .init(
             state: .unsupported,

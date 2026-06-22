@@ -50,9 +50,6 @@ final class AVPlayerBackend {
         return false
         #endif
     }
-    private static var loopbackSteadyStateBufferTargetMiB: Double {
-        isConstrainedMemoryDevice ? 160 : 270
-    }
     private static var loopbackSegmentStoreMemoryBudgetBytes: Int {
         isConstrainedMemoryDevice ? 96 * 1024 * 1024 : 128 * 1024 * 1024
     }
@@ -63,19 +60,44 @@ final class AVPlayerBackend {
     /// very low-bitrate sources still keep enough cushion for transient WAN
     /// dips.
     static func loopbackSteadyStateForwardBufferTarget(
-        forBitsPerSecond bitrateBps: Double?
+        forBitsPerSecond bitrateBps: Double?,
+        targetDuration: Double? = nil,
+        longestSegmentDuration: Double? = nil,
+        constrainedMemoryDevice: Bool? = nil
     ) -> Double {
+        let constrainedMemoryDevice = constrainedMemoryDevice ?? Self.isConstrainedMemoryDevice
+        let liveEdgeFloor = loopbackLiveEdgeForwardBufferFloor(
+            targetDuration: targetDuration,
+            longestSegmentDuration: longestSegmentDuration
+        )
+        let minSeconds = constrainedMemoryDevice ? 8.0 : 12.0
+        let maxSeconds = constrainedMemoryDevice ? 36.0 : 60.0
         guard let bps = bitrateBps, bps > 0 else {
-            return isConstrainedMemoryDevice ? 20.0 : loopbackSteadyStateForwardBufferDefault
+            let fallback = constrainedMemoryDevice ? 20.0 : loopbackSteadyStateForwardBufferDefault
+            return min(maxSeconds, max(minSeconds, max(fallback, liveEdgeFloor)))
         }
         // target MiB / bitrate seconds = duration that sustains the budget.
-        let targetBits = loopbackSteadyStateBufferTargetMiB * 1_048_576 * 8
+        let targetMiB = constrainedMemoryDevice ? 160.0 : 270.0
+        let targetBits = targetMiB * 1_048_576 * 8
         let computed = targetBits / bps
         // Clamp: avoid underrun on jitter while capping memory and seek-back
         // churn. Lower-memory Apple TVs get a tighter window.
-        let minSeconds = isConstrainedMemoryDevice ? 8.0 : 12.0
-        let maxSeconds = isConstrainedMemoryDevice ? 36.0 : 60.0
-        return min(maxSeconds, max(minSeconds, computed))
+        return min(maxSeconds, max(minSeconds, max(computed, liveEdgeFloor)))
+    }
+
+    private static func loopbackLiveEdgeForwardBufferFloor(
+        targetDuration: Double?,
+        longestSegmentDuration: Double?
+    ) -> Double {
+        guard let targetDuration,
+              let longestSegmentDuration,
+              targetDuration.isFinite,
+              longestSegmentDuration.isFinite,
+              targetDuration > 0,
+              longestSegmentDuration > 0 else {
+            return 0
+        }
+        return 3 * targetDuration + longestSegmentDuration
     }
 
     private static func generatedHLSSpillPolicy(for spec: LoopbackSessionSpec) -> DVSegmentStore.SpillPolicy {
@@ -133,6 +155,7 @@ final class AVPlayerBackend {
     private var embeddedSubtitleExtractor: AVPlayerEmbeddedSubtitleExtractor?
     private var selectedControlledSubtitleTrackId: Int64?
     private var selectedSecondaryControlledSubtitleTrackId: Int64?
+    private var sidecarDescriptorsByTrackId: [Int64: SidecarSubtitleDescriptor] = [:]
     private var mediaTimelineOffsetSeconds: Double = 0
     private var serverChapters: [PlayerChapterInfo] = []
     private var currentLoopbackAudioTracks: [PlayerTrack] = []
@@ -140,6 +163,14 @@ final class AVPlayerBackend {
     private var lastStatsEmitWall: CFTimeInterval = 0
     private var loopbackSourceDownloadBitrateBps: Double?
     private var loopbackSourceBytesRead: Int64?
+    private var latestLoopbackGeneratedStats: DVSegmentWriter.GeneratedMediaStats?
+    private struct LoopbackEdgeWatch {
+        var lastLoadedEnd: Double
+        var lastLoadedEndAdvancedAt: CFTimeInterval
+        var lastPlaylistEnd: Double
+        var lastPlaylistHash: UInt64
+    }
+    private var loopbackEdgeWatch: LoopbackEdgeWatch?
     private var isInitialVideoDisplayGatePrepared = false
     private var isWaitingForInitialVideoDisplay = false
     private var didTemporarilyMuteForInitialVideoDisplay = false
@@ -320,8 +351,8 @@ final class AVPlayerBackend {
         if mediaSeconds + 0.05 < mediaTimelineOffsetSeconds {
             return "before_anchor"
         }
-        if let stats = segmentStore?.stats() {
-            let generatedEnd = stats.generatedMediaSeconds
+        if let generatedEnd = latestLoopbackGeneratedStats?.playlistVisibleEndSeconds
+            ?? segmentStore?.stats().generatedMediaSeconds {
             if generatedEnd.isFinite,
                generatedEnd > 0,
                playerSeconds > generatedEnd - Self.loopbackSeekWindowTolerance {
@@ -589,6 +620,11 @@ final class AVPlayerBackend {
     }
 
     func registerSidecarSubtitles(_ descriptors: [SidecarSubtitleDescriptor]) {
+        sidecarDescriptorsByTrackId = Dictionary(
+            uniqueKeysWithValues: descriptors.map {
+                (SubtitleTrackIdSpace.makeSidecarTrackId(urlIndex: $0.index), $0)
+            }
+        )
         subtitleSession?.registerSidecarTracks(descriptors)
         emitTrackList()
     }
@@ -618,6 +654,8 @@ final class AVPlayerBackend {
         lastStatsEmitWall = 0
         loopbackSourceDownloadBitrateBps = nil
         loopbackSourceBytesRead = nil
+        latestLoopbackGeneratedStats = nil
+        loopbackEdgeWatch = nil
         pendingLocalLoopbackRecoveryMediaTime = nil
         lastLocalLoopbackStallRecoveryAt = 0
         didFireFileLoaded = false
@@ -770,6 +808,19 @@ final class AVPlayerBackend {
                 }
             }
         }
+        writer.onGeneratedMediaStats = { [weak self] generatedStats in
+            DispatchQueue.main.async {
+                guard let self, !self.isDisposed else { return }
+                guard self.activeLoopbackSessionID == sessionID else { return }
+                self.latestLoopbackGeneratedStats = generatedStats
+                self.emitPlaybackStats(referenceTime: self.currentTime(), force: true)
+                if let item = self.currentItem,
+                   self.canRampLoopbackBufferToSteadyState {
+                    self.rampLoopbackBufferToSteadyStateIfNeeded(for: item)
+                    self.sampleLocalLoopbackEdge(item: item, referenceTime: self.currentTime(), trigger: "generated_stats")
+                }
+            }
+        }
         segmentWriter = writer
         writer.start()
     }
@@ -902,6 +953,9 @@ final class AVPlayerBackend {
             self.onTimeChange?(time.seconds)
             self.emitBufferedAhead(referenceTime: time.seconds)
             self.emitPlaybackStats(referenceTime: time.seconds)
+            if let item = self.currentItem {
+                self.sampleLocalLoopbackEdge(item: item, referenceTime: time.seconds, trigger: "time")
+            }
         }
     }
 
@@ -1001,11 +1055,30 @@ final class AVPlayerBackend {
             stats.segmentStoreBytes = segmentStats.memoryBytes
             stats.segmentStoreBudgetBytes = segmentStats.memoryBudgetBytes
             stats.segmentStoreTempSpillBytes = segmentStats.tempSpillBytes
+            stats.segmentStoreTempSpillBudgetBytes = segmentStats.tempSpillBudgetBytes
+            if segmentStats.tempSpillBudgetBytes > 0 {
+                stats.segmentStoreTempSpillPercent = Double(segmentStats.tempSpillBytes)
+                    / Double(segmentStats.tempSpillBudgetBytes) * 100
+            }
             stats.segmentStoreDebugMirrorBytes = segmentStats.debugMirrorBytes
             stats.segmentServerRequestCount = segmentStats.requestCount
             stats.segmentServerBytesServed = segmentStats.bytesServed
             stats.segmentServerLastLatencyMs = segmentStats.lastRequestLatencyMs
             stats.segmentServerWaitCount = segmentStats.waitCount
+        }
+        if let generatedStats = latestLoopbackGeneratedStats {
+            stats.generatedVisibleAheadSeconds = max(0, generatedStats.playlistVisibleEndSeconds - referenceTime)
+            stats.generatedMediaBitrateBps = generatedStats.rollingBitrateBps
+            stats.generatedLoopbackGeneration = generatedStats.generation
+            stats.generatedPlaylistMediaSequence = "\(generatedStats.firstMediaSequence)-\(generatedStats.lastMediaSequence)"
+            stats.generatedPlaylistVisibleRange = String(
+                format: "%.1f-%.1f s",
+                generatedStats.playlistVisibleStartSeconds,
+                generatedStats.playlistVisibleEndSeconds
+            )
+            stats.generatedPlaylistBytes = generatedStats.playlistBodyBytes
+            stats.generatedPlaylistHash = generatedStats.playlistBodyHash
+            stats.generatedDurationSource = generatedStats.durationSource
         }
         if let observedBitrate, let indicatedBitrate, indicatedBitrate > 0 {
             stats.streamSpeed = observedBitrate / indicatedBitrate
@@ -1023,6 +1096,7 @@ final class AVPlayerBackend {
         }
         stats.deviceInfo = Self.deviceInfo()
         stats.freeDiskSpaceBytes = Self.freeDiskSpaceBytes()
+        stats.volumeAvailableCapacityBytes = Self.volumeAvailableCapacityBytes()
         onPlaybackStatsChange?(stats)
     }
 
@@ -1102,6 +1176,10 @@ final class AVPlayerBackend {
             .playerTracks(selectedPrimaryTrackId: selectedControlledSubtitleTrackId)
             .first(where: { $0.trackId == selectedControlledSubtitleTrackId }) {
             return track.title ?? track.lang ?? track.codec ?? "On"
+        }
+        if let selectedControlledSubtitleTrackId,
+           let descriptor = sidecarDescriptorsByTrackId[selectedControlledSubtitleTrackId] {
+            return descriptor.label ?? descriptor.language ?? descriptor.codec ?? "On"
         }
         guard let state = subtitleSelectionState,
               let option = currentItem?.currentMediaSelection.selectedMediaOption(in: state.group) else {
@@ -1197,6 +1275,10 @@ final class AVPlayerBackend {
     }
 
     private func bufferedAheadSeconds(for item: AVPlayerItem, referenceTime: Double) -> Double? {
+        loadedRangeEnd(for: item, referenceTime: referenceTime).map { max(0, $0 - referenceTime) }
+    }
+
+    private func loadedRangeEnd(for item: AVPlayerItem, referenceTime: Double) -> Double? {
         let ranges = item.loadedTimeRanges.map(\.timeRangeValue)
         let end = ranges.compactMap { range -> Double? in
             let start = range.start.seconds
@@ -1206,7 +1288,7 @@ final class AVPlayerBackend {
             }
             return end
         }.max()
-        return end.map { max(0, $0 - referenceTime) }
+        return end
     }
 
     private func describeLoadedRanges(_ item: AVPlayerItem) -> String {
@@ -1217,6 +1299,68 @@ final class AVPlayerBackend {
             let end = (range.start + range.duration).seconds
             return String(format: "%.2f-%.2f", start, end)
         }.joined(separator: ",")
+    }
+
+    private func describeSeekableRanges(_ item: AVPlayerItem) -> String {
+        let ranges = item.seekableTimeRanges.map(\.timeRangeValue)
+        guard !ranges.isEmpty else { return "[]" }
+        return ranges.map { range in
+            let start = range.start.seconds
+            let end = (range.start + range.duration).seconds
+            return String(format: "%.2f-%.2f", start, end)
+        }.joined(separator: ",")
+    }
+
+    private func sampleLocalLoopbackEdge(item: AVPlayerItem, referenceTime: Double, trigger: String) {
+        guard case .localDVLoopback = currentSourceStrategy,
+              item === currentItem,
+              didFireFileLoaded,
+              !isUserPaused,
+              !isSeekPending,
+              referenceTime.isFinite,
+              let generatedStats = latestLoopbackGeneratedStats else {
+            return
+        }
+        let now = CACurrentMediaTime()
+        let loadedEnd = loadedRangeEnd(for: item, referenceTime: referenceTime) ?? referenceTime
+        if loopbackEdgeWatch == nil {
+            loopbackEdgeWatch = LoopbackEdgeWatch(
+                lastLoadedEnd: loadedEnd,
+                lastLoadedEndAdvancedAt: now,
+                lastPlaylistEnd: generatedStats.playlistVisibleEndSeconds,
+                lastPlaylistHash: generatedStats.playlistBodyHash
+            )
+            return
+        }
+
+        guard var watch = loopbackEdgeWatch else { return }
+        let loadedAdvanced = loadedEnd > watch.lastLoadedEnd + 0.25
+        if loadedAdvanced {
+            watch.lastLoadedEnd = loadedEnd
+            watch.lastLoadedEndAdvancedAt = now
+        }
+        let playlistAdvanced = generatedStats.playlistVisibleEndSeconds > watch.lastPlaylistEnd + 0.25
+            || generatedStats.playlistBodyHash != watch.lastPlaylistHash
+        watch.lastPlaylistEnd = max(watch.lastPlaylistEnd, generatedStats.playlistVisibleEndSeconds)
+        watch.lastPlaylistHash = generatedStats.playlistBodyHash
+        loopbackEdgeWatch = watch
+
+        let targetDuration = max(1.0, Double(generatedStats.targetDuration))
+        let watchdogDelay = max(3.0, targetDuration * 2.0 + 1.0)
+        let loadedAhead = max(0, loadedEnd - referenceTime)
+        let visibleAhead = max(0, generatedStats.playlistVisibleEndSeconds - referenceTime)
+        guard playlistAdvanced,
+              !loadedAdvanced,
+              loadedAhead <= 1.0,
+              visibleAhead >= max(6.0, targetDuration + generatedStats.longestSegmentDuration),
+              now - watch.lastLoadedEndAdvancedAt >= watchdogDelay else {
+            return
+        }
+
+        Self.logger.info(
+            "[CMP-AVP] edge_watchdog trigger=\(trigger, privacy: .public) player=\(referenceTime, privacy: .public) loadedEnd=\(loadedEnd, privacy: .public) loadedAhead=\(loadedAhead, privacy: .public) playlistStart=\(generatedStats.playlistVisibleStartSeconds, privacy: .public) playlistEnd=\(generatedStats.playlistVisibleEndSeconds, privacy: .public) visibleAhead=\(visibleAhead, privacy: .public) mediaSeq=\(generatedStats.firstMediaSequence, privacy: .public)-\(generatedStats.lastMediaSequence, privacy: .public) targetDuration=\(generatedStats.targetDuration, privacy: .public) longestSegment=\(generatedStats.longestSegmentDuration, privacy: .public) playlistBytes=\(generatedStats.playlistBodyBytes, privacy: .public) playlistHash=\(generatedStats.playlistBodyHash, privacy: .public) forwardBuffer=\(item.preferredForwardBufferDuration, privacy: .public) loadedRanges=\(self.describeLoadedRanges(item), privacy: .public) seekableRanges=\(self.describeSeekableRanges(item), privacy: .public)"
+        )
+        recoverLocalLoopbackStallIfNeeded(item: item, requireBufferedEdge: true, reason: "edge_watchdog")
     }
 
     private func positive(_ value: Double?) -> Double? {
@@ -1237,6 +1381,16 @@ final class AVPlayerBackend {
     private static func freeDiskSpaceBytes() -> Int64? {
         let attributes = try? FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
         return (attributes?[.systemFreeSize] as? NSNumber)?.int64Value
+    }
+
+    private static func volumeAvailableCapacityBytes() -> Int64? {
+        #if os(tvOS)
+        return freeDiskSpaceBytes()
+        #else
+        let url = FileManager.default.temporaryDirectory
+        let values = try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+        return values?.volumeAvailableCapacityForImportantUsage
+        #endif
     }
 
     private static func audioOutputModeLabel(_ mode: LoopbackSessionSpec.AudioOutputMode) -> String {
@@ -1416,8 +1570,10 @@ final class AVPlayerBackend {
         guard playerSeconds.isFinite else { return }
         let bufferedAhead = bufferedAheadSeconds(for: item, referenceTime: playerSeconds) ?? 0
         guard !requireBufferedEdge || bufferedAhead <= 0.5 else { return }
-        guard let stats = segmentStore?.stats() else { return }
-        let generatedAhead = stats.generatedMediaSeconds - playerSeconds
+        let generatedEnd = latestLoopbackGeneratedStats?.playlistVisibleEndSeconds
+            ?? segmentStore?.stats().generatedMediaSeconds
+            ?? 0
+        let generatedAhead = generatedEnd - playerSeconds
         let minimumGeneratedAhead = playerSeconds < 10 ? Self.loopbackStartupForwardBuffer : 10
         guard generatedAhead > minimumGeneratedAhead else { return }
         lastLocalLoopbackStallRecoveryAt = now
@@ -1623,16 +1779,20 @@ final class AVPlayerBackend {
     /// `automaticallyWaitsToMinimizeStalling` so AVPlayer pauses cleanly
     /// to rebuffer on actual underrun instead of presenting a stutter.
     private func rampLoopbackBufferToSteadyStateIfNeeded(for item: AVPlayerItem) {
-        guard case .localDVLoopback = currentSourceStrategy else { return }
+        guard case .localDVLoopback(let spec) = currentSourceStrategy else { return }
         guard canRampLoopbackBufferToSteadyState else { return }
+        let generatedStats = latestLoopbackGeneratedStats
+        let mediaBitrate = generatedStats?.rollingBitrateBps ?? spec.sourceBitrateBps
         let target = Self.loopbackSteadyStateForwardBufferTarget(
-            forBitsPerSecond: loopbackSourceDownloadBitrateBps
+            forBitsPerSecond: mediaBitrate,
+            targetDuration: generatedStats.map { Double($0.targetDuration) },
+            longestSegmentDuration: generatedStats?.longestSegmentDuration
         )
         guard item.preferredForwardBufferDuration < target else { return }
         item.preferredForwardBufferDuration = target
         avPlayer.automaticallyWaitsToMinimizeStalling = true
         Self.logger.info(
-            "[CMP-AVP] loopback buffer ramp forwardBuffer=\(target, privacy: .public)s automaticallyWaits=1 sourceBitrate=\(self.loopbackSourceDownloadBitrateBps ?? 0, privacy: .public)bps"
+            "[CMP-AVP] loopback buffer ramp forwardBuffer=\(target, privacy: .public)s automaticallyWaits=1 mediaBitrate=\(mediaBitrate ?? 0, privacy: .public)bps generatedBitrate=\(generatedStats?.rollingBitrateBps ?? 0, privacy: .public)bps declaredBitrate=\(spec.sourceBitrateBps ?? 0, privacy: .public)bps sourceReadBitrate=\(self.loopbackSourceDownloadBitrateBps ?? 0, privacy: .public)bps targetDuration=\(generatedStats?.targetDuration ?? 0, privacy: .public) longestSegment=\(generatedStats?.longestSegmentDuration ?? 0, privacy: .public)"
         )
     }
 
@@ -1919,6 +2079,7 @@ final class AVPlayerBackend {
         currentLoopbackAudioTracks = []
         selectedControlledSubtitleTrackId = nil
         selectedSecondaryControlledSubtitleTrackId = nil
+        sidecarDescriptorsByTrackId.removeAll()
         embeddedSubtitleExtractor?.teardown()
         activeLoopbackSessionID = nil
         isInitialSeekInFlight = false
@@ -1947,10 +2108,13 @@ final class AVPlayerBackend {
         writer?.onSegmentAppended = nil
         writer?.onTimelineAnchorResolved = nil
         writer?.onSourceDownloadStats = nil
+        writer?.onGeneratedMediaStats = nil
         writer?.onFinished = nil
         segmentServer?.stop()
         segmentServer = nil
         segmentStore = nil
+        latestLoopbackGeneratedStats = nil
+        loopbackEdgeWatch = nil
 
         let dir = sessionDirectory
         let preserveDir = preserveSessionDirectory

@@ -36,6 +36,53 @@ import Libavutil
 import Libdovi
 import Libswresample
 
+enum DVPreVideoAudioTailPolicy {
+    static let maxPackets = 512
+    static let maxBytes = 8 * 1024 * 1024
+
+    static func headDropCountBeforeAppending(
+        existingByteSizes: [Int],
+        retainedBytes: Int,
+        incomingBytes: Int,
+        maxPackets: Int = Self.maxPackets,
+        maxBytes: Int = Self.maxBytes
+    ) -> Int? {
+        guard incomingBytes <= maxBytes else { return nil }
+        var dropCount = 0
+        var remainingBytes = retainedBytes
+        while dropCount < existingByteSizes.count,
+              existingByteSizes.count - dropCount >= maxPackets || remainingBytes + incomingBytes > maxBytes {
+            remainingBytes = max(0, remainingBytes - max(0, existingByteSizes[dropCount]))
+            dropCount += 1
+        }
+        return dropCount
+    }
+}
+
+enum DVTrueHDMajorSyncScanner {
+    private static let syncWord: [UInt8] = [0xF8, 0x72, 0x6F, 0xBA]
+
+    static func containsMajorSync(_ data: Data) -> Bool {
+        data.withUnsafeBytes { rawBuffer in
+            guard let base = rawBuffer.bindMemory(to: UInt8.self).baseAddress else { return false }
+            return containsMajorSync(bytes: base, count: data.count)
+        }
+    }
+
+    static func containsMajorSync(bytes: UnsafePointer<UInt8>, count: Int) -> Bool {
+        guard count >= syncWord.count else { return false }
+        for offset in 0...(count - syncWord.count) {
+            if bytes[offset] == syncWord[0],
+               bytes[offset + 1] == syncWord[1],
+               bytes[offset + 2] == syncWord[2],
+               bytes[offset + 3] == syncWord[3] {
+                return true
+            }
+        }
+        return false
+    }
+}
+
 final class DVSegmentWriter {
     private static let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "com.continuum.app",
@@ -85,8 +132,12 @@ final class DVSegmentWriter {
     /// Keep a generous runway behind current playback before retiring local HLS
     /// spill files. This turns the spill budget into a current-cache budget
     /// without removing media AVPlayer may still retry during normal playback.
-    private static let spillRetirementPlaybackSafetyWindowSeconds: Double = 60
+    private static let spillRetirementPlaybackSafetyWindowSeconds: Double = 45
     private static let minimumPlaylistSegmentsToKeep = 8
+    private static let generatedAheadThrottleConstrainedSeconds: Double = 60
+    private static let generatedAheadThrottleDefaultSeconds: Double = 90
+    private static let generatedBitrateWindowSeconds: Double = 30
+    private static let maxGeneratedAheadThrottleWaitSeconds: Double = 2
     /// Upper bound on how long the mux thread will park waiting for the store
     /// to free spill capacity. Capacity only frees as the playhead advances
     /// past retired segments; if the position provider wedges, the wait would
@@ -108,6 +159,27 @@ final class DVSegmentWriter {
     /// Fires with a rolling estimate of how quickly FFmpeg is reading the
     /// remote source, not how quickly AVPlayer is reading localhost HLS.
     var onSourceDownloadStats: ((_ bitsPerSecond: Double?, _ totalBytesRead: Int64?) -> Void)?
+    struct GeneratedMediaStats: Equatable {
+        let generation: UInt64
+        let rollingBitrateBps: Double?
+        let totalGeneratedBytes: Int64
+        let playlistVisibleStartSeconds: Double
+        let playlistVisibleEndSeconds: Double
+        let firstMediaSequence: Int
+        let lastMediaSequence: Int
+        let targetDuration: Int
+        let longestSegmentDuration: Double
+        let segmentCount: Int
+        let playlistBodyBytes: Int
+        let playlistBodyHash: UInt64
+        let playlistKind: String
+        let tempSpillBytes: Int64
+        let tempSpillBudgetBytes: Int64
+        let durationSource: String
+    }
+    /// Fires after every playlist publish with generated HLS facts. The
+    /// backend uses this for AVPlayer buffer sizing and live-edge diagnostics.
+    var onGeneratedMediaStats: ((GeneratedMediaStats) -> Void)?
     /// Returns AVPlayer's current local playlist time. Used to keep the remuxer
     /// from producing minutes of HLS ahead of the player and forcing store
     /// eviction of segments that AVPlayer may still request.
@@ -195,6 +267,10 @@ final class DVSegmentWriter {
     private var lastSourceStatsWallTime: CFAbsoluteTime?
     private var lastSourceStatsBytesRead: Int64?
     private var lastSpillCapacityBackpressureLogWall: CFAbsoluteTime = 0
+    private var lastGeneratedAheadBackpressureLogWall: CFAbsoluteTime = 0
+    private var totalGeneratedSegmentBytes: Int64 = 0
+    private var recentGeneratedSegments: [(bytes: Int, duration: Double)] = []
+    private var lastSegmentDurationSource = "unknown"
 
     private var shouldIncludeAudio: Bool {
         if let explicit = sessionSpec.selectedAudio.ffIndex {
@@ -1116,16 +1192,18 @@ final class DVSegmentWriter {
         var totalPacketsRead = 0
         var videoPacketsRead = 0
         var droppedPreVideoPackets = 0
-        var queuedPreVideoAudio = 0
+        var retainedPreVideoAudioBytes = 0
+        var droppedPreVideoAudioPackets = 0
         var firstKeyframeNALSummary = "none"
         let maxPackets = 8_000
         let maxVideoPackets = 128
-        // TrueHD `major_sync` units recur every ~16 frames (≈170 ms at
-        // 48 kHz). 256 packets = ~2.5 s of audio — far more than enough
-        // to prime the FLAC encoder. Beyond this we'd just be holding
-        // tens of MiB of pre-video TrueHD packets in memory while waiting
-        // for the first video keyframe.
-        let maxQueuedPreVideoAudio = 256
+        // Keep the newest selected pre-video audio packets. TrueHD major_sync
+        // units recur, but the first video keyframe can arrive after a long
+        // audio preroll; a prefix cap drops the newer sync candidates. The
+        // packet and byte caps bound memory while preserving the tail nearest
+        // the first video packet.
+        let maxQueuedPreVideoAudio = DVPreVideoAudioTailPolicy.maxPackets
+        let maxQueuedPreVideoAudioBytes = DVPreVideoAudioTailPolicy.maxBytes
         let headerHasParameterSets = ISOBoxSurgery.hvcCContainsParameterSets(header)
         let keepSelectedAudioPreroll = shouldIncludeAudio && selectedAudioOutputMode != .copy
 
@@ -1160,10 +1238,14 @@ final class DVSegmentWriter {
                 // replayed through transcodeAudioPacket in
                 // flushPendingAudioPackets (called after writeHeader).
                 if keepSelectedAudioPreroll,
-                   inIdx == selectedAudioStreamIndex,
-                   queuedPreVideoAudio < maxQueuedPreVideoAudio {
-                    pendingAudioPackets.append(pkt)
-                    queuedPreVideoAudio += 1
+                   inIdx == selectedAudioStreamIndex {
+                    retainPreVideoAudioPacket(
+                        pkt,
+                        maxPackets: maxQueuedPreVideoAudio,
+                        maxBytes: maxQueuedPreVideoAudioBytes,
+                        retainedBytes: &retainedPreVideoAudioBytes,
+                        droppedPackets: &droppedPreVideoAudioPackets
+                    )
                 } else {
                     var free = readPkt
                     av_packet_free(&free)
@@ -1202,7 +1284,10 @@ final class DVSegmentWriter {
         }
 
         guard !pendingVideoPackets.isEmpty else {
-            print("[CMP-AVP] bootstrap gave up: vps=\(vps.count) sps=\(sps.count) pps=\(pps.count) videoPackets=\(videoPacketsRead) totalPackets=\(totalPacketsRead) droppedPreVideo=\(droppedPreVideoPackets) queuedAudio=\(queuedPreVideoAudio)")
+            let syncFound = isSelectedAudioTrueHD()
+                ? firstMLPMajorSyncIndex(in: pendingAudioPackets) != nil
+                : false
+            print("[CMP-AVP] bootstrap gave up: vps=\(vps.count) sps=\(sps.count) pps=\(pps.count) videoPackets=\(videoPacketsRead) totalPackets=\(totalPacketsRead) droppedPreVideo=\(droppedPreVideoPackets) retainedAudio=\(pendingAudioPackets.count) retainedAudioBytes=\(retainedPreVideoAudioBytes) droppedPreVideoAudio=\(droppedPreVideoAudioPackets) trueHDSyncFound=\(syncFound ? 1 : 0)")
             return
         }
 
@@ -1218,7 +1303,44 @@ final class DVSegmentWriter {
             doviRecord = doviConfig.flatMap(parseDoviRecord(from:))
         }
         let doviLog = doviRecord?.logLine ?? "none"
-        print("[CMP-AVP] bootstrap OK: hvcCParams=\(headerHasParameterSets ? 1 : 0) vps=\(vps.count) sps=\(sps.count) pps=\(pps.count) videoPackets=\(videoPacketsRead) totalPackets=\(totalPacketsRead) droppedPreVideo=\(droppedPreVideoPackets) pendingVideo=\(pendingVideoPackets.count) queuedAudio=\(queuedPreVideoAudio) firstVideoNALs=\(firstKeyframeNALSummary) dovi=\(doviLog)")
+        let syncFound = isSelectedAudioTrueHD()
+            ? firstMLPMajorSyncIndex(in: pendingAudioPackets) != nil
+            : false
+        print("[CMP-AVP] bootstrap OK: hvcCParams=\(headerHasParameterSets ? 1 : 0) vps=\(vps.count) sps=\(sps.count) pps=\(pps.count) videoPackets=\(videoPacketsRead) totalPackets=\(totalPacketsRead) droppedPreVideo=\(droppedPreVideoPackets) pendingVideo=\(pendingVideoPackets.count) retainedAudio=\(pendingAudioPackets.count) retainedAudioBytes=\(retainedPreVideoAudioBytes) droppedPreVideoAudio=\(droppedPreVideoAudioPackets) trueHDSyncFound=\(syncFound ? 1 : 0) firstVideoNALs=\(firstKeyframeNALSummary) dovi=\(doviLog)")
+    }
+
+    private func retainPreVideoAudioPacket(
+        _ packet: UnsafeMutablePointer<AVPacket>,
+        maxPackets: Int,
+        maxBytes: Int,
+        retainedBytes: inout Int,
+        droppedPackets: inout Int
+    ) {
+        let packetBytes = max(0, Int(packet.pointee.size))
+        let existingByteSizes = pendingAudioPackets.map { max(0, Int($0.pointee.size)) }
+        guard let headDropCount = DVPreVideoAudioTailPolicy.headDropCountBeforeAppending(
+            existingByteSizes: existingByteSizes,
+            retainedBytes: retainedBytes,
+            incomingBytes: packetBytes,
+            maxPackets: maxPackets,
+            maxBytes: maxBytes
+        ) else {
+            var free: UnsafeMutablePointer<AVPacket>? = packet
+            av_packet_free(&free)
+            droppedPackets += 1
+            return
+        }
+
+        for _ in 0..<headDropCount {
+            let dropped = pendingAudioPackets.removeFirst()
+            retainedBytes = max(0, retainedBytes - max(0, Int(dropped.pointee.size)))
+            var free: UnsafeMutablePointer<AVPacket>? = dropped
+            av_packet_free(&free)
+            droppedPackets += 1
+        }
+
+        pendingAudioPackets.append(packet)
+        retainedBytes += packetBytes
     }
 
     /// Pull the first `AV_PKT_DATA_DOVI_CONF` entry from a codec parameters'
@@ -1754,8 +1876,11 @@ final class DVSegmentWriter {
         // sync incorrect" / "Invalid blocksize" warnings while it realigns,
         // and the priming output is discarded anyway. The pre-major_sync
         // gap is at most ~170 ms (one major_sync interval).
+        let trueHDSyncIndex = isSelectedAudioTrueHD()
+            ? firstMLPMajorSyncIndex(in: pendingAudioPackets)
+            : nil
         let primingStart = isSelectedAudioTrueHD()
-            ? (firstMLPMajorSyncIndex(in: pendingAudioPackets) ?? 0)
+            ? (trueHDSyncIndex ?? 0)
             : 0
         for index in 0..<primingStart {
             var free: UnsafeMutablePointer<AVPacket>? = pendingAudioPackets[index]
@@ -1773,10 +1898,11 @@ final class DVSegmentWriter {
         }
         if !pendingAudioPackets.isEmpty {
             let dropped = primingStart
+            let syncFound = trueHDSyncIndex != nil
             if dropped > 0 {
-                print("[CMP-AVP] primed audio decoder with \(primedCount) pre-video packets (skipped \(dropped) pre-major_sync) without muxing preroll")
+                print("[CMP-AVP] primed audio decoder with \(primedCount) pre-video packets (skipped \(dropped) pre-major_sync, trueHDSyncFound=\(syncFound ? 1 : 0)) without muxing preroll")
             } else {
-                print("[CMP-AVP] primed audio decoder with \(primedCount) pre-video packets without muxing preroll")
+                print("[CMP-AVP] primed audio decoder with \(primedCount) pre-video packets (trueHDSyncFound=\(syncFound ? 1 : 0)) without muxing preroll")
             }
         }
         pendingAudioPackets.removeAll()
@@ -1797,15 +1923,8 @@ final class DVSegmentWriter {
         for (index, packet) in packets.enumerated() {
             let size = Int(packet.pointee.size)
             guard size >= 4, let data = packet.pointee.data else { continue }
-            var offset = 0
-            while offset + 4 <= size {
-                if data[offset] == 0xF8,
-                   data[offset + 1] == 0x72,
-                   data[offset + 2] == 0x6F,
-                   data[offset + 3] == 0xBA {
-                    return index
-                }
-                offset += 1
+            if DVTrueHDMajorSyncScanner.containsMajorSync(bytes: data, count: size) {
+                return index
             }
         }
         return nil
@@ -2077,10 +2196,8 @@ final class DVSegmentWriter {
         guard videoMode == .convertProfile7To81 else { return }
         guard let dataPtr = pkt.pointee.data else { return }
         let packetBytes = UnsafeBufferPointer(start: dataPtr, count: Int(pkt.pointee.size))
+        guard videoPacketNeedsProfile7Rewrite(packetBytes: packetBytes) else { return }
         let transformed = try transformedVideoPacketData(packetBytes: packetBytes)
-        if transformed == Data(buffer: packetBytes) {
-            return
-        }
 
         var replacement = av_packet_alloc()
         guard let newPacket = replacement else {
@@ -2105,8 +2222,10 @@ final class DVSegmentWriter {
         packetBytes: UnsafeBufferPointer<UInt8>
     ) throws -> Data {
         var output = Data()
+        output.reserveCapacity(packetBytes.count)
         var cursor = 0
         while cursor + nalLengthSize <= packetBytes.count {
+            let prefixStart = cursor
             var nalSize = 0
             for i in 0..<nalLengthSize {
                 nalSize = (nalSize << 8) | Int(packetBytes[cursor + i])
@@ -2114,7 +2233,6 @@ final class DVSegmentWriter {
             let nalStart = cursor + nalLengthSize
             guard nalSize >= 2, nalStart + nalSize <= packetBytes.count else { break }
 
-            let nalData = Data(bytes: packetBytes.baseAddress!.advanced(by: nalStart), count: nalSize)
             let byte0 = packetBytes[nalStart]
             let byte1 = packetBytes[nalStart + 1]
             let nalType = Int((byte0 >> 1) & 0x3F)
@@ -2126,16 +2244,40 @@ final class DVSegmentWriter {
                 continue
             }
 
-            let payload: Data
             if nalType == 62 {
-                payload = try convertRpuNALToProfile81(nalData)
+                let nalData = Data(bytes: packetBytes.baseAddress!.advanced(by: nalStart), count: nalSize)
+                let payload = try convertRpuNALToProfile81(nalData)
+                appendLengthPrefixedNAL(payload, into: &output)
             } else {
-                payload = nalData
+                if let base = packetBytes.baseAddress {
+                    output.append(base.advanced(by: prefixStart), count: nalLengthSize + nalSize)
+                }
             }
-
-            appendLengthPrefixedNAL(payload, into: &output)
         }
         return output.isEmpty ? Data(buffer: packetBytes) : output
+    }
+
+    private func videoPacketNeedsProfile7Rewrite(
+        packetBytes: UnsafeBufferPointer<UInt8>
+    ) -> Bool {
+        var cursor = 0
+        while cursor + nalLengthSize <= packetBytes.count {
+            var nalSize = 0
+            for i in 0..<nalLengthSize {
+                nalSize = (nalSize << 8) | Int(packetBytes[cursor + i])
+            }
+            let nalStart = cursor + nalLengthSize
+            guard nalSize >= 2, nalStart + nalSize <= packetBytes.count else { return false }
+            let byte0 = packetBytes[nalStart]
+            let byte1 = packetBytes[nalStart + 1]
+            let nalType = Int((byte0 >> 1) & 0x3F)
+            let layerID = Int(((byte0 & 0x01) << 5) | ((byte1 & 0xF8) >> 3))
+            if layerID > 0 || nalType == 62 || nalType == 63 {
+                return true
+            }
+            cursor = nalStart + nalSize
+        }
+        return false
     }
 
     private func convertRpuNALToProfile81(_ nal: Data) throws -> Data {
@@ -2715,7 +2857,10 @@ final class DVSegmentWriter {
         }
 
         let name = String(format: "seg_%06d.m4s", currentSegmentIndex)
-        let duration = segmentMediaDuration(in: pendingSegmentBytes) ?? targetSegmentDuration
+        let parsedDuration = segmentMediaDuration(in: pendingSegmentBytes)
+        let duration = parsedDuration ?? targetSegmentDuration
+        lastSegmentDurationSource = parsedDuration == nil ? "target_duration_fallback" : "fragment_timing"
+        waitForGeneratedAheadIfNeeded()
         waitForSegmentStoreCapacityIfNeeded(nextSegmentBytes: segSize)
         guard !isCancelled else {
             pendingSegmentBytes = Data()
@@ -2742,6 +2887,7 @@ final class DVSegmentWriter {
         }
         segmentEntries.append(SegmentEntry(index: currentSegmentIndex, start: totalMediaDuration, duration: duration))
         totalMediaDuration += duration
+        recordGeneratedSegment(bytes: segSize, duration: duration)
         let idx = currentSegmentIndex
         currentSegmentIndex += 1
         pendingSegmentBytes = Data()
@@ -2762,6 +2908,75 @@ final class DVSegmentWriter {
 
     private func shouldLogSegmentProgress(index: Int) -> Bool {
         Self.verboseSegmentLogging || index < 4 || index.isMultiple(of: 20)
+    }
+
+    private var generatedAheadThrottleSeconds: Double {
+        #if os(tvOS)
+        let constrained = ProcessInfo.processInfo.physicalMemory <= 3_500_000_000
+        return constrained
+            ? Self.generatedAheadThrottleConstrainedSeconds
+            : Self.generatedAheadThrottleDefaultSeconds
+        #else
+        return Self.generatedAheadThrottleDefaultSeconds
+        #endif
+    }
+
+    private func waitForGeneratedAheadIfNeeded() {
+        guard firstSegmentReadyFired else { return }
+        let cap = generatedAheadThrottleSeconds
+        let waitStarted = CFAbsoluteTimeGetCurrent()
+        let targetDuration = Double(
+            publishedPlaylistTargetDuration > 0
+                ? publishedPlaylistTargetDuration
+                : max(1, Int(targetSegmentDuration.rounded()))
+        )
+        let waitBudget = Self.generatedAheadThrottleWaitBudgetSeconds(targetDuration: targetDuration)
+        while !isCancelled {
+            retireSegmentsBehindPlaybackIfNeeded()
+            guard let playbackPosition = playbackPositionProvider?(),
+                  playbackPosition.isFinite else { return }
+            let generatedAhead = totalMediaDuration - max(0, playbackPosition)
+            guard generatedAhead > cap else { return }
+            let now = CFAbsoluteTimeGetCurrent()
+            if now - waitStarted >= waitBudget {
+                cmpLog(
+                    "[CMP-HLS-STORE] generated-ahead throttle soft-release ahead=\(String(format: "%.1f", generatedAhead))s cap=\(String(format: "%.0f", cap))s wait=\(String(format: "%.1f", now - waitStarted))s targetDuration=\(String(format: "%.1f", targetDuration))s reason=playlist_reload_budget"
+                )
+                return
+            }
+            if now - lastGeneratedAheadBackpressureLogWall >= 5 {
+                lastGeneratedAheadBackpressureLogWall = now
+                cmpLog(
+                    "[CMP-HLS-STORE] generated-ahead throttle ahead=\(String(format: "%.1f", generatedAhead))s cap=\(String(format: "%.0f", cap))s playback=\(String(format: "%.1f", playbackPosition))s generated=\(String(format: "%.1f", totalMediaDuration))s"
+                )
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+    }
+
+    static func generatedAheadThrottleWaitBudgetSeconds(targetDuration: Double) -> Double {
+        guard targetDuration.isFinite, targetDuration > 0 else {
+            return maxGeneratedAheadThrottleWaitSeconds
+        }
+        return min(maxGeneratedAheadThrottleWaitSeconds, max(0.5, targetDuration * 0.5))
+    }
+
+    private func recordGeneratedSegment(bytes: Int, duration: Double) {
+        totalGeneratedSegmentBytes += Int64(bytes)
+        recentGeneratedSegments.append((bytes: bytes, duration: duration))
+        var windowDuration = recentGeneratedSegments.reduce(0) { $0 + $1.duration }
+        while recentGeneratedSegments.count > 1,
+              windowDuration > Self.generatedBitrateWindowSeconds {
+            let removed = recentGeneratedSegments.removeFirst()
+            windowDuration -= removed.duration
+        }
+    }
+
+    private var rollingGeneratedBitrateBps: Double? {
+        let byteCount = recentGeneratedSegments.reduce(0) { $0 + $1.bytes }
+        let duration = recentGeneratedSegments.reduce(0) { $0 + $1.duration }
+        guard byteCount > 0, duration.isFinite, duration > 0 else { return nil }
+        return Double(byteCount) * 8 / duration
     }
 
     private func waitForSegmentStoreCapacityIfNeeded(nextSegmentBytes: Int) {
@@ -3056,16 +3271,11 @@ final class DVSegmentWriter {
         if LocalHLSPlaylistPolicy.shouldEmitStartTag(firstMediaSequence: firstMediaSequence) {
             lines.append("#EXT-X-START:TIME-OFFSET=0,PRECISE=YES")
         }
-        lines.append("#EXT-X-TARGETDURATION:\(playlistTargetDurationForEmit())")
+        let targetDuration = playlistTargetDurationForEmit()
+        lines.append("#EXT-X-TARGETDURATION:\(targetDuration)")
         lines.append("#EXT-X-MEDIA-SEQUENCE:\(firstMediaSequence)")
-        // Use EVENT (append-only, growable) until we've written the final
-        // segment — AVPlayer refetches EVENT playlists. Flipping to VOD only
-        // happens together with EXT-X-ENDLIST. Declaring VOD on an empty /
-        // growing playlist makes AVPlayer error (-12642 ParsingFailure).
-        if isFinal {
-            lines.append("#EXT-X-PLAYLIST-TYPE:VOD")
-        } else if firstMediaSequence == 0 {
-            lines.append("#EXT-X-PLAYLIST-TYPE:EVENT")
+        if let playlistTypeTag = LocalHLSPlaylistPolicy.playlistType(isFinal: isFinal).hlsTag {
+            lines.append(playlistTypeTag)
         }
         lines.append("#EXT-X-MAP:URI=\"init.mp4\"")
         for segment in segmentEntries {
@@ -3089,6 +3299,52 @@ final class DVSegmentWriter {
             Self.logger.error("playlist write failed: \(String(describing: error), privacy: .public)")
             fatalIOError = .fileWriteFailed("playlist.m3u8", error)
         }
+        emitGeneratedMediaStats(
+            playlistBodyBytes: body.utf8.count,
+            playlistBodyHash: Self.stablePlaylistHash(body),
+            playlistKind: isFinal ? "vod" : "live_sliding",
+            targetDuration: targetDuration
+        )
+    }
+
+    private func emitGeneratedMediaStats(
+        playlistBodyBytes: Int,
+        playlistBodyHash: UInt64,
+        playlistKind: String,
+        targetDuration: Int
+    ) {
+        let storeStats = segmentStore?.stats()
+        let visibleStart = segmentEntries.first?.start ?? totalMediaDuration
+        let visibleEnd = segmentEntries.last?.end ?? totalMediaDuration
+        let lastMediaSequence = firstMediaSequence + max(0, segmentEntries.count - 1)
+        let longestSegmentDuration = segmentEntries.map(\.duration).max() ?? self.targetSegmentDuration
+        onGeneratedMediaStats?(GeneratedMediaStats(
+            generation: storeStats?.generation ?? segmentStore?.generation ?? 0,
+            rollingBitrateBps: rollingGeneratedBitrateBps,
+            totalGeneratedBytes: totalGeneratedSegmentBytes,
+            playlistVisibleStartSeconds: visibleStart,
+            playlistVisibleEndSeconds: visibleEnd,
+            firstMediaSequence: firstMediaSequence,
+            lastMediaSequence: lastMediaSequence,
+            targetDuration: targetDuration,
+            longestSegmentDuration: longestSegmentDuration,
+            segmentCount: segmentEntries.count,
+            playlistBodyBytes: playlistBodyBytes,
+            playlistBodyHash: playlistBodyHash,
+            playlistKind: playlistKind,
+            tempSpillBytes: storeStats?.tempSpillBytes ?? 0,
+            tempSpillBudgetBytes: storeStats?.tempSpillBudgetBytes ?? 0,
+            durationSource: lastSegmentDurationSource
+        ))
+    }
+
+    private static func stablePlaylistHash(_ body: String) -> UInt64 {
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in body.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return hash
     }
 
     private func emitMasterPlaylist() {

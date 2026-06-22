@@ -1855,7 +1855,9 @@ class PlayerViewModel {
                 return SourceProxyPreparation(plan: plan, proxy: nil)
             }
             proxy.setSourceBitrate(sourceBitrateBps(for: plan))
-            proxy.startPrefetch(at: 0)
+            if plan.engine != .avPlayerLocalDVLoopback {
+                proxy.startPrefetch(at: 0)
+            }
             Self.logger.info("[CMP-SOURCE-CACHE] enabled route=\(plan.engine.label, privacy: .public) budgetBytes=\(cacheBudget, privacy: .public)")
             let streamRequest = StreamRequest(
                 url: localURL,

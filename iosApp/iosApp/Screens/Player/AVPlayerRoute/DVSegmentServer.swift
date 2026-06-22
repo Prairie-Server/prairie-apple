@@ -28,6 +28,7 @@ import OSLog
 
 final class DVSegmentServer {
     private static let startupRequestLogLimit = 80
+    private static let responseChunkBytes = 256 * 1024
     private static let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "com.continuum.app",
         category: "DVSegmentServer"
@@ -324,11 +325,43 @@ final class DVSegmentServer {
         case .gone:
             logRequest(method: method, path: path, status: 410, bytes: 0, range: rangeHeader, started: started)
             respondError(410, "Gone", on: connection)
-        case .found(let data, let mime):
+        case .found(let resource):
+            respondWithResource(
+                resource,
+                requestPath: path,
+                method: method,
+                range: rangeHeader,
+                started: started,
+                on: connection
+            )
+        }
+    }
+
+    private func respondWithResource(
+        _ resource: DVSegmentStore.Resource,
+        requestPath: String,
+        method: HTTPMethod,
+        range rangeHeader: String?,
+        started: CFAbsoluteTime,
+        on connection: NWConnection
+    ) {
+        switch resource {
+        case .memory(let data, let mime):
             respondWithData(
                 data,
                 mime: mime,
-                requestPath: path,
+                requestPath: requestPath,
+                method: method,
+                range: rangeHeader,
+                started: started,
+                on: connection
+            )
+        case .disk(let url, let byteCount, let mime):
+            respondWithDiskResource(
+                url: url,
+                totalLength: byteCount,
+                mime: mime,
+                requestPath: requestPath,
                 method: method,
                 range: rangeHeader,
                 started: started,
@@ -371,10 +404,8 @@ final class DVSegmentServer {
                 header += "Content-Range: bytes \(lower)-\(upper)/\(totalLength)\r\n"
                 header += "Cache-Control: no-store\r\n"
                 header += "Connection: close\r\n\r\n"
-                var response = Data(header.utf8)
-                response.append(slice)
                 logRequest(method: method, path: requestPath, status: 206, bytes: slice.count, range: rangeHeader, started: started)
-                send(response, on: connection, andClose: true)
+                sendHeaderAndBody(header, body: slice, on: connection)
                 return
             case .notSatisfiable:
                 var header = "HTTP/1.1 416 Range Not Satisfiable\r\n"
@@ -393,10 +424,90 @@ final class DVSegmentServer {
         header += "Accept-Ranges: bytes\r\n"
         header += "Cache-Control: no-store\r\n"
         header += "Connection: close\r\n\r\n"
-        var response = Data(header.utf8)
-        response.append(data)
         logRequest(method: method, path: requestPath, status: 200, bytes: totalLength, range: rangeHeader, started: started)
-        send(response, on: connection, andClose: true)
+        sendHeaderAndBody(header, body: data, on: connection)
+    }
+
+    private func respondWithDiskResource(
+        url: URL,
+        totalLength: Int,
+        mime: String,
+        requestPath: String,
+        method: HTTPMethod,
+        range rangeHeader: String?,
+        started: CFAbsoluteTime,
+        on connection: NWConnection
+    ) {
+        guard totalLength > 0 else {
+            logRequest(method: method, path: requestPath, status: 404, bytes: 0, range: rangeHeader, started: started)
+            respondError(404, "Not Found", on: connection)
+            return
+        }
+
+        if method == .head {
+            var header = "HTTP/1.1 200 OK\r\n"
+            header += "Content-Type: \(mime)\r\n"
+            header += "Content-Length: \(totalLength)\r\n"
+            header += "Accept-Ranges: bytes\r\n"
+            header += "Cache-Control: no-store\r\n"
+            header += "Connection: close\r\n\r\n"
+            logRequest(method: method, path: requestPath, status: 200, bytes: totalLength, range: nil, started: started)
+            send(Data(header.utf8), on: connection, andClose: true)
+            return
+        }
+
+        let lower: Int
+        let upper: Int
+        let status: Int
+        if let rangeHeader, let parsed = Self.parseByteRange(rangeHeader, totalLength: totalLength) {
+            switch parsed {
+            case .satisfiable(let parsedLower, let parsedUpper):
+                lower = parsedLower
+                upper = parsedUpper
+                status = 206
+            case .notSatisfiable:
+                var header = "HTTP/1.1 416 Range Not Satisfiable\r\n"
+                header += "Content-Length: 0\r\n"
+                header += "Content-Range: bytes */\(totalLength)\r\n"
+                header += "Connection: close\r\n\r\n"
+                logRequest(method: method, path: requestPath, status: 416, bytes: 0, range: rangeHeader, started: started)
+                send(Data(header.utf8), on: connection, andClose: true)
+                return
+            }
+        } else {
+            lower = 0
+            upper = totalLength - 1
+            status = 200
+        }
+
+        guard let handle = try? FileHandle(forReadingFrom: url) else {
+            logRequest(method: method, path: requestPath, status: 404, bytes: 0, range: rangeHeader, started: started)
+            respondError(404, "Not Found", on: connection)
+            return
+        }
+        do {
+            try handle.seek(toOffset: UInt64(lower))
+        } catch {
+            handle.closeFile()
+            logRequest(method: method, path: requestPath, status: 404, bytes: 0, range: rangeHeader, started: started)
+            respondError(404, "Not Found", on: connection)
+            return
+        }
+
+        let bodyBytes = upper - lower + 1
+        var header = "HTTP/1.1 \(status) \(status == 206 ? "Partial Content" : "OK")\r\n"
+        header += "Content-Type: \(mime)\r\n"
+        header += "Content-Length: \(bodyBytes)\r\n"
+        header += "Accept-Ranges: bytes\r\n"
+        if status == 206 {
+            header += "Content-Range: bytes \(lower)-\(upper)/\(totalLength)\r\n"
+        }
+        header += "Cache-Control: no-store\r\n"
+        header += "Connection: close\r\n\r\n"
+        logRequest(method: method, path: requestPath, status: status, bytes: bodyBytes, range: rangeHeader, started: started)
+        send(Data(header.utf8), on: connection, andClose: false) { [weak self] in
+            self?.sendFileChunks(handle: handle, remaining: bodyBytes, on: connection)
+        }
     }
 
     private func logRequest(
@@ -495,8 +606,39 @@ final class DVSegmentServer {
         send(data, on: connection, andClose: true)
     }
 
-    private func send(_ data: Data, on connection: NWConnection, andClose close: Bool) {
+    private func sendHeaderAndBody(_ header: String, body: Data, on connection: NWConnection) {
+        send(Data(header.utf8), on: connection, andClose: false) { [weak self] in
+            self?.send(body, on: connection, andClose: true)
+        }
+    }
+
+    private func sendFileChunks(handle: FileHandle, remaining: Int, on connection: NWConnection) {
+        guard remaining > 0 else {
+            handle.closeFile()
+            connection.cancel()
+            return
+        }
+        let nextLength = min(remaining, Self.responseChunkBytes)
+        let chunk = handle.readData(ofLength: nextLength)
+        guard !chunk.isEmpty else {
+            handle.closeFile()
+            connection.cancel()
+            return
+        }
+        let nextRemaining = remaining - chunk.count
+        let isLast = nextRemaining <= 0
+        send(chunk, on: connection, andClose: isLast) { [weak self] in
+            if isLast {
+                handle.closeFile()
+            } else {
+                self?.sendFileChunks(handle: handle, remaining: nextRemaining, on: connection)
+            }
+        }
+    }
+
+    private func send(_ data: Data, on connection: NWConnection, andClose close: Bool, completion: (() -> Void)? = nil) {
         connection.send(content: data, completion: .contentProcessed { _ in
+            completion?()
             if close { connection.cancel() }
         })
     }

@@ -45,11 +45,21 @@ struct PlaybackStats: Equatable {
     var sourceOriginBytesTransferred: Int64?
     var sourceOriginBitrateBps: Double?
     var generatedAheadSeconds: Double?
+    var generatedVisibleAheadSeconds: Double?
+    var generatedMediaBitrateBps: Double?
     var generatedSegmentCount: Int?
     var generatedSpilledSegmentCount: Int?
+    var generatedLoopbackGeneration: UInt64?
+    var generatedPlaylistMediaSequence: String?
+    var generatedPlaylistVisibleRange: String?
+    var generatedPlaylistBytes: Int?
+    var generatedPlaylistHash: UInt64?
+    var generatedDurationSource: String?
     var segmentStoreBytes: Int64?
     var segmentStoreBudgetBytes: Int64?
     var segmentStoreTempSpillBytes: Int64?
+    var segmentStoreTempSpillBudgetBytes: Int64?
+    var segmentStoreTempSpillPercent: Double?
     var segmentStoreDebugMirrorBytes: Int64?
     var segmentServerRequestCount: Int64?
     var segmentServerBytesServed: Int64?
@@ -62,6 +72,7 @@ struct PlaybackStats: Equatable {
     var audioQueueDepth: Int?
     var deviceInfo: String?
     var freeDiskSpaceBytes: Int64?
+    var volumeAvailableCapacityBytes: Int64?
 
     static let empty = PlaybackStats()
 }
@@ -193,11 +204,35 @@ extension PlaybackStats {
         if let generatedAheadSeconds {
             rows.append(("Generated ahead", String(format: "%.1f s", generatedAheadSeconds)))
         }
+        if let generatedVisibleAheadSeconds {
+            rows.append(("Generated visible ahead", String(format: "%.1f s", generatedVisibleAheadSeconds)))
+        }
+        if let generatedMediaBitrateBps {
+            rows.append(("Generated media bitrate", formatBitsPerSecond(generatedMediaBitrateBps)))
+        }
         if let generatedSegmentCount {
             rows.append(("Generated segments", "\(generatedSegmentCount)"))
         }
         if let generatedSpilledSegmentCount {
             rows.append(("Generated spilled segments", "\(generatedSpilledSegmentCount)"))
+        }
+        if let generatedLoopbackGeneration {
+            rows.append(("Loopback generation", "\(generatedLoopbackGeneration)"))
+        }
+        if let generatedPlaylistMediaSequence {
+            rows.append(("Playlist media sequence", generatedPlaylistMediaSequence))
+        }
+        if let generatedPlaylistVisibleRange {
+            rows.append(("Playlist visible range", generatedPlaylistVisibleRange))
+        }
+        if let generatedPlaylistBytes {
+            rows.append(("Playlist bytes", "\(generatedPlaylistBytes)"))
+        }
+        if let generatedPlaylistHash {
+            rows.append(("Playlist hash", String(format: "%016llx", generatedPlaylistHash)))
+        }
+        if let generatedDurationSource {
+            rows.append(("Segment duration source", generatedDurationSource))
         }
         if let segmentStoreBytes {
             let value: String
@@ -209,7 +244,14 @@ extension PlaybackStats {
             rows.append(("Generated store", value))
         }
         if let segmentStoreTempSpillBytes {
-            rows.append(("Generated temp spill", ByteCountFormatter.string(fromByteCount: segmentStoreTempSpillBytes, countStyle: .file)))
+            var value = ByteCountFormatter.string(fromByteCount: segmentStoreTempSpillBytes, countStyle: .file)
+            if let segmentStoreTempSpillBudgetBytes, segmentStoreTempSpillBudgetBytes > 0 {
+                value += " / \(ByteCountFormatter.string(fromByteCount: segmentStoreTempSpillBudgetBytes, countStyle: .file))"
+            }
+            if let segmentStoreTempSpillPercent {
+                value += String(format: " (%.1f%%)", segmentStoreTempSpillPercent)
+            }
+            rows.append(("Generated temp spill", value))
         }
         if let segmentStoreDebugMirrorBytes {
             rows.append(("Generated debug mirror", ByteCountFormatter.string(fromByteCount: segmentStoreDebugMirrorBytes, countStyle: .file)))
@@ -236,6 +278,9 @@ extension PlaybackStats {
         }
         if let freeDiskSpaceBytes {
             rows.append(("Free disk space", ByteCountFormatter.string(fromByteCount: freeDiskSpaceBytes, countStyle: .file)))
+        }
+        if let volumeAvailableCapacityBytes {
+            rows.append(("Volume available", ByteCountFormatter.string(fromByteCount: volumeAvailableCapacityBytes, countStyle: .file)))
         }
         return rows
     }

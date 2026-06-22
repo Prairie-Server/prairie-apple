@@ -49,6 +49,14 @@ actor SidecarSubtitleFetcher {
         url: URL,
         preferredFormatHint: SubtitleFormat? = nil
     ) async throws -> (content: String, format: SubtitleFormat) {
+        // Offline downloads carry `file://` sidecar URLs. URLSession would
+        // load them, but the response is a plain `URLResponse` (not
+        // `HTTPURLResponse`), so the status-code path below would reject it.
+        // Read the local file directly instead — no auth, no network.
+        if url.isFileURL {
+            return try readLocalSubtitle(url: url, preferredFormatHint: preferredFormatHint)
+        }
+
         let request = await buildRequest(url: url)
 
         let (data, response): (Data, URLResponse)
@@ -80,6 +88,41 @@ actor SidecarSubtitleFetcher {
 
         let format = detectFormat(
             contentType: http.value(forHTTPHeaderField: "Content-Type"),
+            urlHint: url,
+            codecHint: preferredFormatHint,
+            body: content
+        )
+        return (content, format)
+    }
+
+    // MARK: - Local (offline) sidecars
+
+    /// Read a downloaded sidecar straight off disk. Format detection falls
+    /// back to the file extension + body sniff since there is no
+    /// `Content-Type` header.
+    private func readLocalSubtitle(
+        url: URL,
+        preferredFormatHint: SubtitleFormat?
+    ) throws -> (content: String, format: SubtitleFormat) {
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            throw SidecarSubtitleFetchError.transport(underlying: error)
+        }
+        guard !data.isEmpty else {
+            throw SidecarSubtitleFetchError.emptyBody
+        }
+
+        let content: String
+        if let utf8 = String(data: data, encoding: .utf8) {
+            content = utf8
+        } else {
+            content = String(decoding: data, as: UTF8.self)
+        }
+
+        let format = detectFormat(
+            contentType: nil,
             urlHint: url,
             codecHint: preferredFormatHint,
             body: content
