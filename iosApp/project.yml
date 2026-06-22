@@ -241,6 +241,21 @@ schemes:
       config: Debug
     profile:
       config: Release
+  SiloNoDebugger:
+    build:
+      targets:
+        Silo: all
+    run:
+      config: Debug
+      debugEnabled: false
+      disableMainThreadChecker: true
+      disableThreadPerformanceChecker: true
+      enableGPUFrameCaptureMode: disabled
+      enableGPUValidationMode: false
+    analyze:
+      config: Debug
+    profile:
+      config: Release
   SiloTV:
     build:
       targets:

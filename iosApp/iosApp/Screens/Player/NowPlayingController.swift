@@ -38,16 +38,28 @@ final class NowPlayingController {
         var currentTime: () -> Double
         /// Called with an absolute seek target in seconds.
         var seek: (Double) -> Void
+        /// Called when the user presses Stop, when the system exposes it.
+        var stop: (() -> Void)?
+        /// Called when the user presses Next, when the active session has one.
+        var next: (() -> Void)?
+        /// True when `next` should be exposed as an enabled command.
+        var isNextEnabled: () -> Bool = { false }
+    }
+
+    private struct SkipIntervals {
+        var backward: TimeInterval
+        var forward: TimeInterval
     }
 
     private var handlers: Handlers?
     private var isActive = false
+    private var remoteCommandTargets: [(command: MPRemoteCommand, target: Any)] = []
     /// URL of the artwork most recently requested. Used to dedupe fetches
     /// when `setArtworkURL` is called repeatedly with the same source while
     /// a fetch is already in flight or has already published.
     private var currentArtworkURL: URL?
     private var artworkFetchTask: Task<Void, Never>?
-    private var preferredSkipInterval: TimeInterval = 10
+    private var preferredSkipIntervals = SkipIntervals(backward: 10, forward: 10)
 
     enum MediaKind {
         case video
@@ -73,6 +85,8 @@ final class NowPlayingController {
         if !isActive {
             registerRemoteCommands()
             isActive = true
+        } else {
+            updateCommandAvailability()
         }
     }
 
@@ -85,23 +99,24 @@ final class NowPlayingController {
         artworkFetchTask = nil
         currentArtworkURL = nil
 
-        let center = MPRemoteCommandCenter.shared()
-        center.playCommand.removeTarget(self)
-        center.pauseCommand.removeTarget(self)
-        center.togglePlayPauseCommand.removeTarget(self)
-        center.skipForwardCommand.removeTarget(self)
-        center.skipBackwardCommand.removeTarget(self)
-        center.changePlaybackPositionCommand.removeTarget(self)
+        unregisterRemoteCommands()
 
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
     }
 
     func setPreferredSkipInterval(_ seconds: TimeInterval) {
-        preferredSkipInterval = max(1, seconds)
+        setPreferredSkipIntervals(backward: seconds, forward: seconds)
+    }
+
+    func setPreferredSkipIntervals(backward: TimeInterval, forward: TimeInterval) {
+        preferredSkipIntervals = SkipIntervals(
+            backward: max(1, backward),
+            forward: max(1, forward)
+        )
         guard isActive else { return }
         let center = MPRemoteCommandCenter.shared()
-        center.skipForwardCommand.preferredIntervals = [NSNumber(value: preferredSkipInterval)]
-        center.skipBackwardCommand.preferredIntervals = [NSNumber(value: preferredSkipInterval)]
+        center.skipForwardCommand.preferredIntervals = [NSNumber(value: preferredSkipIntervals.forward)]
+        center.skipBackwardCommand.preferredIntervals = [NSNumber(value: preferredSkipIntervals.backward)]
     }
 
     // MARK: - State updates
@@ -137,6 +152,7 @@ final class NowPlayingController {
         info[MPNowPlayingInfoPropertyDefaultPlaybackRate] = playbackRate
         info[MPNowPlayingInfoPropertyMediaType] = mediaKind.nowPlayingValue
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+        updateCommandAvailability()
     }
 
     /// Fetch and publish poster artwork for the active item. Idempotent for
@@ -218,19 +234,19 @@ final class NowPlayingController {
         let center = MPRemoteCommandCenter.shared()
 
         center.playCommand.isEnabled = true
-        center.playCommand.addTarget { [weak self] _ in
+        addTarget(to: center.playCommand) { [weak self] _ in
             self?.handlers?.play()
             return .success
         }
 
         center.pauseCommand.isEnabled = true
-        center.pauseCommand.addTarget { [weak self] _ in
+        addTarget(to: center.pauseCommand) { [weak self] _ in
             self?.handlers?.pause()
             return .success
         }
 
         center.togglePlayPauseCommand.isEnabled = true
-        center.togglePlayPauseCommand.addTarget { [weak self] _ in
+        addTarget(to: center.togglePlayPauseCommand) { [weak self] _ in
             guard let h = self?.handlers else { return .commandFailed }
             if h.isPaused() {
                 h.play()
@@ -240,28 +256,28 @@ final class NowPlayingController {
             return .success
         }
 
-        center.skipForwardCommand.preferredIntervals = [NSNumber(value: preferredSkipInterval)]
+        center.skipForwardCommand.preferredIntervals = [NSNumber(value: preferredSkipIntervals.forward)]
         center.skipForwardCommand.isEnabled = true
-        center.skipForwardCommand.addTarget { [weak self] event in
+        addTarget(to: center.skipForwardCommand) { [weak self] event in
             guard let h = self?.handlers else { return .commandFailed }
-            let fallback = self?.preferredSkipInterval ?? 10
+            let fallback = self?.preferredSkipIntervals.forward ?? 10
             let skip = (event as? MPSkipIntervalCommandEvent)?.interval ?? fallback
             h.seek(h.currentTime() + skip)
             return .success
         }
 
-        center.skipBackwardCommand.preferredIntervals = [NSNumber(value: preferredSkipInterval)]
+        center.skipBackwardCommand.preferredIntervals = [NSNumber(value: preferredSkipIntervals.backward)]
         center.skipBackwardCommand.isEnabled = true
-        center.skipBackwardCommand.addTarget { [weak self] event in
+        addTarget(to: center.skipBackwardCommand) { [weak self] event in
             guard let h = self?.handlers else { return .commandFailed }
-            let fallback = self?.preferredSkipInterval ?? 10
+            let fallback = self?.preferredSkipIntervals.backward ?? 10
             let skip = (event as? MPSkipIntervalCommandEvent)?.interval ?? fallback
             h.seek(max(0, h.currentTime() - skip))
             return .success
         }
 
         center.changePlaybackPositionCommand.isEnabled = true
-        center.changePlaybackPositionCommand.addTarget { [weak self] event in
+        addTarget(to: center.changePlaybackPositionCommand) { [weak self] event in
             guard let h = self?.handlers,
                   let positionEvent = event as? MPChangePlaybackPositionCommandEvent else {
                 return .commandFailed
@@ -269,5 +285,45 @@ final class NowPlayingController {
             h.seek(positionEvent.positionTime)
             return .success
         }
+
+        addTarget(to: center.stopCommand) { [weak self] _ in
+            guard let stop = self?.handlers?.stop else { return .noSuchContent }
+            stop()
+            return .success
+        }
+
+        addTarget(to: center.nextTrackCommand) { [weak self] _ in
+            guard let h = self?.handlers,
+                  h.isNextEnabled(),
+                  let next = h.next else {
+                return .noSuchContent
+            }
+            next()
+            return .success
+        }
+
+        updateCommandAvailability()
+    }
+
+    private func addTarget(
+        to command: MPRemoteCommand,
+        handler: @escaping (MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus
+    ) {
+        let target = command.addTarget(handler: handler)
+        remoteCommandTargets.append((command, target))
+    }
+
+    private func unregisterRemoteCommands() {
+        for target in remoteCommandTargets {
+            target.command.removeTarget(target.target)
+        }
+        remoteCommandTargets.removeAll()
+    }
+
+    private func updateCommandAvailability() {
+        guard isActive else { return }
+        let center = MPRemoteCommandCenter.shared()
+        center.stopCommand.isEnabled = handlers?.stop != nil
+        center.nextTrackCommand.isEnabled = handlers.map { $0.next != nil && $0.isNextEnabled() } ?? false
     }
 }

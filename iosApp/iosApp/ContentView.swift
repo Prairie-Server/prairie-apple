@@ -200,23 +200,24 @@ struct ContentView: View {
         #endif
     }
 
-    /// Determine the initial auth state based on stored credentials.
-    ///
-    /// Before reading auth state, sync the actor-isolated `TokenStore`
-    /// with the observable `ServerRegistry`'s active server. The
-    /// registry loads its state synchronously in `init`, but TokenStore
-    /// is an actor and needs an explicit `switchActiveServer` hop before
-    /// its Keychain reads target the right slot.
+    /// Determine the initial auth state with the smallest launch-time
+    /// Keychain surface possible. The registry loads synchronously in `init`;
+    /// TokenStore only needs to be retargeted to that active server before the
+    /// first authenticated request lazily loads the full token cache.
     private func checkInitialState() async {
-        if let activeId = ServerRegistry.shared.activeServerId, !activeId.isEmpty {
-            await TokenStore.shared.switchActiveServer(serverId: activeId)
+        let activeServerId = ServerRegistry.shared.activeServerId
+        let hasStoredAccessToken: Bool
+        if let activeServerId, !activeServerId.isEmpty {
+            hasStoredAccessToken = await TokenStore.shared.hasAccessTokenForActiveServer(serverId: activeServerId)
+        } else {
+            hasStoredAccessToken = false
         }
 
         let api = AuthService.shared
         let targetState: AppRouter.AuthState
         if !api.hasServer {
             targetState = .needsServerSetup
-        } else if !api.isLoggedIn {
+        } else if !hasStoredAccessToken {
             targetState = .needsLogin
         } else if !api.hasProfile {
             targetState = .needsProfile

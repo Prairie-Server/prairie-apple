@@ -16,8 +16,8 @@
 //    - tvOS: HDMI mode is driven by AVDisplayManager. `onSigPeakChange` is a
 //      no-op; the display layer's EDR flag is irrelevant because the compositor
 //      negotiates HDR directly with the TV.
-//    - iOS: no HDMI to negotiate. HDR is driven by setting
-//      `wantsExtendedDynamicRangeContent` on the AVSampleBufferDisplayLayer
+    //    - iOS: no HDMI to negotiate. HDR is driven by setting
+    //      `preferredDynamicRange` on the AVSampleBufferDisplayLayer
 //      when the stream's transfer function is HDR and the user has HDR
 //      enabled. `onSigPeakChange` fires so the hosting view can toggle EDR.
 
@@ -67,7 +67,7 @@ final class PlayerCore: NSObject {
     var onChaptersChange: (([ChapterInfo]) -> Void)?
     /// Fires on iOS with a sig-peak > 1.0 for HDR streams (HDR10 / HLG) when
     /// the user has HDR enabled, so the hosting view can toggle
-    /// `wantsExtendedDynamicRangeContent` on the display layer. On tvOS this
+    /// `preferredDynamicRange` on the display layer. On tvOS this
     /// is a no-op — HDR is negotiated via AVDisplayManager HDMI signaling.
     var onSigPeakChange: ((Double) -> Void)?
     /// Fires on main when sidecar subtitle descriptors have been
@@ -1536,7 +1536,7 @@ final class PlayerCore: NSObject {
     /// iOS HDR path: derives a sig peak from the current stream's dynamic
     /// range and the user's `hdrEnabled` preference, then fires
     /// `onSigPeakChange` so the hosting view can toggle
-    /// `wantsExtendedDynamicRangeContent` on the display layer. Called once
+    /// `preferredDynamicRange` on the display layer. Called once
     /// per load (after dynamicRange is known) and whenever `setHDREnabled`
     /// changes the preference. No-op on tvOS — HDR is handled via
     /// AVDisplayManager there, not EDR.

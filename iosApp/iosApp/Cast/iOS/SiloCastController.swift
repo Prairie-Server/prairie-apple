@@ -12,6 +12,9 @@ final class SiloCastController {
 
     let clock = RemotePlaybackClock()
 
+    private let nowPlaying = NowPlayingController()
+    private var nowPlayingArtworkTask: Task<Void, Never>?
+    private var nowPlayingArtworkContentId: String?
     private var session: SiloCastSession?
     private var readTask: Task<Void, Never>?
     private var connectionId: UUID?
@@ -191,6 +194,7 @@ final class SiloCastController {
         case .state(let state):
             self.state = state
             clock.ingest(state)
+            updateNowPlaying(for: state)
             isConnecting = false
             errorMessage = nil
         case .error(let error):
@@ -258,6 +262,7 @@ final class SiloCastController {
         // connect (which no longer auto-presents) would fail silently.
         isShowingRemoteControl = true
         isConnecting = false
+        detachNowPlaying()
         session = nil
         readTask?.cancel()
         readTask = nil
@@ -276,6 +281,7 @@ final class SiloCastController {
         connectionId = nil
         activeTarget = nil
         state = nil
+        detachNowPlaying()
         isConnecting = false
         isShowingRemoteControl = false
     }
@@ -296,6 +302,7 @@ final class SiloCastController {
         connectionId = nil
         state = nil
         activeTarget = nil
+        detachNowPlaying()
     }
 
     private func makeHello() -> SiloCastMessage {
@@ -309,6 +316,80 @@ final class SiloCastController {
             serverName: server?.displayName,
             supportedVersions: [SiloCastProtocol.version]
         ))
+    }
+
+    private func updateNowPlaying(for state: SiloCastPlaybackState) {
+        guard let contentId = state.contentId, !contentId.isEmpty else {
+            detachNowPlaying()
+            return
+        }
+
+        attachNowPlayingIfNeeded()
+        nowPlaying.update(
+            title: state.title.isEmpty ? "Silo TV" : state.title,
+            duration: state.duration,
+            position: clock.displayTime(),
+            isPlaying: clock.isPlaying(),
+            mediaKind: .video,
+            artist: state.subtitle,
+            albumTitle: activeTarget.map { "Playing on \($0.name)" },
+            playbackRate: state.playbackSpeed
+        )
+        updateNowPlayingArtwork(contentId: contentId)
+    }
+
+    private func attachNowPlayingIfNeeded() {
+        nowPlaying.attach(handlers: NowPlayingController.Handlers(
+            play: { [weak self] in self?.send(.play) },
+            pause: { [weak self] in self?.send(.pause) },
+            isPaused: { [weak self] in !(self?.clock.isPlaying() ?? false) },
+            currentTime: { [weak self] in self?.clock.displayTime() ?? 0 },
+            seek: { [weak self] seconds in self?.seekOptimistic(to: seconds) },
+            stop: { [weak self] in self?.send(.stop) },
+            next: { [weak self] in self?.playNext() },
+            isNextEnabled: { [weak self] in self?.state?.hasNextEpisode == true }
+        ))
+        nowPlaying.setPreferredSkipIntervals(backward: 10, forward: 30)
+    }
+
+    private func updateNowPlayingArtwork(contentId: String) {
+        guard contentId != nowPlayingArtworkContentId else { return }
+        nowPlayingArtworkContentId = contentId
+        nowPlayingArtworkTask?.cancel()
+
+        if let cached: ItemDetail = ResponseCache.shared.get(CacheKey.itemDetail(contentId)) {
+            applyNowPlayingArtwork(from: cached)
+            return
+        }
+
+        nowPlayingArtworkTask = Task { [weak self] in
+            do {
+                let detail = try await ContinuumAPI.shared.itemDetail(contentId: contentId)
+                try Task.checkCancellation()
+                self?.applyNowPlayingArtwork(from: detail)
+            } catch is CancellationError {
+                return
+            } catch {
+                self?.nowPlaying.setArtworkURL(nil)
+            }
+        }
+    }
+
+    private func applyNowPlayingArtwork(from detail: ItemDetail) {
+        let poster = detail.posterUrl?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let backdrop = detail.backdropUrl?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let candidate = [poster, backdrop].compactMap { value -> String? in
+            guard let value, !value.isEmpty else { return nil }
+            return value
+        }.first
+        nowPlaying.setArtworkURL(candidate.flatMap(URL.init(string:)))
+    }
+
+    private func detachNowPlaying() {
+        nowPlayingArtworkTask?.cancel()
+        nowPlayingArtworkTask = nil
+        nowPlayingArtworkContentId = nil
+        nowPlaying.detach()
     }
 }
 #endif

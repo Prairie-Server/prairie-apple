@@ -158,7 +158,7 @@ final class PlayerOrientationCoordinator {
 
     private func currentInterfaceOrientation() -> UIInterfaceOrientation? {
         activeWindowScenes()
-            .compactMap(\.interfaceOrientation)
+            .map(\.effectiveGeometry.interfaceOrientation)
             .first(where: { $0 != .unknown })
     }
 }

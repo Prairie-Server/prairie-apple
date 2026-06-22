@@ -94,6 +94,18 @@ actor TokenStore {
         mirrorActiveTokensForExtension()
     }
 
+    /// Retarget the actor to the active registry server without touching
+    /// Keychain. Used during cold launch so route selection can avoid doing
+    /// the full token load + Top Shelf mirror before SwiftUI leaves `.loading`.
+    func retargetActiveServer(serverId: String) {
+        if serverId == activeServerId { return }
+        activeServerId = serverId
+        cachedAccessToken = nil
+        cachedRefreshToken = nil
+        cachedProfileToken = nil
+        loadedForServerId = nil
+    }
+
     /// The current active server ID. Empty string if none.
     func getActiveServerId() -> String { activeServerId }
 
@@ -119,6 +131,18 @@ actor TokenStore {
             return cachedAccessToken
         }
         return keychain.get(Self.accessTokenKey(for: serverId))
+    }
+
+    /// Minimal launch-time check for whether the active server has a stored
+    /// access token. This reads only the access-token slot; the full token
+    /// cache is still loaded lazily by the first authenticated request.
+    func hasAccessTokenForActiveServer(serverId: String) -> Bool {
+        retargetActiveServer(serverId: serverId)
+        if loadedForServerId == activeServerId {
+            return cachedAccessToken != nil
+        }
+        cachedAccessToken = keychain.get(Self.accessTokenKey(for: serverId))
+        return cachedAccessToken != nil
     }
 
     func saveTokens(accessToken: String, refreshToken: String) {

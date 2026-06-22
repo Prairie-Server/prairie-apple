@@ -12,8 +12,8 @@
 //  borders, animations, and ASS typesetting all flow through libass —
 //  the overlay view is just a CALayer host for the composited pixels.
 //
-//  iOS HDR: the host view subscribes to `onSigPeakChange` and toggles
-//  `wantsExtendedDynamicRangeContent` on the display layer when the
+//  iOS HDR: the host view subscribes to `onSigPeakChange` and updates
+//  `preferredDynamicRange` on the display layer when the
 //  stream is HDR and the display has EDR headroom to spare. On tvOS
 //  the callback never fires (HDR is driven via AVDisplayManager / HDMI
 //  negotiation).
@@ -122,14 +122,15 @@ final class PlayerSurfaceHostView: UIView {
 
     /// Toggle EDR on the display layer based on stream peak + current screen
     /// headroom. iOS-only; tvOS composites HDR through HDMI and doesn't
-    /// expose `wantsExtendedDynamicRangeContent` on this layer in a way
+    /// expose `preferredDynamicRange` on this layer in a way
     /// that matters.
     func updateEDR(sigPeak: Double) {
         #if os(iOS)
         let headroom = window?.screen.potentialEDRHeadroom ?? 1.0
         let enable = sigPeak > 1.0 && headroom > 1.0
-        if displayLayer.wantsExtendedDynamicRangeContent != enable {
-            displayLayer.wantsExtendedDynamicRangeContent = enable
+        let dynamicRange: CALayer.DynamicRange = enable ? .high : .standard
+        if displayLayer.preferredDynamicRange != dynamicRange {
+            displayLayer.preferredDynamicRange = dynamicRange
         }
         #endif
     }

@@ -33,7 +33,12 @@ enum PlatformScreen {
 
     #if canImport(UIKit) && !os(tvOS)
     private static var activeScreen: UIScreen? {
-        return UIScreen.main
+        let scenes = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+
+        return scenes.first(where: { $0.activationState == .foregroundActive })?.screen
+            ?? scenes.first(where: { $0.activationState == .foregroundInactive })?.screen
+            ?? scenes.first?.screen
     }
     #endif
 }

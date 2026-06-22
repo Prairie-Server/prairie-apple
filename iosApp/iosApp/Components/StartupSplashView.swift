@@ -10,16 +10,15 @@ import UIKit
 
 /// Full-screen startup animation shown while the app resolves its initial auth route.
 struct StartupSplashView: View {
-    private static let fallbackDuration: TimeInterval = 4.0
+    private static let maximumDisplayDuration: TimeInterval = 4.0
 
     let onFinished: () -> Void
 
     @State private var player = AVPlayer()
     @State private var playerItem: AVPlayerItem?
-    @State private var statusObservation: NSKeyValueObservation?
     @State private var playbackEndObserver: NSObjectProtocol?
     @State private var playbackFailureObserver: NSObjectProtocol?
-    @State private var fallbackCompletionTask: Task<Void, Never>?
+    @State private var completionTask: Task<Void, Never>?
     @State private var isVideoAvailable = true
     @State private var didFinish = false
 
@@ -66,10 +65,11 @@ struct StartupSplashView: View {
     }
 
     private func startPlayback() {
+        scheduleCompletion()
+
         if playerItem == nil {
             guard let url = Bundle.main.url(forResource: "startup_splash", withExtension: "mp4") else {
                 isVideoAvailable = false
-                scheduleFallbackCompletion()
                 return
             }
 
@@ -78,7 +78,6 @@ struct StartupSplashView: View {
             player.replaceCurrentItem(with: item)
             player.isMuted = true
             installPlaybackObservers(for: item)
-            installStatusObservation(for: item)
         }
 
         player.play()
@@ -86,10 +85,9 @@ struct StartupSplashView: View {
 
     private func stopPlayback() {
         player.pause()
-        fallbackCompletionTask?.cancel()
-        fallbackCompletionTask = nil
+        completionTask?.cancel()
+        completionTask = nil
         removePlaybackObservers()
-        removeStatusObservation()
     }
 
     private func installPlaybackObservers(for item: AVPlayerItem) {
@@ -109,18 +107,6 @@ struct StartupSplashView: View {
             queue: .main
         ) { _ in
             isVideoAvailable = false
-            scheduleFallbackCompletion()
-        }
-    }
-
-    private func installStatusObservation(for item: AVPlayerItem) {
-        removeStatusObservation()
-        statusObservation = item.observe(\.status, options: [.new]) { item, _ in
-            guard item.status == .failed else { return }
-            Task { @MainActor in
-                isVideoAvailable = false
-                scheduleFallbackCompletion()
-            }
         }
     }
 
@@ -135,15 +121,10 @@ struct StartupSplashView: View {
         }
     }
 
-    private func removeStatusObservation() {
-        statusObservation?.invalidate()
-        statusObservation = nil
-    }
-
-    private func scheduleFallbackCompletion() {
-        guard fallbackCompletionTask == nil else { return }
-        fallbackCompletionTask = Task {
-            try? await Task.sleep(nanoseconds: UInt64(Self.fallbackDuration * 1_000_000_000))
+    private func scheduleCompletion() {
+        guard completionTask == nil else { return }
+        completionTask = Task {
+            try? await Task.sleep(nanoseconds: UInt64(Self.maximumDisplayDuration * 1_000_000_000))
             guard !Task.isCancelled else { return }
             await MainActor.run { finish() }
         }
@@ -152,10 +133,10 @@ struct StartupSplashView: View {
     private func finish() {
         guard !didFinish else { return }
         didFinish = true
-        fallbackCompletionTask?.cancel()
-        fallbackCompletionTask = nil
+        completionTask?.cancel()
+        completionTask = nil
         removePlaybackObservers()
-        removeStatusObservation()
+        isVideoAvailable = false
         onFinished()
     }
 }
