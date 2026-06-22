@@ -1,4 +1,5 @@
 #if os(iOS)
+import Foundation
 import SwiftUI
 
 /// Native "now-playing" remote for controlling Silo playback on an Apple TV.
@@ -153,6 +154,7 @@ private struct RemoteNowPlayingContent: View {
 
     @State private var scrubPreview: Double?
     private let speedOptions: [Double] = [0.75, 1.0, 1.25, 1.5, 2.0]
+    private let subtitleDelayOptions = [-2_000, -1_500, -1_000, -500, -250, 0, 250, 500, 1_000, 1_500, 2_000]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -336,13 +338,19 @@ private struct RemoteNowPlayingContent: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(alignment: .top, spacing: 8) {
                 if !state.audioTracks.isEmpty { audioMenu.frame(minWidth: 76) }
-                if !state.subtitleTracks.isEmpty { subtitleMenu.frame(minWidth: 76) }
+                if hasSubtitleControls { subtitleMenu.frame(minWidth: 76) }
                 if !state.qualityOptions.isEmpty { qualityMenu.frame(minWidth: 76) }
                 speedMenu.frame(minWidth: 76)
                 if state.supportsVideoGravity || state.supportsHDRToggle { displayMenu.frame(minWidth: 76) }
             }
             .padding(.horizontal, 2)
         }
+    }
+
+    private var hasSubtitleControls: Bool {
+        !state.subtitleTracks.isEmpty
+            || state.supportsSubtitleDelay == true
+            || state.supportsSubtitlePosition == true
     }
 
     private var audioMenu: some View {
@@ -358,16 +366,71 @@ private struct RemoteNowPlayingContent: View {
 
     private var subtitleMenu: some View {
         Menu {
-            Button { onCommand(.selectSubtitleTrack(nil)) } label: {
-                Label("Off", systemImage: state.selectedSubtitleTrackId == nil ? "checkmark" : "captions.bubble")
+            if !state.subtitleTracks.isEmpty {
+                Section("Track") {
+                    Button { onCommand(.selectSubtitleTrack(nil)) } label: {
+                        Label("Off", systemImage: state.selectedSubtitleTrackId == nil ? "checkmark" : "captions.bubble")
+                    }
+                    ForEach(state.subtitleTracks) { track in
+                        Button { onCommand(.selectSubtitleTrack(track.trackId)) } label: {
+                            Label(track.title, systemImage: state.selectedSubtitleTrackId == track.trackId ? "checkmark" : "captions.bubble")
+                        }
+                    }
+                }
             }
-            ForEach(state.subtitleTracks) { track in
-                Button { onCommand(.selectSubtitleTrack(track.trackId)) } label: {
-                    Label(track.title, systemImage: state.selectedSubtitleTrackId == track.trackId ? "checkmark" : "captions.bubble")
+
+            if state.supportsSubtitleDelay == true {
+                Section("Delay") {
+                    ForEach(subtitleDelayMenuOptions, id: \.self) { milliseconds in
+                        Button { onCommand(.setSubtitleSyncMs(milliseconds)) } label: {
+                            Label(
+                                subtitleDelayLabel(milliseconds),
+                                systemImage: subtitleDelaySelectionSystemImage(milliseconds)
+                            )
+                        }
+                    }
+                }
+            }
+
+            if state.supportsSubtitlePosition == true {
+                Section("Position") {
+                    ForEach(SubtitlePositionPreset.allCases) { position in
+                        Button { onCommand(.setSubtitlePosition(position.rawValue)) } label: {
+                            Label(
+                                position.label,
+                                systemImage: state.subtitlePosition == position.rawValue ? "checkmark" : "textformat"
+                            )
+                        }
+                    }
                 }
             }
         } label: { RemoteChipLabel(systemImage: "captions.bubble", caption: "Subtitles") }
-        .accessibilityValue(state.subtitleTracks.first(where: { $0.trackId == state.selectedSubtitleTrackId })?.title ?? "Off")
+        .accessibilityValue(subtitleAccessibilityValue)
+    }
+
+    private var subtitleDelayMenuOptions: [Int] {
+        let current = state.subtitleSyncMs ?? 0
+        if subtitleDelayOptions.contains(current) {
+            return subtitleDelayOptions
+        }
+        return (subtitleDelayOptions + [current]).sorted()
+    }
+
+    private var subtitleAccessibilityValue: String {
+        var values: [String] = [
+            state.subtitleTracks.first(where: { $0.trackId == state.selectedSubtitleTrackId })?.title ?? "Off"
+        ]
+        if state.supportsSubtitleDelay == true {
+            values.append("Delay \(subtitleDelayLabel(state.subtitleSyncMs ?? 0))")
+        }
+        if state.supportsSubtitlePosition == true {
+            values.append(SubtitlePositionPreset(rawValue: state.subtitlePosition ?? "")?.label ?? "Bottom")
+        }
+        return values.joined(separator: ", ")
+    }
+
+    private func subtitleDelaySelectionSystemImage(_ milliseconds: Int) -> String {
+        abs((state.subtitleSyncMs ?? 0) - milliseconds) < 1 ? "checkmark" : "timer"
     }
 
     private var qualityMenu: some View {
@@ -420,6 +483,12 @@ private struct RemoteNowPlayingContent: View {
         case 2.0: return "2.0×"
         default: return "\(speed)×"
         }
+    }
+
+    private func subtitleDelayLabel(_ milliseconds: Int) -> String {
+        guard milliseconds != 0 else { return "0.0s" }
+        let seconds = Double(milliseconds) / 1000.0
+        return String(format: "%+.1fs", seconds)
     }
 
     private func errorBanner(_ message: String) -> some View {

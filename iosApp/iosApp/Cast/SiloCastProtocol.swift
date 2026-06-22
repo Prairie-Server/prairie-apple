@@ -70,6 +70,10 @@ struct SiloCastPlaybackState: Codable, Equatable, Sendable {
     let hdrEnabled: Bool
     let supportsVideoGravity: Bool
     let supportsHDRToggle: Bool
+    var subtitleSyncMs: Int? = nil
+    var subtitlePosition: String? = nil
+    var supportsSubtitleDelay: Bool? = nil
+    var supportsSubtitlePosition: Bool? = nil
     let volume: Double
     let isMuted: Bool
     let hasNextEpisode: Bool
@@ -90,6 +94,8 @@ struct SiloCastControlCommand: Codable, Equatable, Sendable {
         case setQuality = "set_quality"
         case setVideoGravity = "set_video_gravity"
         case setHDREnabled = "set_hdr_enabled"
+        case setSubtitleSyncMs = "set_subtitle_sync_ms"
+        case setSubtitlePosition = "set_subtitle_position"
         case setVolume = "set_volume"
         case setMuted = "set_muted"
         case playNext = "play_next"
@@ -102,6 +108,7 @@ struct SiloCastControlCommand: Codable, Equatable, Sendable {
     let volume: Double?
     let value: String?
     let enabled: Bool?
+    let milliseconds: Int?
 
     init(
         name: Name,
@@ -110,7 +117,8 @@ struct SiloCastControlCommand: Codable, Equatable, Sendable {
         speed: Double? = nil,
         volume: Double? = nil,
         value: String? = nil,
-        enabled: Bool? = nil
+        enabled: Bool? = nil,
+        milliseconds: Int? = nil
     ) {
         self.name = name
         self.seconds = seconds
@@ -119,6 +127,7 @@ struct SiloCastControlCommand: Codable, Equatable, Sendable {
         self.volume = volume
         self.value = value
         self.enabled = enabled
+        self.milliseconds = milliseconds
     }
 
     static let play = SiloCastControlCommand(name: .play)
@@ -152,6 +161,14 @@ struct SiloCastControlCommand: Codable, Equatable, Sendable {
 
     static func setHDREnabled(_ enabled: Bool) -> SiloCastControlCommand {
         SiloCastControlCommand(name: .setHDREnabled, enabled: enabled)
+    }
+
+    static func setSubtitleSyncMs(_ milliseconds: Int) -> SiloCastControlCommand {
+        SiloCastControlCommand(name: .setSubtitleSyncMs, milliseconds: milliseconds)
+    }
+
+    static func setSubtitlePosition(_ value: String) -> SiloCastControlCommand {
+        SiloCastControlCommand(name: .setSubtitlePosition, value: value)
     }
 
     static let playNext = SiloCastControlCommand(name: .playNext)

@@ -540,11 +540,13 @@ struct MainTabView: View {
             )
         }
         #if os(iOS)
-        .fullScreenCover(isPresented: Binding(
+        .sheet(isPresented: Binding(
             get: { castController.isShowingRemoteControl },
             set: { if !$0 { castController.hideRemoteControl() } }
         )) {
             SiloCastRemoteControlView(controller: castController)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
         }
         #endif
         #endif

@@ -2114,6 +2114,19 @@ class PlayerViewModel {
     }
 
     @MainActor
+    func setSubtitlePosition(_ position: SubtitlePositionPreset) {
+        var next = settings.subtitleAppearance
+        guard next.position != position else { return }
+        next.position = position
+        settings.subtitleAppearance = next.sanitized()
+        settings.subtitleUsesDeviceAppearanceOverride = true
+        applySubtitleAppearanceToPlayer()
+        Task { [settings] in
+            await settings.setSubtitleAppearance(next)
+        }
+    }
+
+    @MainActor
     func setSubtitleDeviceOverrideEnabled(_ enabled: Bool) async {
         await settings.setSubtitleDeviceOverrideEnabled(enabled)
         applySubtitleAppearanceToPlayer()
@@ -5347,8 +5360,10 @@ private enum SiloCastPlayerControlError: LocalizedError {
     case missingSpeed
     case missingValue
     case missingEnabledValue
+    case missingMilliseconds
     case trackNotFound
     case invalidVideoGravity
+    case invalidSubtitlePosition
 
     var errorDescription: String? {
         switch self {
@@ -5362,10 +5377,14 @@ private enum SiloCastPlayerControlError: LocalizedError {
             return "Missing setting value."
         case .missingEnabledValue:
             return "Missing enabled value."
+        case .missingMilliseconds:
+            return "Missing millisecond value."
         case .trackNotFound:
             return "Track not found."
         case .invalidVideoGravity:
             return "Invalid aspect setting."
+        case .invalidSubtitlePosition:
+            return "Invalid subtitle position."
         }
     }
 }
@@ -5430,6 +5449,19 @@ extension PlayerViewModel {
                 throw SiloCastPlayerControlError.missingEnabledValue
             }
             setHDREnabled(enabled)
+        case .setSubtitleSyncMs:
+            guard let milliseconds = command.milliseconds else {
+                throw SiloCastPlayerControlError.missingMilliseconds
+            }
+            setSubtitleSyncMilliseconds(milliseconds)
+        case .setSubtitlePosition:
+            guard let value = command.value else {
+                throw SiloCastPlayerControlError.missingValue
+            }
+            guard let position = SubtitlePositionPreset(rawValue: value) else {
+                throw SiloCastPlayerControlError.invalidSubtitlePosition
+            }
+            setSubtitlePosition(position)
         case .setVolume:
             guard let volume = command.volume, volume.isFinite else {
                 throw SiloCastPlayerControlError.missingValue
@@ -5478,6 +5510,10 @@ extension PlayerViewModel {
             hdrEnabled: settings.hdrEnabled,
             supportsVideoGravity: backendCapabilities.supportsVideoGravity,
             supportsHDRToggle: backendCapabilities.supportsHDRToggle,
+            subtitleSyncMs: settings.subtitleSyncMs,
+            subtitlePosition: settings.subtitleAppearance.position.rawValue,
+            supportsSubtitleDelay: backendCapabilities.supportsSubtitleDelay,
+            supportsSubtitlePosition: backendCapabilities.supportsSubtitleStyling,
             volume: Double(userVolume),
             isMuted: userMuted,
             hasNextEpisode: nextUpEpisode != nil,
