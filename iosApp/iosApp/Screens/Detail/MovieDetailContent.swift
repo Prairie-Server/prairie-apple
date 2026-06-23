@@ -67,7 +67,7 @@ struct MovieDetailContent: View {
             sourceTokens: PhoneHeroMetadata.movieSourceTokens(from: detail),
             ratingChip: PhoneHeroMetadata.contentRatingChip(from: detail),
             overview: detail.overview,
-            factsLine: PhoneHeroMetadata.movieFactsLine(from: detail),
+            factsLine: PhoneHeroMetadata.movieFactsLine(from: detail, version: effectiveVersion),
             overlayData: OverlayData.from(detail),
             actions: { actionStack }
         )

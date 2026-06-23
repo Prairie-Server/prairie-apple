@@ -480,7 +480,7 @@ enum TVHeroMetadata {
 
     // Facts line (year · runtime · maturity · quality chips)
 
-    static func movieFactsLine(from detail: ItemDetail) -> [TVHeroFactToken] {
+    static func movieFactsLine(from detail: ItemDetail, version selectedVersion: FileVersion? = nil) -> [TVHeroFactToken] {
         var tokens: [TVHeroFactToken] = []
         if let year = detail.year, year > 0 {
             tokens.append(.text(String(year)))
@@ -491,7 +491,7 @@ enum TVHeroMetadata {
         if let imdb = detail.ratingImdb {
             tokens.append(.text(String(format: "★ %.1f", imdb)))
         }
-        tokens.append(contentsOf: qualityTokens(from: detail))
+        tokens.append(contentsOf: qualityTokens(from: detail, version: selectedVersion))
         return tokens
     }
 
@@ -559,8 +559,8 @@ enum TVHeroMetadata {
         }
     }
 
-    private static func qualityTokens(from detail: ItemDetail) -> [TVHeroFactToken] {
-        guard let version = preferredVersion(from: detail) else { return [] }
+    private static func qualityTokens(from detail: ItemDetail, version selectedVersion: FileVersion? = nil) -> [TVHeroFactToken] {
+        guard let version = selectedVersion ?? preferredVersion(from: detail) else { return [] }
         var tokens: [TVHeroFactToken] = []
         if let res = resolutionLabel(version.resolution) {
             tokens.append(.chip(res))
