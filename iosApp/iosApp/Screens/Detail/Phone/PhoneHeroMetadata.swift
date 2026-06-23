@@ -61,7 +61,7 @@ enum PhoneHeroMetadata {
 
     // MARK: - Facts row
 
-    static func movieFactsLine(from detail: ItemDetail) -> [PhoneHeroFactToken] {
+    static func movieFactsLine(from detail: ItemDetail, version selectedVersion: FileVersion? = nil) -> [PhoneHeroFactToken] {
         var tokens: [PhoneHeroFactToken] = []
         if let year = detail.year, year > 0 { tokens.append(.text(String(year))) }
         if let runtime = detail.runtime, runtime > 0 {
@@ -70,7 +70,7 @@ enum PhoneHeroMetadata {
         if let imdb = detail.ratingImdb {
             tokens.append(.text(String(format: "★ %.1f", imdb)))
         }
-        tokens.append(contentsOf: qualityTokens(from: detail))
+        tokens.append(contentsOf: qualityTokens(from: detail, version: selectedVersion))
         return tokens
     }
 
@@ -165,8 +165,8 @@ enum PhoneHeroMetadata {
         }
     }
 
-    private static func qualityTokens(from detail: ItemDetail) -> [PhoneHeroFactToken] {
-        guard let version = preferredVersion(from: detail) else { return [] }
+    private static func qualityTokens(from detail: ItemDetail, version selectedVersion: FileVersion? = nil) -> [PhoneHeroFactToken] {
+        guard let version = selectedVersion ?? preferredVersion(from: detail) else { return [] }
         var tokens: [PhoneHeroFactToken] = []
         if let res = resolutionLabel(version.resolution) { tokens.append(.chip(res)) }
         if version.hdr == true {

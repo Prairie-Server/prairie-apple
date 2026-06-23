@@ -46,7 +46,7 @@ struct TVMovieDetailView: View {
                     ratingChip: TVHeroMetadata.contentRatingChip(from: detail),
                     overview: detail.overview,
                     tagline: detail.tagline,
-                    factsLine: TVHeroMetadata.movieFactsLine(from: detail),
+                    factsLine: TVHeroMetadata.movieFactsLine(from: detail, version: currentVersion),
                     starringText: TVHeroMetadata.starringText(from: detail),
                     actions: { actionColumn }
                 )
@@ -80,11 +80,7 @@ struct TVMovieDetailView: View {
             actionRow
             TVPlaybackSelectorRow(
                 versions: availableVersions,
-                currentVersion: DetailVersionSelection.displayVersion(
-                    versions: availableVersions,
-                    selectedFileId: selectedVersionFileId,
-                    lastFileId: detail.userData?.lastFileId
-                ),
+                currentVersion: currentVersion,
                 selectedVersionFileId: selectedVersionFileId,
                 selectedAudioTrackIndex: selectedAudioTrackIndex,
                 selectedSubtitleTrackIndex: selectedSubtitleTrackIndex,
@@ -279,6 +275,14 @@ struct TVMovieDetailView: View {
 
     private var availableVersions: [FileVersion] {
         detail.versions ?? []
+    }
+
+    private var currentVersion: FileVersion? {
+        DetailVersionSelection.displayVersion(
+            versions: availableVersions,
+            selectedFileId: selectedVersionFileId,
+            lastFileId: detail.userData?.lastFileId
+        )
     }
 }
 #endif
