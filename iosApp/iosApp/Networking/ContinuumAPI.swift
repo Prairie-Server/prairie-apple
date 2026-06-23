@@ -482,6 +482,22 @@ actor ContinuumAPI {
         try await http.get("/api/v1/catalog", query: query)
     }
 
+    func historyCatalog(
+        offset: Int,
+        limit: Int,
+        snapshot: String? = nil,
+        includeTotal: Bool = true
+    ) async throws -> CatalogResponse {
+        var query: [String: String] = [
+            "source": "history",
+            "offset": String(offset),
+            "limit": String(limit),
+        ]
+        if let snapshot { query["snapshot"] = snapshot }
+        if !includeTotal { query["include_total"] = "false" }
+        return try await catalog(query: query)
+    }
+
     func itemDetail(contentId: String) async throws -> ItemDetail {
         try await http.get("/api/v1/catalog/items/\(contentId)")
     }
