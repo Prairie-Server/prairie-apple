@@ -92,6 +92,9 @@ struct ContentView: View {
             guard newPhase == .active,
                   router.authState == .authenticated else { return }
             Task { await overlayPrefs.hydrateIfNeeded() }
+            #if os(tvOS)
+            NotificationCenter.default.post(name: .homeSectionsShouldRefresh, object: nil)
+            #endif
         }
     }
 

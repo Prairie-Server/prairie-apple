@@ -85,7 +85,7 @@ struct ErrorView: View {
         if let goBack = resolvedOnGoBack {
             return Action(title: "Go Back", run: goBack)
         }
-        return Action(title: "Sign In Again", run: resolvedOnSignOut)
+        return nil
     }
 
     private var secondaryAction: Action? {
@@ -94,8 +94,8 @@ struct ErrorView: View {
         }
         if state.isNotFound, resolvedOnGoBack != nil {
             if let onRetry { return Action(title: "Try Again", run: onRetry) }
-            return Action(title: "Sign Out", run: resolvedOnSignOut)
+            return nil
         }
-        return Action(title: "Sign Out", run: resolvedOnSignOut)
+        return nil
     }
 }
