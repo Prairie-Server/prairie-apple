@@ -37,17 +37,38 @@ class HomeViewModel {
         error = nil
 
         do {
-            let response = try await StartupContentPrefetcher.fetchHomeSections()
-            sections = response.sections.filter { !$0.items.isEmpty }
+            try await fetchAndApplySections()
         } catch let err {
             // Don't blow away painted content on a transient failure —
             // surface the error only when there's nothing to show.
             if sections.isEmpty {
-                self.error = ErrorState(err)
+                let state = ErrorState(err)
+                if state.isTransient {
+                    await retryTransientInitialLoad()
+                } else {
+                    self.error = state
+                }
             }
         }
 
         isLoading = false
         isRefreshing = false
+    }
+
+    private func fetchAndApplySections() async throws {
+        let response = try await StartupContentPrefetcher.fetchHomeSections()
+        sections = response.sections.filter { !$0.items.isEmpty }
+        error = nil
+    }
+
+    private func retryTransientInitialLoad() async {
+        try? await Task.sleep(nanoseconds: 750_000_000)
+        guard !Task.isCancelled else { return }
+
+        do {
+            try await fetchAndApplySections()
+        } catch {
+            self.error = ErrorState(error)
+        }
     }
 }
