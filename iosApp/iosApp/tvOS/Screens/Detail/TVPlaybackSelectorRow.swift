@@ -72,7 +72,10 @@ struct TVPlaybackSelectorRow: View {
                 ForEach(editions) { edition in
                     Button {
                         let best = DetailVersionSelection.displayVersion(
-                            versions: edition.versions, selectedFileId: nil, lastFileId: nil
+                            versions: edition.versions,
+                            selectedFileId: nil,
+                            lastFileId: nil,
+                            preferredQualityId: PlayerSettings.shared.preferredQuality
                         )
                         onSelectVersion(best?.fileId)
                     } label: {

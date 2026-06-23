@@ -281,7 +281,8 @@ struct TVMovieDetailView: View {
         DetailVersionSelection.displayVersion(
             versions: availableVersions,
             selectedFileId: selectedVersionFileId,
-            lastFileId: detail.userData?.lastFileId
+            lastFileId: detail.userData?.lastFileId,
+            preferredQualityId: PlayerSettings.shared.preferredQuality
         )
     }
 }
