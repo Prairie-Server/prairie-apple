@@ -2,23 +2,16 @@ import SwiftUI
 
 /// List of recently watched items from the user's history.
 struct HistoryView: View {
-    @State private var items: [BrowseItem] = []
-    @State private var isLoading = false
-    @State private var error: ErrorState?
+    @State private var viewModel = HistoryViewModel()
     @Environment(AppRouter.self) private var router
-    @Environment(\.horizontalSizeClass) private var hSize
-
-    private var columns: [GridItem] {
-        AdaptiveColumns.posters(for: hSize)
-    }
 
     var body: some View {
         Group {
-            if !items.isEmpty {
+            if !viewModel.items.isEmpty {
                 gridContent
-            } else if let error {
-                ErrorView(state: error, onRetry: { Task { await loadHistory() } })
-            } else if isLoading {
+            } else if let error = viewModel.error {
+                ErrorView(state: error, onRetry: { Task { await viewModel.load(reset: true) } })
+            } else if viewModel.isLoading {
                 // tvOS: this is a pushed destination, so the top menu bar
                 // isn't there to hold focus — without a focusable element
                 // the remote goes dead until the grid renders.
@@ -38,55 +31,35 @@ struct HistoryView: View {
         .navigationTitle("History")
         .continuumNavigationTitleDisplayMode(.large)
         .task {
-            await loadHistory()
+            await viewModel.load(reset: true)
         }
         .refreshable {
-            await loadHistory()
+            await viewModel.load(reset: true)
         }
     }
 
     private var gridContent: some View {
-        ScrollView {
-            LazyVGrid(columns: columns, spacing: 16) {
-                ForEach(items) { item in
-                    MediaCard(
-                        title: item.title,
-                        posterUrl: item.posterUrl ?? "",
-                        thumbhash: item.posterThumbhash,
-                        year: item.year,
-                        userState: item.userState,
-                        overlayData: OverlayData.from(item),
-                        action: {
-                            router.navigate(to: .itemDetail(contentId: item.contentId))
-                        }
-                    )
-                    .frame(maxWidth: .infinity)
-                }
-            }
-            .padding(ContinuumTheme.padding)
-        }
-    }
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: ContinuumTheme.padding) {
+                Text(viewModel.countLabel)
+                    .font(.continuumCaption)
+                    .foregroundColor(.continuumSecondaryText)
 
-    private func loadHistory() async {
-        if items.isEmpty,
-           let cached: CatalogResponse = ResponseCache.shared.get(CacheKey.history) {
-            items = cached.items
-        }
-        if items.isEmpty {
-            isLoading = true
-        }
-        error = nil
-        do {
-            let response: CatalogResponse = try await ContinuumAPI.shared.get(
-                "/api/v1/history"
-            )
-            ResponseCache.shared.set(response, for: CacheKey.history)
-            items = response.items
-        } catch let err {
-            if items.isEmpty {
-                self.error = ErrorState(err)
+                CatalogGrid(
+                    items: viewModel.items,
+                    isLoading: viewModel.isLoading,
+                    hasMore: viewModel.hasMore,
+                    onItemTap: { contentId in
+                        router.navigate(to: .itemDetail(contentId: contentId))
+                    },
+                    onLoadMore: {
+                        Task { await viewModel.load(reset: false) }
+                    }
+                )
             }
+            .padding(.horizontal, ContinuumTheme.padding)
+            .padding(.top, ContinuumTheme.smallPadding)
+            .padding(.bottom, ContinuumTheme.largePadding)
         }
-        isLoading = false
     }
 }
