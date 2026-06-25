@@ -282,6 +282,11 @@ struct TVCascadeSelector: View {
             // A sibling focus section, so a Left press is resolved as a move
             // *out* of the flyout and *into* the library column's preferred row.
             .focusSection()
+            .applySectionFlyoutDefaultFocus(
+                anchorId,
+                firstPill: pills.first,
+                binding: $focus
+            )
             .fixedSize()
             // Crossfade the section list as the flyout follows focus to a
             // new library; the vertical move is handled by `flyoutTopOffset`
@@ -438,9 +443,27 @@ struct TVCascadeSelector: View {
     }
 }
 
-// MARK: - Flyout left-return focus
+// MARK: - Cross-column focus defaults
 
 private extension View {
+    /// Routes a d-pad **Right** out of the library column into the flyout's
+    /// first section. Without an explicit user-initiated default, tvOS can fail
+    /// to find a geometrically valid target because the flyout is visually
+    /// offset to align with the focused library row while its first focusable
+    /// row sits below the flyout header.
+    @ViewBuilder
+    func applySectionFlyoutDefaultFocus(
+        _ libraryId: Int?,
+        firstPill: TVLibraryPill?,
+        binding: FocusState<TVCascadeSelector.Focus?>.Binding
+    ) -> some View {
+        if let libraryId, let firstPill {
+            self.defaultFocus(binding, .section(libraryId, firstPill), priority: .userInitiated)
+        } else {
+            self
+        }
+    }
+
     /// Routes a d-pad **Left** out of the flyout straight to the anchored
     /// library row (§5.3), instead of the geometrically nearest row — which,
     /// because the flyout is top-aligned a row below, would be the wrong
