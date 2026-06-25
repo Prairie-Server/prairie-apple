@@ -81,12 +81,14 @@ enum TVLibraryTabType: String, CaseIterable, Hashable {
 
 enum TVRootDestination: Hashable {
     case home
+    case recommendations
     case libraryType(TVLibraryTabType)
     case calendar
 
     var title: String {
         switch self {
         case .home: return "Home"
+        case .recommendations: return "For You"
         case .libraryType(let type): return type.title
         case .calendar: return "Calendar"
         }
@@ -301,23 +303,38 @@ struct TVTopMenuBar: View {
         // page content behind the bar. Fires only when the engine can't move
         // focus within the bar — i.e. the bar is a single row, so down
         // always reaches here.
-        // `canOpenPanel` is keyed on the tab *kind* (a library tab always
-        // can; Home/Calendar never can) — invariant, so opening a panel
-        // never restructures this focused button (which dropped focus).
-        .modifier(TVTopMenuDownHandler(canOpenPanel: libraryRoot(root) != nil) {
+        // `canOpenPanel` is keyed on the tab *kind* (library and For You tabs
+        // can; Home/Calendar never can) — invariant, so opening a panel never
+        // restructures this focused button (which dropped focus).
+        .modifier(TVTopMenuDownHandler(canOpenPanel: rootPanel(root) != nil) {
             onEnterPanel(.root(root))
         })
-        // Library tabs publish their bounds so the shell can center the
-        // cascade panel under them (§5.3); other tabs have no panel.
-        .modifier(TVTopMenuAnchorPublisher(panel: libraryRoot(root) != nil ? .root(root) : nil))
+        // Panel-bearing tabs publish their bounds so the shell can center the
+        // anchored dropdown under them (§5.3); other tabs have no panel.
+        .modifier(TVTopMenuAnchorPublisher(panel: rootPanel(root)))
         .accessibilityLabel("\(root.title), tab, \(index + 1) of \(count)")
-        .accessibilityHint(libraryRoot(root) != nil ? "Rest to choose a library" : "")
+        .accessibilityHint(rootPanelHint(for: root))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
-    private func libraryRoot(_ root: TVRootDestination) -> TVLibraryTabType? {
-        if case .libraryType(let type) = root { return type }
-        return nil
+    private func rootPanel(_ root: TVRootDestination) -> TVTopMenuPanel? {
+        switch root {
+        case .libraryType, .recommendations:
+            return .root(root)
+        case .home, .calendar:
+            return nil
+        }
+    }
+
+    private func rootPanelHint(for root: TVRootDestination) -> String {
+        switch root {
+        case .libraryType:
+            return "Rest to choose a library"
+        case .recommendations:
+            return "Rest to choose Watchlist, Favorites, or Recommendations"
+        case .home, .calendar:
+            return ""
+        }
     }
 
     private func tabForeground(isSelected: Bool, isFocused: Bool) -> Color {
@@ -477,8 +494,7 @@ struct TVTopMenuBar: View {
     private func dwellTarget(for item: TVTopMenuFocus?) -> TVTopMenuPanel? {
         switch item {
         case .root(let root):
-            guard case .libraryType = root else { return nil }
-            return .root(root)
+            return rootPanel(root)
         case .profile:
             return .profile
         case .search, .none:
@@ -700,6 +716,133 @@ private final class TVTopMenuExitPressUIView: UIView, UIGestureRecognizerDelegat
 
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         isActive
+    }
+}
+
+// MARK: - For You dropdown
+
+private enum TVForYouAction: Hashable {
+    case watchlist
+    case favorites
+    case recommendations
+}
+
+/// Anchored For You dropdown: a single-level menu under the For You root
+/// tab, matching the top-bar dwell/down focus contract used by library
+/// cascades.
+struct TVForYouDropdown: View {
+    let entersPanel: Bool
+    let focusEntryToken: Int
+    let onPanelFocusChanged: (Bool) -> Void
+    let onWatchlist: () -> Void
+    let onFavorites: () -> Void
+    let onRecommendations: () -> Void
+
+    @FocusState private var focusedAction: TVForYouAction?
+    @State private var lastAppliedEntryToken = 0
+
+    var body: some View {
+        panel
+            .onChange(of: focusEntryToken) { _, token in applyEntryToken(token) }
+            .onChange(of: focusedAction) { _, newValue in
+                onPanelFocusChanged(newValue != nil)
+            }
+            .onChange(of: entersPanel) { _, entered in
+                if !entered { focusedAction = nil }
+            }
+            .onAppear {
+                if entersPanel { applyEntryToken(focusEntryToken) }
+            }
+    }
+
+    private func applyEntryToken(_ token: Int) {
+        guard entersPanel, token > 0, token != lastAppliedEntryToken else { return }
+        lastAppliedEntryToken = token
+        focusedAction = .watchlist
+    }
+
+    private var panel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            panelHeader
+
+            actionButton("Watchlist", systemImage: "bookmark.fill", id: .watchlist, action: onWatchlist)
+            actionButton("Favorites", systemImage: "heart.fill", id: .favorites, action: onFavorites)
+            actionButton("Recommendations", systemImage: "sparkles", id: .recommendations, action: onRecommendations)
+
+            panelFooter
+        }
+        .padding(ContinuumTheme.Skyline.dropdownPadding)
+        .frame(width: ContinuumTheme.Skyline.dropdownWidth, alignment: .leading)
+        .modifier(TVSkylinePanelChrome())
+        .focusSection()
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("For You menu")
+    }
+
+    private var panelHeader: some View {
+        Text("FOR YOU")
+            .font(.system(size: ContinuumTheme.Skyline.dropdownHeaderSize, design: .monospaced))
+            .tracking(ContinuumTheme.Skyline.dropdownHeaderSize * 0.26)
+            .foregroundStyle(Color.white.opacity(0.38))
+            .lineLimit(1)
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 2)
+            .accessibilityHidden(true)
+    }
+
+    private var panelFooter: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Rectangle()
+                .fill(Color.continuumDivider)
+                .frame(height: 1)
+                .padding(.horizontal, 12)
+                .padding(.top, 6)
+
+            Text("Press opens the section · Menu closes")
+                .font(.system(size: ContinuumTheme.Skyline.dropdownHeaderSize, design: .monospaced))
+                .tracking(1.2)
+                .foregroundStyle(Color.white.opacity(0.34))
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 16)
+                .padding(.top, 10)
+                .padding(.bottom, 4)
+        }
+        .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private func actionButton(
+        _ title: String,
+        systemImage: String,
+        id: TVForYouAction,
+        action: @escaping () -> Void
+    ) -> some View {
+        let label = HStack(spacing: 14) {
+            Image(systemName: systemImage)
+                .font(.system(size: 20, weight: .semibold))
+                .frame(width: 30)
+
+            Text(title)
+                .font(.system(size: ContinuumTheme.Skyline.dropdownRowTextSize, weight: .semibold))
+                .lineLimit(1)
+
+            Spacer(minLength: 0)
+        }
+
+        if entersPanel {
+            Button(action: action) {
+                label
+            }
+            .buttonStyle(TVProfileMenuButtonStyle(isDestructive: false))
+            .focused($focusedAction, equals: id)
+        } else {
+            label
+                .foregroundStyle(.white.opacity(0.86))
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+        }
     }
 }
 

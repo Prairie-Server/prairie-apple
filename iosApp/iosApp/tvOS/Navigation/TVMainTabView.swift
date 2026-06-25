@@ -10,8 +10,8 @@ private let tvFocusLog = Logger(subsystem: "com.silo.tvfocus", category: "host")
 /// navigation without the system sidebar claiming leftward focus.
 ///
 /// Tabs are content-type-first (Skyline §3.1): `Home · Movies · Series ·
-/// Music · Audiobooks · Calendar`, where each library-type tab appears only
-/// if the profile can see at least one library of that type.
+/// Music · Audiobooks · For You · Calendar`, where each library-type tab
+/// appears only if the profile can see at least one library of that type.
 struct TVMainTabView: View {
     @Bindable var router: AppRouter
     @State private var selectedRoot: TVRootDestination = .home
@@ -199,6 +199,11 @@ struct TVMainTabView: View {
                 isTopMenuFocused: isTopMenuFocused,
                 onTopMenuFocusRequest: { focusTopMenuIfVisible() }
             )
+        case .recommendations:
+            RecommendationsView(
+                focusRequest: contentFocusRequest,
+                onTopMenuFocusRequest: { focusTopMenuIfVisible() }
+            )
         case .libraryType(let type):
             let active = activeLibrary(for: type)
             TVLibraryTypeTabView(
@@ -260,11 +265,26 @@ struct TVMainTabView: View {
     /// passive labels.
     private var persistentPanels: [TVTopMenuPanel] {
         var panels = visibleRoots.compactMap { root -> TVTopMenuPanel? in
-            if case .libraryType = root { return .root(root) }
-            return nil
+            switch root {
+            case .libraryType, .recommendations:
+                return .root(root)
+            case .home, .calendar:
+                return nil
+            }
         }
         panels.append(.profile)
         return panels
+    }
+
+    private func panelIntrinsicWidth(for panel: TVTopMenuPanel) -> CGFloat {
+        switch panel {
+        case .profile, .root(.recommendations):
+            return ContinuumTheme.Skyline.dropdownWidth
+        case .root:
+            return ContinuumTheme.Skyline.dropdownWidth
+                + ContinuumTheme.Skyline.flyoutGap
+                + ContinuumTheme.Skyline.flyoutWidth
+        }
     }
 
     private func anchoredPanel(
@@ -319,6 +339,14 @@ struct TVMainTabView: View {
         case .profile:
             // Right-aligned to safeArea.x (§5.8).
             return max(safe, screenWidth - safe - level1Width)
+        case .root(.recommendations):
+            guard let anchor = anchors[panel] else {
+                return safe
+            }
+            let rect = proxy[anchor]
+            let centered = rect.midX - level1Width / 2
+            let maxLeading = max(safe, screenWidth - safe - panelIntrinsicWidth(for: panel))
+            return min(max(centered, safe), maxLeading)
         case .root:
             guard let anchor = anchors[panel] else {
                 // Anchor not published yet — fall back to the safe-area edge.
@@ -356,8 +384,13 @@ struct TVMainTabView: View {
     private func panelBody(for panel: TVTopMenuPanel, isActive: Bool) -> some View {
         switch panel {
         case .root(let root):
-            if case .libraryType(let type) = root {
+            switch root {
+            case .libraryType(let type):
                 cascadePanel(for: type, isActive: isActive)
+            case .recommendations:
+                forYouPanel(isActive: isActive)
+            case .home, .calendar:
+                EmptyView()
             }
         case .profile:
             profilePanel(isActive: isActive)
@@ -375,6 +408,17 @@ struct TVMainTabView: View {
             onCommitSection: { commitScope(type: type, library: $0, pill: $1) },
             onClose: { closePanel() },
             onPanelFocusChanged: { handlePanelFocusChanged($0) }
+        )
+    }
+
+    private func forYouPanel(isActive: Bool) -> some View {
+        TVForYouDropdown(
+            entersPanel: isActive && panelEntersFocus,
+            focusEntryToken: panelFocusEntryToken,
+            onPanelFocusChanged: { handlePanelFocusChanged($0) },
+            onWatchlist: { closePanel(then: { router.navigate(to: .watchlist) }) },
+            onFavorites: { closePanel(then: { router.navigate(to: .favorites) }) },
+            onRecommendations: { closePanel(then: { selectRoot(.recommendations) }) }
         )
     }
 
@@ -579,14 +623,15 @@ struct TVMainTabView: View {
 
     // MARK: - Tab derivation
 
-    /// Fixed root order (Skyline §3.1): Home, then one tab per library
-    /// type the profile can see, then Calendar.
+    /// Fixed root order (Skyline §3.1): Home, then one tab per library type
+    /// the profile can see, then For You and Calendar.
     private var visibleRoots: [TVRootDestination] {
         var roots: [TVRootDestination] = [.home]
         for type in TVLibraryTabType.allCases
         where libraries.contains(where: { type.matches($0) }) {
             roots.append(.libraryType(type))
         }
+        roots.append(.recommendations)
         roots.append(.calendar)
         return roots
     }
