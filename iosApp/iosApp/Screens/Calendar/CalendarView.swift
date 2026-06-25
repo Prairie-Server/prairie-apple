@@ -101,7 +101,7 @@ struct CalendarView: View {
             HStack(spacing: 10) {
                 SidebarToggleButton()
 
-                Text(monthLabel)
+                Text(viewModel.week.monthLabel)
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundColor(.continuumOnSurface)
 
@@ -156,18 +156,12 @@ struct CalendarView: View {
         .frame(maxWidth: .infinity)
     }
 
-    /// "June 2026" for the visible week — Thursday anchor so a month-spanning
-    /// week shows the month that owns most of its days.
-    private var monthLabel: String {
-        let anchor = Calendar.current.date(byAdding: .day, value: 3, to: viewModel.week.startDate)
-            ?? viewModel.week.startDate
-        return anchor.formatted(.dateTime.month(.wide).year())
-    }
-
     /// "Today" returns to the current week *and* scrolls to today's shelf —
     /// otherwise the user lands at the top of the week. The week reload is
-    /// awaited so today's shelf exists before we scroll, with a brief beat
-    /// for the reloaded shelves to lay out.
+    /// awaited so today's shelf exists, then the scroll is deferred one
+    /// runloop tick so the reloaded week's shelves are laid out first (the
+    /// same hand-off `CalendarDayShelf` uses for focus). Scrolling inline
+    /// would target the previous week's shelves, before SwiftUI re-renders.
     private func returnToToday(proxy: ScrollViewProxy) {
         Task {
             await viewModel.goToToday()
@@ -175,9 +169,10 @@ struct CalendarView: View {
                 Calendar.current.isDateInToday($0)
             }) else { return }
             viewModel.selectDay(today)
-            try? await Task.sleep(for: .milliseconds(50))
-            withAnimation(ContinuumTheme.springAnimation) {
-                proxy.scrollTo(today, anchor: .top)
+            DispatchQueue.main.async {
+                withAnimation(ContinuumTheme.springAnimation) {
+                    proxy.scrollTo(today, anchor: .top)
+                }
             }
         }
     }

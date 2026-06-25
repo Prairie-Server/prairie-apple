@@ -48,6 +48,13 @@ struct CalendarWeek: Equatable, Hashable {
     var startString: String { DateFormatters.isoDate.string(from: startDate) }
     var endString: String { DateFormatters.isoDate.string(from: endDate) }
 
+    /// "June 2026" — anchored on the week's Thursday so a month-spanning week
+    /// shows the month that owns most of its days.
+    var monthLabel: String {
+        let anchor = Self.isoCalendar.date(byAdding: .day, value: 3, to: startDate) ?? startDate
+        return anchor.formatted(.dateTime.month(.wide).year())
+    }
+
     func containsToday(_ today: Date = Date()) -> Bool {
         days.contains { Self.isoCalendar.isDate($0, inSameDayAs: today) }
     }

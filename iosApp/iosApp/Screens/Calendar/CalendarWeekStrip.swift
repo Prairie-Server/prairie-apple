@@ -124,7 +124,7 @@ struct CalendarWeekStrip: View {
 
             Spacer(minLength: 0)
 
-            Text(monthLabel)
+            Text(week.monthLabel)
                 .font(monthFont)
                 .foregroundColor(.continuumSecondaryText)
         }
@@ -171,14 +171,6 @@ struct CalendarWeekStrip: View {
     }
 
     fileprivate var focusBinding: FocusState<StripControl?>.Binding { $focusedControl }
-
-    /// "June 2026" — uses the Thursday so a week spanning two months shows
-    /// the month that owns most of its days.
-    private var monthLabel: String {
-        let anchor = Calendar.current.date(byAdding: .day, value: 3, to: week.startDate)
-            ?? week.startDate
-        return anchor.formatted(.dateTime.month(.wide).year())
-    }
 
     // MARK: - Metrics
 
