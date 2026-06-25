@@ -218,8 +218,12 @@ struct SectionItem: Codable, Identifiable, Hashable {
 }
 
 enum SiloMediaType {
+    private static func normalized(_ type: String) -> String {
+        type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
     static func isAudiobook(_ type: String) -> Bool {
-        switch type.lowercased() {
+        switch normalized(type) {
         case "audiobook", "audiobooks", "book", "books":
             return true
         default:
@@ -228,7 +232,34 @@ enum SiloMediaType {
     }
 
     static func isSeries(_ type: String) -> Bool {
-        type.lowercased() == "series"
+        switch normalized(type) {
+        case "series", "show", "shows", "tv", "tvshows":
+            return true
+        default:
+            return false
+        }
+    }
+
+    static func isMovieLibrary(_ type: String) -> Bool {
+        switch normalized(type) {
+        case "movie", "movies":
+            return true
+        default:
+            return false
+        }
+    }
+
+    static func isAudiobookLibrary(_ type: String) -> Bool {
+        switch normalized(type) {
+        case "audiobook", "audiobooks":
+            return true
+        default:
+            return false
+        }
+    }
+
+    static func isSupportedLibrary(_ type: String) -> Bool {
+        isMovieLibrary(type) || isSeries(type) || isAudiobookLibrary(type)
     }
 }
 
@@ -1019,25 +1050,28 @@ struct Library: Codable, Identifiable, Hashable {
     let sortOrder: Int?
     let posterUrl: String?
 
-    var isAudiobookLibrary: Bool { SiloMediaType.isAudiobook(type) }
+    var isMovieLibrary: Bool { SiloMediaType.isMovieLibrary(type) }
+    var isAudiobookLibrary: Bool { SiloMediaType.isAudiobookLibrary(type) }
     var isSeriesLibrary: Bool { SiloMediaType.isSeries(type) }
+    var isSupportedLibrary: Bool { SiloMediaType.isSupportedLibrary(type) }
 }
 
 struct LibrariesResponse: Codable {
     let libraries: [Library]
 
     init(libraries: [Library]) {
-        self.libraries = libraries
+        self.libraries = libraries.filter(\.isSupportedLibrary)
     }
 
     init(from decoder: Decoder) throws {
         if let list = try? [Library](from: decoder) {
-            libraries = list
+            libraries = list.filter(\.isSupportedLibrary)
             return
         }
 
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        libraries = try c.decodeIfPresent([Library].self, forKey: .libraries) ?? []
+        libraries = try c.decodeIfPresent([Library].self, forKey: .libraries)?
+            .filter(\.isSupportedLibrary) ?? []
     }
 }
 
