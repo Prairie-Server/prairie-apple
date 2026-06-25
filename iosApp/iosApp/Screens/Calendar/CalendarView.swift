@@ -49,13 +49,72 @@ struct CalendarView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         #else
-        VStack(spacing: 0) {
-            HStack(spacing: 12) {
+        // No standalone title bar: the search / profile actions live inside
+        // the floating calendar card so the agenda reclaims that height.
+        phoneContent
+            .continuumBackground()
+        #if os(iOS)
+            .toolbar(.hidden, for: .navigationBar)
+        #endif
+        #endif
+    }
+
+    // MARK: - iOS / macOS
+
+    #if !os(tvOS)
+    private var phoneContent: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.vertical, showsIndicators: false) {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    // The scope sits in the scrolling content so it slides
+                    // away as you read down the agenda — only the week rail
+                    // (pinned via the safe-area inset below) stays put. That
+                    // is the room win: one slim sticky bar instead of three.
+                    CalendarFilterBar(
+                        selected: viewModel.filter,
+                        onSelect: { viewModel.select(filter: $0) }
+                    )
+                    .padding(.horizontal, ContinuumTheme.safePadding)
+                    .padding(.top, ContinuumTheme.smallPadding)
+                    .padding(.bottom, ContinuumTheme.padding)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    shelfArea
+                }
+                .padding(.bottom, ContinuumTheme.largePadding)
+            }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                phoneWeekStrip(proxy: proxy)
+            }
+            .continuumScrollEdgeEffect()
+        }
+    }
+
+    /// The single pinned element: a floating Liquid-Glass calendar card. It
+    /// carries the relocated top-bar actions (so the agenda reclaims the old
+    /// title bar's height) and rides the scroll view's top safe-area inset —
+    /// the agenda scrolls *under* its glass. Tapping a day still lands its
+    /// shelf just below the card (the inset offsets `scrollTo`). No opaque
+    /// backing, so content refracts through the glass as it passes beneath.
+    private func phoneWeekStrip(proxy: ScrollViewProxy) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
                 SidebarToggleButton()
 
-                Text("Calendar")
-                    .font(.continuumTitle)
+                Text(monthLabel)
+                    .font(.system(size: 17, weight: .semibold))
                     .foregroundColor(.continuumOnSurface)
+
+                if !viewModel.isCurrentWeek {
+                    Button("Today") { returnToToday(proxy: proxy) }
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.continuumOnSurface)
+                        .buttonStyle(.plain)
+                        .padding(.horizontal, 12)
+                        .frame(height: 30)
+                        .siloGlass(in: .capsule)
+                        .accessibilityLabel("Jump to today")
+                }
 
                 Spacer(minLength: 8)
 
@@ -71,53 +130,55 @@ struct CalendarView: View {
                     onSignOut: { router.signOutAndReset() }
                 )
             }
-            .padding(.horizontal, ContinuumTheme.padding)
-            .padding(.top, ContinuumTheme.smallPadding)
-            .padding(.bottom, ContinuumTheme.smallPadding)
 
-            phoneContent
+            CalendarWeekStrip(
+                week: viewModel.week,
+                selectedDay: viewModel.selectedDay,
+                isCurrentWeek: viewModel.isCurrentWeek,
+                hasEvents: { viewModel.hasEvents(on: $0) },
+                eventCount: { viewModel.events(on: $0).count },
+                onSelectDay: { selectDay($0, proxy: proxy) },
+                onPreviousWeek: { viewModel.goToPreviousWeek() },
+                onNextWeek: { viewModel.goToNextWeek() },
+                onToday: { returnToToday(proxy: proxy) }
+            )
         }
-        .continuumBackground()
-        #if os(iOS)
-        .toolbar(.hidden, for: .navigationBar)
-        #endif
-        #endif
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .siloGlass(in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+        )
+        .padding(.horizontal, ContinuumTheme.safePadding)
+        .padding(.top, ContinuumTheme.smallPadding)
+        .padding(.bottom, ContinuumTheme.smallPadding)
+        .frame(maxWidth: .infinity)
     }
 
-    // MARK: - iOS / macOS
+    /// "June 2026" for the visible week — Thursday anchor so a month-spanning
+    /// week shows the month that owns most of its days.
+    private var monthLabel: String {
+        let anchor = Calendar.current.date(byAdding: .day, value: 3, to: viewModel.week.startDate)
+            ?? viewModel.week.startDate
+        return anchor.formatted(.dateTime.month(.wide).year())
+    }
 
-    #if !os(tvOS)
-    private var phoneContent: some View {
-        ScrollViewReader { proxy in
-            ScrollView(.vertical, showsIndicators: false) {
-                LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    Section {
-                        shelfArea
-                    } header: {
-                        VStack(alignment: .leading, spacing: ContinuumTheme.smallPadding) {
-                            CalendarFilterBar(
-                                selected: viewModel.filter,
-                                onSelect: { viewModel.select(filter: $0) }
-                            )
-                            .padding(.horizontal, ContinuumTheme.safePadding)
-
-                            CalendarWeekStrip(
-                                week: viewModel.week,
-                                selectedDay: viewModel.selectedDay,
-                                isCurrentWeek: viewModel.isCurrentWeek,
-                                hasEvents: { viewModel.hasEvents(on: $0) },
-                                onSelectDay: { selectDay($0, proxy: proxy) },
-                                onPreviousWeek: { viewModel.goToPreviousWeek() },
-                                onNextWeek: { viewModel.goToNextWeek() },
-                                onToday: { viewModel.goToToday() }
-                            )
-                        }
-                        .padding(.vertical, ContinuumTheme.smallPadding)
-                    }
-                }
-                .padding(.bottom, ContinuumTheme.largePadding)
+    /// "Today" returns to the current week *and* scrolls to today's shelf —
+    /// otherwise the user lands at the top of the week. The week reload is
+    /// awaited so today's shelf exists before we scroll, with a brief beat
+    /// for the reloaded shelves to lay out.
+    private func returnToToday(proxy: ScrollViewProxy) {
+        Task {
+            await viewModel.goToToday()
+            guard let today = viewModel.week.days.first(where: {
+                Calendar.current.isDateInToday($0)
+            }) else { return }
+            viewModel.selectDay(today)
+            try? await Task.sleep(for: .milliseconds(50))
+            withAnimation(ContinuumTheme.springAnimation) {
+                proxy.scrollTo(today, anchor: .top)
             }
-            .continuumScrollEdgeEffect()
         }
     }
     #endif
@@ -154,10 +215,11 @@ struct CalendarView: View {
                         selectedDay: viewModel.selectedDay,
                         isCurrentWeek: viewModel.isCurrentWeek,
                         hasEvents: { viewModel.hasEvents(on: $0) },
+                        eventCount: { viewModel.events(on: $0).count },
                         onSelectDay: { selectDay($0, proxy: proxy) },
                         onPreviousWeek: { viewModel.goToPreviousWeek() },
                         onNextWeek: { viewModel.goToNextWeek() },
-                        onToday: { viewModel.goToToday() }
+                        onToday: { Task { await viewModel.goToToday() } }
                     )
 
                     shelfArea
