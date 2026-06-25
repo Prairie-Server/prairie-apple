@@ -61,13 +61,16 @@ struct PhoneDetailFactsSection: View {
         if let countries = detail.countries, !countries.isEmpty {
             facts.append(Fact(label: "Country", value: countries.prefix(3).joined(separator: ", ")))
         }
-        if let releaseDate = formattedDate(detail.releaseDate) {
+        if let airDate = DetailDateFormatting.longDate(detail.airDate) {
+            facts.append(Fact(label: "Aired", value: airDate))
+        }
+        if let releaseDate = DetailDateFormatting.longDate(detail.releaseDate) {
             facts.append(Fact(label: "Released", value: releaseDate))
         }
-        if let firstAired = formattedDate(detail.firstAirDate) {
+        if let firstAired = DetailDateFormatting.longDate(detail.firstAirDate) {
             facts.append(Fact(label: "First Aired", value: firstAired))
         }
-        if let lastAired = formattedDate(detail.lastAirDate) {
+        if let lastAired = DetailDateFormatting.longDate(detail.lastAirDate) {
             facts.append(Fact(label: "Last Aired", value: lastAired))
         }
         return facts
@@ -92,27 +95,5 @@ struct PhoneDetailFactsSection: View {
         let joined = trimmed.prefix(maxCreditNames).joined(separator: ", ")
         return trimmed.count > maxCreditNames ? "\(joined), …" : joined
     }
-
-    private func formattedDate(_ raw: String?) -> String? {
-        guard let raw, !raw.isEmpty else { return nil }
-        let parser = ISO8601DateFormatter()
-        parser.formatOptions = [.withFullDate]
-        if let parsed = parser.date(from: raw) {
-            return Self.displayDateFormatter.string(from: parsed)
-        }
-        let fallback = DateFormatter()
-        fallback.dateFormat = "yyyy-MM-dd"
-        fallback.locale = Locale(identifier: "en_US_POSIX")
-        if let parsed = fallback.date(from: raw) {
-            return Self.displayDateFormatter.string(from: parsed)
-        }
-        return raw
-    }
-
-    private static let displayDateFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateStyle = .long
-        return f
-    }()
 }
 #endif

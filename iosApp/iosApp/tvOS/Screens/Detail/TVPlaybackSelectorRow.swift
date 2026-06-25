@@ -1,9 +1,10 @@
 #if os(tvOS)
 import SwiftUI
 
-/// Pre-Play playback-selection row shown under the hero actions. Renders
-/// Version · Audio · Subtitles as squared menu buttons, mirroring the Silo
-/// webapp. Edition is included only when there are multiple edition groups.
+/// Pre-Play playback metadata row shown under the hero actions. Version ·
+/// Audio · Subtitles stay visible as squared value boxes; boxes become menus
+/// only when there are multiple real choices. Edition is included only when
+/// there are multiple edition groups.
 /// Once an effective playable version is known, the active playback metadata
 /// stays visible.
 /// Uses the detail view's existing version/audio/subtitle callbacks; Edition
@@ -12,6 +13,13 @@ import SwiftUI
 struct TVPlaybackSelectorRow: View {
     private enum Layout {
         static let selectorSpacing: CGFloat = 28
+    }
+
+    private enum SelectorFocus: Hashable {
+        case edition
+        case version
+        case audio
+        case subtitles
     }
 
     let versions: [FileVersion]
@@ -23,6 +31,11 @@ struct TVPlaybackSelectorRow: View {
     let onSelectAudioTrack: (Int?) -> Void
     let onSelectSubtitleTrack: (Int?) -> Void
 
+    @Environment(\.resetFocus) private var resetFocus
+    @Namespace private var selectorFocusScope
+    @FocusState private var focusedSelector: SelectorFocus?
+    @State private var defaultSelectorFocus: SelectorFocus?
+
     private var editions: [PlaybackEditions.Edition] { PlaybackEditions.editions(from: versions) }
 
     var body: some View {
@@ -31,9 +44,15 @@ struct TVPlaybackSelectorRow: View {
                 if shouldShowEditionSelector {
                     editionSelector
                 }
-                versionSelector
-                audioSelector
-                subtitleSelector
+                if shouldShowVersionValue {
+                    versionSelector
+                }
+                if shouldShowAudioValue {
+                    audioSelector
+                }
+                if shouldShowSubtitleValue {
+                    subtitleSelector
+                }
             }
             // Stretch the focus section to the full action-area width even
             // though the buttons sit on the left. Entering a focus section is
@@ -43,16 +62,48 @@ struct TVPlaybackSelectorRow: View {
             // A Down press from any of them then lands on the nearest selector
             // instead of skipping the row. Buttons stay left-aligned.
             .frame(maxWidth: .infinity, alignment: .leading)
+            .focusScope(selectorFocusScope)
             .focusSection()
+            .modifier(SelectorDefaultFocus(focus: defaultSelectorFocus, binding: $focusedSelector))
         }
     }
 
     private var hasAnySelector: Bool {
-        currentVersion != nil
+        shouldShowEditionSelector
+            || shouldShowVersionValue
+            || shouldShowAudioValue
+            || shouldShowSubtitleValue
     }
 
     private var shouldShowEditionSelector: Bool {
         editions.count > 1
+    }
+
+    private var shouldShowVersionValue: Bool {
+        currentVersion != nil
+    }
+
+    private var shouldEnableVersionSelector: Bool {
+        DetailPlaybackFormatting.shouldEnableVersionSelector(
+            versions: versions,
+            currentVersion: currentVersion
+        )
+    }
+
+    private var shouldShowAudioValue: Bool {
+        DetailPlaybackFormatting.shouldShowAudioValue(version: currentVersion)
+    }
+
+    private var shouldEnableAudioSelector: Bool {
+        DetailPlaybackFormatting.shouldEnableAudioSelector(version: currentVersion)
+    }
+
+    private var shouldShowSubtitleValue: Bool {
+        DetailPlaybackFormatting.shouldShowSubtitleValue(version: currentVersion)
+    }
+
+    private var shouldEnableSubtitleSelector: Bool {
+        DetailPlaybackFormatting.shouldEnableSubtitleSelector(version: currentVersion)
     }
 
     // MARK: - Edition
@@ -77,7 +128,7 @@ struct TVPlaybackSelectorRow: View {
                             lastFileId: nil,
                             preferredQualityId: PlayerSettings.shared.preferredQuality
                         )
-                        onSelectVersion(best?.fileId)
+                        selectVersion(best?.fileId, returningFocusTo: .edition)
                     } label: {
                         selectorMenuItem(
                             title: edition.label,
@@ -88,104 +139,167 @@ struct TVPlaybackSelectorRow: View {
                 }
             }
         }
+        .focused($focusedSelector, equals: .edition)
     }
 
     // MARK: - Version
 
+    @ViewBuilder
     private var versionSelector: some View {
-        TVSelectorButton(
-            icon: "4k.tv",
-            label: "Version",
-            value: DetailPlaybackFormatting.versionShortLabel(currentVersion)
-        ) {
-            Button { onSelectVersion(nil) } label: {
-                selectorMenuItem(title: "Auto", detail: "Best match for this device", isSelected: selectedVersionFileId == nil)
-            }
-            ForEach(scopedVersions) { version in
-                Button {
-                    onSelectVersion(version.fileId)
-                } label: {
-                    selectorMenuItem(
-                        title: DetailPlaybackFormatting.versionShortLabel(version),
-                        detail: DetailPlaybackFormatting.versionDetailLabel(version),
-                        isSelected: selectedVersionFileId == version.fileId
-                    )
+        let value = DetailPlaybackFormatting.versionShortLabel(currentVersion)
+        if shouldEnableVersionSelector {
+            TVSelectorButton(
+                icon: "4k.tv",
+                label: "Version",
+                value: value
+            ) {
+                Button { selectVersion(nil, returningFocusTo: .version) } label: {
+                    selectorMenuItem(title: "Auto", detail: "Best match for this device", isSelected: selectedVersionFileId == nil)
                 }
-            }
-        }
-    }
-
-    private var scopedVersions: [FileVersion] {
-        if editions.count > 1, let edition = currentEdition { return edition.versions }
-        return versions
-    }
-
-    // MARK: - Audio
-
-    private var audioSelector: some View {
-        TVSelectorButton(
-            icon: "speaker.wave.2",
-            label: "Audio",
-            value: DetailPlaybackFormatting.audioValueLabel(
-                version: currentVersion,
-                selectedAudioTrackIndex: selectedAudioTrackIndex
-            )
-        ) {
-            Button { onSelectAudioTrack(nil) } label: {
-                selectorMenuItem(title: "Auto", detail: "Use the file default track", isSelected: selectedAudioTrackIndex == nil)
-            }
-            let options = DetailPlaybackFormatting.audioOptions(
-                version: currentVersion,
-                selectedAudioTrackIndex: selectedAudioTrackIndex
-            )
-            if options.isEmpty {
-                Button("Unknown") { }.disabled(true)
-            } else {
-                ForEach(options) { option in
-                    Button { onSelectAudioTrack(option.ordinal) } label: {
+                ForEach(scopedVersions) { version in
+                    Button {
+                        selectVersion(version.fileId, returningFocusTo: .version)
+                    } label: {
                         selectorMenuItem(
-                            title: option.title,
-                            detail: option.detail,
-                            isSelected: selectedAudioTrackIndex == option.ordinal
+                            title: DetailPlaybackFormatting.versionShortLabel(version),
+                            detail: DetailPlaybackFormatting.versionDetailLabel(version),
+                            isSelected: selectedVersionFileId == version.fileId
                         )
                     }
                 }
             }
+            .focused($focusedSelector, equals: .version)
+        } else {
+            TVSelectorValue(icon: "4k.tv", label: "Version", value: value)
+        }
+    }
+
+    private var scopedVersions: [FileVersion] {
+        DetailPlaybackFormatting.versionSelectorVersions(
+            versions: versions,
+            currentVersion: currentVersion
+        )
+    }
+
+    // MARK: - Audio
+
+    @ViewBuilder
+    private var audioSelector: some View {
+        let value = DetailPlaybackFormatting.audioValueLabel(
+            version: currentVersion,
+            selectedAudioTrackIndex: selectedAudioTrackIndex
+        )
+        if shouldEnableAudioSelector {
+            TVSelectorButton(
+                icon: "speaker.wave.2",
+                label: "Audio",
+                value: value
+            ) {
+                Button { selectAudioTrack(nil) } label: {
+                    selectorMenuItem(title: "Auto", detail: "Use the file default track", isSelected: selectedAudioTrackIndex == nil)
+                }
+                let options = DetailPlaybackFormatting.audioOptions(
+                    version: currentVersion,
+                    selectedAudioTrackIndex: selectedAudioTrackIndex
+                )
+                if options.isEmpty {
+                    Button("Unknown") { }.disabled(true)
+                } else {
+                    ForEach(options) { option in
+                        Button { selectAudioTrack(option.ordinal) } label: {
+                            selectorMenuItem(
+                                title: option.title,
+                                detail: option.detail,
+                                isSelected: selectedAudioTrackIndex == option.ordinal
+                            )
+                        }
+                    }
+                }
+            }
+            .focused($focusedSelector, equals: .audio)
+        } else {
+            TVSelectorValue(icon: "speaker.wave.2", label: "Audio", value: value)
         }
     }
 
     // MARK: - Subtitles
 
+    @ViewBuilder
     private var subtitleSelector: some View {
-        TVSelectorButton(
-            icon: "captions.bubble",
-            label: "Subtitles",
-            value: DetailPlaybackFormatting.subtitleValueLabel(
-                version: currentVersion,
-                selectedSubtitleTrackIndex: selectedSubtitleTrackIndex
-            )
-        ) {
-            Button { onSelectSubtitleTrack(nil) } label: {
-                selectorMenuItem(title: "Auto", detail: "Use your subtitle preferences", isSelected: selectedSubtitleTrackIndex == nil)
-            }
-            Button { onSelectSubtitleTrack(-1) } label: {
-                selectorMenuItem(title: "Off", detail: "Start without subtitles", isSelected: selectedSubtitleTrackIndex == -1)
-            }
-            ForEach(DetailPlaybackFormatting.subtitleOptions(
-                version: currentVersion,
-                selectedSubtitleTrackIndex: selectedSubtitleTrackIndex
-            )) { option in
-                if option.isSelectable, let selectionIndex = option.selectionIndex {
-                    Button { onSelectSubtitleTrack(selectionIndex) } label: {
-                        selectorMenuItem(title: option.title, detail: option.detail, isSelected: option.isSelected)
-                    }
-                } else {
-                    Button {
-                    } label: {
-                        selectorMenuItem(title: option.title, detail: option.detail, isSelected: false)
-                    }
-                    .disabled(true)
+        let value = DetailPlaybackFormatting.subtitleValueLabel(
+            version: currentVersion,
+            selectedSubtitleTrackIndex: selectedSubtitleTrackIndex
+        )
+        if shouldEnableSubtitleSelector {
+            TVSelectorButton(
+                icon: "captions.bubble",
+                label: "Subtitles",
+                value: value
+            ) {
+                Button { selectSubtitleTrack(nil) } label: {
+                    selectorMenuItem(title: "Auto", detail: "Use your subtitle preferences", isSelected: selectedSubtitleTrackIndex == nil)
                 }
+                Button { selectSubtitleTrack(-1) } label: {
+                    selectorMenuItem(title: "Off", detail: "Start without subtitles", isSelected: selectedSubtitleTrackIndex == -1)
+                }
+                ForEach(DetailPlaybackFormatting.subtitleOptions(
+                    version: currentVersion,
+                    selectedSubtitleTrackIndex: selectedSubtitleTrackIndex
+                )) { option in
+                    if option.isSelectable, let selectionIndex = option.selectionIndex {
+                        Button { selectSubtitleTrack(selectionIndex) } label: {
+                            selectorMenuItem(title: option.title, detail: option.detail, isSelected: option.isSelected)
+                        }
+                    } else {
+                        Button {
+                        } label: {
+                            selectorMenuItem(title: option.title, detail: option.detail, isSelected: false)
+                        }
+                        .disabled(true)
+                    }
+                }
+            }
+            .focused($focusedSelector, equals: .subtitles)
+        } else {
+            TVSelectorValue(icon: "captions.bubble", label: "Subtitles", value: value)
+        }
+    }
+
+    private func selectVersion(_ fileId: Int?, returningFocusTo focus: SelectorFocus) {
+        onSelectVersion(fileId)
+        restoreFocus(to: focus)
+    }
+
+    private func selectAudioTrack(_ index: Int?) {
+        onSelectAudioTrack(index)
+        restoreFocus(to: .audio)
+    }
+
+    private func selectSubtitleTrack(_ index: Int?) {
+        onSelectSubtitleTrack(index)
+        restoreFocus(to: .subtitles)
+    }
+
+    private func restoreFocus(to focus: SelectorFocus) {
+        defaultSelectorFocus = focus
+        focusedSelector = focus
+        Task { @MainActor in
+            await Task.yield()
+            resetFocus(in: selectorFocusScope)
+            focusedSelector = focus
+        }
+    }
+
+    private struct SelectorDefaultFocus: ViewModifier {
+        let focus: SelectorFocus?
+        let binding: FocusState<SelectorFocus?>.Binding
+
+        @ViewBuilder
+        func body(content: Content) -> some View {
+            if let focus {
+                content.defaultFocus(binding, focus, priority: .userInitiated)
+            } else {
+                content
             }
         }
     }
@@ -226,6 +340,38 @@ private struct TVSelectorButton<MenuContent: View>: View {
         }
         .menuStyle(.button)
         .buttonStyle(TVPillButtonStyle(kind: .secondary, focusTreatment: .compact))
+    }
+}
+
+/// Static version of the selector pill for single-choice playback metadata.
+private struct TVSelectorValue: View {
+    let icon: String
+    let label: String
+    let value: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon).font(.system(size: 22, weight: .semibold))
+            Text(label.uppercased())
+                .font(.system(size: 18, weight: .bold))
+                .tracking(1.0)
+                .opacity(0.6)
+            Text(value).font(.system(size: 22, weight: .semibold)).lineLimit(1)
+        }
+        .foregroundColor(.white)
+        .padding(.horizontal, 40)
+        .padding(.vertical, 22)
+        .overlay(
+            RoundedRectangle(cornerRadius: ContinuumTheme.smallCornerRadius, style: .continuous)
+                .stroke(Color.white.opacity(0.24), lineWidth: 1.2)
+        )
+        .background(
+            RoundedRectangle(cornerRadius: ContinuumTheme.smallCornerRadius, style: .continuous)
+                .fill(Color.black.opacity(0.52))
+        )
+        .shadow(color: .black.opacity(0.14), radius: 4, y: 2)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(label), \(value)")
     }
 }
 #endif

@@ -68,6 +68,41 @@ enum DetailPlaybackFormatting {
             ?? PlaybackEditions.editions(from: versions).first
     }
 
+    static func versionSelectorVersions(
+        versions: [FileVersion],
+        currentVersion: FileVersion?
+    ) -> [FileVersion] {
+        let editions = PlaybackEditions.editions(from: versions)
+        if editions.count > 1,
+           let currentEdition = currentEdition(versions: versions, currentVersion: currentVersion) {
+            return currentEdition.versions
+        }
+        return versions
+    }
+
+    static func shouldEnableVersionSelector(
+        versions: [FileVersion],
+        currentVersion: FileVersion?
+    ) -> Bool {
+        versionSelectorVersions(versions: versions, currentVersion: currentVersion).count > 1
+    }
+
+    static func shouldShowAudioValue(version: FileVersion?) -> Bool {
+        !(version?.audioTracks ?? []).isEmpty
+    }
+
+    static func shouldEnableAudioSelector(version: FileVersion?) -> Bool {
+        (version?.audioTracks ?? []).count > 1
+    }
+
+    static func shouldShowSubtitleValue(version: FileVersion?) -> Bool {
+        !(version?.subtitleTracks ?? []).isEmpty
+    }
+
+    static func shouldEnableSubtitleSelector(version: FileVersion?) -> Bool {
+        (version?.subtitleTracks ?? []).count > 1
+    }
+
     static func audioOptions(
         version: FileVersion?,
         selectedAudioTrackIndex: Int?
@@ -181,7 +216,13 @@ enum DetailPlaybackFormatting {
         version: FileVersion?,
         selectedSubtitleTrackIndex: Int?
     ) -> String {
-        if selectedSubtitleTrackIndex == nil { return "Auto" }
+        if selectedSubtitleTrackIndex == nil {
+            let tracks = version?.subtitleTracks ?? []
+            if tracks.count == 1, let track = tracks.first {
+                return subtitleTitle(track, ordinal: 0)
+            }
+            return "Auto"
+        }
         if selectedSubtitleTrackIndex == -1 { return "Off" }
         guard let selectedSubtitleTrackIndex,
               let match = (version?.subtitleTracks ?? []).enumerated().first(where: { _, track in

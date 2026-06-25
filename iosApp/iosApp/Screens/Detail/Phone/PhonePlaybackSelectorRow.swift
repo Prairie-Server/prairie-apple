@@ -50,12 +50,13 @@ struct PhonePlaybackSelectorRow: View {
     ]
 
     var body: some View {
-        if currentVersion != nil {
+        if currentVersion != nil, !selectorKinds.isEmpty {
             LazyVGrid(columns: columns, alignment: .center, spacing: 10) {
                 ForEach(selectorKinds) { kind in
                     PhonePlaybackSelectorPill(
                         kind: kind,
                         value: value(for: kind),
+                        isInteractive: isInteractive(kind),
                         action: { activeSelector = kind }
                     )
                 }
@@ -78,10 +79,64 @@ struct PhonePlaybackSelectorRow: View {
     }
 
     private var selectorKinds: [PhonePlaybackSelectorKind] {
-        if editions.count > 1 {
-            return [.edition, .version, .audio, .subtitles]
+        var kinds: [PhonePlaybackSelectorKind] = []
+        if shouldShowEditionSelector {
+            kinds.append(.edition)
         }
-        return [.version, .audio, .subtitles]
+        if shouldShowVersionValue {
+            kinds.append(.version)
+        }
+        if shouldShowAudioValue {
+            kinds.append(.audio)
+        }
+        if shouldShowSubtitleValue {
+            kinds.append(.subtitles)
+        }
+        return kinds
+    }
+
+    private var shouldShowEditionSelector: Bool {
+        editions.count > 1
+    }
+
+    private var shouldShowVersionValue: Bool {
+        currentVersion != nil
+    }
+
+    private var shouldEnableVersionSelector: Bool {
+        DetailPlaybackFormatting.shouldEnableVersionSelector(
+            versions: versions,
+            currentVersion: currentVersion
+        )
+    }
+
+    private var shouldShowAudioValue: Bool {
+        DetailPlaybackFormatting.shouldShowAudioValue(version: currentVersion)
+    }
+
+    private var shouldEnableAudioSelector: Bool {
+        DetailPlaybackFormatting.shouldEnableAudioSelector(version: currentVersion)
+    }
+
+    private var shouldShowSubtitleValue: Bool {
+        DetailPlaybackFormatting.shouldShowSubtitleValue(version: currentVersion)
+    }
+
+    private var shouldEnableSubtitleSelector: Bool {
+        DetailPlaybackFormatting.shouldEnableSubtitleSelector(version: currentVersion)
+    }
+
+    private func isInteractive(_ kind: PhonePlaybackSelectorKind) -> Bool {
+        switch kind {
+        case .edition:
+            return shouldShowEditionSelector
+        case .version:
+            return shouldEnableVersionSelector
+        case .audio:
+            return shouldEnableAudioSelector
+        case .subtitles:
+            return shouldEnableSubtitleSelector
+        }
     }
 
     private func value(for kind: PhonePlaybackSelectorKind) -> String {
@@ -110,44 +165,58 @@ struct PhonePlaybackSelectorRow: View {
 private struct PhonePlaybackSelectorPill: View {
     let kind: PhonePlaybackSelectorKind
     let value: String
+    let isInteractive: Bool
     let action: () -> Void
 
+    @ViewBuilder
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: kind.icon)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.78))
-                    .frame(width: 16)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(kind.title.uppercased())
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundColor(.white.opacity(0.62))
-                        .lineLimit(1)
-                    Text(value)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(.white)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.78)
-                }
-                Spacer(minLength: 4)
+        if isInteractive {
+            Button(action: action) {
+                labelContent(showsChevron: true)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(kind.title), \(value)")
+        } else {
+            labelContent(showsChevron: false)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(kind.title), \(value)")
+        }
+    }
+
+    private func labelContent(showsChevron: Bool) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: kind.icon)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(.white.opacity(0.78))
+                .frame(width: 16)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(kind.title.uppercased())
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(.white.opacity(0.62))
+                    .lineLimit(1)
+                Text(value)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+            }
+            Spacer(minLength: 4)
+            if showsChevron {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundColor(.white.opacity(0.58))
             }
-            .padding(.horizontal, 12)
-            .frame(height: 46)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.white.opacity(0.10))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(Color.white.opacity(0.20), lineWidth: 1)
-                    )
-            )
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("\(kind.title), \(value)")
+        .padding(.horizontal, 12)
+        .frame(height: 46)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.white.opacity(0.10))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.white.opacity(0.20), lineWidth: 1)
+                )
+        )
     }
 }
 
@@ -276,10 +345,10 @@ private struct PhonePlaybackSelectorSheet: View {
     }
 
     private var scopedVersions: [FileVersion] {
-        if editions.count > 1, let currentEdition {
-            return currentEdition.versions
-        }
-        return versions
+        DetailPlaybackFormatting.versionSelectorVersions(
+            versions: versions,
+            currentVersion: currentVersion
+        )
     }
 
     @ViewBuilder

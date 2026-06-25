@@ -104,9 +104,6 @@ struct TVTopMenuBar: View {
     let roots: [TVRootDestination]
     let selectedRoot: TVRootDestination
     let currentProfile: UserProfile?
-    /// Whether the signed-in user is a server admin — gates the Admin
-    /// Dashboard row in the profile dropdown.
-    let isAdmin: Bool
     @Binding var isMenuFocused: Bool
     let isFocusSuppressed: Bool
     let focusRequest: Int
@@ -854,7 +851,6 @@ private enum TVProfileAction: Hashable {
     case favorites
     case history
     case settings
-    case adminDashboard
     case switchServer
     case signOut
 }
@@ -869,7 +865,6 @@ struct TVProfileDropdown: View {
     /// Display name of the active server, shown under the profile name in
     /// the §5.8 mono header style.
     let serverHost: String?
-    let isAdmin: Bool
     /// Whether focus has entered the panel.
     let entersPanel: Bool
     /// Bumped by the host when focus should enter — lands on the first row.
@@ -882,7 +877,6 @@ struct TVProfileDropdown: View {
     let onFavorites: () -> Void
     let onHistory: () -> Void
     let onSettings: () -> Void
-    let onAdminDashboard: () -> Void
     let onSwitchServer: () -> Void
     let onSignOut: () -> Void
 
@@ -923,9 +917,6 @@ struct TVProfileDropdown: View {
             divider
 
             actionButton("Settings", systemImage: "gearshape.fill", id: .settings, action: onSettings)
-            if isAdmin {
-                actionButton("Admin Dashboard", systemImage: "slider.horizontal.3", id: .adminDashboard, action: onAdminDashboard)
-            }
             // The guide marks Switch Server as Android-only (§5.8), but tvOS
             // already ships multi-server switching — dropping it here would
             // regress existing users.

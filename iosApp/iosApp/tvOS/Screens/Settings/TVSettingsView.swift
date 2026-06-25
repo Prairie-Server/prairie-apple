@@ -110,12 +110,6 @@ struct TVSettingsView: View {
 
     private var accountActionsSection: some View {
         Section("Account") {
-            if viewModel.isAdmin {
-                Button { router.navigate(to: .admin) } label: {
-                    FocusAwareLabel(title: "Admin Dashboard", systemImage: "slider.horizontal.3")
-                }
-            }
-
             Button(role: .destructive) {
                 showSignOutConfirm = true
             } label: {

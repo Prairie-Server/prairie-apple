@@ -16,9 +16,6 @@ struct TVMainTabView: View {
     @Bindable var router: AppRouter
     @State private var selectedRoot: TVRootDestination = .home
     @State private var currentProfile: UserProfile?
-    /// Server-side admin flag for the signed-in user; gates the profile
-    /// dropdown's Admin Dashboard row.
-    @State private var isAdmin = false
     @State private var showServerPicker = false
     @State private var registry = ServerRegistry.shared
     /// Visible libraries for the active profile; drives which type tabs
@@ -76,7 +73,6 @@ struct TVMainTabView: View {
                     roots: visibleRoots,
                     selectedRoot: selectedRoot,
                     currentProfile: currentProfile,
-                    isAdmin: isAdmin,
                     isMenuFocused: $isTopMenuFocused,
                     isFocusSuppressed: isTopMenuFocusSuppressed,
                     focusRequest: topMenuFocusRequest,
@@ -150,8 +146,7 @@ struct TVMainTabView: View {
             castReceiver.start(router: router)
             async let profileTask: Void = loadCurrentProfile()
             async let librariesTask: Void = loadLibraries()
-            async let adminTask: Void = loadAdminFlag()
-            _ = await (profileTask, librariesTask, adminTask)
+            _ = await (profileTask, librariesTask)
         }
         .onDisappear {
             castReceiver.stop()
@@ -427,7 +422,6 @@ struct TVMainTabView: View {
             profileName: currentProfile?.name ?? "Profile",
             avatar: currentProfile?.avatarEmoji,
             serverHost: ServerRegistry.shared.activeServer?.displayName,
-            isAdmin: isAdmin,
             entersPanel: isActive && panelEntersFocus,
             focusEntryToken: panelFocusEntryToken,
             onPanelFocusChanged: { handlePanelFocusChanged($0) },
@@ -436,7 +430,6 @@ struct TVMainTabView: View {
             onFavorites: { closePanel(then: { router.navigate(to: .favorites) }) },
             onHistory: { closePanel(then: { router.navigate(to: .history) }) },
             onSettings: { closePanel(then: { router.navigate(to: .settings) }) },
-            onAdminDashboard: { closePanel(then: { router.navigate(to: .admin) }) },
             onSwitchServer: { closePanel(then: { showServerPicker = true }) },
             onSignOut: { closePanel(then: { router.signOutAndReset() }) }
         )
@@ -777,11 +770,6 @@ struct TVMainTabView: View {
         }
     }
 
-    private func loadAdminFlag() async {
-        let user: UserInfo? = try? await ContinuumAPI.shared.get("/api/v1/user/me")
-        isAdmin = user?.isAdmin == true
-    }
-
     private func serverButtonLabel(_ entry: ServerEntry) -> String {
         entry.id == registry.activeServerId
             ? "\(entry.displayName) (Current)"
@@ -801,14 +789,12 @@ struct TVMainTabView: View {
                 libraries = []
                 ResponseCache.shared.remove(CacheKey.userLibraries)
                 pillSelections = [:]
-                isAdmin = false
                 refreshAuthState()
             }
             if AuthService.shared.hasProfile {
                 async let profileTask: Void = loadCurrentProfile()
                 async let librariesTask: Void = loadLibraries()
-                async let adminTask: Void = loadAdminFlag()
-                _ = await (profileTask, librariesTask, adminTask)
+                _ = await (profileTask, librariesTask)
             }
         }
     }

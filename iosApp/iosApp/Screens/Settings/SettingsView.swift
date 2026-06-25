@@ -89,17 +89,6 @@ struct SettingsView: View {
             .buttonStyle(.plain)
             .accessibilityHint("Switches to a different profile")
 
-            if viewModel.userInfo?.isAdmin == true {
-                NavigationLink {
-                    AdminDashboardView()
-                } label: {
-                    SettingsRowLabel(
-                        title: "Admin Dashboard",
-                        systemImage: "wrench.and.screwdriver.fill",
-                        color: .indigo
-                    )
-                }
-            }
         } footer: {
             if viewModel.userInfo?.isAdmin == true {
                 Text("Signed in as an administrator.")

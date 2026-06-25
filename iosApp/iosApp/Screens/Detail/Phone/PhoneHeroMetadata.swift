@@ -63,7 +63,12 @@ enum PhoneHeroMetadata {
 
     static func movieFactsLine(from detail: ItemDetail, version selectedVersion: FileVersion? = nil) -> [PhoneHeroFactToken] {
         var tokens: [PhoneHeroFactToken] = []
-        if let year = detail.year, year > 0 { tokens.append(.text(String(year))) }
+        if detail.type == "episode",
+           let airDate = DetailDateFormatting.abbreviatedDate(detail.airDate) {
+            tokens.append(.text(airDate))
+        } else if let year = detail.year, year > 0 {
+            tokens.append(.text(String(year)))
+        }
         if let runtime = detail.runtime, runtime > 0 {
             tokens.append(.text(formatRuntime(runtime)))
         }

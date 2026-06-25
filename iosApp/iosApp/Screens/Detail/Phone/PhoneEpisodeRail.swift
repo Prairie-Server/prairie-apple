@@ -75,6 +75,15 @@ private struct PhoneEpisodeCard: View {
                         .lineLimit(2, reservesSpace: true)
                         .multilineTextAlignment(.leading)
 
+                    if let metadataLine = episodeMetadataLine {
+                        Text(metadataLine)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.continuumSecondaryText)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
+                            .multilineTextAlignment(.leading)
+                    }
+
                     if let overview = episode.overview, !overview.isEmpty {
                         Text(overview)
                             .font(.system(size: 12, weight: .regular))
@@ -106,11 +115,18 @@ private struct PhoneEpisodeCard: View {
     }
 
     private var episodeNumberLabel: String {
-        var parts = ["EPISODE \(episode.episodeNumber)"]
+        "EPISODE \(episode.episodeNumber)"
+    }
+
+    private var episodeMetadataLine: String? {
+        var parts: [String] = []
+        if let airDate = DetailDateFormatting.abbreviatedDate(episode.airDate) {
+            parts.append(airDate)
+        }
         if let runtime = episode.runtime, runtime > 0 {
             parts.append(formatRuntime(runtime))
         }
-        return parts.joined(separator: "  ·  ")
+        return parts.isEmpty ? nil : parts.joined(separator: "  ·  ")
     }
 
     private var still: some View {

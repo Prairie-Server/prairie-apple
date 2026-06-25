@@ -93,6 +93,83 @@ final class DetailVersionSelectionTests: XCTestCase {
         XCTAssertTrue(edition?.label == "Extended", "fileId 2 should resolve to Extended; got \(edition?.label ?? "nil")")
     }
 
+    func testSelectorValuesShowForSingleChoicesButOnlyEnableForMultipleChoices() {
+        let singleChoiceVersion = decodedVersions("""
+        [
+          {
+            "file_id": 1,
+            "resolution": "4K",
+            "audio_tracks": [
+              { "codec": "aac", "language": "eng" }
+            ],
+            "subtitle_tracks": [
+              { "index": 2, "codec": "srt", "language": "eng" }
+            ]
+          }
+        ]
+        """)[0]
+
+        XCTAssertFalse(DetailPlaybackFormatting.shouldEnableVersionSelector(
+            versions: [singleChoiceVersion],
+            currentVersion: singleChoiceVersion
+        ))
+        XCTAssertTrue(DetailPlaybackFormatting.shouldShowAudioValue(version: singleChoiceVersion))
+        XCTAssertFalse(DetailPlaybackFormatting.shouldEnableAudioSelector(version: singleChoiceVersion))
+        XCTAssertTrue(DetailPlaybackFormatting.shouldShowSubtitleValue(version: singleChoiceVersion))
+        XCTAssertFalse(DetailPlaybackFormatting.shouldEnableSubtitleSelector(version: singleChoiceVersion))
+        XCTAssertTrue(
+            DetailPlaybackFormatting.subtitleValueLabel(
+                version: singleChoiceVersion,
+                selectedSubtitleTrackIndex: nil
+            ) == "SubRip - English"
+        )
+
+        let multipleChoiceVersion = decodedVersions("""
+        [
+          {
+            "file_id": 2,
+            "resolution": "4K",
+            "audio_tracks": [
+              { "codec": "aac", "language": "eng" },
+              { "codec": "ac3", "language": "spa" }
+            ],
+            "subtitle_tracks": [
+              { "index": 2, "codec": "srt", "language": "eng" },
+              { "index": 3, "codec": "srt", "language": "spa" }
+            ]
+          }
+        ]
+        """)[0]
+
+        XCTAssertTrue(DetailPlaybackFormatting.shouldEnableAudioSelector(version: multipleChoiceVersion))
+        XCTAssertTrue(DetailPlaybackFormatting.shouldEnableSubtitleSelector(version: multipleChoiceVersion))
+    }
+
+    func testVersionSelectorScopesChoicesToCurrentEdition() {
+        let versions = decodedVersions("""
+        [
+          { "file_id": 1, "edition_raw": "Theatrical", "edition_key": "theatrical", "resolution": "4K" },
+          { "file_id": 2, "edition_raw": "Extended", "edition_key": "extended", "resolution": "4K" },
+          { "file_id": 3, "edition_raw": "Extended", "edition_key": "extended", "resolution": "1080p" }
+        ]
+        """)
+
+        XCTAssertFalse(DetailPlaybackFormatting.shouldEnableVersionSelector(
+            versions: versions,
+            currentVersion: versions[0]
+        ))
+        XCTAssertTrue(DetailPlaybackFormatting.shouldEnableVersionSelector(
+            versions: versions,
+            currentVersion: versions[1]
+        ))
+        XCTAssertTrue(
+            DetailPlaybackFormatting.versionSelectorVersions(
+                versions: versions,
+                currentVersion: versions[1]
+            ).map(\.fileId) == [2, 3]
+        )
+    }
+
     func testAudioOptionsUseOrdinalIndexes() {
         let versions = decodedVersions("""
         [
