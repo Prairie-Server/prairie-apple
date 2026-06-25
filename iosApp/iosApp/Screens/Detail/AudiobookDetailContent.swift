@@ -180,12 +180,8 @@ struct AudiobookDetailContent: View {
         // styles render white-on-white here because the tvOS root tints
         // controls with `.continuumOnSurface`.
         HStack(spacing: 24) {
-            TVPrimaryPillButton(icon: "play.fill", title: primaryPlayLabel) {
-                audioStore.play(
-                    contentId: detail.contentId,
-                    restart: false,
-                    startPosition: resumePosition
-                )
+            TVPrimaryPillButton(icon: primaryActionIcon, title: primaryPlayLabel) {
+                primaryAction()
             }
 
             TVSecondaryPillButton(icon: "arrow.counterclockwise", title: "Start Over") {
@@ -849,13 +845,43 @@ struct AudiobookDetailContent: View {
         guard let position = detail.userData?.positionSeconds,
               position.isFinite,
               position > 30 else { return nil }
-        if let duration = detail.userData?.durationSeconds,
-           duration.isFinite,
+        // Use the same duration source that drives the finished-state logic,
+        // so a completed book with a missing/stale userData duration still
+        // suppresses Resume and routes to Play Again.
+        let duration = totalDurationSeconds
+        if duration.isFinite,
            duration > 0,
            position >= duration - 5 {
             return nil
         }
         return position
+    }
+
+    private var positionSeconds: Double {
+        max(0, detail.userData?.positionSeconds ?? 0)
+    }
+
+    /// Whether the book is effectively finished. Shared so every platform
+    /// can route completed titles to "Play Again" (restart) instead of
+    /// resuming near the end.
+    private var isFinished: Bool {
+        if detail.userData?.played == true { return true }
+        guard totalDurationSeconds > 0, positionSeconds > 0 else { return false }
+        return positionSeconds >= totalDurationSeconds - 5
+    }
+
+    private var primaryActionIcon: String {
+        resumePosition == nil && isFinished ? "arrow.counterclockwise" : "play.fill"
+    }
+
+    private func primaryAction() {
+        if let resumePosition {
+            audioStore.play(contentId: detail.contentId, restart: false, startPosition: resumePosition)
+        } else if isFinished {
+            audioStore.play(contentId: detail.contentId, restart: true)
+        } else {
+            audioStore.play(contentId: detail.contentId, restart: false)
+        }
     }
 
     private func partTitle(_ part: FileVersion, fallbackIndex: Int) -> String {
@@ -904,6 +930,9 @@ struct AudiobookDetailContent: View {
     private var primaryPlayLabel: String {
         if let resumePosition {
             return "Resume \(PlayerTimeFormatter.formatHMS(resumePosition))"
+        }
+        if isFinished {
+            return "Play Again"
         }
         return "Play"
     }
@@ -1006,10 +1035,6 @@ struct AudiobookDetailContent: View {
         return tokens
     }
 
-    private var positionSeconds: Double {
-        max(0, detail.userData?.positionSeconds ?? 0)
-    }
-
     /// Listening progress 0...1, only when there's a meaningful resume point.
     private var resumeFraction: Double? {
         guard resumePosition != nil, totalDurationSeconds > 0 else { return nil }
@@ -1024,30 +1049,10 @@ struct AudiobookDetailContent: View {
         max(0, totalDurationSeconds - positionSeconds)
     }
 
-    private var isFinished: Bool {
-        if detail.userData?.played == true { return true }
-        guard totalDurationSeconds > 0, positionSeconds > 0 else { return false }
-        return positionSeconds >= totalDurationSeconds - 5
-    }
-
     private var primaryActionLabel: String {
         if resumePosition != nil { return "Resume" }
         if isFinished { return "Play Again" }
         return "Play"
-    }
-
-    private var primaryActionIcon: String {
-        resumePosition == nil && isFinished ? "arrow.counterclockwise" : "play.fill"
-    }
-
-    private func primaryAction() {
-        if let resumePosition {
-            audioStore.play(contentId: detail.contentId, restart: false, startPosition: resumePosition)
-        } else if isFinished {
-            audioStore.play(contentId: detail.contentId, restart: true)
-        } else {
-            audioStore.play(contentId: detail.contentId, restart: false)
-        }
     }
 
     private func partStartOffset(_ index: Int) -> Double {
