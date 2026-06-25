@@ -295,7 +295,7 @@ final class TVCastReceiver {
     }
 
     private func refreshStandbyState() {
-        guard activeSession != nil, playerViewModel == nil else {
+        guard activeSession != nil, isAuthorized, playerViewModel == nil else {
             standbyState = nil
             return
         }

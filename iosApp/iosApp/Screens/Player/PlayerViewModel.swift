@@ -1856,7 +1856,7 @@ class PlayerViewModel {
             }
             proxy.setSourceBitrate(sourceBitrateBps(for: plan))
             if plan.engine != .avPlayerLocalDVLoopback {
-                proxy.startPrefetch(at: 0)
+                proxy.startPrefetch(at: initialSourcePrefetchOffset(for: plan))
             }
             Self.logger.info("[CMP-SOURCE-CACHE] enabled route=\(plan.engine.label, privacy: .public) budgetBytes=\(cacheBudget, privacy: .public)")
             let streamRequest = StreamRequest(
@@ -1942,6 +1942,13 @@ class PlayerViewModel {
             return nil
         }
         return Double(bitrateKbps) * 1_000
+    }
+
+    private func initialSourcePrefetchOffset(for plan: PlaybackExecutionPlan) -> Int64 {
+        PlaybackSourcePrefetchPolicy.initialOffset(
+            sourceStartTimeSeconds: plan.loopbackSession?.sourceStartTimeSeconds ?? 0,
+            sourceBitrateBps: sourceBitrateBps(for: plan)
+        )
     }
 
     private func timelineOffset(

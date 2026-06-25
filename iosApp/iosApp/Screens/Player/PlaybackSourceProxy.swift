@@ -686,7 +686,11 @@ private final class PlaybackSourceResource {
         }
         if let prefetchTask, !prefetchTask.isCancelled {
             if let prefetchStartOffset,
-                abs(prefetchStartOffset - offset) <= Int64(currentChunkBytes()) {
+               !PlaybackSourcePrefetchPolicy.shouldRetargetPrefetch(
+                    activeStart: prefetchStartOffset,
+                    requestedStart: offset,
+                    chunkBytes: currentChunkBytes()
+               ) {
                 prefetchLock.unlock()
                 return
             }
