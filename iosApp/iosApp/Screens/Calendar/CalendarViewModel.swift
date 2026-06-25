@@ -77,10 +77,12 @@ final class CalendarViewModel {
         Task { await load() }
     }
 
-    func goToToday() {
+    /// Returns to the current week and awaits its load so callers can scroll
+    /// to today's shelf once the data is in place.
+    func goToToday() async {
         week = CalendarWeek(containing: Date())
         selectedDay = Date()
-        Task { await load() }
+        await load()
     }
 
     // MARK: - Loading

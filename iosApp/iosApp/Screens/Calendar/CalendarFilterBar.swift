@@ -1,33 +1,96 @@
 import SwiftUI
 
-/// Segmented Following / Trending / All preset control. Capsule segments
-/// matching the app's monochrome pill language; on tvOS each segment
-/// draws its own focus chrome (the app suppresses the system slab).
+/// Following / Trending / All scope control.
+///
+/// - iOS / macOS: a contained segmented control — a visible track holding a
+///   single near-white pill that slides between segments. The track is what
+///   keeps the control from reading as loose, clipped text against the black
+///   background (the previous glass capsule was invisible there).
+/// - tvOS: capsule glass segments that draw their own focus chrome (the app
+///   suppresses the system focus slab).
 struct CalendarFilterBar: View {
     let selected: CalendarFilter
     let onSelect: (CalendarFilter) -> Void
-    /// tvOS: programmatic focus kick from the root focus hand-down, so
-    /// the remote is never dead when the Calendar tab swaps in.
+    /// tvOS: programmatic focus kick from the root focus hand-down, so the
+    /// remote is never dead when the Calendar tab swaps in.
     var focusRequest: Int = 0
     /// tvOS: edge-up escape back to the top menu bar.
     var onMoveUp: (() -> Void)? = nil
 
-    @FocusState private var focusedFilter: CalendarFilter?
     #if os(tvOS)
+    @FocusState private var focusedFilter: CalendarFilter?
     /// Each hand-down token claims focus exactly once; guards against
     /// `onAppear` re-fires yanking focus on scroll recycling.
     @State private var lastAppliedFocusRequest = 0
+    #else
+    /// Drives the sliding selected pill across segments.
+    @Namespace private var pillNamespace
     #endif
 
     var body: some View {
+        #if os(tvOS)
+        tvBody
+        #else
+        phoneBody
+        #endif
+    }
+
+    // MARK: - iOS / macOS
+
+    #if !os(tvOS)
+    private var phoneBody: some View {
         HStack(spacing: segmentSpacing) {
             ForEach(CalendarFilter.allCases) { filter in
-                segmentButton(filter)
+                phoneSegment(filter)
+            }
+        }
+        .padding(containerPadding)
+        .background(
+            Capsule(style: .continuous).fill(Color.white.opacity(0.07))
+        )
+        .overlay(
+            Capsule(style: .continuous).strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
+        )
+        .animation(ContinuumTheme.springAnimation, value: selected)
+        .accessibilityElement(children: .contain)
+    }
+
+    private func phoneSegment(_ filter: CalendarFilter) -> some View {
+        let isSelected = selected == filter
+        return Button {
+            onSelect(filter)
+        } label: {
+            Text(filter.displayLabel)
+                .font(segmentFont)
+                .lineLimit(1)
+                .foregroundColor(isSelected ? Color.continuumBackground : Color.continuumOnSurface.opacity(0.6))
+                .padding(.horizontal, segmentHorizontalPadding)
+                .frame(height: segmentHeight)
+                .background {
+                    if isSelected {
+                        Capsule(style: .continuous)
+                            .fill(Color.continuumOnSurface)
+                            .matchedGeometryEffect(id: "calendarFilterPill", in: pillNamespace)
+                    }
+                }
+                .contentShape(Capsule(style: .continuous))
+        }
+        .buttonStyle(.continuumFlat)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+    #endif
+
+    // MARK: - tvOS
+
+    #if os(tvOS)
+    private var tvBody: some View {
+        HStack(spacing: segmentSpacing) {
+            ForEach(CalendarFilter.allCases) { filter in
+                tvSegmentButton(filter)
             }
         }
         .padding(containerPadding)
         .siloGlass(in: .capsule)
-        #if os(tvOS)
         .focusSection()
         .onMoveCommand { direction in
             if direction == .up {
@@ -36,18 +99,15 @@ struct CalendarFilterBar: View {
         }
         .onAppear { applyFocusRequest(focusRequest) }
         .onChange(of: focusRequest) { _, request in applyFocusRequest(request) }
-        #endif
     }
 
-    #if os(tvOS)
     private func applyFocusRequest(_ request: Int) {
         guard request > 0, request != lastAppliedFocusRequest else { return }
         lastAppliedFocusRequest = request
         focusedFilter = selected
     }
-    #endif
 
-    private func segmentButton(_ filter: CalendarFilter) -> some View {
+    private func tvSegmentButton(_ filter: CalendarFilter) -> some View {
         let isSelected = selected == filter
         let isFocused = focusedFilter == filter
 
@@ -82,6 +142,7 @@ struct CalendarFilterBar: View {
         if isSelected { return Color.continuumOnSurface.opacity(0.88) }
         return .clear
     }
+    #endif
 
     // MARK: - Metrics
 
@@ -89,7 +150,7 @@ struct CalendarFilterBar: View {
         #if os(tvOS)
         return 6
         #else
-        return 2
+        return 4
         #endif
     }
 
@@ -97,7 +158,7 @@ struct CalendarFilterBar: View {
         #if os(tvOS)
         return 6
         #else
-        return 3
+        return 4
         #endif
     }
 
@@ -113,7 +174,7 @@ struct CalendarFilterBar: View {
         #if os(tvOS)
         return 26
         #else
-        return 14
+        return 16
         #endif
     }
 
@@ -121,7 +182,7 @@ struct CalendarFilterBar: View {
         #if os(tvOS)
         return 54
         #else
-        return 28
+        return 30
         #endif
     }
 }
