@@ -485,6 +485,7 @@ struct LibraryCollectionsView: View {
                         LibraryCollectionCard(collection: collection)
                     }
                     .buttonStyle(.plain)
+                    .frame(maxWidth: .infinity)
                 }
             }
         }
@@ -494,8 +495,11 @@ struct LibraryCollectionsView: View {
 private struct LibraryCollectionCard: View {
     let collection: LibraryCollection
 
+    private var cardWidth: CGFloat { ContinuumTheme.posterCardWidth }
+    private var cardHeight: CGFloat { ContinuumTheme.posterCardHeight }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 4) {
             ZStack(alignment: .bottomTrailing) {
                 poster
 
@@ -508,20 +512,20 @@ private struct LibraryCollectionCard: View {
                     .clipShape(Capsule())
                     .padding(8)
             }
-            .aspectRatio(ContinuumTheme.posterAspectRatio, contentMode: .fit)
+            .frame(width: cardWidth, height: cardHeight)
             .clipShape(RoundedRectangle(cornerRadius: ContinuumTheme.smallCornerRadius))
 
             Text(collection.name)
                 .font(.continuumCaption)
                 .foregroundColor(.continuumOnSurface)
-                .lineLimit(2)
+                .lineLimit(2, reservesSpace: true)
 
             Text(typeLabel)
                 .font(.continuumSmall)
                 .foregroundColor(.continuumSecondaryText)
                 .lineLimit(1)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(width: cardWidth, alignment: .leading)
     }
 
     @ViewBuilder
@@ -530,8 +534,11 @@ private struct LibraryCollectionCard: View {
             AsyncImageView(
                 url: posterUrl,
                 thumbhash: collection.posterThumbhash,
+                targetSize: CGSize(width: cardWidth, height: cardHeight),
                 contentMode: .fill
             )
+            .frame(width: cardWidth, height: cardHeight)
+            .clipped()
         } else {
             ZStack {
                 Color.continuumSurfaceVariant
@@ -539,6 +546,7 @@ private struct LibraryCollectionCard: View {
                     .font(.system(size: 28, weight: .semibold))
                     .foregroundColor(.continuumSecondaryText)
             }
+            .frame(width: cardWidth, height: cardHeight)
         }
     }
 
