@@ -20,6 +20,7 @@ struct TVMediaCard: View {
     /// Override with a smaller value in space-constrained grids (e.g. the
     /// Library tab where the alphabet rail forces cards to shrink).
     var cardWidth: CGFloat = ContinuumTheme.posterCardWidth
+    var aspect: MediaCardAspect = .poster
     var prefersDefaultFocus: Bool = false
     var defaultFocusNamespace: Namespace.ID? = nil
     /// Focus visual. `.nativeCard` keeps tvOS's `.card` lift + parallax
@@ -43,8 +44,14 @@ struct TVMediaCard: View {
     @FocusState private var isFocused: Bool
     @EnvironmentObject private var overlayStore: OverlayPrefsStore
 
-    // Standard 2:3 movie-poster aspect ratio — height tracks width.
-    private var cardHeight: CGFloat { cardWidth * 1.5 }
+    private var cardHeight: CGFloat {
+        switch aspect {
+        case .poster:
+            cardWidth * 1.5
+        case .square:
+            cardWidth
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {

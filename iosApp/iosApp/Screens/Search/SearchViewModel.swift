@@ -1,25 +1,31 @@
 import Foundation
 
 enum SearchMediaType: String, CaseIterable, Identifiable {
-    case all
+    case video
     case movie
     case series
+    case audiobook
+    case all
 
     var id: Self { self }
 
     var title: String {
         switch self {
         case .all: "All"
+        case .video: "Movies & Series"
         case .movie: "Movies"
         case .series: "Series"
+        case .audiobook: "Audiobooks"
         }
     }
 
     var queryValue: String? {
         switch self {
         case .all: nil
+        case .video: "video"
         case .movie: "movie"
         case .series: "series"
+        case .audiobook: "audiobook"
         }
     }
 }
@@ -27,7 +33,7 @@ enum SearchMediaType: String, CaseIterable, Identifiable {
 @Observable
 class SearchViewModel {
     var query = ""
-    var selectedMediaType: SearchMediaType = .all
+    var selectedMediaType: SearchMediaType = .video
     var results: [BrowseItem] = []
     var isSearching = false
     var error: ErrorState?

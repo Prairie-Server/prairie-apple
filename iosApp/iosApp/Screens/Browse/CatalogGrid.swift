@@ -35,7 +35,8 @@ struct CatalogGrid: View {
                     userState: item.userState,
                     overlayData: OverlayData.from(item),
                     action: { onItemTap(item.contentId) },
-                    contentId: item.contentId
+                    contentId: item.contentId,
+                    aspect: item.isAudiobook ? .square : .poster
                 )
                 .frame(maxWidth: .infinity)
                 .onAppear {

@@ -4,6 +4,9 @@ import SwiftUI
 struct SearchView: View {
     @State private var viewModel = SearchViewModel()
     @Environment(AppRouter.self) private var router
+    #if os(iOS)
+    @FocusState private var isSearchFieldFocused: Bool
+    #endif
     private let usesTVTopMenuInset: Bool
 
     init(usesTVTopMenuInset: Bool = true) {
@@ -14,9 +17,9 @@ struct SearchView: View {
         ScrollView {
             VStack(spacing: ContinuumTheme.padding) {
                 if shouldShowFilters {
-                    mediaTypePicker
-                        .padding(.horizontal, ContinuumTheme.padding)
+                    mediaTypeFilter
                     #if os(tvOS)
+                        .padding(.horizontal, ContinuumTheme.padding)
                         // The picker is a centered 760pt pill inside a
                         // 1600pt column. Stretch its focus section across
                         // the full row so up-moves from the grid's outer
@@ -24,6 +27,8 @@ struct SearchView: View {
                         // to the search field above.
                         .frame(maxWidth: .infinity)
                         .focusSection()
+                    #elseif os(macOS)
+                        .padding(.horizontal, ContinuumTheme.padding)
                     #endif
                 }
 
@@ -47,7 +52,13 @@ struct SearchView: View {
         .continuumNavigationTitleDisplayMode(.inline)
         .continuumToolbarColorSchemeDark()
         .continuumNavigationBarSurfaceBackground()
-        .continuumSearchable(text: $viewModel.query, prompt: "Search movies, series...")
+        .continuumSearchable(text: $viewModel.query, prompt: "Search movies, series, audiobooks...")
+        #if os(iOS)
+        .searchFocused($isSearchFieldFocused)
+        .task {
+            await focusSearchField()
+        }
+        #endif
         .onChange(of: viewModel.query) { _, _ in
             viewModel.onQueryChanged()
         }
@@ -55,6 +66,14 @@ struct SearchView: View {
             Task { await viewModel.applyMediaType() }
         }
     }
+
+    #if os(iOS)
+    @MainActor
+    private func focusSearchField() async {
+        await Task.yield()
+        isSearchFieldFocused = true
+    }
+    #endif
 
     // MARK: - Shared Content
 
@@ -118,6 +137,19 @@ struct SearchView: View {
 
     private var shouldShowFilters: Bool {
         !viewModel.query.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    @ViewBuilder
+    private var mediaTypeFilter: some View {
+        #if os(iOS)
+        HStack {
+            SearchMediaTypeMenu(selectedMediaType: $viewModel.selectedMediaType)
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        #else
+        mediaTypePicker
+        #endif
     }
 
     private var mediaTypePicker: some View {

@@ -55,6 +55,7 @@ struct TVCatalogGrid: View {
                     overlayData: OverlayData.from(item),
                     action: { onItemTap(item.contentId) },
                     cardWidth: cardWidth,
+                    aspect: item.isAudiobook ? .square : .poster,
                     prefersDefaultFocus: prefersDefaultFocusOnFirstItem && indexed.index == 0,
                     defaultFocusNamespace: gridFocusNamespace
                 )
