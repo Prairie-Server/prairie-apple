@@ -7,7 +7,7 @@
 // lets Local.xcconfig swap values without touching the other targets'
 // xcconfigs.
 
-SILO_TV_BUNDLE_ID = com.continuum.play
+SILO_TV_BUNDLE_ID = org.siloserver.silo
 SILO_TV_ENTITLEMENTS = SiloTV.entitlements
 
 PRODUCT_BUNDLE_IDENTIFIER = $(SILO_TV_BUNDLE_ID)

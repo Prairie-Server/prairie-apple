@@ -1,6 +1,6 @@
 name: Silo
 options:
-  bundleIdPrefix: com.continuum.play
+  bundleIdPrefix: org.siloserver.silo
   deploymentTarget:
     iOS: "26.0"
     macOS: "26.0"

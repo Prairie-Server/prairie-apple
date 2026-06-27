@@ -16,7 +16,7 @@ import Security
 enum SharedStorage {
     /// Must match the `com.apple.security.application-groups` entitlement
     /// on both the main app and the extension.
-    static let appGroup = "group.com.continuum.play"
+    static let appGroup = "group.org.siloserver.silo"
 
     /// Must match the `keychain-access-groups` entitlement on both sides.
     /// Resolved from a build-expanded Info.plist value so personal-team
@@ -64,7 +64,7 @@ private enum RuntimeConfiguration {
             logger.error("Missing ContinuumKeychainAccessGroup Info.plist value; shared auth tokens may not persist.")
             return nil
         }
-        if group.hasSuffix(".com.continuum.app.shared") {
+        if group.hasSuffix(".org.siloserver.silo.shared") {
             return group
         }
         logger.error("Unexpected ContinuumKeychainAccessGroup value: \(group, privacy: .public)")

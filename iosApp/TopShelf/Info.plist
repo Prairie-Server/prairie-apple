@@ -21,7 +21,7 @@
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>ContinuumKeychainAccessGroup</key>
-	<string>$(AppIdentifierPrefix)com.continuum.app.shared</string>
+	<string>$(AppIdentifierPrefix)org.siloserver.silo.shared</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

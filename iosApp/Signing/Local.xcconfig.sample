@@ -1,8 +1,8 @@
 // Copy this file to `Local.xcconfig` (gitignored) to override the signing
 // defaults in `Silo.xcconfig`, `SiloTV.xcconfig`, and
 // `SiloTVTopShelf.xcconfig`. Use this when you don't have access to
-// the paid Apple Developer team that owns `com.continuum.play` and the
-// `group.com.continuum.play` App Group.
+// the Silo Media L.L.C Apple Developer team that owns
+// `org.siloserver.silo` and the `group.org.siloserver.silo` App Group.
 //
 // Every target xcconfig ends with `#include? "Local.xcconfig"`, so any
 // variable you redefine here wins. Each target reads its own indirection

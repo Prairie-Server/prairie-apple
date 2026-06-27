@@ -2,7 +2,7 @@
 // Local contributors can override the bundle identifier by dropping a
 // `Local.xcconfig` into this directory.
 
-SILO_MAC_BUNDLE_ID = com.continuum.play.mac
+SILO_MAC_BUNDLE_ID = org.siloserver.silo.mac
 
 PRODUCT_BUNDLE_IDENTIFIER = $(SILO_MAC_BUNDLE_ID)
 

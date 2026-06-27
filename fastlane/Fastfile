@@ -165,7 +165,7 @@ platform :ios do
     setup_ci if is_ci
 
     api_key        = setup_api_key
-    app_id         = "com.continuum.play"
+    app_id         = "org.siloserver.silo"
     team_id        = ENV["TEAM_ID"]
     # CI sets TESTFLIGHT_DISTRIBUTION from the release tag. Internal is the
     # default; public/external tags also distribute to TESTFLIGHT_EXTERNAL_GROUPS.
@@ -249,8 +249,8 @@ platform :ios do
     setup_ci if is_ci
 
     api_key        = setup_api_key
-    app_id         = "com.continuum.play"
-    topshelf_id    = "com.continuum.play.topshelf"
+    app_id         = "org.siloserver.silo"
+    topshelf_id    = "org.siloserver.silo.topshelf"
     team_id        = ENV["TEAM_ID"]
     # CI sets TESTFLIGHT_DISTRIBUTION from the release tag. Internal is the
     # default; public/external tags also distribute to TESTFLIGHT_EXTERNAL_GROUPS.

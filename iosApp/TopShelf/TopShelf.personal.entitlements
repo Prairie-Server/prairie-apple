@@ -4,7 +4,7 @@
 <dict>
 	<key>keychain-access-groups</key>
 	<array>
-		<string>$(AppIdentifierPrefix)com.continuum.app.shared</string>
+		<string>$(AppIdentifierPrefix)org.siloserver.silo.shared</string>
 	</array>
 </dict>
 </plist>
