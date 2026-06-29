@@ -18,6 +18,10 @@ struct TVMainTabView: View {
     @State private var currentProfile: UserProfile?
     @State private var showServerPicker = false
     @State private var registry = ServerRegistry.shared
+    /// Local, per-profile tab-visibility prefs (e.g. whether the Audiobooks
+    /// tab is opted in). Observed so the bar re-derives `visibleRoots` the
+    /// instant a toggle flips in Settings.
+    @State private var navPrefs = TVNavPreferences.shared
     /// Visible libraries for the active profile; drives which type tabs
     /// exist and which library each type tab scopes to.
     @State private var libraries: [Library] = []
@@ -143,10 +147,18 @@ struct TVMainTabView: View {
         // when it's absent.
         .environment(router)
         .task {
+            // Re-read tab-visibility prefs for the now-known profile (the
+            // singleton may hold the previous profile's value after a switch).
+            navPrefs.refresh()
             castReceiver.start(router: router)
             async let profileTask: Void = loadCurrentProfile()
             async let librariesTask: Void = loadLibraries()
             _ = await (profileTask, librariesTask)
+        }
+        .onChange(of: navPrefs.showAudiobooks) {
+            // Turning a tab off while parked on it would otherwise orphan the
+            // page with no matching tab in the bar; snap back to Home.
+            ensureSelectedRootIsVisible()
         }
         .onDisappear {
             castReceiver.stop()
@@ -621,12 +633,23 @@ struct TVMainTabView: View {
     private var visibleRoots: [TVRootDestination] {
         var roots: [TVRootDestination] = [.home]
         for type in TVLibraryTabType.allCases
-        where libraries.contains(where: { type.matches($0) }) {
+        where libraries.contains(where: { type.matches($0) }) && isTypeVisible(type) {
             roots.append(.libraryType(type))
         }
         roots.append(.recommendations)
         roots.append(.calendar)
         return roots
+    }
+
+    /// Whether a library type the profile can see should surface as a tab.
+    /// Most types are always shown; Audiobooks is opt-in (hidden by default)
+    /// because most users don't want it on their TV. This is the seam a
+    /// fuller "customize the header" feature would extend.
+    private func isTypeVisible(_ type: TVLibraryTabType) -> Bool {
+        switch type {
+        case .audiobooks: return navPrefs.showAudiobooks
+        default: return true
+        }
     }
 
     private func libraries(of type: TVLibraryTabType) -> [Library] {
@@ -675,12 +698,13 @@ struct TVMainTabView: View {
         }
     }
 
-    /// A library refresh can remove the type the user is parked on (e.g.
-    /// profile permissions changed). Snap back to Home rather than leaving
-    /// a tab-less content view on screen.
+    /// The selected root can stop being visible — a library refresh removes
+    /// its type (e.g. profile permissions changed), or the user hides its tab
+    /// from Settings. Snap back to Home rather than leaving a tab-less content
+    /// view on screen. Home / For You / Calendar are always in `visibleRoots`,
+    /// so this never strands the user.
     private func ensureSelectedRootIsVisible() {
-        guard case .libraryType(let type) = selectedRoot else { return }
-        if !libraries.contains(where: { type.matches($0) }) {
+        if !visibleRoots.contains(selectedRoot) {
             selectedRoot = .home
             contentFocusRequest += 1
         }
@@ -789,6 +813,11 @@ struct TVMainTabView: View {
                 libraries = []
                 ResponseCache.shared.remove(CacheKey.userLibraries)
                 pillSelections = [:]
+                // Re-read tab-visibility prefs under the new server+profile
+                // key: this path switches in place without rebuilding the
+                // shell, so `.task` (the only other caller of refresh) won't
+                // re-run and the cached mirror would otherwise stay stale.
+                navPrefs.refresh()
                 refreshAuthState()
             }
             if AuthService.shared.hasProfile {

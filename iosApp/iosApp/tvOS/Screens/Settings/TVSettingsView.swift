@@ -80,6 +80,10 @@ struct TVSettingsView: View {
 
     private var preferencesSection: some View {
         Section("Preferences") {
+            Button { activeScreen = .general } label: {
+                FocusAwareRowLabel(title: "General")
+            }
+
             Button { activeScreen = .playback } label: {
                 FocusAwareValueRow(
                     title: "Playback",
@@ -148,6 +152,8 @@ struct TVSettingsView: View {
     @ViewBuilder
     private func subScreen(for screen: SubScreen) -> some View {
         switch screen {
+        case .general:
+            TVGeneralSettingsView()
         case .playback:
             TVPlaybackSettingsView(viewModel: viewModel)
         case .subtitles:
@@ -161,6 +167,7 @@ struct TVSettingsView: View {
     }
 
     enum SubScreen: String, Identifiable {
+        case general
         case playback
         case subtitles
         case cardOverlays
