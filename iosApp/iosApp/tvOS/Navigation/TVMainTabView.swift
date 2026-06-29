@@ -83,6 +83,7 @@ struct TVMainTabView: View {
                     focusRequestTarget: panelReturnFocus,
                     openPanel: openPanel,
                     panelHasFocus: panelHasFocus,
+                    panelEntersFocus: panelEntersFocus,
                     onSelectRoot: selectRoot(_:),
                     onSearch: { router.navigate(to: .search) },
                     onDwell: handleDwell(_:),

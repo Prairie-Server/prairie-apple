@@ -71,9 +71,11 @@ struct TVCascadeSelector: View {
     /// The flyout offsets to the anchored row's value to align tops (§5.3).
     @State private var rowTops: [Int: CGFloat] = [:]
 
-    // `fileprivate` so the file-local `applyLibraryColumnDefaultFocus` helper
-    // can name this as the `defaultFocus` binding's value type.
-    fileprivate enum Focus: Hashable {
+    /// Focus target inside the panel: a level-1 library row, or a level-2
+    /// section row (scoped to its library so the same pill in two libraries
+    /// stays distinct). Cross-column moves set this directly (`moveFromLibrary`
+    /// / `moveFromSection`).
+    private enum Focus: Hashable {
         case library(Int)
         case section(Int, TVLibraryPill)
     }
@@ -115,15 +117,26 @@ struct TVCascadeSelector: View {
         // "top-aligned with the focused row"), not the panel header. Custom
         // VerticalAlignment guides don't survive the level-1 panel's
         // ScrollView / nested stacks, so the anchored row publishes its
-        // frame in this HStack's coordinate space and the flyout offsets
-        // down to match.
+        // frame in this HStack's coordinate space and the flyout pads its
+        // top down to match.
+        //
+        // This MUST be layout padding, not `.offset(y:)`. `.offset` is a
+        // render-only transform: it moves the flyout visually but leaves its
+        // *focus* frame at the top of the HStack. tvOS resolves directional
+        // moves from the layout frame, so a d-pad Right from a library row
+        // lower in the list finds no geometrically valid target to its right
+        // and focus never enters the flyout (and `defaultFocus` can't help —
+        // it only refines *which* row to land on once the engine has decided
+        // to enter the section, it can't initiate the move). Padding moves the
+        // real layout frame, so the focus engine sees the flyout where it
+        // actually appears and the Right move resolves geometrically.
         HStack(alignment: .top, spacing: ContinuumTheme.Skyline.flyoutGap) {
             librariesPanel
 
             flyout
                 .frame(width: ContinuumTheme.Skyline.flyoutWidth, alignment: .top)
                 .opacity(flyoutAnchorId != nil ? 1 : 0)
-                .offset(y: flyoutTopOffset)
+                .padding(.top, flyoutTopOffset)
                 .animation(
                     reduceMotion ? nil : .easeInOut(duration: ContinuumTheme.Skyline.flyoutOpenDuration),
                     value: flyoutTopOffset
@@ -161,14 +174,14 @@ struct TVCascadeSelector: View {
         .modifier(TVSkylinePanelChrome(
             cornerRadius: ContinuumTheme.Skyline.dropdownCornerRadius
         ))
-        // The column is one focus section whose *user-initiated* default focus
-        // is the anchored row, so a d-pad Left out of the flyout lands directly
-        // there (§5.3) instead of the geometrically nearest row. `defaultFocus`
-        // with `.userInitiated` is required: `prefersDefaultFocus` only fires
-        // for automatic focus evaluations, not d-pad-driven moves — so it would
-        // be ignored on Left and the engine would fall back to geometry.
+        // One focus section so vertical d-pad rolls the library list and a
+        // Left/Right move treats the column as a unit. Cross-column moves are
+        // handled explicitly per row (`moveFromLibrary`) via onMoveCommand +
+        // @FocusState — NOT by `defaultFocus`. A `defaultFocus(.userInitiated)`
+        // here actively traps focus: `.userInitiated` resets focus back to the
+        // default on every *user-initiated* move, so it ate the Right press
+        // that should have crossed into the flyout.
         .focusSection()
-        .applyLibraryColumnDefaultFocus(flyoutAnchorId, binding: $focus)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(type.title) libraries")
     }
@@ -211,9 +224,17 @@ struct TVCascadeSelector: View {
             }
             .buttonStyle(.continuumFlat)
             .focused($focus, equals: .library(library.id))
+            // Cross-column move is driven explicitly, not by geometry: a d-pad
+            // Right claims the flyout's first section through @FocusState, which
+            // wins over the focus engine. Geometry alone is unreliable here
+            // because the flyout chases the focused row (its first actionable
+            // row sits a header-height below, often outside the engine's
+            // adjacency cone), so the Right swipe was being silently consumed.
+            // Same idiom as `TVTopMenuDownHandler` (onMoveCommand + @FocusState).
+            .onMoveCommand { direction in moveFromLibrary(library, direction) }
             // Report this row's top in the level-1 HStack's coordinate space so
-            // the flyout can offset to align with the anchored row (§5.3). This
-            // survives the panel's ScrollView / nested stacks, which a custom
+            // the flyout can align with the anchored row (§5.3). This survives
+            // the panel's ScrollView / nested stacks, which a custom
             // VerticalAlignment guide would not.
             .background(libraryRowTopReporter(for: library))
             .accessibilityLabel(accessibilityLabel(for: library, isCurrent: isCurrent))
@@ -279,14 +300,10 @@ struct TVCascadeSelector: View {
             .modifier(TVSkylinePanelChrome(
                 cornerRadius: ContinuumTheme.Skyline.flyoutCornerRadius
             ))
-            // A sibling focus section, so a Left press is resolved as a move
-            // *out* of the flyout and *into* the library column's preferred row.
+            // A sibling focus section so vertical d-pad rolls the section list.
+            // The Left move back to the library column is driven explicitly by
+            // `moveFromSection` (onMoveCommand + @FocusState), not geometry.
             .focusSection()
-            .applySectionFlyoutDefaultFocus(
-                anchorId,
-                firstPill: pills.first,
-                binding: $focus
-            )
             .fixedSize()
             // Crossfade the section list as the flyout follows focus to a
             // new library; the vertical move is handled by `flyoutTopOffset`
@@ -315,6 +332,10 @@ struct TVCascadeSelector: View {
             }
             .buttonStyle(.continuumFlat)
             .focused($focus, equals: .section(library.id, pill))
+            // A d-pad Left returns to the anchored library row explicitly
+            // (claims it via @FocusState) rather than landing on whichever row
+            // is geometrically nearest the offset flyout.
+            .onMoveCommand { direction in moveFromSection(library, direction) }
             .accessibilityLabel("\(pill.title), section")
         } else {
             label
@@ -441,50 +462,32 @@ struct TVCascadeSelector: View {
         if isCurrent { label += ", current library" }
         return label
     }
-}
 
-// MARK: - Cross-column focus defaults
+    // MARK: - Cross-column moves (§5.3 Right/Left)
 
-private extension View {
-    /// Routes a d-pad **Right** out of the library column into the flyout's
-    /// first section. Without an explicit user-initiated default, tvOS can fail
-    /// to find a geometrically valid target because the flyout is visually
-    /// offset to align with the focused library row while its first focusable
-    /// row sits below the flyout header.
-    @ViewBuilder
-    func applySectionFlyoutDefaultFocus(
-        _ libraryId: Int?,
-        firstPill: TVLibraryPill?,
-        binding: FocusState<TVCascadeSelector.Focus?>.Binding
-    ) -> some View {
-        if let libraryId, let firstPill {
-            self.defaultFocus(binding, .section(libraryId, firstPill), priority: .userInitiated)
-        } else {
-            self
-        }
+    /// D-pad on a focused library row. **Right** crosses into that library's
+    /// section flyout by claiming its first section through `@FocusState`,
+    /// which overrides the focus engine — so it works regardless of the
+    /// flyout's offset geometry (the move the engine kept silently dropping).
+    /// Up/Down are left to the engine (additive: the closure runs alongside
+    /// the engine's own move, so vertical rolling of the list still works).
+    private func moveFromLibrary(_ library: Library, _ direction: MoveCommandDirection) {
+        guard direction == .right else { return }
+        tvFocusCascadeLog.debug("cascade.moveFromLibrary RIGHT lib=\(library.id, privacy: .public)")
+        // Anchor the flyout to this library *now* (cancel the follow debounce)
+        // so its section rows are mounted before we claim one.
+        flyoutFollowTask?.cancel()
+        flyoutAnchorId = library.id
+        focus = .section(library.id, pills.first ?? .recommended)
     }
 
-    /// Routes a d-pad **Left** out of the flyout straight to the anchored
-    /// library row (§5.3), instead of the geometrically nearest row — which,
-    /// because the flyout is top-aligned a row below, would be the wrong
-    /// library (e.g. "Movies – Anime" while scoped into "Movies").
-    ///
-    /// `.userInitiated` priority is the load-bearing detail: `prefersDefaultFocus`
-    /// only fires for *automatic* focus evaluations (scope first appears,
-    /// structural changes), so it is ignored on a d-pad move and the engine
-    /// falls back to geometry — producing a visible hop. `defaultFocus(…,
-    /// priority: .userInitiated)` is consulted for the user-driven move and
-    /// lands focus directly. Same idiom as `TVEpisodeRail.applyRailDefaultFocus`.
-    @ViewBuilder
-    func applyLibraryColumnDefaultFocus(
-        _ anchorId: Int?,
-        binding: FocusState<TVCascadeSelector.Focus?>.Binding
-    ) -> some View {
-        if let anchorId {
-            self.defaultFocus(binding, .library(anchorId), priority: .userInitiated)
-        } else {
-            self
-        }
+    /// D-pad on a focused section row. **Left** returns to this library's row
+    /// in the level-1 column (claimed explicitly so it lands on the anchored
+    /// library, not whichever row is geometrically nearest the offset flyout).
+    private func moveFromSection(_ library: Library, _ direction: MoveCommandDirection) {
+        guard direction == .left else { return }
+        tvFocusCascadeLog.debug("cascade.moveFromSection LEFT lib=\(library.id, privacy: .public)")
+        focus = .library(library.id)
     }
 }
 

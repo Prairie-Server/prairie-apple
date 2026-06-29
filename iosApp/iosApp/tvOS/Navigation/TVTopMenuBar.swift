@@ -120,6 +120,16 @@ struct TVTopMenuBar: View {
     /// True once focus has descended from the bar into the open panel —
     /// the tab/avatar then reads as selected, not focused (§5.1).
     let panelHasFocus: Bool
+    /// True while the panel is in focus-owning (entered) mode, as opposed to a
+    /// passive dwell preview. Unlike `panelHasFocus` — which flips false for a
+    /// frame whenever the panel's row focus is momentarily perturbed and lags
+    /// behind the engine by a render pass — this is set once when the host
+    /// hands focus in and stays true until the panel closes. The bar uses it
+    /// to stay passive: in entered mode a `focusedItem` drop to nil means the
+    /// panel claimed focus, so the bar must NOT re-pin to the tab. Re-pinning
+    /// there starts a tug-of-war with the panel's own `@FocusState` (the entry
+    /// oscillation that made d-pad navigation into the flyout flaky).
+    let panelEntersFocus: Bool
     let onSelectRoot: (TVRootDestination) -> Void
     let onSearch: () -> Void
     /// A bar element rested under focus for the dwell interval, or focus
@@ -219,15 +229,29 @@ struct TVTopMenuBar: View {
                 scheduleDwell(for: newValue)
                 return
             }
-            // Focus dropped to nil. Opening OR closing the dropdown overlay
-            // perturbs the focus graph and makes tvOS drop the bar's
-            // @FocusState, repairing to the Home tab (the flash). When that's
-            // why we lost focus — a preview panel is open, or a sideways move
-            // just closed one — re-pin to the tab the user is actually on in
-            // the same transaction. Deferring this by one main-queue turn
-            // leaves a visible frame where tvOS repairs focus back to Home.
-            // A legit leave (down into the page, Menu out) has neither flag,
-            // so it falls through and focus is allowed to go.
+            // Focus dropped to nil while the panel is in entered (focus-owning)
+            // mode: the panel claimed focus through its own @FocusState, so the
+            // bar must stay passive. Re-pinning to the tab here fights the panel
+            // for focus — and because `panelHasFocus` lags a render pass and a
+            // stale `refocusAfterClose` can still be set from earlier bar
+            // navigation, the re-pin fires exactly when it shouldn't, producing
+            // the entry oscillation (focus yo-yos tab↔row until the flags
+            // converge, dropping any d-pad press made in between). The host
+            // closes the panel on a genuine exit via `onPanelFocusChanged`, so
+            // nothing is stranded by staying out of it.
+            if panelEntersFocus {
+                isMenuFocused = false
+                dwellTask?.cancel()
+                return
+            }
+            // Opening OR closing the dropdown overlay perturbs the focus graph
+            // and makes tvOS drop the bar's @FocusState, repairing to the Home
+            // tab (the flash). When that's why we lost focus — a preview panel
+            // is open, or a sideways move just closed one — re-pin to the tab
+            // the user is actually on in the same transaction. Deferring this by
+            // one main-queue turn leaves a visible frame where tvOS repairs
+            // focus back to Home. A legit leave (down into the page, Menu out)
+            // has neither flag, so it falls through and focus is allowed to go.
             let spuriousFromOpenPreview = openPanel != nil && !panelHasFocus
             if (spuriousFromOpenPreview || refocusAfterClose), let target = lastBarFocus {
                 refocusAfterClose = false
