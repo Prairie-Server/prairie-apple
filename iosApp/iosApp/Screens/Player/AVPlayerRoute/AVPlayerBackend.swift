@@ -42,6 +42,21 @@ final class AVPlayerBackend {
     /// tvOS because AVPlayer's forward buffer is only one part of the resident
     /// playback budget.
     private static let loopbackSteadyStateForwardBufferDefault: Double = 30.0
+    /// Local DV loopback playhead watchdog. Driven by an independent wall-clock
+    /// timer (AVPlayer's periodic time observer stops firing when the playhead
+    /// freezes, so it cannot detect a stationary playhead on its own). When
+    /// AVPlayer believes it is playing but the playhead has not advanced for
+    /// `playheadWatchdogStallSeconds` while generated media is available ahead,
+    /// reanchor the loopback. After `playheadWatchdogMaxReanchors` failed
+    /// attempts inside `playheadWatchdogReanchorWindowSeconds`, escalate to a
+    /// route fallback instead of reanchoring forever.
+    private static let playheadWatchdogTickSeconds: TimeInterval = 1.0
+    private static let playheadWatchdogStallSeconds: Double = 10.0
+    /// Kept above the reanchor path's own steady-state `generatedAhead`
+    /// threshold (10 s) so a watchdog trigger never bails inside recovery.
+    private static let playheadWatchdogMinGeneratedAhead: Double = 12.0
+    private static let playheadWatchdogMaxReanchors = 3
+    private static let playheadWatchdogReanchorWindowSeconds: Double = 90.0
     private static let generatedHLSSpillBudgetBytes: Int64 = 4 * 1024 * 1024 * 1024
     private static var isConstrainedMemoryDevice: Bool {
         #if os(tvOS)
@@ -124,6 +139,11 @@ final class AVPlayerBackend {
     var onTimelineOffsetChange: ((Double) -> Void)?
     var onSidecarTracksRegistered: (([SidecarSubtitleDescriptor]) -> Void)?
     var onSubtitleLoadStatusChange: ((SubtitleSlot, SubtitleLoadStatus) -> Void)?
+    /// Raised when the local DV loopback playhead watchdog has exhausted its
+    /// reanchor attempts and the route should be degraded (e.g. to the
+    /// Compatibility route) rather than left frozen. The argument is a short
+    /// reason token for logging/telemetry.
+    var onLoopbackStallUnrecoverable: ((String) -> Void)?
 
     let avPlayer = AVPlayer()
     weak var subtitleOverlay: SubtitleOverlayView?
@@ -188,6 +208,13 @@ final class AVPlayerBackend {
     private var loopbackPlaybackClockSecondsValue: Double = 0
     private var pendingLocalLoopbackRecoveryMediaTime: Double?
     private var lastLocalLoopbackStallRecoveryAt: CFTimeInterval = 0
+    private var loopbackPlayheadWatchdog: Timer?
+    private var watchdogLastPlayheadSeconds: Double = -1
+    private var watchdogLastAdvanceWall: CFTimeInterval = 0
+    private var watchdogLastStateLogWall: CFTimeInterval = 0
+    private var watchdogReanchorCount = 0
+    private var watchdogReanchorWindowStartWall: CFTimeInterval = 0
+    private var didEscalateLoopbackStall = false
     private var isUserPaused = false
     private var preserveSessionDirectory = false
     private var audioSessionActive = false
@@ -658,6 +685,13 @@ final class AVPlayerBackend {
         loopbackEdgeWatch = nil
         pendingLocalLoopbackRecoveryMediaTime = nil
         lastLocalLoopbackStallRecoveryAt = 0
+        // Reset playhead advance-tracking for the new session so a reanchor's
+        // pre-reanchor position does not read as instantly stationary. The
+        // reanchor retry budget (count/window/escalation) deliberately survives
+        // across reanchors and only resets on window expiry.
+        watchdogLastPlayheadSeconds = -1
+        watchdogLastAdvanceWall = 0
+        watchdogLastStateLogWall = 0
         didFireFileLoaded = false
         hasSeekedToStart = false
         pendingStartTime = startTime
@@ -680,6 +714,7 @@ final class AVPlayerBackend {
     ) {
         let sessionID = UUID().uuidString
         activeLoopbackSessionID = sessionID
+        installLoopbackPlayheadWatchdog()
         loopbackGeneration &+= 1
         let generation = loopbackGeneration
         let debugBaseDir = FileManager.default.temporaryDirectory
@@ -1309,6 +1344,105 @@ final class AVPlayerBackend {
             let end = (range.start + range.duration).seconds
             return String(format: "%.2f-%.2f", start, end)
         }.joined(separator: ",")
+    }
+
+    private func installLoopbackPlayheadWatchdog() {
+        loopbackPlayheadWatchdog?.invalidate()
+        let timer = Timer(
+            timeInterval: Self.playheadWatchdogTickSeconds,
+            repeats: true
+        ) { [weak self] _ in
+            self?.loopbackPlayheadWatchdogTick()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        loopbackPlayheadWatchdog = timer
+    }
+
+    /// Independent wall-clock check for a local DV loopback playhead that has
+    /// stopped advancing while AVPlayer believes it is playing and generated
+    /// media is available ahead of it. This is the failure mode the existing
+    /// recovery hooks miss: `.AVPlayerItemPlaybackStalled` only fires on buffer
+    /// starvation, the edge watchdog requires the buffered edge to sit at the
+    /// playhead, and the periodic time observer stops firing the moment the
+    /// playhead freezes. `timeControlStatus` distinguishes a genuine wedge from
+    /// a user pause, so a paused player is never reanchored.
+    private func loopbackPlayheadWatchdogTick() {
+        guard !isDisposed,
+              case .localDVLoopback = currentSourceStrategy,
+              let item = currentItem,
+              didFireFileLoaded,
+              !isSeekPending else { return }
+
+        let now = CACurrentMediaTime()
+        let position = currentTime()
+        guard position.isFinite else { return }
+
+        if watchdogLastPlayheadSeconds < 0 || position > watchdogLastPlayheadSeconds + 0.05 {
+            watchdogLastPlayheadSeconds = position
+            watchdogLastAdvanceWall = now
+        }
+        let stationaryFor = watchdogLastAdvanceWall > 0 ? now - watchdogLastAdvanceWall : 0
+
+        let timeControlStatus = avPlayer.timeControlStatus
+        let bufferedAhead = bufferedAheadSeconds(for: item, referenceTime: position) ?? 0
+        let generatedEnd = latestLoopbackGeneratedStats?.playlistVisibleEndSeconds
+            ?? segmentStore?.stats().generatedMediaSeconds
+            ?? 0
+        let generatedAhead = max(0, generatedEnd - position)
+
+        let statusLabel: String
+        switch timeControlStatus {
+        case .paused: statusLabel = "paused"
+        case .waitingToPlayAtSpecifiedRate: statusLabel = "waiting"
+        case .playing: statusLabel = "playing"
+        @unknown default: statusLabel = "unknown"
+        }
+
+        // Periodic transport-state telemetry so a captured stall can be
+        // classified (pause vs. wedge) directly from the log.
+        if now - watchdogLastStateLogWall >= 3 {
+            watchdogLastStateLogWall = now
+            Self.logger.info(
+                "[CMP-AVP] loopback playhead state pos=\(position, privacy: .public) tc=\(statusLabel, privacy: .public) rate=\(self.avPlayer.rate, privacy: .public) paused=\(self.isUserPaused ? 1 : 0, privacy: .public) bufAhead=\(bufferedAhead, privacy: .public) generatedAhead=\(generatedAhead, privacy: .public) stationaryFor=\(stationaryFor, privacy: .public)"
+            )
+        }
+
+        // Only a wedge qualifies: AVPlayer should be playing (not user-paused,
+        // not legitimately waiting on an empty buffer) yet the playhead is
+        // stationary while media is generated ahead of it.
+        let believesPlayable = timeControlStatus == .playing
+            || (timeControlStatus == .waitingToPlayAtSpecifiedRate && bufferedAhead >= 2.0)
+        guard !isUserPaused,
+              believesPlayable,
+              stationaryFor >= Self.playheadWatchdogStallSeconds,
+              generatedAhead >= Self.playheadWatchdogMinGeneratedAhead else {
+            return
+        }
+
+        // Bound reanchors within a rolling window; escalate to a route fallback
+        // rather than reanchoring a route that will not recover.
+        if watchdogReanchorWindowStartWall == 0
+            || now - watchdogReanchorWindowStartWall > Self.playheadWatchdogReanchorWindowSeconds {
+            watchdogReanchorWindowStartWall = now
+            watchdogReanchorCount = 0
+            didEscalateLoopbackStall = false
+        }
+
+        if watchdogReanchorCount >= Self.playheadWatchdogMaxReanchors {
+            guard !didEscalateLoopbackStall else { return }
+            didEscalateLoopbackStall = true
+            Self.logger.error(
+                "[CMP-AVP] local loopback playhead_watchdog exhausted reanchors=\(self.watchdogReanchorCount, privacy: .public) pos=\(position, privacy: .public) stationaryFor=\(stationaryFor, privacy: .public); escalating to route fallback"
+            )
+            onLoopbackStallUnrecoverable?("playhead_watchdog")
+            return
+        }
+
+        watchdogReanchorCount += 1
+        Self.logger.error(
+            "[CMP-AVP] local loopback playhead_watchdog trigger attempt=\(self.watchdogReanchorCount, privacy: .public) pos=\(position, privacy: .public) tc=\(statusLabel, privacy: .public) bufAhead=\(bufferedAhead, privacy: .public) generatedAhead=\(generatedAhead, privacy: .public) stationaryFor=\(stationaryFor, privacy: .public)"
+        )
+        recoverLocalLoopbackStallIfNeeded(item: item, requireBufferedEdge: false, reason: "playhead_watchdog")
     }
 
     private func sampleLocalLoopbackEdge(item: AVPlayerItem, referenceTime: Double, trigger: String) {
@@ -2054,6 +2188,8 @@ final class AVPlayerBackend {
         }
         subtitleDisplayLink?.invalidate()
         subtitleDisplayLink = nil
+        loopbackPlayheadWatchdog?.invalidate()
+        loopbackPlayheadWatchdog = nil
         statusObs?.invalidate(); statusObs = nil
         rateObs?.invalidate(); rateObs = nil
         timeControlObs?.invalidate(); timeControlObs = nil

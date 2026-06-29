@@ -1049,6 +1049,22 @@ class PlayerViewModel {
             guard let self, !self.isDisposed, offset.isFinite else { return }
             self.playbackTimelineOffset = max(0, offset)
         }
+        backend.onLoopbackStallUnrecoverable = { [weak self] reason in
+            guard let self, !self.isDisposed else { return }
+            self.handleUnrecoverableLoopbackStall(reason: reason)
+        }
+    }
+
+    private func handleUnrecoverableLoopbackStall(reason: String) {
+        guard !isDisposed else { return }
+        Self.logger.warning(
+            "[CMP-ROUTE] local DV loopback unrecoverable (\(reason, privacy: .public)); degrading to Compatibility route"
+        )
+        if !attemptSiloRouteCompatibilityFallback(after: "local_dv_loopback_\(reason)") {
+            Self.logger.error(
+                "[CMP-ROUTE] local DV loopback stall could not be degraded (compatibility fallback unavailable) reason=\(reason, privacy: .public)"
+            )
+        }
     }
 
     private func handleFileLoaded() {

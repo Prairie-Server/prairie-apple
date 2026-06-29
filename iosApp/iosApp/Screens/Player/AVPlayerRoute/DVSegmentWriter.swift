@@ -138,6 +138,16 @@ final class DVSegmentWriter {
     private static let generatedAheadThrottleDefaultSeconds: Double = 90
     private static let generatedBitrateWindowSeconds: Double = 30
     private static let maxGeneratedAheadThrottleWaitSeconds: Double = 2
+    /// Once the playhead has been stationary for at least this long while we are
+    /// already beyond the generated-ahead cap, stop soft-releasing and HOLD
+    /// generation until the playhead moves again or the session is torn down.
+    /// This keeps a paused — or wedged — player from generating hundreds of
+    /// seconds of HLS ahead of a stationary playhead and exhausting the spill
+    /// budget. The short soft-release is preserved below this threshold so brief
+    /// playlist-reload stalls do not deadlock the mux thread. The backend's
+    /// playhead watchdog owns the decision to reanchor or fall back; the writer
+    /// only refuses to run unbounded ahead of a clock that is not advancing.
+    private static let parkedPlayheadHoldThresholdSeconds: Double = 3.0
     /// Upper bound on how long the mux thread will park waiting for the store
     /// to free spill capacity. Capacity only frees as the playhead advances
     /// past retired segments; if the position provider wedges, the wait would
@@ -268,6 +278,12 @@ final class DVSegmentWriter {
     private var lastSourceStatsBytesRead: Int64?
     private var lastSpillCapacityBackpressureLogWall: CFAbsoluteTime = 0
     private var lastGeneratedAheadBackpressureLogWall: CFAbsoluteTime = 0
+    /// Last playback position observed by `waitForGeneratedAheadIfNeeded`, and
+    /// the wall-clock time it last advanced. Tracked across calls (the throttle
+    /// runs once per appended segment) so we can tell a momentarily-stale clock
+    /// from a genuinely stationary playhead.
+    private var generatedAheadObservedPlayback: Double = -1
+    private var generatedAheadObservedPlaybackWall: CFAbsoluteTime = 0
     private var totalGeneratedSegmentBytes: Int64 = 0
     private var recentGeneratedSegments: [(bytes: Int, duration: Double)] = []
     private var lastSegmentDurationSource = "unknown"
@@ -2936,9 +2952,19 @@ final class DVSegmentWriter {
             guard let playbackPosition = playbackPositionProvider?(),
                   playbackPosition.isFinite else { return }
             let generatedAhead = totalMediaDuration - max(0, playbackPosition)
-            guard generatedAhead > cap else { return }
             let now = CFAbsoluteTimeGetCurrent()
-            if now - waitStarted >= waitBudget {
+            if generatedAheadObservedPlayback < 0
+                || playbackPosition > generatedAheadObservedPlayback + 0.05 {
+                generatedAheadObservedPlayback = playbackPosition
+                generatedAheadObservedPlaybackWall = now
+            }
+            guard generatedAhead > cap else { return }
+            let stationaryFor = now - generatedAheadObservedPlaybackWall
+            // Hold (instead of soft-releasing) once the playhead has clearly
+            // stopped. Below the threshold the short soft-release still applies
+            // so a brief playlist-reload stall cannot deadlock the mux thread.
+            let playheadParked = stationaryFor >= Self.parkedPlayheadHoldThresholdSeconds
+            if now - waitStarted >= waitBudget, !playheadParked {
                 cmpLog(
                     "[CMP-HLS-STORE] generated-ahead throttle soft-release ahead=\(String(format: "%.1f", generatedAhead))s cap=\(String(format: "%.0f", cap))s wait=\(String(format: "%.1f", now - waitStarted))s targetDuration=\(String(format: "%.1f", targetDuration))s reason=playlist_reload_budget"
                 )
@@ -2947,7 +2973,7 @@ final class DVSegmentWriter {
             if now - lastGeneratedAheadBackpressureLogWall >= 5 {
                 lastGeneratedAheadBackpressureLogWall = now
                 cmpLog(
-                    "[CMP-HLS-STORE] generated-ahead throttle ahead=\(String(format: "%.1f", generatedAhead))s cap=\(String(format: "%.0f", cap))s playback=\(String(format: "%.1f", playbackPosition))s generated=\(String(format: "%.1f", totalMediaDuration))s"
+                    "[CMP-HLS-STORE] generated-ahead throttle ahead=\(String(format: "%.1f", generatedAhead))s cap=\(String(format: "%.0f", cap))s playback=\(String(format: "%.1f", playbackPosition))s generated=\(String(format: "%.1f", totalMediaDuration))s stationaryFor=\(String(format: "%.1f", stationaryFor))s hold=\(playheadParked ? 1 : 0) reason=\(playheadParked ? "parked_playhead" : "generated_ahead")"
                 )
             }
             Thread.sleep(forTimeInterval: 0.1)
