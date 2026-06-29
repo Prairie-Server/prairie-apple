@@ -415,7 +415,8 @@ struct TVMainTabView: View {
             onCommitLibrary: { commitScope(type: type, library: $0, pill: nil) },
             onCommitSection: { commitScope(type: type, library: $0, pill: $1) },
             onClose: { closePanel() },
-            onPanelFocusChanged: { handlePanelFocusChanged($0) }
+            onPanelFocusChanged: { handlePanelFocusChanged($0) },
+            onExitToContent: { exitPanelToContent() }
         )
     }
 
@@ -602,6 +603,17 @@ struct TVMainTabView: View {
         panelEntersFocus = false
         panelHasFocus = false
         suppressTopMenuFocusForContentHandoff()
+    }
+
+    /// D-pad down past the last cascade row leaves the menu for the page
+    /// content (§5.3). Tear the panel down, relinquish the bar's focus, and
+    /// actively push focus into the swapped-in content — the same hand-down
+    /// `selectRoot` uses, so a later Up press returns to the bar normally.
+    /// Without the explicit `contentFocusRequest` bump the remote would strand:
+    /// the panel closes but nothing claims focus.
+    private func exitPanelToContent() {
+        closePanelForContentHandoff()
+        contentFocusRequest += 1
     }
 
     /// Commit a cascade selection (§5.3, §F): set + persist the tab scope,

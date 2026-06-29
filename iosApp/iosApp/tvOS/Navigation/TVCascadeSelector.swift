@@ -54,6 +54,9 @@ struct TVCascadeSelector: View {
     /// Reports whether any panel row currently holds focus, so the host can
     /// drop the tab's focused look once focus descends (§5.1).
     var onPanelFocusChanged: (Bool) -> Void = { _ in }
+    /// Leave the panel for the page content — d-pad **down** past the last row
+    /// of a column dismisses the menu and hands focus to the content below.
+    var onExitToContent: () -> Void = {}
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -334,8 +337,9 @@ struct TVCascadeSelector: View {
             .focused($focus, equals: .section(library.id, pill))
             // A d-pad Left returns to the anchored library row explicitly
             // (claims it via @FocusState) rather than landing on whichever row
-            // is geometrically nearest the offset flyout.
-            .onMoveCommand { direction in moveFromSection(library, direction) }
+            // is geometrically nearest the offset flyout; Down past the last
+            // section leaves the menu for the page content.
+            .onMoveCommand { direction in moveFromSection(library, pill, direction) }
             .accessibilityLabel("\(pill.title), section")
         } else {
             label
@@ -465,29 +469,49 @@ struct TVCascadeSelector: View {
 
     // MARK: - Cross-column moves (§5.3 Right/Left)
 
-    /// D-pad on a focused library row. **Right** crosses into that library's
-    /// section flyout by claiming its first section through `@FocusState`,
-    /// which overrides the focus engine — so it works regardless of the
-    /// flyout's offset geometry (the move the engine kept silently dropping).
-    /// Up/Down are left to the engine (additive: the closure runs alongside
-    /// the engine's own move, so vertical rolling of the list still works).
+    /// D-pad on a focused library row.
+    /// - **Right** crosses into that library's section flyout by claiming its
+    ///   first section through `@FocusState`, which overrides the focus engine
+    ///   — so it works regardless of the flyout's offset geometry (the move the
+    ///   engine kept silently dropping).
+    /// - **Down past the last library** leaves the menu for the page content.
+    ///   On any other row, down is ignored here and the engine rolls the list
+    ///   (onMoveCommand is additive — the closure runs alongside the engine's
+    ///   own move, so vertical navigation still works).
     private func moveFromLibrary(_ library: Library, _ direction: MoveCommandDirection) {
-        guard direction == .right else { return }
-        tvFocusCascadeLog.debug("cascade.moveFromLibrary RIGHT lib=\(library.id, privacy: .public)")
-        // Anchor the flyout to this library *now* (cancel the follow debounce)
-        // so its section rows are mounted before we claim one.
-        flyoutFollowTask?.cancel()
-        flyoutAnchorId = library.id
-        focus = .section(library.id, pills.first ?? .recommended)
+        switch direction {
+        case .right:
+            tvFocusCascadeLog.debug("cascade.moveFromLibrary RIGHT lib=\(library.id, privacy: .public)")
+            // Anchor the flyout to this library *now* (cancel the follow
+            // debounce) so its section rows are mounted before we claim one.
+            flyoutFollowTask?.cancel()
+            flyoutAnchorId = library.id
+            focus = .section(library.id, pills.first ?? .recommended)
+        case .down where libraries.last?.id == library.id:
+            tvFocusCascadeLog.debug("cascade.moveFromLibrary DOWN exit lib=\(library.id, privacy: .public)")
+            onExitToContent()
+        default:
+            break
+        }
     }
 
-    /// D-pad on a focused section row. **Left** returns to this library's row
-    /// in the level-1 column (claimed explicitly so it lands on the anchored
-    /// library, not whichever row is geometrically nearest the offset flyout).
-    private func moveFromSection(_ library: Library, _ direction: MoveCommandDirection) {
-        guard direction == .left else { return }
-        tvFocusCascadeLog.debug("cascade.moveFromSection LEFT lib=\(library.id, privacy: .public)")
-        focus = .library(library.id)
+    /// D-pad on a focused section row.
+    /// - **Left** returns to this library's row in the level-1 column (claimed
+    ///   explicitly so it lands on the anchored library, not whichever row is
+    ///   geometrically nearest the offset flyout). Suppressed in single-library
+    ///   mode, where there is no level-1 column to return to.
+    /// - **Down past the last section** leaves the menu for the page content.
+    private func moveFromSection(_ library: Library, _ pill: TVLibraryPill, _ direction: MoveCommandDirection) {
+        switch direction {
+        case .left where !isSingleLibrary:
+            tvFocusCascadeLog.debug("cascade.moveFromSection LEFT lib=\(library.id, privacy: .public)")
+            focus = .library(library.id)
+        case .down where pills.last == pill:
+            tvFocusCascadeLog.debug("cascade.moveFromSection DOWN exit lib=\(library.id, privacy: .public)")
+            onExitToContent()
+        default:
+            break
+        }
     }
 }
 

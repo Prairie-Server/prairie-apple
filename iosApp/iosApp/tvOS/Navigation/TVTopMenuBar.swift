@@ -158,6 +158,12 @@ struct TVTopMenuBar: View {
     /// Set when a sideways move closes the open panel: the overlay removal
     /// perturbs focus, so the next nil-drop is spurious and must be re-pinned.
     @State private var refocusAfterClose = false
+    /// The element whose panel the user just explicitly closed (Menu/Back).
+    /// Focus returns to it, but the dwell timer must NOT auto-reopen the panel
+    /// they just dismissed — that's the "closes then immediately reopens"
+    /// awkwardness. Cleared the instant focus moves to a *different* element,
+    /// so resting here again later still opens it normally.
+    @State private var dwellSuppressedElement: TVTopMenuFocus?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -201,6 +207,9 @@ struct TVTopMenuBar: View {
         .onChange(of: isFocusSuppressed) { _, newValue in
             if newValue {
                 focusedItem = nil
+                // Focus left the bar for content; a later return to any tab
+                // should dwell-open normally, so drop any close-suppression.
+                dwellSuppressedElement = nil
             }
         }
         .onChange(of: focusRequest) { _, _ in
@@ -375,9 +384,19 @@ struct TVTopMenuBar: View {
         DispatchQueue.main.async {
             guard !isFocusSuppressed else { return }
             switch focusRequestTarget {
-            case .root(let root): focusedItem = .root(root)
-            case .profile: focusedItem = .profile
-            case .none: focusedItem = .root(selectedRoot)
+            // A non-nil target means focus is returning from an explicit panel
+            // close (focusTopMenuIfVisible(focusing:) is only called that way).
+            // Mark it so the dwell timer doesn't immediately reopen what the
+            // user just dismissed. A target-less request (Up/Menu from content)
+            // leaves dwell enabled — resting on a tab there should preview it.
+            case .root(let root):
+                dwellSuppressedElement = .root(root)
+                focusedItem = .root(root)
+            case .profile:
+                dwellSuppressedElement = .profile
+                focusedItem = .profile
+            case .none:
+                focusedItem = .root(selectedRoot)
             }
         }
     }
@@ -494,6 +513,15 @@ struct TVTopMenuBar: View {
             // Closing the panel removes its overlay, which perturbs focus and
             // drops the tab we just moved to; flag it so the nil-drop re-pins.
             refocusAfterClose = true
+        }
+
+        // Don't auto-reopen a panel the user just explicitly closed: Menu/Back
+        // returns focus to its tab, and resting there would otherwise re-trip
+        // the dwell. Once focus has moved on to a *different* element, drop the
+        // suppression so normal dwell resumes.
+        if let suppressed = dwellSuppressedElement {
+            if suppressed == item { return }
+            dwellSuppressedElement = nil
         }
 
         guard let target = dwellTarget(for: item) else { return }
