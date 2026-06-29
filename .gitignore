@@ -42,3 +42,4 @@ output/
 .DS_Store
 Thumbs.db
 .swiftpm/
+docs/
