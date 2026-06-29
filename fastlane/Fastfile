@@ -60,6 +60,13 @@ def env_truthy?(name, default:)
   %w[1 true yes y on].include?(value.strip.downcase)
 end
 
+# Returns an xcarg fragment that overrides MARKETING_VERSION when the CI-provided
+# env var is set; empty string otherwise (local builds keep the project.yml value).
+def marketing_version_xcarg
+  value = ENV["MARKETING_VERSION"].to_s.strip
+  value.empty? ? "" : "MARKETING_VERSION=#{value} "
+end
+
 def testflight_distribution
   mode = ENV.fetch("TESTFLIGHT_DISTRIBUTION", "internal").strip.downcase
 
@@ -222,7 +229,8 @@ platform :ios do
       export_method:    "app-store",
       output_directory: "build/ios",
       output_name:      "Silo.ipa",
-      xcargs: "CODE_SIGN_STYLE=Manual " \
+      xcargs: "#{marketing_version_xcarg}" \
+              "CODE_SIGN_STYLE=Manual " \
               "CODE_SIGN_IDENTITY='Apple Distribution' " \
               "PROVISIONING_PROFILE_SPECIFIER='#{profile_specifier}' " \
               "CURRENT_PROJECT_VERSION=#{build_number} " \
@@ -334,7 +342,8 @@ platform :ios do
       # PROVISIONING_PROFILE_SPECIFIER is intentionally absent from xcargs —
       # a global value would override both targets with the same profile.
       # Per-target settings were written above via update_code_signing_settings.
-      xcargs: "CODE_SIGN_STYLE=Manual " \
+      xcargs: "#{marketing_version_xcarg}" \
+              "CODE_SIGN_STYLE=Manual " \
               "CODE_SIGN_IDENTITY='Apple Distribution' " \
               "CURRENT_PROJECT_VERSION=#{build_number} " \
               "DEVELOPMENT_TEAM=#{team_id}",
