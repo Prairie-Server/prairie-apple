@@ -65,6 +65,26 @@ struct SearchView: View {
         .onChange(of: viewModel.selectedMediaType) { _, _ in
             Task { await viewModel.applyMediaType() }
         }
+        .onAppear {
+            viewModel.audiobooksEnabled = audiobooksAvailable
+        }
+    }
+
+    /// Whether audiobooks take part in search. On tvOS this mirrors the
+    /// Audiobooks tab — an audiobook library exists and the user has opted to
+    /// show it — so a hidden audiobook library produces neither a filter chip
+    /// nor results under "All". Other platforms have no hide setting, so
+    /// audiobooks always participate (unchanged behavior).
+    private var audiobooksAvailable: Bool {
+        #if os(tvOS)
+        guard TVNavPreferences.shared.showAudiobooks else { return false }
+        guard let cached: LibrariesResponse = ResponseCache.shared.get(CacheKey.userLibraries) else {
+            return false
+        }
+        return cached.libraries.contains { $0.isAudiobookLibrary }
+        #else
+        return true
+        #endif
     }
 
     #if os(iOS)
@@ -143,7 +163,10 @@ struct SearchView: View {
     private var mediaTypeFilter: some View {
         #if os(iOS)
         HStack {
-            SearchMediaTypeMenu(selectedMediaType: $viewModel.selectedMediaType)
+            SearchMediaTypeMenu(
+                selectedMediaType: $viewModel.selectedMediaType,
+                availableTypes: viewModel.availableMediaTypes
+            )
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -154,7 +177,7 @@ struct SearchView: View {
 
     private var mediaTypePicker: some View {
         Picker("Media Type", selection: $viewModel.selectedMediaType) {
-            ForEach(SearchMediaType.allCases) { mediaType in
+            ForEach(viewModel.availableMediaTypes) { mediaType in
                 Text(mediaType.title)
                     .tag(mediaType)
             }

@@ -2,10 +2,11 @@ import SwiftUI
 
 struct SearchMediaTypeMenu: View {
     @Binding var selectedMediaType: SearchMediaType
+    var availableTypes: [SearchMediaType] = SearchMediaType.allCases
 
     var body: some View {
         Menu {
-            ForEach(SearchMediaType.allCases) { mediaType in
+            ForEach(availableTypes) { mediaType in
                 Button {
                     selectedMediaType = mediaType
                 } label: {

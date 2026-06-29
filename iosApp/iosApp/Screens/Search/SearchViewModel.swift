@@ -1,28 +1,29 @@
 import Foundation
 
 enum SearchMediaType: String, CaseIterable, Identifiable {
-    case video
+    case all
     case movie
     case series
     case audiobook
-    case all
 
     var id: Self { self }
 
     var title: String {
         switch self {
         case .all: "All"
-        case .video: "Movies & Series"
         case .movie: "Movies"
         case .series: "Series"
         case .audiobook: "Audiobooks"
         }
     }
 
-    var queryValue: String? {
+    /// The `type` query value for this filter. `.all` is context-dependent:
+    /// when audiobooks aren't part of this search it means video-only (the old
+    /// "Movies & Series" filter), so hidden audiobooks never leak into
+    /// unfiltered results; when they are, it sends no filter (true everything).
+    func queryValue(audiobooksEnabled: Bool) -> String? {
         switch self {
-        case .all: nil
-        case .video: "video"
+        case .all: audiobooksEnabled ? nil : "video"
         case .movie: "movie"
         case .series: "series"
         case .audiobook: "audiobook"
@@ -33,8 +34,26 @@ enum SearchMediaType: String, CaseIterable, Identifiable {
 @Observable
 class SearchViewModel {
     var query = ""
-    var selectedMediaType: SearchMediaType = .video
+    var selectedMediaType: SearchMediaType = .all
     var results: [BrowseItem] = []
+
+    /// Whether audiobooks participate in this search session. Drives both the
+    /// offered filters (`availableMediaTypes`) and what `.all` means. On tvOS
+    /// this mirrors the Audiobooks tab — an audiobook library exists and the
+    /// user has opted to show it. iOS/macOS have no hide setting, so it stays
+    /// `true`. Clamp the selection if audiobooks become unavailable.
+    var audiobooksEnabled = true {
+        didSet {
+            if !audiobooksEnabled, selectedMediaType == .audiobook {
+                selectedMediaType = .all
+            }
+        }
+    }
+
+    /// Filters offered in the picker — Audiobooks only when enabled.
+    var availableMediaTypes: [SearchMediaType] {
+        audiobooksEnabled ? [.all, .movie, .series, .audiobook] : [.all, .movie, .series]
+    }
     var isSearching = false
     var error: ErrorState?
     var hasSearched = false
@@ -100,7 +119,7 @@ class SearchViewModel {
                 "limit": String(pageSize),
                 "offset": String(requestOffset),
             ]
-            if let mediaType = selectedMediaType.queryValue {
+            if let mediaType = selectedMediaType.queryValue(audiobooksEnabled: audiobooksEnabled) {
                 searchQuery["type"] = mediaType
             }
 
