@@ -46,10 +46,18 @@ jobs:
 
       - name: Resolve marketing version
         id: ver
+        env:
+          GH_EVENT_NAME: ${{ github.event_name }}
+          GH_REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
           V="$(scripts/ci/resolve-marketing-version.sh \
-                '${{ github.event_name }}' '${{ github.ref_name }}' '${{ inputs.version }}')"
-          echo "value=$V" >> "$GITHUB_OUTPUT"
+                "$GH_EVENT_NAME" "$GH_REF_NAME" "$INPUT_VERSION")"
+          {
+            echo "value<<EOF"
+            echo "$V"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
           echo "Resolved marketing version: $V"
 
       - name: Build & upload iOS to TestFlight
@@ -90,10 +98,18 @@ jobs:
 
       - name: Resolve marketing version
         id: ver
+        env:
+          GH_EVENT_NAME: ${{ github.event_name }}
+          GH_REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
           V="$(scripts/ci/resolve-marketing-version.sh \
-                '${{ github.event_name }}' '${{ github.ref_name }}' '${{ inputs.version }}')"
-          echo "value=$V" >> "$GITHUB_OUTPUT"
+                "$GH_EVENT_NAME" "$GH_REF_NAME" "$INPUT_VERSION")"
+          {
+            echo "value<<EOF"
+            echo "$V"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
           echo "Resolved marketing version: $V"
 
       - name: Build & upload tvOS to TestFlight
