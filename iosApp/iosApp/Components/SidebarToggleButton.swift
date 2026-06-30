@@ -31,7 +31,7 @@ struct SidebarToggleButton: View {
                 Image(systemName: "sidebar.leading")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(Color.continuumOnSurface)
-                    .frame(width: 40, height: 40)
+                    .frame(width: ContinuumTheme.topBarIconHitSize, height: ContinuumTheme.topBarIconHitSize)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)

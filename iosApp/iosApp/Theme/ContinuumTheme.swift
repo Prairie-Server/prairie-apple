@@ -34,6 +34,16 @@ struct ContinuumTheme {
     /// Pill-shaped elements — use Capsule() instead of a fixed radius
     static let pillCornerRadius: CGFloat = 100
 
+    // MARK: - Top Bar
+
+    /// Tap-target frame for chrome-free top-bar icon buttons (Search / Cast).
+    /// The glyph stays small; the frame keeps a comfortable 44pt hit area and
+    /// sets the rhythm for the evenly spaced top-right cluster.
+    static let topBarIconHitSize: CGFloat = 44
+    /// Gap between top-bar action items (cast / search / profile). Tuned so the
+    /// visible spacing between glyphs reads like Plex's top-right cluster.
+    static let topBarIconSpacing: CGFloat = 2
+
     // MARK: - Spacing
 
     #if os(tvOS)

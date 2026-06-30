@@ -15,38 +15,25 @@ struct TabTopBarActions: View {
     let onSignOut: () -> Void
 
     var body: some View {
-        glassCluster {
-            HStack(spacing: 4) {
-                TopBarIconButton(systemImage: "magnifyingglass", accessibilityLabel: "Search", action: onSearch)
-                ProfileAvatarMenu(
-                    profile: profile,
-                    onOpenSettings: onOpenSettings,
-                    onSwitchProfile: onSwitchProfile,
-                    onSwitchServer: onSwitchServer,
-                    onSignOut: onSignOut
-                )
-            }
+        // Plain icon glyphs (no glass chip) spaced evenly, matching the
+        // clean top-right cluster used by Plex. The profile avatar is the
+        // only filled shape, so it reads as the account control.
+        HStack(spacing: ContinuumTheme.topBarIconSpacing) {
+            TopBarIconButton(systemImage: "magnifyingglass", accessibilityLabel: "Search", action: onSearch)
+            ProfileAvatarMenu(
+                profile: profile,
+                onOpenSettings: onOpenSettings,
+                onSwitchProfile: onSwitchProfile,
+                onSwitchServer: onSwitchServer,
+                onSignOut: onSignOut
+            )
         }
-    }
-
-    /// Wraps the search/profile pair in a `GlassEffectContainer` so their
-    /// individual glass capsules blend into one another. Falls back to a
-    /// plain container where the API is unavailable (macOS < 26).
-    @ViewBuilder
-    private func glassCluster<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        #if os(macOS)
-        if #available(macOS 26, *) {
-            GlassEffectContainer { content() }
-        } else {
-            content()
-        }
-        #else
-        GlassEffectContainer { content() }
-        #endif
     }
 }
 
-/// Circular icon button used for Search actions in the top bar.
+/// Plain icon button used for utility actions (Search) in the top bar.
+/// The 44×44 frame keeps a comfortable tap target while the glyph itself
+/// stays small and chrome-free, matching Plex's top-right icons.
 private struct TopBarIconButton: View {
     let systemImage: String
     let accessibilityLabel: String
@@ -57,8 +44,7 @@ private struct TopBarIconButton: View {
             Image(systemName: systemImage)
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundColor(.continuumOnSurface)
-                .frame(width: 40, height: 40)
-                .siloGlass(in: .circle)
+                .frame(width: ContinuumTheme.topBarIconHitSize, height: ContinuumTheme.topBarIconHitSize)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

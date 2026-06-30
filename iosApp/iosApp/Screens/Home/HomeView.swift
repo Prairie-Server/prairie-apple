@@ -26,10 +26,14 @@ struct HomeView: View {
     #if os(iOS)
     @State private var isShowingCastPicker = false
     @Environment(SiloCastController.self) private var castController
-    /// Pull the floating header up into the unused safe-area band beside the
-    /// Dynamic Island. The logo sits on the left and the action icons on the
-    /// right, so the centered island and status-bar glyphs are never overlapped.
-    private let headerTopReclaim: CGFloat = 16
+    /// Breathing room between the status-bar safe area and the floating header,
+    /// so the logo + action icons sit comfortably below the Dynamic Island
+    /// rather than crowding it (matching Plex's tight-but-relaxed top spacing).
+    private let headerTopInset: CGFloat = 4
+    /// Gap between the bottom of the floating header and the first content row.
+    /// A touch larger than the inter-section spacing so the header reads as a
+    /// distinct band above the rows.
+    private let headerToContentGap: CGFloat = ContinuumTheme.largePadding + ContinuumTheme.padding
     #endif
     #endif
     @Environment(AppRouter.self) private var router
@@ -109,27 +113,32 @@ struct HomeView: View {
 
                 Spacer(minLength: 8)
 
-                #if os(iOS)
-                SiloCastControlModeButton(controller: castController) {
-                    isShowingCastPicker = true
-                }
-                #endif
+                // Trailing action cluster: cast / search / profile, evenly
+                // spaced as one group so the gaps between glyphs are uniform
+                // (matching Plex's top-right icon row).
+                HStack(spacing: ContinuumTheme.topBarIconSpacing) {
+                    #if os(iOS)
+                    SiloCastControlModeButton(controller: castController) {
+                        isShowingCastPicker = true
+                    }
+                    #endif
 
-                TabTopBarActions(
-                    profile: currentProfile,
-                    onSearch: { router.navigate(to: .search) },
-                    onOpenSettings: { router.navigate(to: .settings) },
-                    onSwitchProfile: {
-                        AuthService.shared.profileId = nil
-                        router.showProfileSelection()
-                    },
-                    onSwitchServer: { router.navigate(to: .serverList) },
-                    onSignOut: { router.signOutAndReset() }
-                )
+                    TabTopBarActions(
+                        profile: currentProfile,
+                        onSearch: { router.navigate(to: .search) },
+                        onOpenSettings: { router.navigate(to: .settings) },
+                        onSwitchProfile: {
+                            AuthService.shared.profileId = nil
+                            router.showProfileSelection()
+                        },
+                        onSwitchServer: { router.navigate(to: .serverList) },
+                        onSignOut: { router.signOutAndReset() }
+                    )
+                }
             }
             .padding(.horizontal, ContinuumTheme.padding)
             #if os(iOS)
-            .padding(.top, -headerTopReclaim)
+            .padding(.top, headerTopInset)
             #endif
             .padding(.bottom, ContinuumTheme.smallPadding)
             .background {
@@ -290,10 +299,14 @@ struct HomeView: View {
     }
 
     private func topRunwaySpacing(topSafeAreaInset: CGFloat) -> CGFloat {
-        let headerContentHeight: CGFloat = 40 + ContinuumTheme.smallPadding
-        var runway = topSafeAreaInset + headerContentHeight + ContinuumTheme.largePadding + ContinuumTheme.smallPadding
+        // Mirror the floating header's vertical footprint (icon-frame height +
+        // bottom padding) so the first row always clears it, then add the
+        // top inset and the Plex-style gap beneath the header.
+        var runway = topSafeAreaInset + ContinuumTheme.topBarIconHitSize + ContinuumTheme.smallPadding
         #if os(iOS)
-        runway -= headerTopReclaim
+        runway += headerTopInset + headerToContentGap
+        #else
+        runway += ContinuumTheme.largePadding + ContinuumTheme.smallPadding
         #endif
         return runway
     }

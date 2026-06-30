@@ -36,12 +36,15 @@ struct SiloCastControlModeButton: View {
         Image(systemName: "appletvremote.gen4")
             .font(.system(size: 18, weight: .semibold))
             .foregroundStyle(isActive ? Color.continuumBackground : Color.continuumOnSurface)
-            .frame(width: 40, height: 40)
+            .frame(width: ContinuumTheme.topBarIconHitSize, height: ContinuumTheme.topBarIconHitSize)
             .background {
-                Circle().fill(isActive ? Color.continuumOnSurface : Color.continuumChromeRestingFill)
-            }
-            .overlay {
-                Circle().stroke(isActive ? Color.clear : Color.continuumOutline, lineWidth: 1)
+                // Chrome-free at rest (Plex-style); a filled disc appears only
+                // while actively controlling a TV so the state stays obvious.
+                if isActive {
+                    Circle()
+                        .fill(Color.continuumOnSurface)
+                        .frame(width: 36, height: 36)
+                }
             }
             .contentShape(Circle())
     }
