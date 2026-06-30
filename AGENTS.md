@@ -32,6 +32,11 @@ repo.
 
 Use Swift 5 and SwiftUI naming conventions. Types use `PascalCase`; functions and properties use `camelCase`. Keep platform-specific code under the existing `iOS`, `tvOS`, or `macOS` folders and update `project.yml` instead of hand-editing generated `.xcodeproj` files. Preserve existing Apple bundle IDs and keychain groups during this migration for TestFlight continuity.
 
+For tvOS focus work, read `docs/tvos-focus.md` before editing navigation,
+menus, grids, or custom controls. Prefer a stable native focus graph or a
+single composite focus owner; do not mix row-level focusable controls with
+manual directional focus mutation.
+
 ## Testing Guidelines
 
 Apple tests use XCTest under `iosApp/Tests/`. Do not add tests for small changes or UI changes unless requested. For shared logic changes, add focused tests only for critical or high-risk behavior.
