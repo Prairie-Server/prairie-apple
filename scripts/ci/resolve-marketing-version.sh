@@ -24,4 +24,15 @@ if [[ -z "$version" ]]; then
   exit 1
 fi
 
+# Reject anything that is not a plain dotted version (e.g. 1.4 or 1.4.0). This
+# value is later appended to xcodebuild's xcargs as a shell string, so a value
+# containing spaces or shell metacharacters (e.g. "1.4.0 OTHER=1", "1.2$(cmd)")
+# must never pass through — it could inject build settings or run commands on
+# the signing runner.
+if [[ ! "$version" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then
+  echo "resolve-marketing-version: '${version}' is not a valid dotted version " \
+       "(expected e.g. 1.4.0)" >&2
+  exit 1
+fi
+
 echo "$version"

@@ -16,6 +16,11 @@ concurrency:
   group: testflight-release
   cancel-in-progress: false
 
+# Least privilege: the jobs only check out code and talk to Apple via the ASC
+# API key. They never use GITHUB_TOKEN to write to the repo.
+permissions:
+  contents: read
+
 env:
   XCODEGEN_VERSION: "2.43.0"
   TESTFLIGHT_DISTRIBUTION: external

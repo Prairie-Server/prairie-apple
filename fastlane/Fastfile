@@ -62,9 +62,20 @@ end
 
 # Returns an xcarg fragment that overrides MARKETING_VERSION when the CI-provided
 # env var is set; empty string otherwise (local builds keep the project.yml value).
+#
+# The value is appended to xcodebuild's xcargs as a shell string, so it must be a
+# plain dotted version (e.g. 1.4.0). Rejecting anything else here is the last gate
+# against a value with spaces or shell metacharacters injecting extra build
+# settings ("1.4.0 CURRENT_PROJECT_VERSION=999") or running commands on the
+# signing runner ("1.2.3$(cmd)"). CI also validates this in resolve-marketing-version.sh.
 def marketing_version_xcarg
   value = ENV["MARKETING_VERSION"].to_s.strip
-  value.empty? ? "" : "MARKETING_VERSION=#{value} "
+  return "" if value.empty?
+
+  unless value.match?(/\A\d+(?:\.\d+){1,2}\z/)
+    UI.user_error!("Invalid MARKETING_VERSION #{value.inspect}; expected a dotted version like 1.4.0")
+  end
+  "MARKETING_VERSION=#{value} "
 end
 
 def testflight_distribution
@@ -174,8 +185,10 @@ platform :ios do
     api_key        = setup_api_key
     app_id         = "org.siloserver.silo"
     team_id        = ENV["TEAM_ID"]
-    # CI sets TESTFLIGHT_DISTRIBUTION from the release tag. Internal is the
-    # default; public/external tags also distribute to TESTFLIGHT_EXTERNAL_GROUPS.
+    # The release workflow always sets TESTFLIGHT_DISTRIBUTION=external (see
+    # .github/workflows/release.yml): every tag and manual dispatch distributes
+    # to TESTFLIGHT_EXTERNAL_GROUPS and notifies testers. Internal remains the
+    # default only for ad-hoc local runs with the env var unset.
     testflight_upload = testflight_upload_config
     # Apple requires a "What to Test" note for every external group build.
     # Set TESTFLIGHT_CHANGELOG in CI variables for an explicit note;
@@ -260,8 +273,10 @@ platform :ios do
     app_id         = "org.siloserver.silo"
     topshelf_id    = "org.siloserver.silo.topshelf"
     team_id        = ENV["TEAM_ID"]
-    # CI sets TESTFLIGHT_DISTRIBUTION from the release tag. Internal is the
-    # default; public/external tags also distribute to TESTFLIGHT_EXTERNAL_GROUPS.
+    # The release workflow always sets TESTFLIGHT_DISTRIBUTION=external (see
+    # .github/workflows/release.yml): every tag and manual dispatch distributes
+    # to TESTFLIGHT_EXTERNAL_GROUPS and notifies testers. Internal remains the
+    # default only for ad-hoc local runs with the env var unset.
     testflight_upload = testflight_upload_config
     # Apple requires a "What to Test" note for every external group build.
     # Set TESTFLIGHT_CHANGELOG in CI variables for an explicit note;
