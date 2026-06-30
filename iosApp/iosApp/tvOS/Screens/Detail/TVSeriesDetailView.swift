@@ -3,7 +3,7 @@ import SwiftUI
 
 /// Series detail layout for tvOS. Cinematic hero at the top; seasons +
 /// a horizontal episode rail + cast + facts below.
-struct TVSeriesDetailView: View {
+struct TVSeriesDetailView<BelowSynopsis: View>: View {
     let detail: ItemDetail
     let isFavorite: Bool
     let inWatchlist: Bool
@@ -29,6 +29,9 @@ struct TVSeriesDetailView: View {
     let onToggleWatched: () -> Void
     let onPersonTap: (String) -> Void
     let onNavigateToItem: (String) -> Void
+    /// On-view description-translation affordance, built at the detail call
+    /// site (which owns the view model) and rendered under the synopsis.
+    @ViewBuilder let belowSynopsis: () -> BelowSynopsis
 
     @Namespace private var detailFocusNamespace
     @FocusState private var playFocused: Bool
@@ -54,7 +57,8 @@ struct TVSeriesDetailView: View {
                     tagline: detail.tagline,
                     factsLine: TVHeroMetadata.seriesFactsLine(from: detail),
                     starringText: TVHeroMetadata.starringText(from: detail),
-                    actions: { actionColumn }
+                    actions: { actionColumn },
+                    belowSynopsis: belowSynopsis
                 )
 
                 VStack(alignment: .leading, spacing: 72) {

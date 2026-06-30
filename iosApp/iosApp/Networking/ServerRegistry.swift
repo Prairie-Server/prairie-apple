@@ -193,6 +193,12 @@ final class ServerRegistry {
         activeServerId = serverId
         touchLastUsed(serverId)
         await TokenStore.shared.switchActiveServer(serverId: serverId)
+
+        // Switching between already-added servers is a per-server boundary too:
+        // drop the previous server's AI capability/quota probes after the URL,
+        // profile, active id, and token slot have all been retargeted so any
+        // foreground refresh observes one consistent server context.
+        await MainActor.run { AICapabilities.shared.reset() }
     }
 
     /// Sign out from `serverId` without removing the entry. Clears tokens
@@ -232,6 +238,7 @@ final class ServerRegistry {
                 defaults.removeObject(forKey: "profileId")
                 await TokenStore.shared.switchActiveServer(serverId: "")
             }
+            await MainActor.run { AICapabilities.shared.reset() }
         }
         persist()
     }

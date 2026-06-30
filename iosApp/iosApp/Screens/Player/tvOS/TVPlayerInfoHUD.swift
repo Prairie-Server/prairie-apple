@@ -35,10 +35,20 @@ struct TVPlayerInfoHUD: View {
     /// Tabs shown for the current session. Info + Video are always available;
     /// Audio / Subtitles / Chapters disappear when the stream has none of
     /// those — Infuse hides rather than disables, which keeps the bar tidy.
+    ///
+    /// Subtitles also appear when the stream has *no* tracks but the server's
+    /// AI can produce them (ASR transcription, or translating an existing text
+    /// track). Without this, a file with no subtitles would hide the Subtitles
+    /// tab entirely — and with it the only entry point to "AI Subtitles…",
+    /// which is exactly the case where transcription is most useful. Uses the
+    /// same `hasActionableSource` probe the pane gates its AI row on.
     private var availableTabs: [Tab] {
         var tabs: [Tab] = [.info, .stats, .video]
         if !viewModel.audioTracks.isEmpty { tabs.append(.audio) }
-        if !viewModel.subtitleTracks.isEmpty { tabs.append(.subtitles) }
+        if !viewModel.subtitleTracks.isEmpty
+            || SubtitleTranslateMenu.hasActionableSource(viewModel) {
+            tabs.append(.subtitles)
+        }
         if !viewModel.chapters.isEmpty { tabs.append(.chapters) }
         return tabs
     }
@@ -91,7 +101,7 @@ struct TVPlayerInfoHUD: View {
             case .stats:     StatsPane(viewModel: viewModel, onMoveToTabs: focusActiveTab)
             case .video:     VideoPane(viewModel: viewModel, onMoveToTabs: focusActiveTab)
             case .audio:     AudioPane(viewModel: viewModel, onMoveToTabs: focusActiveTab)
-            case .subtitles: SubtitlesPane(viewModel: viewModel, onMoveToTabs: focusActiveTab)
+            case .subtitles: SubtitlesPane(viewModel: viewModel, onMoveToTabs: focusActiveTab, onCloseHUD: onDismiss)
             case .chapters:  ChaptersPane(viewModel: viewModel, onSelect: onDismiss, onMoveToTabs: focusActiveTab)
             }
         }
@@ -1677,8 +1687,12 @@ private struct AudioPane: View {
 private struct SubtitlesPane: View {
     let viewModel: PlayerViewModel
     let onMoveToTabs: () -> Void
+    /// Dismiss the whole HUD (back to the player). Used when an AI subtitle job
+    /// is accepted so the live "Preparing subtitles" overlay is visible.
+    let onCloseHUD: () -> Void
 
     @State private var showAppearanceDialog = false
+    @State private var showAITranslateMenu = false
     @State private var activePicker: HUDPickerPresentation?
     @State private var pickerReturnField: FocusTarget?
     @State private var appearanceReturnField: FocusTarget?
@@ -1691,6 +1705,7 @@ private struct SubtitlesPane: View {
     }
 
     private enum Option: Hashable {
+        case translate
         case delay
         case save
         case size
@@ -1706,8 +1721,8 @@ private struct SubtitlesPane: View {
                 PaneColumn("Options") { optionRows }
                     .frame(width: 440, alignment: .topLeading)
             }
-            .disabled(showAppearanceDialog || activePicker != nil)
-            .opacity(showAppearanceDialog || activePicker != nil ? 0.28 : 1)
+            .disabled(showAppearanceDialog || activePicker != nil || showAITranslateMenu)
+            .opacity(showAppearanceDialog || activePicker != nil || showAITranslateMenu ? 0.28 : 1)
 
             if showAppearanceDialog {
                 SubtitleAppearanceDialog(
@@ -1726,9 +1741,40 @@ private struct SubtitlesPane: View {
                     onClose: closePicker
                 )
             }
+
+            // The AI translate/transcribe flow reuses the shared
+            // `SubtitleTranslateMenu` as a modal overlay — same presentation
+            // idiom as the appearance dialog above (columns dimmed + disabled).
+            if showAITranslateMenu {
+                SubtitleTranslateMenu(
+                    viewModel: viewModel,
+                    onDismiss: closeAITranslateMenu,
+                    // Job accepted: close the menu AND the HUD so the live
+                    // "Preparing subtitles" overlay is visible on the player.
+                    onJobStarted: {
+                        closeAITranslateMenu()
+                        onCloseHUD()
+                    }
+                )
+                .transition(.opacity)
+            }
         }
         .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: showAppearanceDialog)
         .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: activePicker?.id)
+        .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: showAITranslateMenu)
+    }
+
+    private func closeAITranslateMenu() {
+        showAITranslateMenu = false
+        focusedSubtitleField = .option(.translate)
+    }
+
+    /// Whether the server's AI capabilities + the current track list offer any
+    /// AI subtitle action (translate an existing text track, or transcribe
+    /// audio). Gates the "Translate with AI…" row so it never opens an empty
+    /// menu. Shared with the iOS `TrackSelectionSheet` via the same helper.
+    private var aiSubtitlesAvailable: Bool {
+        SubtitleTranslateMenu.hasActionableSource(viewModel)
     }
 
     private var appearanceSummary: String {
@@ -1738,6 +1784,9 @@ private struct SubtitlesPane: View {
 
     private var optionOrder: [Option] {
         var options: [Option] = []
+        if aiSubtitlesAvailable {
+            options.append(.translate)
+        }
         if viewModel.backendCapabilities.supportsSubtitleDelay {
             options.append(.delay)
         }
@@ -1748,7 +1797,9 @@ private struct SubtitlesPane: View {
     }
 
     private func focusFirstOption() {
-        if viewModel.backendCapabilities.supportsSubtitleDelay {
+        if aiSubtitlesAvailable {
+            focusedSubtitleField = .option(.translate)
+        } else if viewModel.backendCapabilities.supportsSubtitleDelay {
             focusedSubtitleField = .option(.delay)
         } else if viewModel.backendCapabilities.supportsSubtitleStyling {
             focusedSubtitleField = .option(.save)
@@ -1848,7 +1899,7 @@ private struct SubtitlesPane: View {
                 ) {
                     viewModel.disableSubtitles()
                 }
-                ForEach(viewModel.subtitleTracks) { track in
+                ForEach(viewModel.orderedSubtitleTracks) { track in
                     HUDFocusedTrackRow(
                         name: track.primaryLabel,
                         attributes: track.attributesLabel,
@@ -1903,6 +1954,21 @@ private struct SubtitlesPane: View {
     @ViewBuilder
     private var optionRows: some View {
         VStack(spacing: 2) {
+            if aiSubtitlesAvailable {
+                HUDFocusedSettingRow(
+                    label: "AI Subtitles…",
+                    value: "",
+                    systemImage: "sparkles",
+                    focused: $focusedSubtitleField,
+                    focusID: .option(.translate),
+                    onMoveUp: moveOptionUp(from: .translate),
+                    onMoveDown: moveOptionDown(from: .translate),
+                    onMoveLeft: focusSelectedTrack,
+                    onMoveRight: holdOption(.translate)
+                ) {
+                    showAITranslateMenu = true
+                }
+            }
             if viewModel.backendCapabilities.supportsSubtitleDelay {
                 HUDFocusedSettingRow(
                     label: "Delay",

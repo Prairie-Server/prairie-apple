@@ -47,6 +47,9 @@ struct TVSettingsView: View {
         .onChange(of: viewModel.editorShowForcedSubtitles) { _, _ in
             Task { await viewModel.saveProfilePrefs() }
         }
+        .onChange(of: viewModel.editorPreferredMetadataLanguage) { _, _ in
+            Task { await viewModel.saveMetadataLanguage() }
+        }
         .alert("Sign Out", isPresented: $showSignOutConfirm) {
             Button("Sign Out", role: .destructive) {
                 router.signOutAndReset()
@@ -103,10 +106,6 @@ struct TVSettingsView: View {
                     )
                 )
             }
-
-            Button { activeScreen = .cardOverlays } label: {
-                FocusAwareRowLabel(title: "Card Overlays")
-            }
         }
     }
 
@@ -158,11 +157,6 @@ struct TVSettingsView: View {
             TVPlaybackSettingsView(viewModel: viewModel)
         case .subtitles:
             TVSubtitleSettingsView(viewModel: viewModel)
-        case .cardOverlays:
-            NavigationStack {
-                TVCardOverlaySettingsView()
-                    .navigationTitle("Card Overlays")
-            }
         }
     }
 
@@ -170,7 +164,6 @@ struct TVSettingsView: View {
         case general
         case playback
         case subtitles
-        case cardOverlays
 
         var id: String { rawValue }
     }

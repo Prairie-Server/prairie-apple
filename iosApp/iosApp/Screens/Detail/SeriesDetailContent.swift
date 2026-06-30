@@ -7,7 +7,7 @@ import SwiftUI
 ///
 /// Mirrors `TVSeriesDetailView` semantically — same hero metadata, same
 /// next-up Play action, same horizontal episode rail — sized for touch.
-struct SeriesDetailContent: View {
+struct SeriesDetailContent<BelowOverview: View>: View {
     let detail: ItemDetail
     let isFavorite: Bool
     let inWatchlist: Bool
@@ -31,6 +31,9 @@ struct SeriesDetailContent: View {
     let onToggleWatched: () -> Void
     let onPersonTap: (String) -> Void
     let onNavigateToItem: (String) -> Void
+    /// On-view description-translation affordance, built at the detail call
+    /// site (which owns the view model) and rendered under the overview.
+    @ViewBuilder let belowOverview: () -> BelowOverview
 
     @State private var showResumeDialog = false
 
@@ -70,7 +73,8 @@ struct SeriesDetailContent: View {
             overview: detail.overview,
             factsLine: PhoneHeroMetadata.seriesFactsLine(from: detail),
             overlayData: OverlayData.from(detail),
-            actions: { actionStack }
+            actions: { actionStack },
+            belowOverview: belowOverview
         )
     }
 

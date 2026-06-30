@@ -10,7 +10,7 @@ import SwiftUI
 /// if an episode is in progress, otherwise the first unwatched one).
 /// Mark Watched targets the season, which the server fans out to every
 /// leaf episode.
-struct TVSeasonDetailView: View {
+struct TVSeasonDetailView<BelowSynopsis: View>: View {
     let detail: ItemDetail
     let isFavorite: Bool
     let inWatchlist: Bool
@@ -34,6 +34,9 @@ struct TVSeasonDetailView: View {
     let onToggleWatched: () -> Void
     let onPersonTap: (String) -> Void
     let onNavigateToItem: (String) -> Void
+    /// On-view description-translation affordance, built at the detail call
+    /// site (which owns the view model) and rendered under the synopsis.
+    @ViewBuilder let belowSynopsis: () -> BelowSynopsis
 
     @Namespace private var detailFocusNamespace
     @FocusState private var playFocused: Bool
@@ -59,7 +62,8 @@ struct TVSeasonDetailView: View {
                     tagline: detail.tagline,
                     factsLine: [],
                     starringText: TVHeroMetadata.starringText(from: detail),
-                    actions: { actionColumn }
+                    actions: { actionColumn },
+                    belowSynopsis: belowSynopsis
                 )
 
                 VStack(alignment: .leading, spacing: 72) {

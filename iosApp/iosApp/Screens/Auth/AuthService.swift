@@ -172,6 +172,12 @@ final class AuthService: @unchecked Sendable {
         // automatic restoration when the user switches back.
         self.profileId = profileId
         await clearPerProfileCaches()
+        // Re-probe AI capabilities for the newly-selected profile. Fire and
+        // forget — gating defaults to "unavailable" until the probes land,
+        // so nothing blocks on this.
+        Task { @MainActor in
+            await AICapabilities.shared.refresh()
+        }
     }
 
     /// Drop every cached response that's profile-scoped. Called on
@@ -190,6 +196,12 @@ final class AuthService: @unchecked Sendable {
         // restart; (b) defensive — if the server ever moves overlays to
         // a per-profile scope, this path keeps working.
         OverlayPrefsStore.shared.clear()
+        // Profile's preferred subtitle language drives detail-page track
+        // ordering; drop it so the next profile re-hydrates its own.
+        ProfilePrefsStore.shared.clear()
+        // Server-wide AI capability + per-user ASR quota are reset on every
+        // profile switch; `selectProfile` re-fetches after the switch lands.
+        AICapabilities.shared.reset()
         #if os(tvOS)
         ItemDetailCache.shared.clearAll()
         #endif
@@ -255,6 +267,8 @@ final class AuthService: @unchecked Sendable {
     private func clearAllCaches() {
         ResponseCache.shared.clearAll()
         OverlayPrefsStore.shared.clear()
+        ProfilePrefsStore.shared.clear()
+        AICapabilities.shared.reset()
         #if os(tvOS)
         ItemDetailCache.shared.clearAll()
         #endif

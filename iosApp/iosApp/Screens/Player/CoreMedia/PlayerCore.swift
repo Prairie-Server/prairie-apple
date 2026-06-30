@@ -439,6 +439,9 @@ final class PlayerCore: NSObject {
     private var diagnosticsTimer: Timer?
     private var diagStartWall: CFTimeInterval = 0
     private var diagStartSyncTime: Double = 0
+    /// Last playhead second at which the live-subtitle render diagnostic logged,
+    /// so `pumpSubtitleOverlay` samples it ~1×/s instead of every vsync.
+    private var lastLiveOverlayDiagSeconds: Double = -1
     private var lastDiagEnqueueCount: UInt64 = 0
     private var lastDiagAudioEnqueueCount: UInt64 = 0
     private var vSyncHolds: UInt64 = 0
@@ -1830,6 +1833,48 @@ final class PlayerCore: NSObject {
     func registerSidecarSubtitles(_ descriptors: [SidecarSubtitleDescriptor]) {
         guard !isDisposed else { return }
         subtitleSession?.registerSidecarTracks(descriptors)
+    }
+
+    // MARK: - Live AI subtitle track
+
+    /// Open a synthetic live AI subtitle track in the given slot. Cues are
+    /// then streamed in via `feedLiveSubtitleCue`. Dispatches onto
+    /// `controlQueue` so it serialises with subtitle track switching and
+    /// the decode loop, matching every other subtitle-session mutation.
+    func openLiveSubtitleTrack(slot: SubtitleSlot, label: String?, language: String?) {
+        guard !isDisposed else { return }
+        controlQueue.async { [weak self] in
+            self?.subtitleSession?.openLive(slot: slot, label: label, language: language)
+        }
+    }
+
+    /// Feed a single converted live AI cue to the live track in `slot`.
+    /// `eventText`/`startMs`/`durationMs` come straight from
+    /// `LiveSubtitleTrack`. Dispatched onto `controlQueue` for ordering.
+    func feedLiveSubtitleCue(
+        slot: SubtitleSlot,
+        eventText: String,
+        startMs: Int64,
+        durationMs: Int64
+    ) {
+        guard !isDisposed else { return }
+        controlQueue.async { [weak self] in
+            self?.subtitleSession?.feedLiveCue(
+                slot: slot,
+                eventText: eventText,
+                startMs: startMs,
+                durationMs: durationMs
+            )
+        }
+    }
+
+    /// Close the live AI subtitle track in `slot`. Dispatched onto
+    /// `controlQueue` for ordering.
+    func closeLiveSubtitleTrack(slot: SubtitleSlot) {
+        guard !isDisposed else { return }
+        controlQueue.async { [weak self] in
+            self?.subtitleSession?.closeLive(slot: slot)
+        }
     }
 
     /// Re-apply the current negotiated format to the audio engine after an
@@ -4575,6 +4620,18 @@ final class PlayerCore: NSObject {
     /// down the current subtitle decoder in the given slot and
     /// optionally opens a new one. Video + audio keep playing.
     private func performSubtitleTrackSwitch(newId: Int64?, slot: SubtitleSlot) {
+        // Live AI path: the track is a synthetic in-memory libass track
+        // already installed (and being fed cues) by `openLiveSubtitleTrack`.
+        // Selecting it is a no-op — it stays installed and visible; there
+        // is no decoder to spin up and no fetch to start. Must be checked
+        // BEFORE the sidecar branch (the id ranges are disjoint, but the
+        // intent is explicit: never tear down or re-open a live track on
+        // selection).
+        if let newId, SubtitleTrackIdSpace.isAILive(newId) {
+            embeddedSubtitlePipeline.tearDownEmbeddedSlot(slot: slot)
+            return
+        }
+
         // Sidecar path: trackId >= sidecarBase means the user picked a
         // server-provided URL, not an embedded stream. Route to the
         // session and tear down any embedded decoder we had open in
@@ -4687,12 +4744,31 @@ final class PlayerCore: NSObject {
         let scale = overlay.window?.screen.scale ?? overlay.traitCollection.displayScale
         #endif
 
+        // DIAG: while a live AI subtitle slot is active, sample the render once
+        // a second to record whether libass is actually rasterizing a cue
+        // (`hasContent`) at the current playhead. `hasContent=0` while cues are
+        // being fed at the right time ⇒ the miss is in shaping/font/style, not
+        // the cue pipeline; `hasContent=1` while nothing shows ⇒ the miss is in
+        // compositing/overlay.
+        let liveDiag: Bool
+        if session.isLiveSlot(.primary), nowSeconds - lastLiveOverlayDiagSeconds >= 1.0 {
+            lastLiveOverlayDiagSeconds = nowSeconds
+            liveDiag = true
+        } else {
+            liveDiag = false
+        }
+
         renderer.sessionQueue.async { [weak overlay] in
             let out = renderer.renderOnSessionQueue(
                 atMilliseconds: assNowMs,
                 frameSize: bounds.size,
                 scale: scale
             )
+            if liveDiag {
+                Self.logger.info(
+                    "[AI-LIVE-DIAG] render assNowMs=\(assNowMs, privacy: .public) hasContent=\(out.hasContent ? 1 : 0, privacy: .public) dirty=\(out.isDirty ? 1 : 0, privacy: .public) frame=\(Int(bounds.width), privacy: .public)x\(Int(bounds.height), privacy: .public)"
+                )
+            }
             guard out.isDirty else { return }
             let image = out.image
             DispatchQueue.main.async {

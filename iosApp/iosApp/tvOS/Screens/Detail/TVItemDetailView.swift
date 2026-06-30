@@ -158,6 +158,10 @@ struct TVItemDetailView: View {
                 },
                 onNavigateToItem: { id in
                     router.navigate(to: .itemDetail(contentId: id))
+                },
+                belowSynopsis: {
+                    DescriptionTranslationView(viewModel: viewModel, contentId: detail.contentId)
+                        .id(detail.contentId)
                 }
             )
             .task(id: seasonNextUpEpisodeContentId(for: detail)) {
@@ -247,6 +251,10 @@ struct TVItemDetailView: View {
                 },
                 onNavigateToItem: { id in
                     router.navigate(to: .itemDetail(contentId: id))
+                },
+                belowSynopsis: {
+                    DescriptionTranslationView(viewModel: viewModel, contentId: detail.contentId)
+                        .id(detail.contentId)
                 }
             )
             .task(id: seriesNextUpEpisodeContentId(for: detail)) {
@@ -332,6 +340,10 @@ struct TVItemDetailView: View {
                 },
                 onEpisodeTap: { id in
                     router.navigate(to: .itemDetail(contentId: id))
+                },
+                belowSynopsis: {
+                    DescriptionTranslationView(viewModel: viewModel, contentId: detail.contentId)
+                        .id(detail.contentId)
                 }
             )
         }
@@ -590,7 +602,8 @@ struct TVItemDetailView: View {
                 intro: watchDetail.intro,
                 credits: watchDetail.credits,
                 overlaySummary: item.overlaySummary,
-                audiobook: item.audiobook
+                audiobook: item.audiobook,
+                pendingTranslationLanguage: item.pendingTranslationLanguage
             )
         } catch {
             return item

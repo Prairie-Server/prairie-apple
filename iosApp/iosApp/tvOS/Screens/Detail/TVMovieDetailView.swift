@@ -6,7 +6,7 @@ import SwiftUI
 /// overview, and facts. A pre-Play selector row beneath the primary
 /// actions exposes Edition / Version / Audio / Subtitles, each auto-hiding
 /// when there is no real choice.
-struct TVMovieDetailView: View {
+struct TVMovieDetailView<BelowSynopsis: View>: View {
     let detail: ItemDetail
     let isFavorite: Bool
     let inWatchlist: Bool
@@ -29,6 +29,9 @@ struct TVMovieDetailView: View {
     let onPersonTap: (String) -> Void
     let onNavigateToItem: (String) -> Void
     let onEpisodeTap: (String) -> Void
+    /// On-view description-translation affordance, built at the detail call
+    /// site (which owns the view model) and rendered under the synopsis.
+    @ViewBuilder let belowSynopsis: () -> BelowSynopsis
 
     @Namespace private var detailFocusNamespace
     @FocusState private var playFocused: Bool
@@ -48,7 +51,8 @@ struct TVMovieDetailView: View {
                     tagline: detail.tagline,
                     factsLine: TVHeroMetadata.movieFactsLine(from: detail, version: currentVersion),
                     starringText: TVHeroMetadata.starringText(from: detail),
-                    actions: { actionColumn }
+                    actions: { actionColumn },
+                    belowSynopsis: belowSynopsis
                 )
 
                 VStack(alignment: .leading, spacing: 72) {

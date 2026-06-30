@@ -10,6 +10,16 @@ struct TrackSelectionSheet: View {
     let viewModel: PlayerViewModel
     let onDismiss: () -> Void
 
+    /// Drives presentation of the AI translate/transcribe menu.
+    @State private var showAITranslateMenu = false
+
+    /// Whether any AI subtitle action is available (translate or transcribe),
+    /// per the server's capability probes **and** the current track list.
+    /// Gates the "Translate with AI…" row so it never opens an empty menu.
+    private var aiSubtitlesAvailable: Bool {
+        SubtitleTranslateMenu.hasActionableSource(viewModel)
+    }
+
     var body: some View {
         #if os(tvOS)
         tvOSPanel
@@ -31,21 +41,27 @@ struct TrackSelectionSheet: View {
                 .contentShape(Rectangle())
                 .onTapGesture { onDismiss() }
 
-            HStack(alignment: .top, spacing: 32) {
-                if !viewModel.audioTracks.isEmpty {
-                    column(title: "Audio") { audioRows }
-                }
-                if !viewModel.subtitleTracks.isEmpty {
-                    column(title: "Subtitles") { subtitleRows(isSecondary: false) }
-                    // Secondary subs only when a primary is set. The shared
-                    // player contract forbids the same track occupying both
-                    // subtitle slots, so offering a secondary picker before
-                    // the primary slot is chosen would be misleading.
-                    if viewModel.supportsSecondarySubtitles,
-                       viewModel.selectedSubtitleId != nil,
-                       !viewModel.availableSecondarySubtitleTracks.isEmpty {
-                        column(title: "Secondary") { subtitleRows(isSecondary: true) }
+            VStack(spacing: 20) {
+                HStack(alignment: .top, spacing: 32) {
+                    if !viewModel.audioTracks.isEmpty {
+                        column(title: "Audio") { audioRows }
                     }
+                    if !viewModel.subtitleTracks.isEmpty {
+                        column(title: "Subtitles") { subtitleRows(isSecondary: false) }
+                        // Secondary subs only when a primary is set. The shared
+                        // player contract forbids the same track occupying both
+                        // subtitle slots, so offering a secondary picker before
+                        // the primary slot is chosen would be misleading.
+                        if viewModel.supportsSecondarySubtitles,
+                           viewModel.selectedSubtitleId != nil,
+                           !viewModel.availableSecondarySubtitleTracks.isEmpty {
+                            column(title: "Secondary") { subtitleRows(isSecondary: true) }
+                        }
+                    }
+                }
+
+                if aiSubtitlesAvailable {
+                    AITranslateEntryRow { showAITranslateMenu = true }
                 }
             }
             .padding(28)
@@ -62,8 +78,58 @@ struct TrackSelectionSheet: View {
                 RoundedRectangle(cornerRadius: 24, style: .continuous)
                     .stroke(Color.white.opacity(0.12), lineWidth: 1)
             )
+            // While the AI translate menu is up, exclude the base panel from
+            // focus and dim it so the d-pad can't escape behind the overlay.
+            // Mirrors the `TVPlayerInfoHUD` appearance-dialog precedent.
+            .disabled(showAITranslateMenu)
+            .opacity(showAITranslateMenu ? 0.28 : 1)
+
+            if showAITranslateMenu {
+                SubtitleTranslateMenu(
+                    viewModel: viewModel,
+                    onDismiss: { showAITranslateMenu = false },
+                    // Job accepted: close both this menu and the track panel so
+                    // the live overlay is visible on the player.
+                    onJobStarted: {
+                        showAITranslateMenu = false
+                        onDismiss()
+                    }
+                )
+                .transition(.opacity)
+            }
         }
         .onExitCommand { onDismiss() }
+    }
+
+    /// tvOS entry row that opens the AI translate/transcribe menu. Mirrors the
+    /// bare-`focusable` + row-fill focus idiom of `TrackRow`.
+    private struct AITranslateEntryRow: View {
+        let action: () -> Void
+        @FocusState private var isFocused: Bool
+
+        var body: some View {
+            HStack(spacing: 12) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(.white)
+                Text("AI Subtitles…")
+                    .font(.system(size: 22, weight: .medium))
+                    .foregroundStyle(.white)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(isFocused ? Color.white.opacity(0.18) : Color.white.opacity(0.06))
+            )
+            .contentShape(Rectangle())
+            .focusable(true)
+            .focused($isFocused)
+            .onTapGesture(perform: action)
+            .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityLabel("AI Subtitles")
+        }
     }
 
     @ViewBuilder
@@ -119,7 +185,7 @@ struct TrackSelectionSheet: View {
             else           { viewModel.disableSubtitles() }
         }
 
-        ForEach(isSecondary ? viewModel.availableSecondarySubtitleTracks : viewModel.subtitleTracks) { track in
+        ForEach(isSecondary ? viewModel.availableSecondarySubtitleTracks : viewModel.orderedSubtitleTracks) { track in
             let isSelected = isSecondary
                 ? viewModel.selectedSecondarySubtitleId == track.trackId
                 : viewModel.selectedSubtitleId == track.trackId
@@ -155,12 +221,34 @@ struct TrackSelectionSheet: View {
                     Section("Secondary Subtitles") { subtitleRows(isSecondary: true) }
                 }
             }
+            if aiSubtitlesAvailable {
+                Section {
+                    Button {
+                        showAITranslateMenu = true
+                    } label: {
+                        Label("AI Subtitles…", systemImage: "sparkles")
+                    }
+                }
+            }
         }
         #if os(macOS)
         .listStyle(.inset)
         #else
         .listStyle(.insetGrouped)
         #endif
+        .sheet(isPresented: $showAITranslateMenu) {
+            SubtitleTranslateMenu(
+                viewModel: viewModel,
+                onDismiss: { showAITranslateMenu = false },
+                // Job accepted: close both this menu and the track sheet so the
+                // live overlay is visible on the player.
+                onJobStarted: {
+                    showAITranslateMenu = false
+                    onDismiss()
+                }
+            )
+            .presentationDetents([.medium, .large])
+        }
     }
     #endif
 }

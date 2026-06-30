@@ -241,6 +241,10 @@ private struct ItemDetailPhoneContent: View {
                 },
                 onNavigateToItem: { id in
                     router.navigate(to: .itemDetail(contentId: id))
+                },
+                belowOverview: {
+                    DescriptionTranslationView(viewModel: viewModel, contentId: detail.contentId)
+                        .id(detail.contentId)
                 }
             )
             .task(id: nextUpEpisodeContentId(for: detail)) {
@@ -324,6 +328,10 @@ private struct ItemDetailPhoneContent: View {
                 },
                 onNavigateToItem: { id in
                     router.navigate(to: .itemDetail(contentId: id))
+                },
+                belowOverview: {
+                    DescriptionTranslationView(viewModel: viewModel, contentId: detail.contentId)
+                        .id(detail.contentId)
                 }
             )
             .task(id: nextUpEpisodeContentId(for: detail)) {
@@ -405,6 +413,10 @@ private struct ItemDetailPhoneContent: View {
                 },
                 onEpisodeTap: { id in
                     router.navigate(to: .itemDetail(contentId: id))
+                },
+                belowOverview: {
+                    DescriptionTranslationView(viewModel: viewModel, contentId: detail.contentId)
+                        .id(detail.contentId)
                 }
             )
         }
