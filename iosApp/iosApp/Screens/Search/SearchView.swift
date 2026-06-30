@@ -3,6 +3,7 @@ import SwiftUI
 /// Full-screen search with debounced query and grid results — Plezy style.
 struct SearchView: View {
     @State private var viewModel = SearchViewModel()
+    @State private var navPrefs = AppNavPreferences.shared
     @Environment(AppRouter.self) private var router
     #if os(iOS)
     @FocusState private var isSearchFieldFocused: Bool
@@ -52,7 +53,7 @@ struct SearchView: View {
         .continuumNavigationTitleDisplayMode(.inline)
         .continuumToolbarColorSchemeDark()
         .continuumNavigationBarSurfaceBackground()
-        .continuumSearchable(text: $viewModel.query, prompt: "Search movies, series, audiobooks...")
+        .continuumSearchable(text: $viewModel.query, prompt: searchPrompt)
         #if os(iOS)
         .searchFocused($isSearchFieldFocused)
         .task {
@@ -66,25 +67,44 @@ struct SearchView: View {
             Task { await viewModel.applyMediaType() }
         }
         .onAppear {
-            viewModel.audiobooksEnabled = audiobooksAvailable
+            navPrefs.refresh()
+            refreshAudiobookAvailability()
+        }
+        .onChange(of: navPrefs.showAudiobooks) {
+            refreshAudiobookAvailability(applySearch: true)
         }
     }
 
     /// Whether audiobooks take part in search. On tvOS this mirrors the
     /// Audiobooks tab — an audiobook library exists and the user has opted to
     /// show it — so a hidden audiobook library produces neither a filter chip
-    /// nor results under "All". Other platforms have no hide setting, so
-    /// audiobooks always participate (unchanged behavior).
+    /// nor results under "All". iOS has the same user-facing setting, but
+    /// keeps the prior default of showing audiobooks.
     private var audiobooksAvailable: Bool {
         #if os(tvOS)
-        guard TVNavPreferences.shared.showAudiobooks else { return false }
+        guard navPrefs.showAudiobooks else { return false }
         guard let cached: LibrariesResponse = ResponseCache.shared.get(CacheKey.userLibraries) else {
             return false
         }
         return cached.libraries.contains { $0.isAudiobookLibrary }
+        #elseif os(iOS)
+        return navPrefs.showAudiobooks
         #else
         return true
         #endif
+    }
+
+    private var searchPrompt: String {
+        audiobooksAvailable
+            ? "Search movies, series, audiobooks..."
+            : "Search movies and series..."
+    }
+
+    private func refreshAudiobookAvailability(applySearch: Bool = false) {
+        let previous = viewModel.audiobooksEnabled
+        viewModel.audiobooksEnabled = audiobooksAvailable
+        guard applySearch, previous != viewModel.audiobooksEnabled else { return }
+        Task { await viewModel.applyMediaType() }
     }
 
     #if os(iOS)

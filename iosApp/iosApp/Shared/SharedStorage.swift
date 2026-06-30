@@ -114,6 +114,10 @@ struct SharedDefaults: @unchecked Sendable {
         return standard.bool(forKey: key)
     }
 
+    func containsObject(forKey key: String) -> Bool {
+        suite.object(forKey: key) != nil || standard.object(forKey: key) != nil
+    }
+
     func set(_ value: String?, forKey key: String) {
         if let value {
             suite.set(value, forKey: key)

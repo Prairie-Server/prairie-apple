@@ -14,6 +14,7 @@ struct LibrariesTabView: View {
     @State private var error: ErrorState?
     @State private var showPicker = false
     @State private var currentProfile: UserProfile?
+    @State private var navPrefs = AppNavPreferences.shared
 
     /// Persist the last-selected library across launches so the user lands
     /// back where they left off. Stored as Int because `@AppStorage` does
@@ -26,9 +27,9 @@ struct LibrariesTabView: View {
         Group {
             if let activeLibrary {
                 loadedContent(activeLibrary: activeLibrary)
-            } else if let error, libraries.isEmpty {
+            } else if let error, visibleLibraries.isEmpty {
                 ErrorView(state: error, onRetry: { Task { await loadLibraries() } })
-            } else if isLoading && libraries.isEmpty {
+            } else if isLoading && visibleLibraries.isEmpty {
                 Color.clear
             } else {
                 EmptyStateView(
@@ -43,12 +44,16 @@ struct LibrariesTabView: View {
         .toolbar(.hidden, for: .navigationBar)
         #endif
         .task {
+            navPrefs.refresh()
             await loadLibraries()
             await loadCurrentProfile()
         }
+        .onChange(of: navPrefs.showAudiobooks) {
+            applyLibrarySelection()
+        }
         .sheet(isPresented: $showPicker) {
             LibraryPickerSheet(
-                libraries: libraries,
+                libraries: visibleLibraries,
                 selectedLibraryId: selectedLibraryId,
                 onSelect: { id in
                     selectedLibraryId = id
@@ -90,7 +95,7 @@ struct LibrariesTabView: View {
         VStack(spacing: 0) {
             LibrariesTopBar(
                 activeLibrary: activeLibrary,
-                canSwitch: libraries.count > 1,
+                canSwitch: visibleLibraries.count > 1,
                 profile: currentProfile,
                 onLibraryTap: { showPicker = true },
                 onSearch: { router.navigate(to: .search) },
@@ -112,7 +117,11 @@ struct LibrariesTabView: View {
     }
 
     private var activeLibrary: Library? {
-        libraries.first(where: { $0.id == selectedLibraryId })
+        visibleLibraries.first(where: { $0.id == selectedLibraryId })
+    }
+
+    private var visibleLibraries: [Library] {
+        libraries.filter { navPrefs.showAudiobooks || !$0.isAudiobookLibrary }
     }
 
     private func loadLibraries() async {
@@ -143,10 +152,11 @@ struct LibrariesTabView: View {
     /// Preserve the stored selection if it still exists; otherwise fall
     /// back to the first available library.
     private func applyLibrarySelection() {
+        let selectableLibraries = visibleLibraries
         let restored = storedLibraryId != 0
-            ? libraries.first(where: { $0.id == storedLibraryId })?.id
+            ? selectableLibraries.first(where: { $0.id == storedLibraryId })?.id
             : nil
-        let resolved = restored ?? libraries.first?.id
+        let resolved = restored ?? selectableLibraries.first?.id
         selectedLibraryId = resolved
         if let resolved { storedLibraryId = resolved }
     }

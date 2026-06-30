@@ -13,6 +13,9 @@ struct SettingsView: View {
     @State private var viewModel = SettingsViewModel()
     @Environment(AppRouter.self) private var router
     @State private var showSignOutConfirm = false
+    #if os(iOS)
+    @State private var navPrefs = AppNavPreferences.shared
+    #endif
 
     var body: some View {
         #if os(tvOS)
@@ -42,6 +45,9 @@ struct SettingsView: View {
         .continuumNavigationTitleDisplayMode(.large)
         .continuumToolbarColorSchemeDark()
         .task {
+            #if os(iOS)
+            navPrefs.refresh()
+            #endif
             await viewModel.loadSettings()
         }
         .alert("Sign Out", isPresented: $showSignOutConfirm) {
@@ -171,6 +177,15 @@ struct SettingsView: View {
 
     private var librarySection: some View {
         Section("Library") {
+            #if os(iOS)
+            Toggle(isOn: Binding(
+                get: { navPrefs.showAudiobooks },
+                set: { navPrefs.setShowAudiobooks($0) }
+            )) {
+                SettingsRowLabel(title: "Show Audiobooks", systemImage: "book.closed.fill", color: .indigo)
+            }
+            #endif
+
             NavigationLink {
                 WatchlistView()
             } label: {

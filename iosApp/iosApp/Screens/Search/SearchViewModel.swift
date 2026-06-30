@@ -40,8 +40,9 @@ class SearchViewModel {
     /// Whether audiobooks participate in this search session. Drives both the
     /// offered filters (`availableMediaTypes`) and what `.all` means. On tvOS
     /// this mirrors the Audiobooks tab — an audiobook library exists and the
-    /// user has opted to show it. iOS/macOS have no hide setting, so it stays
-    /// `true`. Clamp the selection if audiobooks become unavailable.
+    /// user has opted to show it. On iOS it mirrors the local Settings toggle.
+    /// macOS has no hide setting, so it stays `true`. Clamp the selection if
+    /// audiobooks become unavailable.
     var audiobooksEnabled = true {
         didSet {
             if !audiobooksEnabled, selectedMediaType == .audiobook {
