@@ -8,6 +8,9 @@ struct RecommendationsView: View {
     /// (the For You root was selected), focus is pushed onto the saved-
     /// shortcuts row so the screen never opens with a dead remote.
     var focusRequest: Int = 0
+    /// tvOS-only: the custom top menu owns focus, so deferred content focus
+    /// claims must not yank focus back into the shortcut row.
+    var isTopMenuFocused: Bool = false
     var onTopMenuFocusRequest: (() -> Void)? = nil
 
     @State private var viewModel = RecommendationsViewModel()
@@ -96,6 +99,7 @@ struct RecommendationsView: View {
             LazyVStack(spacing: sectionSpacing) {
                 SavedShortcutsRow(
                     focusRequest: focusRequest,
+                    isTopMenuFocused: isTopMenuFocused,
                     onSelect: { router.navigate(to: $0.route) },
                     onMoveUp: onTopMenuFocusRequest
                 )
@@ -199,6 +203,7 @@ struct RecommendationsView: View {
 
 private struct SavedShortcutsRow: View {
     var focusRequest: Int = 0
+    var isTopMenuFocused: Bool = false
     let onSelect: (SavedShortcut) -> Void
     let onMoveUp: (() -> Void)?
 
@@ -211,6 +216,7 @@ private struct SavedShortcutsRow: View {
     /// when the row is recycled back into view on scroll-up and would yank
     /// focus away from whatever the user was on.
     @State private var lastAppliedFocusRequest = 0
+    @State private var pendingFocusRequest: Int?
     #endif
 
     var body: some View {
@@ -251,12 +257,25 @@ private struct SavedShortcutsRow: View {
         // the For You root is swapped in beneath a remote sitting in the menu.
         .onAppear { applyFocusRequest(focusRequest) }
         .onChange(of: focusRequest) { _, request in applyFocusRequest(request) }
+        .onChange(of: isTopMenuFocused) { _, focused in
+            guard !focused, let pendingFocusRequest else { return }
+            applyFocusRequest(pendingFocusRequest)
+        }
         #endif
     }
 
     #if os(tvOS)
     private func applyFocusRequest(_ request: Int) {
-        guard request > 0, request != lastAppliedFocusRequest else { return }
+        guard request > 0 else { return }
+        guard request != lastAppliedFocusRequest else {
+            pendingFocusRequest = nil
+            return
+        }
+        guard !isTopMenuFocused else {
+            pendingFocusRequest = request
+            return
+        }
+        pendingFocusRequest = nil
         lastAppliedFocusRequest = request
         focusedShortcut = .watchlist
     }

@@ -42,4 +42,5 @@ output/
 .DS_Store
 Thumbs.db
 .swiftpm/
-docs/
+docs/*
+!docs/tvos-focus.md

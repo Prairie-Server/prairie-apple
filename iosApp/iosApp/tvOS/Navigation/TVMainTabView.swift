@@ -1,9 +1,5 @@
 #if os(tvOS)
 import SwiftUI
-import os // TVFOCUS-DEBUG: temporary focus tracing
-
-// TVFOCUS-DEBUG: temporary focus tracing (strip before finalizing)
-private let tvFocusLog = Logger(subsystem: "com.silo.tvfocus", category: "host")
 
 /// Root tvOS shell. Owns a custom Skyline top bar instead of relying on
 /// `TabView(.sidebarAdaptable)`, so content can use horizontal remote
@@ -210,6 +206,7 @@ struct TVMainTabView: View {
         case .recommendations:
             RecommendationsView(
                 focusRequest: contentFocusRequest,
+                isTopMenuFocused: isTopMenuFocused,
                 onTopMenuFocusRequest: { focusTopMenuIfVisible() }
             )
         case .libraryType(let type):
@@ -425,6 +422,8 @@ struct TVMainTabView: View {
             entersPanel: isActive && panelEntersFocus,
             focusEntryToken: panelFocusEntryToken,
             onPanelFocusChanged: { handlePanelFocusChanged($0) },
+            onClose: { closePanel() },
+            onExitToContent: { exitPanelToContent() },
             onWatchlist: { closePanel(then: { router.navigate(to: .watchlist) }) },
             onFavorites: { closePanel(then: { router.navigate(to: .favorites) }) },
             onRecommendations: { closePanel(then: { selectRoot(.recommendations) }) }
@@ -471,7 +470,6 @@ struct TVMainTabView: View {
     /// panel row so the move has a destination.
     private func openPanelPreview(_ panel: TVTopMenuPanel) {
         guard panel != openPanel else { return }
-        tvFocusLog.debug("host.openPanelPreview \(String(describing: panel), privacy: .public)")
 
         panelFocusExitTask?.cancel()
         panelFocusExitTask = nil
@@ -496,7 +494,6 @@ struct TVMainTabView: View {
     /// the matching panel is already open.
     private func enterOpenPanel() {
         guard openPanel != nil else { return }
-        tvFocusLog.debug("host.enterOpenPanel openPanel=\(String(describing: self.openPanel), privacy: .public)")
         panelFocusExitTask?.cancel()
         panelFocusExitTask = nil
         panelEntersFocus = true
@@ -528,7 +525,6 @@ struct TVMainTabView: View {
     /// transition. This is reserved for explicit entry gestures, not dwell,
     /// so hover-open menus never trap horizontal tab navigation.
     private func openPanelAndEnter(_ panel: TVTopMenuPanel) {
-        tvFocusLog.debug("host.openPanelAndEnter \(String(describing: panel), privacy: .public)")
         panelFocusExitTask?.cancel()
         panelFocusExitTask = nil
         panelEntersFocus = true
@@ -762,7 +758,9 @@ struct TVMainTabView: View {
         guard router.path.isEmpty else { return }
 
         panelReturnFocus = target
-        guard !isTopMenuFocused else { return }
+        // Claim ownership before the bar's @FocusState lands so content
+        // hand-down tokens cannot briefly re-focus rows during an Up return.
+        isTopMenuFocused = true
 
         withAnimation(reduceMotion ? nil : ContinuumTheme.springAnimation) {
             isTopMenuFocusSuppressed = false

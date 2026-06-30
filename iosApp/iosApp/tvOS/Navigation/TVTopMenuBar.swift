@@ -1,10 +1,6 @@
 #if os(tvOS)
 import SwiftUI
 import UIKit
-import os // TVFOCUS-DEBUG: temporary focus tracing
-
-// TVFOCUS-DEBUG: temporary focus tracing (strip before finalizing)
-private let tvFocusBarLog = Logger(subsystem: "com.silo.tvfocus", category: "bar")
 
 enum TVTopMenuLayout {
     /// Vertical clearance needed when a root tvOS page does not render a
@@ -230,7 +226,6 @@ struct TVTopMenuBar: View {
             isMenuFocused = focusedItem != nil && !newValue
         }
         .onChange(of: focusedItem) { _, newValue in
-            tvFocusBarLog.debug("bar.focusedItem -> \(String(describing: newValue), privacy: .public) (openPanel=\(String(describing: self.openPanel), privacy: .public), panelHasFocus=\(self.panelHasFocus), refocusAfterClose=\(self.refocusAfterClose))")
             if let newValue {
                 lastBarFocus = newValue
                 refocusAfterClose = false
@@ -381,23 +376,21 @@ struct TVTopMenuBar: View {
     }
 
     private func requestMenuFocus() {
-        DispatchQueue.main.async {
-            guard !isFocusSuppressed else { return }
-            switch focusRequestTarget {
-            // A non-nil target means focus is returning from an explicit panel
-            // close (focusTopMenuIfVisible(focusing:) is only called that way).
-            // Mark it so the dwell timer doesn't immediately reopen what the
-            // user just dismissed. A target-less request (Up/Menu from content)
-            // leaves dwell enabled — resting on a tab there should preview it.
-            case .root(let root):
-                dwellSuppressedElement = .root(root)
-                focusedItem = .root(root)
-            case .profile:
-                dwellSuppressedElement = .profile
-                focusedItem = .profile
-            case .none:
-                focusedItem = .root(selectedRoot)
-            }
+        guard !isFocusSuppressed else { return }
+        switch focusRequestTarget {
+        // A non-nil target means focus is returning from an explicit panel
+        // close (focusTopMenuIfVisible(focusing:) is only called that way).
+        // Mark it so the dwell timer doesn't immediately reopen what the
+        // user just dismissed. A target-less request (Up/Menu from content)
+        // leaves dwell enabled — resting on a tab there should preview it.
+        case .root(let root):
+            dwellSuppressedElement = .root(root)
+            focusedItem = .root(root)
+        case .profile:
+            dwellSuppressedElement = .profile
+            focusedItem = .profile
+        case .none:
+            focusedItem = .root(selectedRoot)
         }
     }
 
@@ -783,6 +776,8 @@ struct TVForYouDropdown: View {
     let entersPanel: Bool
     let focusEntryToken: Int
     let onPanelFocusChanged: (Bool) -> Void
+    let onClose: () -> Void
+    let onExitToContent: () -> Void
     let onWatchlist: () -> Void
     let onFavorites: () -> Void
     let onRecommendations: () -> Void
@@ -815,8 +810,10 @@ struct TVForYouDropdown: View {
             panelHeader
 
             actionButton("Watchlist", systemImage: "bookmark.fill", id: .watchlist, action: onWatchlist)
+                .modifier(TVDropdownBoundaryMoveHandler(onMoveUp: onClose, onMoveDown: nil))
             actionButton("Favorites", systemImage: "heart.fill", id: .favorites, action: onFavorites)
             actionButton("Recommendations", systemImage: "sparkles", id: .recommendations, action: onRecommendations)
+                .modifier(TVDropdownBoundaryMoveHandler(onMoveUp: nil, onMoveDown: onExitToContent))
 
             panelFooter
         }
@@ -891,6 +888,29 @@ struct TVForYouDropdown: View {
                 .foregroundStyle(.white.opacity(0.86))
                 .padding(.horizontal, 16)
                 .padding(.vertical, 14)
+        }
+    }
+}
+
+private struct TVDropdownBoundaryMoveHandler: ViewModifier {
+    let onMoveUp: (() -> Void)?
+    let onMoveDown: (() -> Void)?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if onMoveUp != nil || onMoveDown != nil {
+            content.onMoveCommand { direction in
+                switch direction {
+                case .up:
+                    onMoveUp?()
+                case .down:
+                    onMoveDown?()
+                default:
+                    break
+                }
+            }
+        } else {
+            content
         }
     }
 }

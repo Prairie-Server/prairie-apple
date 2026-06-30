@@ -1,8 +1,5 @@
 #if os(tvOS)
 import SwiftUI
-import os
-
-private let tvFocusCascadeLog = Logger(subsystem: "com.silo.tvfocus", category: "cascade")
 
 /// The Skyline cascading library selector (§5.3, mockups `a3`/`a6`).
 ///
@@ -110,14 +107,11 @@ struct TVCascadeSelector: View {
         .onChange(of: focusEntryToken) { _, token in applyEntryToken(token) }
         .onChange(of: focus) { _, newValue in handleFocusChange(newValue) }
         .onChange(of: panelFocused) { _, isFocused in handlePanelFocusedChange(isFocused) }
-        .onChange(of: flyoutAnchorId) { _, _ in logFocusGeometry("anchor") }
-        .onChange(of: flyoutTopPadding) { _, _ in logFocusGeometry("padding") }
         .onChange(of: entersPanel) { _, entered in
             if !entered {
                 panelFocused = false
                 focus = nil
             }
-            tvFocusCascadeLog.debug("cascade.entersPanel -> \(entered, privacy: .public)")
         }
         .onAppear {
             flyoutAnchorId = currentScopeId ?? libraries.first?.id
@@ -161,11 +155,9 @@ struct TVCascadeSelector: View {
             // Cache every row center; the offset is derived so it updates both
             // when rows move (re-layout) and when the anchor changes.
             libraryRowCenters = centers
-            logFocusGeometry("library-centers")
         }
         .onPreferenceChange(TVCascadeFlyoutFirstSectionCenterKey.self) { center in
             flyoutFirstSectionCenter = center
-            logFocusGeometry("flyout-section-center")
         }
         .fixedSize()
     }
@@ -393,11 +385,7 @@ struct TVCascadeSelector: View {
     // MARK: - Focus plumbing
 
     private func applyEntryToken(_ token: Int) {
-        guard entersPanel, token > 0, token != lastAppliedEntryToken else {
-            tvFocusCascadeLog.debug("cascade.applyEntryToken SKIP token=\(token) entersPanel=\(self.entersPanel) lastApplied=\(self.lastAppliedEntryToken)")
-            return
-        }
-        tvFocusCascadeLog.debug("cascade.applyEntryToken APPLY token=\(token) single=\(self.isSingleLibrary) scope=\(String(describing: self.currentScopeId), privacy: .public)")
+        guard entersPanel, token > 0, token != lastAppliedEntryToken else { return }
         lastAppliedEntryToken = token
         if isSingleLibrary, let library = libraries.first {
             // Single-level: land on the first section (§5.3).
@@ -415,7 +403,6 @@ struct TVCascadeSelector: View {
     }
 
     private func handleFocusChange(_ newValue: Focus?) {
-        tvFocusCascadeLog.debug("cascade.focus -> \(String(describing: newValue), privacy: .public)")
         if newValue != nil, entersPanel {
             onPanelFocusChanged(true)
         }
@@ -429,13 +416,9 @@ struct TVCascadeSelector: View {
             flyoutFollowTask?.cancel()
             flyoutAnchorId = id
         }
-        logFocusGeometry("focus-change")
     }
 
     private func handlePanelFocusedChange(_ isFocused: Bool) {
-        tvFocusCascadeLog.debug(
-            "cascade.panelFocused -> \(isFocused, privacy: .public) selection=\(String(describing: self.focus), privacy: .public)"
-        )
         onPanelFocusChanged(isFocused && focus != nil)
     }
 
@@ -454,19 +437,7 @@ struct TVCascadeSelector: View {
             withAnimation(reduceMotion ? nil : .easeInOut(duration: ContinuumTheme.Skyline.flyoutOpenDuration)) {
                 flyoutAnchorId = id
             }
-            logFocusGeometry("follow")
         }
-    }
-
-    private func logFocusGeometry(_ reason: String) {
-        guard entersPanel else { return }
-        let centers = libraryRowCenters
-            .sorted { $0.key < $1.key }
-            .map { "\($0.key):\(Int($0.value.rounded()))" }
-            .joined(separator: ",")
-        tvFocusCascadeLog.debug(
-            "cascade.geometry reason=\(reason, privacy: .public) focus=\(String(describing: self.focus), privacy: .public) anchor=\(String(describing: self.flyoutAnchorId), privacy: .public) firstSection=\(String(describing: self.flyoutFirstSectionCenter), privacy: .public) padding=\(self.flyoutTopPadding, privacy: .public) centers=[\(centers, privacy: .public)]"
-        )
     }
 
     private var estimatedRowHeight: CGFloat {
@@ -490,10 +461,6 @@ struct TVCascadeSelector: View {
 
     private func handleMoveCommand(_ direction: MoveCommandDirection) {
         guard entersPanel, panelFocused, let focus else { return }
-
-        tvFocusCascadeLog.debug(
-            "cascade.move direction=\(String(describing: direction), privacy: .public) focus=\(String(describing: focus), privacy: .public)"
-        )
 
         switch (focus, direction) {
         case (.library(let libraryId), .up):
