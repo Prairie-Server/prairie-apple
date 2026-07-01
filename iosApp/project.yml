@@ -113,7 +113,6 @@ targets:
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: "NO"
         SDKROOT: appletvos
         SUPPORTED_PLATFORMS: "appletvos appletvsimulator"
-        OTHER_LDFLAGS: "$(inherited) -Wl,-no_warn_reduced_section_align"
         # Bridging header exposes the Obj-C audio graph exception catcher on
         # Apple targets and the private AVDisplayCriteria initializer on tvOS.
         SWIFT_OBJC_BRIDGING_HEADER: iosApp/Screens/Player/CoreMedia/SiloPlayerBridging.h
