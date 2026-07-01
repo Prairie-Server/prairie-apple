@@ -3,8 +3,11 @@
 #
 # Usage: resolve-marketing-version.sh <event_name> <ref_name> <dispatch_input>
 #   workflow_dispatch -> echoes <dispatch_input> verbatim
-#   anything else     -> strips leading 'v' and any '-<suffix>' from <ref_name>
-#                        (v1.4.0 -> 1.4.0 ; v1.4.0-beta.2 -> 1.4.0)
+#   anything else     -> strips the leading 'v', any '+<metadata>' build suffix
+#                        (e.g. the +ios / +tvos platform marker), and any
+#                        '-<prerelease>' suffix from <ref_name>
+#                        (v1.4.0 -> 1.4.0 ; v1.4.0-beta.2 -> 1.4.0 ;
+#                         v1.4.0+ios -> 1.4.0 ; v2.0.0-rc.1+tvos -> 2.0.0)
 set -euo pipefail
 
 event_name="${1:-}"
@@ -14,8 +17,9 @@ dispatch_input="${3:-}"
 if [[ "$event_name" == "workflow_dispatch" ]]; then
   version="$dispatch_input"
 else
-  version="${ref_name#v}"     # strip leading v
-  version="${version%%-*}"    # strip -beta.N / -rc.N suffix
+  version="${ref_name#v}"      # strip leading v
+  version="${version%%+*}"     # strip +ios / +tvos (semver build metadata)
+  version="${version%%-*}"     # strip -beta.N / -rc.N suffix
 fi
 
 if [[ -z "$version" ]]; then
