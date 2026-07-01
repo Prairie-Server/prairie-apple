@@ -9,6 +9,15 @@ on:
         description: 'Marketing version (e.g. 1.4.0)'
         required: true
         type: string
+      platform:
+        description: 'Which platform(s) to release'
+        required: true
+        type: choice
+        default: both
+        options:
+          - both
+          - ios
+          - tvos
 
 # Serialize releases: each run computes latest_testflight_build_number + 1,
 # so overlapping runs would collide. Let an in-flight release finish.
@@ -28,6 +37,9 @@ env:
 
 jobs:
   ios:
+    # Skip only when a manual dispatch explicitly selects tvOS. Tag pushes and
+    # the "both" default resolve to 'both', so iOS runs.
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.platform || 'both') != 'tvos' }}
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -79,7 +91,15 @@ jobs:
           TESTFLIGHT_EXTERNAL_GROUPS: ${{ secrets.TESTFLIGHT_EXTERNAL_GROUPS }}
 
   tvos:
-    needs: ios   # enforce iOS-before-tvOS build-number ordering
+    needs: ios   # enforce iOS-before-tvOS build-number ordering when both run
+    # Run when the selection isn't iOS-only. `needs: ios` keeps the ordering for
+    # "both", but a skipped iOS job (tvOS-only dispatch) must not block tvOS —
+    # hence !cancelled() and the explicit "iOS didn't fail" check rather than
+    # the default success() gate (which would also skip on a skipped dependency).
+    if: >-
+      ${{ !cancelled()
+          && needs.ios.result != 'failure'
+          && (github.event_name == 'workflow_dispatch' && inputs.platform || 'both') != 'ios' }}
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
