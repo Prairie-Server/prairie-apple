@@ -15,6 +15,9 @@ assert_eq() {
 assert_eq "final tag"      "1.4.0" "$("$script" push          v1.4.0        "")"
 assert_eq "prerelease tag" "1.4.0" "$("$script" push          v1.4.0-beta.2 "")"
 assert_eq "rc tag"         "2.0.0" "$("$script" push          v2.0.0-rc.1   "")"
+assert_eq "ios-suffixed"   "1.4.0" "$("$script" push          v1.4.0+ios    "")"
+assert_eq "tvos-suffixed"  "1.4.0" "$("$script" push          v1.4.0+tvos   "")"
+assert_eq "prerelease+meta" "2.0.0" "$("$script" push         v2.0.0-rc.1+tvos "")"
 assert_eq "dispatch input" "1.4.0" "$("$script" workflow_dispatch ""        1.4.0)"
 
 assert_reject() {

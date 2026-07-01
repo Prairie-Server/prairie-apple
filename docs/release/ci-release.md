@@ -4,10 +4,15 @@
 - Push tag `vX.Y.Z` (e.g. `v1.4.0`) → builds iOS + tvOS, uploads to TestFlight,
   distributes to external groups, notifies testers.
 - Push prerelease tag `vX.Y.Z-beta.N` → same, marketing version `X.Y.Z`.
+- **Single platform via tag:** append a `+ios` or `+tvos` build-metadata suffix
+  — `vX.Y.Z+ios` releases iOS only, `vX.Y.Z+tvos` tvOS only. Plain `vX.Y.Z`
+  releases both. Works with prereleases too (`vX.Y.Z-beta.N+ios`). The marketing
+  version stays `X.Y.Z` (the suffix is stripped).
 - Manual: Actions tab → "TestFlight Release" → Run workflow → enter `version`
-  and pick `platform` (`both` / `ios` / `tvos`). Tag pushes always release both.
-  On a `both` run, tvOS is skipped if the iOS job fails (build-number ordering);
-  a `tvos`-only run builds tvOS on its own.
+  and pick `platform` (`both` / `ios` / `tvos`).
+
+On a both-platform run, tvOS is skipped if the iOS job fails (build-number
+ordering); a tvOS-only run builds tvOS on its own.
 
 The git tag is the marketing version. Build numbers auto-increment per platform
 from App Store Connect. iOS builds before tvOS (build-number ordering).

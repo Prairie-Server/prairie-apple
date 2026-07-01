@@ -2,6 +2,8 @@ name: TestFlight Release
 
 on:
   push:
+    # v* -> both platforms; the +ios / +tvos build-metadata suffix
+    # (v1.4.0+ios / v1.4.0+tvos) targets that platform only. Both match 'v*'.
     tags: ['v*']
   workflow_dispatch:
     inputs:
@@ -36,10 +38,29 @@ env:
   TESTFLIGHT_NOTIFY_EXTERNAL_TESTERS: "true"
 
 jobs:
+  # Resolve the target platform from either the dispatch input or the tag's
+  # +ios / +tvos build-metadata suffix, so both trigger paths share one gate.
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      platform: ${{ steps.p.outputs.platform }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: p
+        env:
+          GH_EVENT_NAME: ${{ github.event_name }}
+          GH_REF_NAME: ${{ github.ref_name }}
+          INPUT_PLATFORM: ${{ inputs.platform }}
+        run: |
+          P="$(scripts/ci/resolve-platform.sh \
+                "$GH_EVENT_NAME" "$GH_REF_NAME" "$INPUT_PLATFORM")"
+          echo "platform=$P" >> "$GITHUB_OUTPUT"
+          echo "Release platform: $P"
+
   ios:
-    # Skip only when a manual dispatch explicitly selects tvOS. Tag pushes and
-    # the "both" default resolve to 'both', so iOS runs.
-    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.platform || 'both') != 'tvos' }}
+    needs: setup
+    # Skip only when the selection is tvOS-only. 'both' and 'ios' both run iOS.
+    if: ${{ needs.setup.outputs.platform != 'tvos' }}
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -91,15 +112,15 @@ jobs:
           TESTFLIGHT_EXTERNAL_GROUPS: ${{ secrets.TESTFLIGHT_EXTERNAL_GROUPS }}
 
   tvos:
-    needs: ios   # enforce iOS-before-tvOS build-number ordering when both run
+    needs: [setup, ios]   # enforce iOS-before-tvOS build-number ordering when both run
     # Run when the selection isn't iOS-only. `needs: ios` keeps the ordering for
-    # "both", but a skipped iOS job (tvOS-only dispatch) must not block tvOS —
-    # hence !cancelled() and the explicit "iOS didn't fail" check rather than
-    # the default success() gate (which would also skip on a skipped dependency).
+    # "both", but a skipped iOS job (tvOS-only) must not block tvOS — hence
+    # !cancelled() and the explicit "iOS didn't fail" check rather than the
+    # default success() gate (which would also skip on a skipped dependency).
     if: >-
       ${{ !cancelled()
           && needs.ios.result != 'failure'
-          && (github.event_name == 'workflow_dispatch' && inputs.platform || 'both') != 'ios' }}
+          && needs.setup.outputs.platform != 'ios' }}
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
