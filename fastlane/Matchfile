@@ -5,7 +5,12 @@ storage_mode("git")
 git_url(ENV["MATCH_GIT_URL"])           # Private certs repo — never hardcoded here
 
 type("appstore")
-app_identifier(["org.siloserver.silo", "org.siloserver.silo.topshelf"])
+app_identifier([
+  "org.siloserver.silo",
+  "org.siloserver.silo.topshelf",
+  "org.siloserver.silo.NotificationService",
+  "org.siloserver.silo.DownloadsActivity",
+])
 team_id(ENV["TEAM_ID"])
 # username omitted: all match calls pass api_key: explicitly, so
 # username/password auth is never used.

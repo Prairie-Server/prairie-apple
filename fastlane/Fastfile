@@ -267,6 +267,35 @@ end
 
 platform :ios do
 
+  # ── Signing maintenance ───────────────────────────────────────────────────
+
+  desc "Generate/refresh all App Store provisioning profiles in the Match repo (run locally, read-write)"
+  lane :sync_signing do
+    api_key = setup_api_key
+
+    # iOS: app + notification service extension + downloads Live Activity extension.
+    match(
+      type:           "appstore",
+      platform:       "ios",
+      app_identifier: [
+        "org.siloserver.silo",
+        "org.siloserver.silo.NotificationService",
+        "org.siloserver.silo.DownloadsActivity",
+      ],
+      readonly:       false,
+      api_key:        api_key
+    )
+
+    # tvOS: app + Top Shelf extension.
+    match(
+      type:           "appstore",
+      platform:       "tvos",
+      app_identifier: ["org.siloserver.silo", "org.siloserver.silo.topshelf"],
+      readonly:       false,
+      api_key:        api_key
+    )
+  end
+
   # ── iOS TestFlight ────────────────────────────────────────────────────────
 
   desc "Build the iOS app and upload to TestFlight"
@@ -276,6 +305,8 @@ platform :ios do
 
     api_key        = setup_api_key
     app_id         = "org.siloserver.silo"
+    notification_id = "org.siloserver.silo.NotificationService"
+    downloads_id    = "org.siloserver.silo.DownloadsActivity"
     team_id        = ENV["TEAM_ID"]
     # The release workflow always sets TESTFLIGHT_DISTRIBUTION=external (see
     # .github/workflows/release.yml): every tag and manual dispatch distributes
@@ -294,13 +325,14 @@ platform :ios do
     # it. Running xcodegen after match would wipe those settings out.
     sh("xcodegen generate --spec '#{ios_app_dir}/project.yml'")
 
-    # Sync the iOS distribution cert + provisioning profile from the shared
-    # Match certs repo — read-only on CI. Sets PROVISIONING_PROFILE_SPECIFIER
-    # in the project and the lane context for gym to pick up.
+    # Sync distribution certs + provisioning profiles for the app and both
+    # embedded extensions. Each needs its own profile because they have
+    # different bundle IDs (and the notification service extension carries its
+    # own App Group entitlement, which must be declared on its App ID).
     match(
       type:           "appstore",
       platform:       "ios",
-      app_identifier: app_id,
+      app_identifier: [app_id, notification_id, downloads_id],
       readonly:       is_ci,
       api_key:        api_key
     )
@@ -323,10 +355,31 @@ platform :ios do
     # that is absent on macOS and breaks compilation on Apple Silicon build agents.
     sh("bash '#{ios_app_dir}/scripts/patch-libavutil-modulemap.sh'")
 
-    # match populates MATCH_PROVISIONING_PROFILE_MAPPING in the lane context.
-    # Pass the profile specifier explicitly in xcargs so xcodebuild uses it
-    # during the archive step (export_options only covers the IPA packaging step).
-    profile_specifier = lane_context[SharedValues::MATCH_PROVISIONING_PROFILE_MAPPING][app_id]
+    # Pull the profile names for all three targets from the match mapping.
+    profile_map          = lane_context[SharedValues::MATCH_PROVISIONING_PROFILE_MAPPING]
+    app_profile          = profile_map[app_id]
+    notification_profile = profile_map[notification_id]
+    downloads_profile    = profile_map[downloads_id]
+
+    # Patch signing settings per-target in the regenerated Xcode project.
+    # xcodebuild needs per-target PROVISIONING_PROFILE_SPECIFIER during the
+    # archive step; a single global xcarg would apply the app's profile to the
+    # extension targets (different bundle IDs → signing failure). Same pattern
+    # as the tvOS lane's Top Shelf handling.
+    {
+      "Silo"                    => app_profile,
+      "SiloNotificationService" => notification_profile,
+      "SiloDownloadsActivity"   => downloads_profile,
+    }.each do |target, profile|
+      update_code_signing_settings(
+        use_automatic_signing: false,
+        path:                  "#{ios_app_dir}/Silo.xcodeproj",
+        targets:               [target],
+        code_sign_identity:    "Apple Distribution",
+        profile_name:          profile,
+        team_id:               team_id
+      )
+    end
 
     build_app(
       project:          "#{ios_app_dir}/Silo.xcodeproj",
@@ -335,12 +388,25 @@ platform :ios do
       export_method:    "app-store",
       output_directory: "build/ios",
       output_name:      "Silo.ipa",
+      # PROVISIONING_PROFILE_SPECIFIER is intentionally absent from xcargs —
+      # a global value would override every target with the same profile.
+      # Per-target settings were written above via update_code_signing_settings.
       xcargs: "#{marketing_version_xcarg}" \
               "CODE_SIGN_STYLE=Manual " \
               "CODE_SIGN_IDENTITY='Apple Distribution' " \
-              "PROVISIONING_PROFILE_SPECIFIER='#{profile_specifier}' " \
               "CURRENT_PROJECT_VERSION=#{build_number} " \
-              "DEVELOPMENT_TEAM=#{team_id}"
+              "DEVELOPMENT_TEAM=#{team_id}",
+      # export_options.provisioningProfiles maps each bundle ID to its profile
+      # name for the IPA packaging step (separate from the archive step above).
+      export_options: {
+        method:               "app-store",
+        signingStyle:         "manual",
+        provisioningProfiles: {
+          app_id          => app_profile,
+          notification_id => notification_profile,
+          downloads_id    => downloads_profile,
+        }
+      }
     )
 
     upload_to_testflight(
