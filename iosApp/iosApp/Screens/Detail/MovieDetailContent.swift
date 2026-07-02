@@ -37,6 +37,9 @@ struct MovieDetailContent<BelowOverview: View>: View {
     @ViewBuilder let belowOverview: () -> BelowOverview
 
     @State private var showResumeDialog = false
+    /// Presents the DownloadActionButton's options sheet; lives here so the
+    /// overflow menu can open it now that a plain tap downloads directly.
+    @State private var showDownloadOptions = false
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
@@ -139,14 +142,36 @@ struct MovieDetailContent<BelowOverview: View>: View {
                 action: onToggleWatched
             )
 
-            if hasOverflowNavigation {
+            if showsDownloadButton {
+                DownloadActionButton(
+                    detail: detail,
+                    versions: availableVersions,
+                    selectedVersionFileId: selectedVersionFileId,
+                    showOptions: $showDownloadOptions
+                )
+            }
+
+            if hasOverflowMenu {
                 overflowMenu
             }
         }
     }
 
+    /// Download is offered for movies and individual episodes once the
+    /// server advertises the capability for this profile.
+    private var showsDownloadButton: Bool {
+        DownloadManager.shared.downloadsEnabled
+            && (detail.type == "movie" || detail.type == "episode")
+    }
+
     private var hasOverflowNavigation: Bool {
         detail.type == "episode" && detail.seriesId != nil
+    }
+
+    /// Downloads also earn the overflow menu: the one-tap download button no
+    /// longer opens the options sheet, so the menu keeps it discoverable.
+    private var hasOverflowMenu: Bool {
+        hasOverflowNavigation || showsDownloadButton
     }
 
     @ViewBuilder
@@ -165,6 +190,13 @@ struct MovieDetailContent<BelowOverview: View>: View {
                     onNavigateToItem(seriesId)
                 } label: {
                     Label("Go to Series", systemImage: "tv")
+                }
+            }
+            if showsDownloadButton {
+                Button {
+                    showDownloadOptions = true
+                } label: {
+                    Label("Download Options…", systemImage: "slider.horizontal.3")
                 }
             }
         }
@@ -221,10 +253,20 @@ struct MovieDetailContent<BelowOverview: View>: View {
                 PhoneEpisodeRail(
                     episodes: seasonEpisodes,
                     onSelect: onEpisodeTap,
-                    currentContentId: detail.contentId
+                    currentContentId: detail.contentId,
+                    downloadContext: episodeDownloadContext
                 )
             }
         }
+    }
+
+    /// Series scope for the per-card download controls; same seriesId
+    /// resolution as `SeriesDownloadMenuButton`.
+    private var episodeDownloadContext: EpisodeDownloadContext {
+        EpisodeDownloadContext(
+            seriesId: detail.seriesId ?? detail.contentId,
+            posterThumbhash: detail.posterThumbhash
+        )
     }
 
     private var episodeRailEyebrow: String {

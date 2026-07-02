@@ -139,6 +139,14 @@ struct SeriesDetailContent<BelowOverview: View>: View {
                 accessibilityLabel: isWatched ? "Mark Series Unwatched" : "Mark Series Watched",
                 action: onToggleWatched
             )
+
+            if DownloadManager.shared.downloadsEnabled {
+                SeriesDownloadMenuButton(
+                    detail: detail,
+                    seasons: seasons,
+                    selectedSeason: selectedSeason
+                )
+            }
         }
     }
 
@@ -272,9 +280,19 @@ struct SeriesDetailContent<BelowOverview: View>: View {
         } else {
             PhoneEpisodeRail(
                 episodes: episodes,
-                onSelect: onEpisodeTap
+                onSelect: onEpisodeTap,
+                downloadContext: episodeDownloadContext
             )
         }
+    }
+
+    /// Series scope for the per-card download controls; same seriesId
+    /// resolution as `SeriesDownloadMenuButton`.
+    private var episodeDownloadContext: EpisodeDownloadContext {
+        EpisodeDownloadContext(
+            seriesId: detail.seriesId ?? detail.contentId,
+            posterThumbhash: detail.posterThumbhash
+        )
     }
 
     // MARK: - Cast

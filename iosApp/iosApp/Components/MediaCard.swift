@@ -190,6 +190,10 @@ struct MediaCard: View {
                 .padding(checkBadgePadding)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             }
+
+            #if !os(tvOS)
+            DownloadedBadgeOverlay(contentId: contentId, padding: checkBadgePadding)
+            #endif
         }
         .frame(width: cardWidth, height: cardHeight)
     }

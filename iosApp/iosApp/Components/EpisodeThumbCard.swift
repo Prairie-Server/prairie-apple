@@ -166,6 +166,10 @@ struct EpisodeThumbCard: View {
                 .padding(badgeInset)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             }
+
+            #if !os(tvOS)
+            DownloadedBadgeOverlay(contentId: item.contentId, padding: badgeInset)
+            #endif
         }
         .frame(width: cardWidth, height: cardHeight)
     }

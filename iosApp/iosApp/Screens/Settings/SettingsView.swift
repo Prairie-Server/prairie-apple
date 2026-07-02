@@ -165,6 +165,18 @@ struct SettingsView: View {
                     value: subtitleLanguageName(viewModel.editorSubtitleLanguage)
                 )
             }
+
+            if DownloadManager.shared.downloadsEnabled {
+                NavigationLink {
+                    DownloadsSettingsView()
+                } label: {
+                    SettingsRowLabel(
+                        title: "Downloads",
+                        systemImage: "arrow.down.circle.fill",
+                        color: .blue
+                    )
+                }
+            }
         }
     }
 

@@ -145,6 +145,14 @@ struct SeasonDetailContent<BelowOverview: View>: View {
                 action: onToggleWatched
             )
 
+            if DownloadManager.shared.downloadsEnabled {
+                SeriesDownloadMenuButton(
+                    detail: detail,
+                    seasons: seasons,
+                    selectedSeason: selectedSeason ?? seasons.first(where: { $0.seasonNumber == detail.seasonNumber })
+                )
+            }
+
             if let seriesId = detail.seriesId {
                 PhoneCircleMenuButton(accessibilityLabel: "More options") {
                     Button {
@@ -237,9 +245,22 @@ struct SeasonDetailContent<BelowOverview: View>: View {
                     .foregroundColor(.continuumSecondaryText)
                     .padding(.horizontal, ContinuumTheme.safePadding)
             } else {
-                PhoneEpisodeRail(episodes: episodes, onSelect: onEpisodeTap)
+                PhoneEpisodeRail(
+                    episodes: episodes,
+                    onSelect: onEpisodeTap,
+                    downloadContext: episodeDownloadContext
+                )
             }
         }
+    }
+
+    /// Series scope for the per-card download controls; same seriesId
+    /// resolution as `SeriesDownloadMenuButton`.
+    private var episodeDownloadContext: EpisodeDownloadContext {
+        EpisodeDownloadContext(
+            seriesId: detail.seriesId ?? detail.contentId,
+            posterThumbhash: detail.posterThumbhash
+        )
     }
 
     @ViewBuilder

@@ -57,6 +57,8 @@ class AppRouter {
         let subtitleTrackIndex: Int?
         let startFromBeginning: Bool
         let resumePosition: Double?
+        /// Set for offline playback of a completed download.
+        var offlineDownloadId: String? = nil
         /// Hints supplied by the originating screen (e.g. the detail page,
         /// which has just loaded the catalog item) so the player's now-
         /// playing widget can publish artwork without re-fetching the
@@ -66,6 +68,18 @@ class AppRouter {
     }
 
     var presentedPlayer: PlayerPresentation?
+
+    // MARK: - Tab Selection
+
+    /// One-shot tab-switch request, consumed (and cleared) by `MainTabView`,
+    /// which owns the actual selection state. Routed here so leaf screens —
+    /// e.g. the Downloads empty state's "Browse Libraries" — can jump tabs
+    /// without threading a selection binding through the tree.
+    var requestedTab: AppTab?
+
+    func switchTab(to tab: AppTab) {
+        requestedTab = tab
+    }
 
     /// Present the player using the platform-appropriate path. iOS/iPadOS use
     /// a full-window cover; macOS pushes into the main navigation content so
@@ -107,6 +121,36 @@ class AppRouter {
             resumePosition: resumePosition,
             posterURL: posterURL,
             backdropURL: backdropURL
+        )
+        #endif
+    }
+
+    /// Present offline playback of a completed download. iOS/iPadOS use a
+    /// full-window cover; macOS pushes the offline player route.
+    func presentOfflinePlayer(
+        downloadId: String,
+        contentId: String,
+        startFromBeginning: Bool = false,
+        resumePosition: Double? = nil
+    ) {
+        #if os(macOS)
+        navigate(to: .offlinePlayer(
+            downloadId: downloadId,
+            contentId: contentId,
+            startFromBeginning: startFromBeginning,
+            resumePosition: resumePosition
+        ))
+        #else
+        presentedPlayer = PlayerPresentation(
+            contentId: contentId,
+            fileId: nil,
+            audioTrackIndex: nil,
+            subtitleTrackIndex: nil,
+            startFromBeginning: startFromBeginning,
+            resumePosition: resumePosition,
+            offlineDownloadId: downloadId,
+            posterURL: nil,
+            backdropURL: nil
         )
         #endif
     }

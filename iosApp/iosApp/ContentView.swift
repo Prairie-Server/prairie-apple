@@ -57,6 +57,9 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .continuumSessionExpired)) { _ in
             audioStore.dismissFullPlayer()
             Task { await audioStore.player.close() }
+            #if !os(tvOS)
+            DownloadManager.shared.clearForSignOut()
+            #endif
             router.expiredSession()
         }
         .task {
@@ -85,6 +88,9 @@ struct ContentView: View {
                 #if os(iOS)
                 await ApplePushRegistrationCoordinator.shared.prepareForAuthenticatedProfile()
                 #endif
+                #if !os(tvOS)
+                await DownloadManager.shared.onAppActive()
+                #endif
             }
         }
         .onChange(of: scenePhase) { _, newPhase in
@@ -94,6 +100,11 @@ struct ContentView: View {
                 castController.appDidBecomeActive()
             case .background:
                 castController.appDidEnterBackground()
+                // Keep series monitoring alive while backgrounded; only
+                // worth a wake when the profile can download at all.
+                if DownloadManager.shared.downloadsEnabled {
+                    DownloadBackgroundRefresh.schedule()
+                }
             default:
                 break
             }
@@ -124,6 +135,9 @@ struct ContentView: View {
             #endif
             #if os(tvOS)
             NotificationCenter.default.post(name: .homeSectionsShouldRefresh, object: nil)
+            #endif
+            #if !os(tvOS)
+            Task { await DownloadManager.shared.onAppActive() }
             #endif
         }
     }
@@ -187,12 +201,33 @@ struct ContentView: View {
     /// - `continuum://item/{contentId}` — push the detail screen
     /// - `continuum://play/{contentId}` — push the player (resume from
     ///   last known position)
+    /// - `continuum://downloads` — select the Downloads tab (local
+    ///   download notifications)
     ///
     /// If the auth state isn't ready yet, the link is queued in
     /// `pendingDeepLink` and drained on the next `.authenticated`
     /// transition.
     private func handleDeepLink(_ url: URL) {
-        guard let host = url.host, !url.pathComponents.isEmpty else { return }
+        guard let host = url.host else { return }
+
+        if host == "downloads" {
+            guard router.authState == .authenticated else {
+                pendingDeepLink = url
+                return
+            }
+            // The tab only exists while downloads are enabled — a stale
+            // download notification tapped after a profile/capability
+            // change must not select a tab that never renders.
+            guard DownloadManager.shared.downloadsEnabled else { return }
+            // Select the tab rather than pushing the route — a push stacks
+            // a duplicate Downloads screen when that tab is already showing,
+            // and hides the tab context from anywhere else.
+            router.popToRoot()
+            router.switchTab(to: .downloads)
+            return
+        }
+
+        guard !url.pathComponents.isEmpty else { return }
         let contentId = url.pathComponents
             .dropFirst()
             .first?
@@ -553,6 +588,11 @@ struct MainTabView: View {
             }
         }
         .tint(.continuumOnSurface)
+        .onChange(of: router.requestedTab) { _, tab in
+            guard let tab else { return }
+            selectedTab = tab
+            router.requestedTab = nil
+        }
         #if !os(macOS)
         .fullScreenCover(isPresented: Binding(
             get: { audioStore.isShowingFullPlayer },
@@ -568,6 +608,7 @@ struct MainTabView: View {
                 preferredSubtitleTrackIndex: payload.subtitleTrackIndex,
                 startFromBeginning: payload.startFromBeginning,
                 resumePositionOverride: payload.resumePosition,
+                offlineDownloadId: payload.offlineDownloadId,
                 posterURLHint: payload.posterURL,
                 backdropURLHint: payload.backdropURL
             )
@@ -597,11 +638,25 @@ struct MainTabView: View {
         #endif
     }
 
+    /// Visible tabs, plus a Downloads tab when the server advertises the
+    /// downloads capability for this profile. Reading
+    /// `DownloadManager.shared.downloadsEnabled` here registers the tab bar
+    /// as an observer, so the tab appears as soon as capability loads.
+    private var visibleTabs: [AppTab] {
+        var tabs = AppTab.visibleCases
+        #if !os(tvOS)
+        if DownloadManager.shared.downloadsEnabled {
+            tabs.append(.downloads)
+        }
+        #endif
+        return tabs
+    }
+
     /// iPhone + iPad compact width: bottom tab bar, single navigation stack.
     private var tabLayout: some View {
         NavigationStack(path: $router.path) {
             TabView(selection: $selectedTab) {
-                ForEach(AppTab.visibleCases) { tab in
+                ForEach(visibleTabs) { tab in
                     #if os(tvOS)
                     // Text-only tabs on tvOS keep the top bar compact — adding an
                     // icon blows up each tab's focus pill. The value-based `Tab`
@@ -648,7 +703,7 @@ struct MainTabView: View {
                 get: { selectedTab },
                 set: { if let v = $0 { selectedTab = v } }
             )) {
-                ForEach(AppTab.visibleCases) { tab in
+                ForEach(visibleTabs) { tab in
                     Label(
                         tab.rawValue,
                         systemImage: selectedTab == tab ? tab.selectedIcon : tab.icon
@@ -697,6 +752,13 @@ struct MainTabView: View {
 
         case .calendar:
             CalendarView()
+
+        case .downloads:
+            #if os(tvOS)
+            EmptyView()
+            #else
+            DownloadsView()
+            #endif
 
         case .settings:
             SettingsView()
@@ -787,6 +849,40 @@ struct MainTabView: View {
             RecommendationsView()
         case .serverList:
             ServerListView()
+        case .downloads:
+            #if os(tvOS)
+            EmptyStateView(icon: "questionmark.circle", title: "Unknown", subtitle: nil)
+                .continuumBackground()
+            #else
+            DownloadsView()
+            #endif
+        case .offlinePlayer(let downloadId, let contentId, let startFromBeginning, let resumePosition):
+            #if os(macOS)
+            PlayerView(
+                contentId: contentId,
+                startFromBeginning: startFromBeginning,
+                resumePositionOverride: resumePosition,
+                offlineDownloadId: downloadId
+            )
+            #else
+            // Presented as a full-screen cover (see MainTabView). This arm
+            // exists only for switch exhaustiveness.
+            EmptyView()
+            #endif
+        case .offlineSeriesBrowse(let seriesId):
+            #if os(tvOS)
+            EmptyStateView(icon: "questionmark.circle", title: "Unknown", subtitle: nil)
+                .continuumBackground()
+            #else
+            OfflineSeriesBrowseView(seriesId: seriesId)
+            #endif
+        case .offlineDownloadDetail(let downloadId):
+            #if os(tvOS)
+            EmptyStateView(icon: "questionmark.circle", title: "Unknown", subtitle: nil)
+                .continuumBackground()
+            #else
+            OfflineDownloadDetailView(downloadId: downloadId)
+            #endif
         default:
             EmptyStateView(icon: "questionmark.circle", title: "Unknown", subtitle: nil)
                 .continuumBackground()
