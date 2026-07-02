@@ -62,6 +62,9 @@ final class PlayerCore: NSObject {
     var onError: ((String) -> Void)?
     var onEndOfFile: (() -> Void)?
     var onBufferingChange: ((Bool) -> Void)?
+    /// Fires on main while buffering with fill progress toward the resume
+    /// threshold (0–100). Only whole-percent changes are reported.
+    var onBufferingProgress: ((Double) -> Void)?
     var onPlaybackStatsChange: ((PlaybackStats) -> Void)?
     var onTracksChange: (([PlayerTrack]) -> Void)?
     var onChaptersChange: (([ChapterInfo]) -> Void)?
@@ -309,6 +312,148 @@ final class PlayerCore: NSObject {
         endOfFileCoordinator.clear()
     }
 
+    // MARK: - Seek coalescing
+
+    /// Latest-wins latch for seek targets; see `runSeekWorker()`.
+    private let seekLatch = SeekLatch()
+
+    // MARK: - Playback health telemetry
+    //
+    // Counters feeding the 1 Hz diagnostics line, the stats panel, and the
+    // planned playback-diagnostics reporting. Written from main (buffering
+    // monitor, display tick), controlQueue (seek worker), and arbitrary
+    // seek-caller threads, so all access goes through `telemetryLock`.
+
+    private let telemetryLock = NSLock()
+    private var _seekCount: UInt64 = 0
+    private var _coalescedSeekCount: UInt64 = 0
+    /// Wall time of the most recent seek worker iteration. Never reset —
+    /// also drives the buffering policy's post-seek fast-resume window.
+    private var _lastSeekWall: CFTimeInterval = -.infinity
+    /// Wall time armed by a seek and consumed by the first post-seek frame
+    /// enqueue to compute seek→first-frame latency.
+    private var _seekLatencyArmedWall: CFTimeInterval?
+    private var _lastSeekToFirstFrameSeconds: Double?
+    private var _rebufferCount = 0
+    private var _bufferingWallSeconds: Double = 0
+    private var _bufferingSinceWall: CFTimeInterval?
+    private var _lastRebufferRecoverySeconds: Double?
+    private var _avsyncFlushCount: UInt64 = 0
+    private var _avsyncGopDropCount: UInt64 = 0
+    private var _avsyncReseekCount: UInt64 = 0
+    private var _avsyncDroppedPacketSeconds: Double = 0
+
+    /// Wall time the in-flight seek worker iteration started; nil when no
+    /// iteration is running. Basis for the seek-stall watchdog.
+    private var _seekIterationStartWall: CFTimeInterval?
+    private var _seekStallReported = false
+    /// A seek iteration older than this is declared wedged. FFmpeg's
+    /// interrupt callback + rw_timeout are supposed to bound
+    /// `avformat_seek_file`, but the vendored build's TLS reads have been
+    /// observed blocking without polling either (tvOS, TLS decode error →
+    /// reconnect → dead read). Comfortably above `demuxIOTimeoutSeconds` so
+    /// the watchdog only fires after FFmpeg's own timeouts have failed.
+    private static let seekStallTimeoutSeconds: CFTimeInterval = 15.0
+
+    private func noteSeekStarted() {
+        let now = CACurrentMediaTime()
+        telemetryLock.lock()
+        _seekCount &+= 1
+        _lastSeekWall = now
+        _seekLatencyArmedWall = now
+        _seekIterationStartWall = now
+        _seekStallReported = false
+        telemetryLock.unlock()
+    }
+
+    private func noteSeekIterationEnded() {
+        telemetryLock.lock()
+        _seekIterationStartWall = nil
+        telemetryLock.unlock()
+    }
+
+    /// Returns the stalled iteration's age when the watchdog should fire,
+    /// else nil. Sets the reported flag so it fires once per iteration.
+    private func claimSeekStall() -> Double? {
+        telemetryLock.lock()
+        defer { telemetryLock.unlock() }
+        guard let started = _seekIterationStartWall, !_seekStallReported else { return nil }
+        let age = CACurrentMediaTime() - started
+        guard age > Self.seekStallTimeoutSeconds else { return nil }
+        _seekStallReported = true
+        return age
+    }
+
+    private func noteCoalescedSeek() {
+        telemetryLock.lock()
+        _coalescedSeekCount &+= 1
+        telemetryLock.unlock()
+    }
+
+    private func noteSeekFirstFrame() {
+        telemetryLock.lock()
+        if let armed = _seekLatencyArmedWall {
+            _lastSeekToFirstFrameSeconds = CACurrentMediaTime() - armed
+            _seekLatencyArmedWall = nil
+        }
+        telemetryLock.unlock()
+    }
+
+    /// Seconds since the last seek worker iteration began; used by the
+    /// buffering policy's post-seek fast-resume path.
+    private func secondsSinceLastSeek() -> Double {
+        telemetryLock.lock()
+        defer { telemetryLock.unlock() }
+        guard _lastSeekWall.isFinite else { return .infinity }
+        return CACurrentMediaTime() - _lastSeekWall
+    }
+
+    private func noteBufferingTransition(_ buffering: Bool) {
+        let now = CACurrentMediaTime()
+        telemetryLock.lock()
+        if buffering {
+            _rebufferCount += 1
+            _bufferingSinceWall = now
+        } else if let since = _bufferingSinceWall {
+            let elapsed = now - since
+            _bufferingWallSeconds += elapsed
+            _lastRebufferRecoverySeconds = elapsed
+            _bufferingSinceWall = nil
+        }
+        telemetryLock.unlock()
+    }
+
+    private func noteAvsyncAction(_ action: AVSyncLadder.Action, droppedPacketSeconds: Double = 0) {
+        telemetryLock.lock()
+        switch action {
+        case .flushDecodedFrames: _avsyncFlushCount &+= 1
+        case .dropPacketsToNextKeyframe:
+            _avsyncGopDropCount &+= 1
+            _avsyncDroppedPacketSeconds += droppedPacketSeconds
+        case .reseekToClock: _avsyncReseekCount &+= 1
+        case .none: break
+        }
+        telemetryLock.unlock()
+    }
+
+    func playbackHealthStats() -> PlaybackHealthStats {
+        telemetryLock.lock()
+        defer { telemetryLock.unlock() }
+        return PlaybackHealthStats(
+            rebufferCount: _rebufferCount,
+            bufferingWallSeconds: _bufferingWallSeconds
+                + (_bufferingSinceWall.map { CACurrentMediaTime() - $0 } ?? 0),
+            lastRebufferRecoverySeconds: _lastRebufferRecoverySeconds,
+            seekCount: _seekCount,
+            coalescedSeekCount: _coalescedSeekCount,
+            lastSeekToFirstFrameSeconds: _lastSeekToFirstFrameSeconds,
+            avsyncFlushCount: _avsyncFlushCount,
+            avsyncGopDropCount: _avsyncGopDropCount,
+            avsyncReseekCount: _avsyncReseekCount,
+            avsyncDroppedPacketSeconds: _avsyncDroppedPacketSeconds
+        )
+    }
+
     // MARK: - Stream info learned at load time
 
     private var refreshRate: Float = 24.0
@@ -340,9 +485,17 @@ final class PlayerCore: NSObject {
     // UI time observer on main.
     private var playbackTimeObserver: Timer?
 
-    // Buffering state (reflects whether the decoder is waiting for packets).
+    // Buffering state (reflects whether playback is starving for media).
     private var bufferingState = false
-    /// Timer that samples packet queue depth + renderer readiness every 100ms.
+    /// Hysteresis policy behind `bufferingState`. Main-only (timer thread).
+    private var bufferingPolicy = BufferingPolicy()
+    /// Last whole-percent buffering progress reported; dedupes the 10 Hz
+    /// sampling down to actual changes. Main-only.
+    private var lastReportedBufferingProgress = -1
+    /// Post-seek window in which the buffering policy uses its faster
+    /// resume threshold.
+    private static let postSeekFastResumeWindowSeconds: CFTimeInterval = 10.0
+    /// Timer that samples buffered seconds + renderer readiness every 100ms.
     /// Used for the `onBufferingChange` heuristic. Runs on main.
     private var bufferingTimer: Timer?
 
@@ -362,15 +515,43 @@ final class PlayerCore: NSObject {
     /// `videoFeedQueue`. The next packet on the feed loop performs the
     /// actual teardown/recreate before submitting more work to VT.
     private var decoderRebuildPending = false
-    /// Set by `performSeek` to tag the next sample buffer sent to VT with
+    /// Armed to tag the next sample buffer sent to VT with
     /// `kCMSampleAttachmentKey_ResetDecoderBeforeDecoding`. Without this,
     /// VT retains reference frames from the pre-seek GOP and emits
     /// `-8969` / similar for every new post-seek packet until it happens
     /// to land a clean I-frame — which often crosses the 30-failure
-    /// threshold first. Written on the seek thread before the feed
-    /// restart barrier; read on `videoFeedQueue`. GCD's async dispatch
-    /// provides the happens-before, so no explicit lock is needed.
-    private var nextSampleNeedsDecoderReset = false
+    /// threshold first.
+    ///
+    /// Writers: control queue (seek / audio-track switch), `videoFeedQueue`
+    /// (decode-burst resync), and main (A/V-sync ladder packet drops, which
+    /// race the live feed loop — the reason this is locked rather than
+    /// relying on dispatch happens-before like its neighbors). The
+    /// generation guard keeps the decode thread's post-apply clear from
+    /// erasing an arm that landed while the sample was in flight.
+    private let decoderResetLock = NSLock()
+    private var _decoderResetArmed = false
+    private var _decoderResetGeneration: UInt64 = 0
+
+    private func armDecoderReset() {
+        decoderResetLock.lock()
+        _decoderResetArmed = true
+        _decoderResetGeneration &+= 1
+        decoderResetLock.unlock()
+    }
+
+    private func decoderResetSnapshot() -> (armed: Bool, generation: UInt64) {
+        decoderResetLock.lock()
+        defer { decoderResetLock.unlock() }
+        return (_decoderResetArmed, _decoderResetGeneration)
+    }
+
+    private func clearDecoderReset(ifGeneration generation: UInt64) {
+        decoderResetLock.lock()
+        if _decoderResetGeneration == generation {
+            _decoderResetArmed = false
+        }
+        decoderResetLock.unlock()
+    }
     /// Cumulative VT decode failures since the current `openAndDemux` session
     /// started. Used to print milestone log lines for on-device diagnosis —
     /// OSLog warnings from VT don't reach `devicectl --console` on tvOS.
@@ -1344,23 +1525,79 @@ final class PlayerCore: NSObject {
         guard !isDisposed else { return }
         let target = max(0, seconds)
 
+        // Seek tears down the demux + feed workers, rewinds the format ctx,
+        // flushes decoders + renderers, then restarts the workers. Running
+        // on the control queue keeps us off main (which would deadlock on
+        // the main.sync flush) and off demuxQueue (which we need to .sync
+        // to drain). Signal cancel immediately so in-flight workers exit.
+        //
+        // Bursts coalesce through `seekLatch`: the newest target overwrites
+        // any pending one, and at most one seek worker runs at a time. A
+        // superseded in-flight `performSeek` short-circuits before the
+        // renderer flush / worker restart, so a scrub storm pays the
+        // expensive tail once, for the final target.
+        clearEndOfFileFlag()
+        markCancelled()
+        guard seekLatch.submit(target) else {
+            // An active worker will pick this target up.
+            noteCoalescedSeek()
+            if #available(iOS 15.0, tvOS 15.0, *) {
+                os_signpost(.event, log: Self.signpostLog, name: "SeekCoalesced",
+                            "target=%.3f", target)
+            }
+            return
+        }
         seekSignpostID = OSSignpostID(log: Self.signpostLog)
         if #available(iOS 15.0, tvOS 15.0, *) {
             os_signpost(.begin, log: Self.signpostLog, name: "Seek",
                         signpostID: seekSignpostID,
                         "target=%.3f", target)
         }
-
-        // Seek tears down the demux + feed workers, rewinds the format ctx,
-        // flushes decoders + renderers, then restarts the workers. Running
-        // on the control queue keeps us off main (which would deadlock on
-        // the main.sync flush) and off demuxQueue (which we need to .sync
-        // to drain). Signal cancel immediately so in-flight workers exit.
-        clearEndOfFileFlag()
-        markCancelled()
+        // Silence the renderers for the whole burst. Superseded worker
+        // iterations skip the renderer-flush tail, so without this the
+        // audio renderer keeps playing pre-seek content (and the display
+        // tick keeps consuming stale frames) until the final target's
+        // flush lands — seconds of old audio over a frozen frame on a slow
+        // network. Ordering is safe: this main.async is enqueued before
+        // any restart's preroll (also dispatched to main), and every
+        // coalesced submit guarantees a later iteration whose preroll
+        // re-plays. Rate preservation is untouched — `playbackClock.rate`
+        // isn't modified here, so the restart tail still restores the
+        // user's rate (or stays paused if they were paused).
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.isDisposed else { return }
+            self.audioOutput.pause()
+            self.setVideoDisplayTickPaused(true)
+        }
         controlQueue.async { [weak self] in
             guard let self else { return }
-            self.performSeek(to: target)
+            self.runSeekWorker()
+        }
+    }
+
+    /// Seek worker (controlQueue). Drains the latch: each iteration takes
+    /// the newest target and runs a full `performSeek`. `finish()` closes
+    /// the submit-vs-exit race — a target submitted after the final nil
+    /// `take()` is returned by `finish()` and keeps this worker looping,
+    /// because no new worker was started for it (`submit` saw us active).
+    private func runSeekWorker() {
+        while true {
+            guard let target = seekLatch.take() ?? seekLatch.finish() else { break }
+            guard !isDisposed else {
+                seekLatch.abandon()
+                break
+            }
+            // Iterations after the first run with cancellation cleared by the
+            // previous performSeek's restart tail. Re-arm so the drains and
+            // barriers below actually stop the freshly restarted workers.
+            markCancelled()
+            noteSeekStarted()
+            performSeek(to: target)
+            noteSeekIterationEnded()
+        }
+        if #available(iOS 15.0, tvOS 15.0, *) {
+            os_signpost(.end, log: Self.signpostLog, name: "Seek",
+                        signpostID: seekSignpostID)
         }
     }
 
@@ -1401,7 +1638,7 @@ final class PlayerCore: NSObject {
         // decodes — it doesn't invalidate reference frames. Without this
         // tag, the first packets of the new GOP try to resolve DPB
         // references against stale pre-seek frames → -8969 cascade.
-        nextSampleNeedsDecoderReset = true
+        armDecoderReset()
         if let audio = audioCodecCtx {
             avcodec_flush_buffers(audio)
         }
@@ -1439,6 +1676,16 @@ final class PlayerCore: NSObject {
             Self.logger.error("avformat_seek_file failed: \(result)")
         }
         demuxLastProgressWall = CACurrentMediaTime()
+
+        // Superseded mid-seek: a newer target landed while we were inside
+        // `avformat_seek_file`. Skip the renderer flush, worker restart, and
+        // preroll — the worker loop immediately re-runs from this drained
+        // state (queues empty, decoders flushed, workers not running), so
+        // the burst pays the expensive tail once, for the final target.
+        if seekLatch.hasPending {
+            Self.logger.info("[CMP-SEEK] superseded after format seek target=\(target, privacy: .public); skipping restart tail")
+            return
+        }
 
         // Drain any decoded frames from before the seek so stale images don't
         // get enqueued once the display link resumes.
@@ -1483,6 +1730,9 @@ final class PlayerCore: NSObject {
             self.postDiscontinuityWallDeadline =
                 CACurrentMediaTime() + Self.postDiscontinuityWindowSeconds
             self.decodedVideoFrameRenderer.reset()
+            // Fresh ladder per discontinuity — the post-seek keyframe gap
+            // must not inherit a half-escalated episode.
+            self.avSyncLadder = AVSyncLadder()
 
             // Bypass the dedup guard — the scrubber must reflect the new
             // position even if `target` happens to match the last report.
@@ -1493,8 +1743,15 @@ final class PlayerCore: NSObject {
         // Restart demux + feeds from the seek point. Re-check disposal —
         // dispose() may have landed while we were blocked in
         // `avformat_seek_file` or the main.sync above, and restarting the
-        // workers would resurrect a torn-down session.
+        // workers would resurrect a torn-down session. Re-check the latch
+        // too: a target that arrived during the main.sync above makes this
+        // restart pointless (the next worker iteration cancels + drains it
+        // immediately), so skip straight to that iteration.
         guard !isDisposed else { return }
+        if seekLatch.hasPending {
+            Self.logger.info("[CMP-SEEK] superseded before restart target=\(target, privacy: .public); skipping worker restart")
+            return
+        }
         clearEndOfFileFlag()
         resetCancellation()
         startVideoFeed()
@@ -1510,11 +1767,6 @@ final class PlayerCore: NSObject {
             generation: restartGeneration,
             reason: "seek"
         )
-
-        if #available(iOS 15.0, tvOS 15.0, *) {
-            os_signpost(.end, log: Self.signpostLog, name: "Seek",
-                        signpostID: seekSignpostID)
-        }
     }
 
     func setHDREnabled(_ enabled: Bool) {
@@ -1566,6 +1818,9 @@ final class PlayerCore: NSObject {
         Self.logger.info("PlayerCore.dispose()")
 
         markCancelled()
+        // No further submits can race this: `seek(to:)` guards on
+        // `isDisposed`, which `claimDisposed()` just set.
+        seekLatch.abandon()
         wakeVideoToolboxDecodeWaiters()
 
         let disposedAt = currentPlaybackTime()
@@ -2116,7 +2371,7 @@ final class PlayerCore: NSObject {
         // Same reset tag as performSeek: track switch restarts video
         // feed from the current position, so VT's DPB state is stale
         // relative to the re-fed packets.
-        nextSampleNeedsDecoderReset = true
+        armDecoderReset()
         compressedVideoPipeline.resetDiagnostics()
         if let audio = audioCodecCtx {
             avcodec_flush_buffers(audio)
@@ -2144,6 +2399,8 @@ final class PlayerCore: NSObject {
                 audioStreamIndex = -1
             }
         }
+        // The audio timebase (and frame duration) may have changed.
+        configurePacketQueueTiming()
 
         let resumeSeconds = max(0, currentPlaybackTimeSeconds())
         pendingSkipBelowPTS = resumeSeconds
@@ -2188,6 +2445,9 @@ final class PlayerCore: NSObject {
             self.postDiscontinuityWallDeadline =
                 CACurrentMediaTime() + Self.postDiscontinuityWindowSeconds
             self.decodedVideoFrameRenderer.reset()
+            // Fresh ladder per discontinuity — the post-seek keyframe gap
+            // must not inherit a half-escalated episode.
+            self.avSyncLadder = AVSyncLadder()
         }
 
         // Refresh the track list so the UI's "selected" indicator matches.
@@ -2229,6 +2489,11 @@ final class PlayerCore: NSObject {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.bufferingTimer?.invalidate()
+            // Fresh policy per monitored session: a reloaded core must not
+            // inherit the previous file's buffering state. Main-only, like
+            // every other touch of these two.
+            self.bufferingPolicy = BufferingPolicy()
+            self.lastReportedBufferingProgress = -1
             self.bufferingTimer = Timer.scheduledTimer(
                 withTimeInterval: 0.1, repeats: true
             ) { [weak self] _ in
@@ -2337,15 +2602,20 @@ final class PlayerCore: NSObject {
             lastAudioRendererStatus = audioStatus
         }
         let demuxIdle = now - demuxLastProgressWall
+        let health = playbackHealthStats()
+        let bufferedAhead = bufferedSecondsEstimate() ?? -1
         print(String(format:
-            "[CMP-DIAG] wall=%.2f sync=%.3f adv=%.3f ratio=%.3f rate=%.2f ac.pts=%.3f ac.cur=%.3f vidEnq=+%llu aEnq=+%llu holds=%llu drops=%llu vDec=%d vtIn=%d vPkts=%d aPkts=%d layerRdy=%d layerSt=%d audRdy=%d audSt=%d audFeed=%llu rd=%llu rt=%llu idle=%.2f",
+            "[CMP-DIAG] wall=%.2f sync=%.3f adv=%.3f ratio=%.3f rate=%.2f ac.pts=%.3f ac.cur=%.3f vidEnq=+%llu aEnq=+%llu holds=%llu drops=%llu vDec=%d vtIn=%d vPkts=%d aPkts=%d layerRdy=%d layerSt=%d audRdy=%d audSt=%d audFeed=%llu rd=%llu rt=%llu idle=%.2f bufS=%.2f rebuf=%d seeks=%llu coal=%llu ladder=%llu/%llu/%llu",
             wall, syncTime, syncAdvance, ratio, Double(syncRate),
             audioPts, audioCurrent,
             enqDelta, audioEnqDelta, vSyncHolds, vSyncDrops,
             vDec, vtInFlight, vPkts, aPkts,
             layerReady ? 1 : 0, layerStatus, audioReady ? 1 : 0,
             audioStatus, audioFeedInvocations,
-            demuxReadCount, demuxReturnCount, demuxIdle))
+            demuxReadCount, demuxReturnCount, demuxIdle,
+            bufferedAhead, health.rebufferCount, health.seekCount,
+            health.coalescedSeekCount, health.avsyncFlushCount,
+            health.avsyncGopDropCount, health.avsyncReseekCount))
         emitPlaybackStatsSnapshot(
             syncRate: Double(syncRate),
             videoFramesEnqueued: displayLinkEnqueueCount,
@@ -2426,6 +2696,14 @@ final class PlayerCore: NSObject {
         stats.playbackRate = syncRate
         stats.bufferStatus = bufferingState ? "Buffering" : "Healthy"
         stats.bufferedAheadSeconds = bufferedSecondsEstimate()
+        let health = playbackHealthStats()
+        stats.bufferLoadCount = health.rebufferCount
+        stats.seekCount = health.seekCount
+        stats.coalescedSeekCount = health.coalescedSeekCount
+        stats.lastSeekLatencySeconds = health.lastSeekToFirstFrameSeconds
+        stats.avsyncRecoveryCount = health.avsyncFlushCount
+            &+ health.avsyncGopDropCount
+            &+ health.avsyncReseekCount
         stats.displayedVideoFrames = videoFramesEnqueued
         stats.droppedVideoFrames = droppedFrames
         stats.videoQueueDepth = videoPacketDepth
@@ -2550,8 +2828,16 @@ final class PlayerCore: NSObject {
     }
 
     private func bufferedSecondsEstimate() -> Double? {
-        guard refreshRate > 0 else { return nil }
-        return Double(videoPacketQueue.count) / Double(refreshRate)
+        // Min across active tracks — matches what the buffering policy
+        // considers the binding constraint.
+        var tracked: [Double] = []
+        if videoStreamIndex >= 0 {
+            tracked.append(videoPacketQueue.bufferedSeconds + decodedVideoSecondsEstimate())
+        }
+        if audioStreamIndex >= 0 {
+            tracked.append(audioPacketQueue.bufferedSeconds + max(0, audioOutput.bufferedDurationSeconds))
+        }
+        return tracked.min()
     }
 
     private static func codecName(for codecID: AVCodecID) -> String? {
@@ -2592,35 +2878,60 @@ final class PlayerCore: NSObject {
         return (attributes?[.systemFreeSize] as? NSNumber)?.int64Value
     }
 
-    /// Called from the buffering watchdog timer. Reads queue depth and
-    /// renderer readiness, flips the `bufferingState` bit on transitions,
-    /// and fires `onBufferingChange` only on state change.
+    /// Called from the buffering watchdog timer (main, 100 ms). Samples
+    /// buffered *seconds* per track, runs the hysteresis policy, flips the
+    /// `bufferingState` bit on transitions, and fires `onBufferingChange`
+    /// only on state change. While buffering, also reports fill progress
+    /// toward the leave threshold via `onBufferingProgress`.
     private func sampleBufferingState() {
         guard !isDisposed else { return }
+
+        // Seek-stall watchdog. A worker iteration wedged inside FFmpeg I/O
+        // (observed: TLS read that ignores both the interrupt callback and
+        // rw_timeout during `avformat_seek_file`) freezes the pipeline and
+        // holds the seek latch, silently swallowing every further seek.
+        // There is no way to unblock the thread from here, so escalate: set
+        // cancel (in case FFmpeg ever polls again) and surface the error —
+        // the VM's recovery chain rebuilds the session on a fresh engine,
+        // and this core's `isDisposed` guards neutralize the stuck worker
+        // if it ever returns. Checked before the rate guard so a stalled
+        // seek-while-paused is caught too.
+        if let age = claimSeekStall() {
+            print(String(format:
+                "[CMP] seek watchdog: worker iteration stalled for %.1fs (ffmpeg I/O wedged); surfacing error",
+                age))
+            markCancelled()
+            reportError("Seek stalled: stream I/O did not complete")
+            return
+        }
 
         // While paused, buffering is nonsense — the user is the reason we're
         // not moving, not the network.
         if playbackClock.rate == 0 { return }
 
-        // Low-water is a fixed packet count, not a fraction of capacity: the
-        // count ceiling is now a belt-and-braces cap well above steady-state
-        // occupancy (the byte budget is the real constraint), so `cap/10`
-        // would mark us "buffering" in the hundreds of packets — way too
-        // aggressive. ~24 packets is ~1 s at 24 fps, which is what the
-        // heuristic wants to detect.
-        let depth = videoPacketQueue.count
-        let lowWater = 24
-        let underfilled = depth < lowWater
-        // Only check renderer hunger when audio is active. With audio
-        // disabled the renderer is never fed, so its "not ready" state
-        // would flip buffering=true permanently on any queue dip.
-        let rendererHungry = audioStreamIndex >= 0 && audioOutput.isReadyForMoreMediaData
-
-        // "We're buffering" = both low queue AND a renderer that's asking
-        // for media we can't give it. Either alone is noise: a full queue
-        // with a full renderer just means we're at capacity, and a hungry
-        // renderer with a full queue is the normal feed cadence.
-        let newState = underfilled && rendererHungry
+        // Video seconds = compressed backlog + decoded frames. Decoded
+        // frames count on purpose: they're media the user will see, and the
+        // policy's enter threshold should reflect true starvation. A starved
+        // *decoded* queue with a full packet queue is a decoder problem, not
+        // a network one — that case belongs to the VT failure counters and
+        // the A/V-sync ladder, not the spinner.
+        let videoSeconds: Double? = videoStreamIndex >= 0
+            ? videoPacketQueue.bufferedSeconds + decodedVideoSecondsEstimate()
+            : nil
+        let audioSeconds: Double? = audioStreamIndex >= 0
+            ? audioPacketQueue.bufferedSeconds + max(0, audioOutput.bufferedDurationSeconds)
+            : nil
+        let sample = BufferingPolicy.Sample(
+            videoBufferedSeconds: videoSeconds,
+            audioBufferedSeconds: audioSeconds,
+            audioRendererHungry: audioStreamIndex >= 0
+                ? audioOutput.isReadyForMoreMediaData
+                : nil,
+            isPlaying: true,
+            reachedInputEOF: endOfFileCoordinator.hasReachedInputEndOfFile(),
+            withinPostSeekWindow: secondsSinceLastSeek() < Self.postSeekFastResumeWindowSeconds
+        )
+        let newState = bufferingPolicy.evaluate(sample)
 
         if newState != bufferingState {
             bufferingState = newState
@@ -2628,8 +2939,62 @@ final class PlayerCore: NSObject {
                 os_signpost(.event, log: Self.signpostLog, name: "Buffering",
                             "state=%{public}@", newState ? "underrun" : "ok")
             }
+            noteBufferingTransition(newState)
             onBufferingChange?(newState)
+            if !newState {
+                lastReportedBufferingProgress = -1
+            }
         }
+        if newState, let buffered = bufferingPolicy.lastMinBufferedSeconds {
+            let leave = bufferingPolicy.activeLeaveThresholdSeconds
+            let progress = leave > 0 ? min(100, max(0, buffered / leave * 100)) : 100
+            // Fire on whole-percent changes only; this runs 10×/second.
+            let rounded = Int(progress)
+            if rounded != lastReportedBufferingProgress {
+                lastReportedBufferingProgress = rounded
+                onBufferingProgress?(progress)
+            }
+        }
+    }
+
+    /// Seconds of decoded-but-unrendered video sitting in the frame
+    /// scheduler.
+    private func decodedVideoSecondsEstimate() -> Double {
+        let fps = videoFPS > 0 ? videoFPS : 24.0
+        return Double(videoFrameScheduler.count) / fps
+    }
+
+    /// Configure the packet queues' duration→seconds conversion from the
+    /// discovered streams. Called after stream selection at load and again
+    /// after an audio track switch (the audio timebase can change).
+    private func configurePacketQueueTiming() {
+        let videoTickSeconds = videoTimeBase.den > 0
+            ? Double(videoTimeBase.num) / Double(videoTimeBase.den)
+            : 0
+        let fps = Double(refreshRate > 0 ? refreshRate : 24)
+        videoPacketQueue.configureTiming(
+            secondsPerTick: videoTickSeconds,
+            fallbackSecondsPerPacket: fps > 0 ? 1.0 / fps : 0
+        )
+
+        let audioTickSeconds = audioTimeBase.den > 0
+            ? Double(audioTimeBase.num) / Double(audioTimeBase.den)
+            : 0
+        // Fallback for zero-duration audio packets: codec frame duration
+        // when the codec reports one, else an AAC-ish ~23 ms guess.
+        var audioPacketSeconds = 1.0 / 43.0
+        if let formatCtx, audioStreamIndex >= 0,
+           let stream = formatCtx.pointee.streams?[Int(audioStreamIndex)],
+           let codecparPtr = stream.pointee.codecpar {
+            let codecpar = codecparPtr.pointee
+            if codecpar.frame_size > 0, codecpar.sample_rate > 0 {
+                audioPacketSeconds = Double(codecpar.frame_size) / Double(codecpar.sample_rate)
+            }
+        }
+        audioPacketQueue.configureTiming(
+            secondsPerTick: audioTickSeconds,
+            fallbackSecondsPerPacket: audioPacketSeconds
+        )
     }
 
     // MARK: - FFmpeg open + demux loop (demuxQueue)
@@ -2749,6 +3114,9 @@ final class PlayerCore: NSObject {
             reportError("No supported video stream")
             return
         }
+        // Stream timebases are known — teach the packet queues to convert
+        // packet durations into buffered seconds for the buffering policy.
+        configurePacketQueueTiming()
         let buildOK = buildVideoFormatDescription()
         // If the format-description step rejected the stream (e.g. DV P5 up
         // front), fire the neutral rejection signal and exit cleanly. The
@@ -3687,7 +4055,8 @@ final class PlayerCore: NSObject {
         let size = filtered.size
         guard size > 0 else { return }
 
-        let resetDecoderBeforeDecoding = nextSampleNeedsDecoderReset
+        let decoderReset = decoderResetSnapshot()
+        let resetDecoderBeforeDecoding = decoderReset.armed
         let outcome = compressedVideoPipeline.submitPacket(
             packet: pkt,
             data: data,
@@ -3733,7 +4102,7 @@ final class PlayerCore: NSObject {
             })
         guard let outcome else { return }
         if outcome.decoderResetApplied {
-            nextSampleNeedsDecoderReset = false
+            clearDecoderReset(ifGeneration: decoderReset.generation)
         }
         if case .submitFailed(let status) = outcome.submission {
             Self.logger.error("VTDecompressionSessionDecodeFrame failed: \(status)")
@@ -4130,7 +4499,7 @@ final class PlayerCore: NSObject {
         pendingDecodeBurstResync = false
         decodeRecoveryLock.unlock()
         flushVideoDecoderAfterDiscontinuity()
-        nextSampleNeedsDecoderReset = true
+        armDecoderReset()
         postDiscontinuityWallDeadline =
             CACurrentMediaTime() + Self.postDiscontinuityWindowSeconds
         // Clear failure state only after the async drain above, so the
@@ -4399,6 +4768,81 @@ final class PlayerCore: NSObject {
         }
     }
 
+    /// A/V-sync recovery ladder state. Main-only (display tick + the
+    /// main.sync blocks of seek/track-switch, which reset it).
+    private var avSyncLadder = AVSyncLadder()
+
+    /// Kill switch for the ladder's escalation rungs (the per-frame rung-0
+    /// drop is unaffected). Defaults ON in debug builds and OFF in release
+    /// until the on-device validation pass; override either way via the
+    /// "PlayerAVSyncLadderEnabled" UserDefaults key.
+    private let avSyncLadderEnabled: Bool = {
+        if let value = UserDefaults.standard.object(forKey: "PlayerAVSyncLadderEnabled") as? Bool {
+            return value
+        }
+        #if DEBUG
+        return true
+        #else
+        return false
+        #endif
+    }()
+
+    /// Runs the escalation ladder for a late head frame. Returns true when
+    /// a rung fired (the tick must return; the pipeline needs a beat before
+    /// re-evaluating), false to fall through to the per-frame drop.
+    /// Main thread (display tick).
+    private func performAvsyncLadderRecovery(
+        diff: Double,
+        frameDuration: Double,
+        clockSeconds: Double
+    ) -> Bool {
+        let action = avSyncLadder.evaluate(.init(
+            diffSeconds: diff,
+            frameDurationSeconds: frameDuration,
+            decodedFrameCount: videoFrameScheduler.count,
+            packetCount: videoPacketQueue.count,
+            wallNow: CACurrentMediaTime()
+        ))
+        switch action {
+        case .none:
+            return false
+        case .flushDecodedFrames:
+            let flushed = videoFrameScheduler.count
+            videoFrameScheduler.removeAll(keepingCapacity: true)
+            vSyncDrops &+= UInt64(flushed)
+            noteAvsyncAction(action)
+            print(String(format:
+                "[CMP] avsync rung=1 flushDecodedFrames diff=%.3f flushed=%d",
+                diff, flushed))
+            return true
+        case .dropPacketsToNextKeyframe:
+            // Arm the reset BEFORE dropping so the feed loop can't submit
+            // the post-skip keyframe without the DPB-reset attachment.
+            armDecoderReset()
+            guard let dropped = videoPacketQueue.dropToNextKeyframe() else {
+                // No keyframe in the backlog to skip to — nothing this rung
+                // can do; let the per-frame drop keep grinding. The armed
+                // reset is harmless (next applied sample consumes it).
+                return false
+            }
+            let flushed = videoFrameScheduler.count
+            videoFrameScheduler.removeAll(keepingCapacity: true)
+            vSyncDrops &+= UInt64(flushed)
+            noteAvsyncAction(action, droppedPacketSeconds: dropped.seconds)
+            print(String(format:
+                "[CMP] avsync rung=2 dropToNextKeyframe diff=%.3f packets=%d (%.2fs) flushedFrames=%d",
+                diff, dropped.count, dropped.seconds, flushed))
+            return true
+        case .reseekToClock:
+            noteAvsyncAction(action)
+            print(String(format:
+                "[CMP] avsync rung=3 reseekToClock diff=%.3f clock=%.3f",
+                diff, clockSeconds))
+            seek(to: max(0, clockSeconds))
+            return true
+        }
+    }
+
     /// CADisplayLink tick — runs on main at display refresh rate. Peeks the
     /// head of `videoFrameScheduler`, decides early/on-time/late against the
     /// interpolated audio clock, and either holds (early), drops (late), or
@@ -4473,6 +4917,15 @@ final class PlayerCore: NSObject {
                     ? -5.0
                     : -frameDuration * 2.0
                 if diff < dropThreshold {
+                    // Escalation ladder for multi-second desync (steady
+                    // state only — the post-discontinuity window is the
+                    // keyframe gap doing its normal thing). Rung 0, the
+                    // per-frame drop below, stays as the base case.
+                    if avSyncLadderEnabled, !inPostDiscontinuityWindow,
+                       playbackClock.rate > 0,
+                       performAvsyncLadderRecovery(diff: diff, frameDuration: frameDuration, clockSeconds: desire) {
+                        return
+                    }
                     videoFrameScheduler.dropHead()
                     vSyncDrops &+= 1
                     videoDisplayLinkTick()
@@ -4497,6 +4950,7 @@ final class PlayerCore: NSObject {
                 return
             case .enqueued(let count, let formatChanged, let requiresFlushToResumeDecoding, let rendererFailed):
                 displayLinkEnqueueCount = count
+                noteSeekFirstFrame()
                 if formatChanged {
                     Self.logger.info("format-change detected; flushing display layer")
                 }

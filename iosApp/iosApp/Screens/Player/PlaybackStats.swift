@@ -25,6 +25,10 @@ struct PlaybackStats: Equatable {
     var bufferStatus: String?
     var bufferedAheadSeconds: Double?
     var bufferLoadCount: Int?
+    var seekCount: UInt64?
+    var coalescedSeekCount: UInt64?
+    var lastSeekLatencySeconds: Double?
+    var avsyncRecoveryCount: UInt64?
     var averageFileBitrateBps: Double?
     var currentDownloadBitrateBps: Double?
     var observedBitrateBps: Double?
@@ -123,6 +127,19 @@ extension PlaybackStats {
         }
         if let bufferLoadCount {
             rows.append(("Buffer load count", "\(bufferLoadCount)"))
+        }
+        if let seekCount, seekCount > 0 {
+            var value = "\(seekCount)"
+            if let coalescedSeekCount, coalescedSeekCount > 0 {
+                value += " (+\(coalescedSeekCount) coalesced)"
+            }
+            rows.append(("Seeks", value))
+        }
+        if let lastSeekLatencySeconds {
+            rows.append(("Last seek latency", String(format: "%.2f s", lastSeekLatencySeconds)))
+        }
+        if let avsyncRecoveryCount, avsyncRecoveryCount > 0 {
+            rows.append(("A/V sync recoveries", "\(avsyncRecoveryCount)"))
         }
         if let displayedVideoFrames {
             rows.append(("Displayed frames", "\(displayedVideoFrames)"))

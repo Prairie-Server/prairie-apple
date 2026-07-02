@@ -276,6 +276,13 @@ targets:
       - path: Tests
     dependencies:
       - target: Silo
+      # PacketQueueTests allocates real AVPackets, so the test bundle needs
+      # the Libav* module maps the app target gets from this package.
+      # link: false — the symbols come from the test host (BUNDLE_LOADER);
+      # linking the static FFmpeg libs a second time fails the link.
+      - package: FFmpeg
+        product: FFmpeg
+        link: false
     settings:
       base:
         PRODUCT_NAME: SiloTests

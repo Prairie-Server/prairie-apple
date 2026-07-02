@@ -14,6 +14,23 @@ extension PlayerCore {
         var id: Int { index }
     }
 
+    /// Cumulative playback-health counters for the diagnostics line, the
+    /// stats panel, and (eventually) playback-diagnostics reporting. All
+    /// values are session-lifetime totals; snapshot via
+    /// `playbackHealthStats()`.
+    struct PlaybackHealthStats: Equatable {
+        var rebufferCount: Int
+        var bufferingWallSeconds: Double
+        var lastRebufferRecoverySeconds: Double?
+        var seekCount: UInt64
+        var coalescedSeekCount: UInt64
+        var lastSeekToFirstFrameSeconds: Double?
+        var avsyncFlushCount: UInt64
+        var avsyncGopDropCount: UInt64
+        var avsyncReseekCount: UInt64
+        var avsyncDroppedPacketSeconds: Double
+    }
+
     /// Reasons PlayerCore rejects a stream. The VM decides what to do with
     /// the rejection (e.g. route to an AVPlayer-backed fallback) — the
     /// core itself stays agnostic about fallbacks.

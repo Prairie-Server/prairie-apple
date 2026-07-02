@@ -38,6 +38,9 @@ struct PlayerCallbacks {
     var onError: ((String) -> Void)?
     var onEndOfFile: (() -> Void)?
     var onBufferingChange: ((Bool) -> Void)?
+    /// Fill progress (0–100) toward the buffering-resume threshold while
+    /// buffering. CoreMedia-only; AVPlayer surfaces no comparable signal.
+    var onBufferingProgress: ((Double) -> Void)?
     /// Seconds buffered ahead of `currentTime`. AVPlayer-only today; the
     /// CoreMedia path doesn't publish a comparable metric so it stays 0.
     var onBufferedAheadChange: ((Double) -> Void)?
@@ -360,6 +363,9 @@ class PlayerViewModel {
     var title: String = ""
     var isLoading = true
     var isBuffering = false
+    /// Fill progress (0–100) toward the buffering-resume threshold; nil
+    /// when not buffering or when the active backend doesn't report it.
+    var bufferingProgress: Double?
     var error: String?
     var showControls = false
     var activeNotice: PlayerNotice?
@@ -1174,6 +1180,13 @@ class PlayerViewModel {
         cb.onBufferingChange = { [weak self] buffering in
             guard let self, !self.isDisposed else { return }
             self.isBuffering = buffering
+            if !buffering {
+                self.bufferingProgress = nil
+            }
+        }
+        cb.onBufferingProgress = { [weak self] progress in
+            guard let self, !self.isDisposed, progress.isFinite else { return }
+            self.bufferingProgress = min(100, max(0, progress))
         }
         cb.onBufferedAheadChange = { [weak self] seconds in
             guard let self, !self.isDisposed, seconds.isFinite else { return }
@@ -1202,6 +1215,7 @@ class PlayerViewModel {
         core.onTracksChange    = cb.onTracksChange
         core.onChaptersChange  = cb.onChaptersChange
         core.onBufferingChange = cb.onBufferingChange
+        core.onBufferingProgress = cb.onBufferingProgress
         core.onPlaybackStatsChange = cb.onPlaybackStatsChange
         core.onEndOfFile       = cb.onEndOfFile
     }
@@ -2510,6 +2524,7 @@ class PlayerViewModel {
         }
         isLoading = false
         isBuffering = false
+        bufferingProgress = nil
         isPlaying = false
         showControls = true
         nowPlaying.update(
@@ -3715,6 +3730,7 @@ class PlayerViewModel {
         isScrubbing = false
         isLoading = true
         isBuffering = false
+        bufferingProgress = nil
         showControls = true
         hideControlsTask?.cancel()
         Self.logger.info(
@@ -3787,6 +3803,7 @@ class PlayerViewModel {
         isScrubbing = false
         isLoading = true
         isBuffering = false
+        bufferingProgress = nil
         showControls = true
         hideControlsTask?.cancel()
         playbackTimelineOffset = clampedTarget
@@ -3871,6 +3888,7 @@ class PlayerViewModel {
                 if source == "quality" {
                     self.isLoading = true
                     self.isBuffering = false
+                    self.bufferingProgress = nil
                     self.activePlayer.dispose()
                 }
 
@@ -3931,6 +3949,7 @@ class PlayerViewModel {
                     self.qualitySwitchError = "Couldn't switch quality."
                     self.isLoading = false
                     self.isBuffering = false
+                    self.bufferingProgress = nil
                 } else {
                     self.finalizeTerminalPlaybackError(String(describing: error))
                 }
@@ -6135,6 +6154,7 @@ class PlayerViewModel {
         activeNotice = nil
         isHUDPresented = false
         isBuffering = false
+        bufferingProgress = nil
         isLoading = false
         isPlaying = false
         showControls = true
