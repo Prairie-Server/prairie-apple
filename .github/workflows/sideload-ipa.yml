@@ -28,6 +28,12 @@ on:
 env:
   XCODEGEN_VERSION: "2.43.0"
 
+# Serialize runs: dispatch builds compute the next v<version>-build.N number
+# from existing releases, so overlapping runs could pick the same number.
+concurrency:
+  group: sideload-ipa
+  cancel-in-progress: false
+
 jobs:
   # Compute the build matrix from the dispatch input. Tag pushes (and any run
   # without an explicit choice) build both platforms.
@@ -50,8 +56,61 @@ jobs:
           echo "Building matrix for platform=$PLATFORM"
           echo "matrix={\"include\":$include}" >> "$GITHUB_OUTPUT"
 
+  # Create the GitHub Release ONCE before the platform builds fan out, so the
+  # matrix jobs only upload assets (no create race). Tag pushes release under
+  # the pushed tag; dispatch runs mirror the TestFlight flow by minting the
+  # next v<version>-build.N tag from existing releases and stamping that build
+  # number into the IPAs via BUILD_NUMBER.
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.rel.outputs.tag }}
+      build_number: ${{ steps.rel.outputs.build_number }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - id: rel
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_EVENT_NAME: ${{ github.event_name }}
+          GH_REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "$GH_EVENT_NAME" == "workflow_dispatch" ]]; then
+            # Validates the dispatch input is a plain dotted version before it
+            # is embedded in a tag name / shell strings.
+            V="$(scripts/ci/resolve-marketing-version.sh \
+                  "$GH_EVENT_NAME" "$GH_REF_NAME" "$INPUT_VERSION")"
+            # Next build number for this version = highest existing
+            # v<V>-build.N release + 1 (starts at 1).
+            LAST="$(gh release list --limit 1000 --json tagName -q '.[].tagName' \
+                      | { grep -E "^v${V//./\\.}-build\.[0-9]+$" || true; } \
+                      | sed -E 's/.*build\.([0-9]+)$/\1/' | sort -n | tail -n 1)"
+            BUILD=$(( ${LAST:-0} + 1 ))
+            TAG="v${V}-build.${BUILD}"
+            TITLE="v${V} (Build ${BUILD})"
+            echo "build_number=$BUILD" >> "$GITHUB_OUTPUT"
+          else
+            TAG="$GH_REF_NAME"
+            TITLE="$GH_REF_NAME"
+          fi
+          # Tag pushes can already have a release (created manually or by a
+          # previous run); only create when missing.
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --target "$GITHUB_SHA" \
+              --title "$TITLE" \
+              --notes "Unsigned iOS/tvOS IPAs for third-party signing / sideloading. See docs/release/sideloading.md."
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Releasing as $TAG"
+
   build:
-    needs: setup
+    needs: [setup, release]
     runs-on: macos-15
     # Only the release-upload step (tag builds) needs write; scope it to the job
     # rather than the whole workflow to keep the rest at least privilege.
@@ -102,6 +161,8 @@ jobs:
         run: bundle exec fastlane ios ${{ matrix.lane }}
         env:
           MARKETING_VERSION: ${{ steps.ver.outputs.value }}
+          # Set for dispatch runs only; tag builds keep the project.yml value.
+          BUILD_NUMBER: ${{ needs.release.outputs.build_number }}
 
       - name: Upload ${{ matrix.platform }} IPA artifact
         uses: actions/upload-artifact@v4
@@ -111,19 +172,8 @@ jobs:
           if-no-files-found: error
 
       - name: Attach ${{ matrix.platform }} IPA to release
-        if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
           IPA_PATH: ${{ matrix.ipa_path }}
-        run: |
-          # release.yml (TestFlight) never creates a GitHub Release, so one may
-          # not exist for this tag. Create it if missing before uploading. Both
-          # matrix jobs can race here, so tolerate an "already exists" error and
-          # re-check that the release is present before uploading.
-          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release create "$GITHUB_REF_NAME" \
-              --title "$GITHUB_REF_NAME" \
-              --notes "Unsigned iOS/tvOS IPAs for third-party signing / sideloading. See docs/release/sideloading.md." \
-              || true
-          fi
-          gh release upload "$GITHUB_REF_NAME" "$IPA_PATH" --clobber
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
+        run: gh release upload "$RELEASE_TAG" "$IPA_PATH" --clobber

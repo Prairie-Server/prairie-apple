@@ -78,6 +78,21 @@ def marketing_version_xcarg
   "MARKETING_VERSION=#{value} "
 end
 
+# Optional CURRENT_PROJECT_VERSION override for the unsigned sideload lanes.
+# CI passes a GitHub-release-derived build number via BUILD_NUMBER so sideload
+# builds carry a distinct CFBundleVersion per release (v1.0.0-build.N). Same
+# validation/threat model as marketing_version_xcarg: this flows into
+# xcodebuild's xcargs as a shell string.
+def build_number_xcarg
+  value = ENV["BUILD_NUMBER"].to_s.strip
+  return "" if value.empty?
+
+  unless value.match?(/\A\d+\z/)
+    UI.user_error!("Invalid BUILD_NUMBER #{value.inspect}; expected a positive integer")
+  end
+  "CURRENT_PROJECT_VERSION=#{value} "
+end
+
 # Returns the build number to stamp on a TestFlight build.
 #
 # In CI the reserve_build_numbers job computes the next number per platform once
@@ -516,7 +531,7 @@ platform :ios do
       scheme:       "Silo",
       destination:  "generic/platform=iOS",
       archive_path: archive_path,
-      xcargs:       "#{marketing_version_xcarg}" \
+      xcargs:       "#{marketing_version_xcarg}#{build_number_xcarg}" \
                     "CODE_SIGNING_ALLOWED=NO " \
                     "CODE_SIGNING_REQUIRED=NO " \
                     "CODE_SIGN_IDENTITY='' " \
@@ -546,7 +561,7 @@ platform :ios do
       scheme:       "SiloTV",
       destination:  "generic/platform=tvOS",
       archive_path: archive_path,
-      xcargs:       "#{marketing_version_xcarg}" \
+      xcargs:       "#{marketing_version_xcarg}#{build_number_xcarg}" \
                     "CODE_SIGNING_ALLOWED=NO " \
                     "CODE_SIGNING_REQUIRED=NO " \
                     "CODE_SIGN_IDENTITY='' " \
