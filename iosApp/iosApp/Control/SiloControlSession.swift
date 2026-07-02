@@ -1,14 +1,14 @@
 import Foundation
 import Network
 
-actor SiloCastSession {
+actor SiloControlSession {
     enum SessionError: Error {
         case closed
     }
 
     private let connection: NWConnection
     private var frameBuffer = PairingFrameBuffer()
-    private var continuation: AsyncThrowingStream<SiloCastMessage, Error>.Continuation?
+    private var continuation: AsyncThrowingStream<SiloControlMessage, Error>.Continuation?
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
     private var isOpen = false
@@ -19,7 +19,7 @@ actor SiloCastSession {
     // send — hello/launch — can't race ahead of, or behind, an enqueued
     // control/ping frame.
     private struct OutboundItem {
-        let message: SiloCastMessage
+        let message: SiloControlMessage
         let completion: CheckedContinuation<Void, Error>?
     }
     private let outbound: AsyncStream<OutboundItem>
@@ -57,7 +57,7 @@ actor SiloCastSession {
         return params
     }
 
-    func open() -> AsyncThrowingStream<SiloCastMessage, Error> {
+    func open() -> AsyncThrowingStream<SiloControlMessage, Error> {
         guard !isOpen else { return AsyncThrowingStream { $0.finish() } }
         return AsyncThrowingStream { continuation in
             self.continuation = continuation
@@ -91,7 +91,7 @@ actor SiloCastSession {
 
     /// Fire-and-forget, ordered. Safe to call from any context; FIFO is
     /// preserved by call order because all call sites are @MainActor.
-    nonisolated func enqueue(_ message: SiloCastMessage) {
+    nonisolated func enqueue(_ message: SiloControlMessage) {
         outboundContinuation.yield(OutboundItem(message: message, completion: nil))
     }
 
@@ -118,14 +118,14 @@ actor SiloCastSession {
     /// Awaited, ordered send. Routes through the same FIFO as `enqueue` so the
     /// write can't reorder relative to queued frames, and surfaces the write
     /// result to the caller.
-    func send(_ message: SiloCastMessage) async throws {
+    func send(_ message: SiloControlMessage) async throws {
         guard isOpen else { throw SessionError.closed }
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             outboundContinuation.yield(OutboundItem(message: message, completion: cont))
         }
     }
 
-    private func writeRaw(_ message: SiloCastMessage) async throws {
+    private func writeRaw(_ message: SiloControlMessage) async throws {
         let payload = try encoder.encode(message)
         let framed = try PairingFrame.encode(payload)
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
@@ -143,16 +143,22 @@ actor SiloCastSession {
         teardown(nil)
     }
 
-    /// Enqueue a final `.close` (ordered after any pending sends), then tear
-    /// down after a brief flush window. Bounded so a wedged connection can't
-    /// leak the session.
-    func closeGracefully() {
+    /// Send a final `.close` (ordered after any pending sends) and await the
+    /// write before tearing down, so the frame is handed to the transport
+    /// ahead of the FIN. The peer must read `.close` before EOF to tell a
+    /// deliberate disconnect from a dropped connection — otherwise it
+    /// auto-reconnects. Bounded by a watchdog so a wedged connection can't
+    /// hang the caller: if the write hasn't completed in time, tear down
+    /// anyway (the send continuation is then failed by the drain loop).
+    func closeGracefully() async {
         guard isOpen else { return }
-        enqueue(.close)
-        Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(300))
+        let watchdog = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
             await self?.close()
         }
+        try? await send(.close)
+        watchdog.cancel()
+        teardown(nil)
     }
 
     private func teardown(_ error: Error?) {
@@ -189,7 +195,7 @@ actor SiloCastSession {
         if let data, !data.isEmpty {
             do {
                 for payload in try frameBuffer.append(data) {
-                    let message = try decoder.decode(SiloCastMessage.self, from: payload)
+                    let message = try decoder.decode(SiloControlMessage.self, from: payload)
                     continuation?.yield(message)
                 }
             } catch {

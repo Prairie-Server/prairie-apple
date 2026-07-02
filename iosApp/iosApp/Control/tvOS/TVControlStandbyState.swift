@@ -1,7 +1,7 @@
 #if os(tvOS)
 import Foundation
 
-struct TVCastStandbyState: Equatable {
+struct TVControlStandbyState: Equatable {
     var controllerName: String?
     var serverName: String?
 

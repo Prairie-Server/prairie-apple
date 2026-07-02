@@ -1,44 +1,66 @@
 #if os(iOS)
 import SwiftUI
 
-/// Persistent "Playing on <TV>" bar shown above the tab content whenever a cast
+/// Persistent "Playing on <TV>" bar shown above the tab content whenever a TV control
 /// session is active and the full remote is dismissed. Tapping reopens the remote.
-struct SiloCastMiniBar: View {
-    @Bindable var controller: SiloCastController
+struct SiloControlMiniBar: View {
+    @Bindable var controller: SiloControlClient
     var style: NowPlayingBarStyle = .card
-    @State private var artwork = SiloCastArtworkResolver()
+    @State private var artwork = SiloControlArtworkResolver()
     @Environment(\.tabViewBottomAccessoryPlacement) private var placement
 
     /// `.inline` is the minimized-tab-bar slot — collapse to a single line so the
     /// bar fits the compact pill without truncating.
     private var isInline: Bool { placement == .inline }
 
+    /// Whether the bar has anything to show: a live session (that isn't a
+    /// still-unconfirmed auto-resume probe) or an in-flight reconnect. Keeping
+    /// the bar up through a reconnect (with a spinner) beats having it vanish
+    /// and pop back.
+    private var isVisible: Bool {
+        guard !controller.isShowingRemoteControl else { return false }
+        return (controller.hasActiveSession && !controller.isAutoResuming) || controller.isReconnecting
+    }
+
+    private var targetName: String {
+        controller.activeTarget?.name ?? controller.lastTarget?.name ?? "Silo TV"
+    }
+
     var body: some View {
-        if controller.hasActiveSession && !controller.isShowingRemoteControl {
+        if isVisible {
             Button { controller.showRemoteControl() } label: {
                 HStack(spacing: 12) {
                     thumb
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(controller.state?.title ?? "Connected")
+                        Text(controller.isReconnecting
+                             ? "Reconnecting…"
+                             : (controller.state?.title ?? "Connected"))
                             .font(.subheadline.weight(.semibold))
                             .lineLimit(1)
                         if !isInline {
-                            Text("Playing on \(controller.activeTarget?.name ?? "Silo TV")")
+                            Text(controller.isReconnecting
+                                 ? "to \(targetName)"
+                                 : "Playing on \(targetName)")
                                 .font(.caption)
                                 .foregroundStyle(Color.continuumSecondaryText)
                                 .lineLimit(1)
                         }
                     }
                     Spacer(minLength: 8)
-                    Button {
-                        controller.togglePlayPauseOptimistic()
-                    } label: {
-                        Image(systemName: controller.clock.isPlaying() ? "pause.fill" : "play.fill")
-                            .font(.system(size: 18, weight: .semibold))
+                    if controller.isReconnecting {
+                        ProgressView()
                             .frame(width: 32, height: 32)
+                    } else {
+                        Button {
+                            controller.togglePlayPauseOptimistic()
+                        } label: {
+                            Image(systemName: controller.clock.isPlaying() ? "pause.fill" : "play.fill")
+                                .font(.system(size: 18, weight: .semibold))
+                                .frame(width: 32, height: 32)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(controller.clock.isPlaying() ? "Pause" : "Play")
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(controller.clock.isPlaying() ? "Pause" : "Play")
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, isInline ? 4 : 8)

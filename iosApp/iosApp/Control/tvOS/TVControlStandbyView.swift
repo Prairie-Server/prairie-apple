@@ -1,9 +1,9 @@
 #if os(tvOS)
 import SwiftUI
 
-struct TVCastStandbyView: View {
-    @Bindable var receiver: TVCastReceiver
-    let state: TVCastStandbyState
+struct TVControlStandbyView: View {
+    @Bindable var receiver: TVControlReceiver
+    let state: TVControlStandbyState
 
     @FocusState private var isDisconnectFocused: Bool
 

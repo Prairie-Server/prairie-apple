@@ -1,11 +1,11 @@
 #if os(iOS)
 import SwiftUI
 
-struct SiloCastTargetPickerView: View {
-    let request: SiloCastPlaybackRequest?
-    @Bindable var controller: SiloCastController
+struct SiloControlTargetPickerView: View {
+    let request: SiloControlPlaybackRequest?
+    @Bindable var controller: SiloControlClient
 
-    @State private var browser = SiloCastBrowser()
+    @State private var browser = SiloControlBrowser()
     @State private var searchTimedOut = false
     @Environment(\.dismiss) private var dismiss
 
@@ -64,7 +64,7 @@ struct SiloCastTargetPickerView: View {
             Button {
                 Task {
                     if let request {
-                        await controller.cast(to: target, request: request)
+                        await controller.play(on: target, request: request)
                     } else {
                         await controller.connect(to: target)
                     }
@@ -80,7 +80,11 @@ struct SiloCastTargetPickerView: View {
 
                     VStack(alignment: .leading, spacing: 3) {
                         Text(target.name).font(.headline)
-                        if let serverName = target.serverName {
+                        if target.isPlaying {
+                            Text("Playing now")
+                                .font(.subheadline)
+                                .foregroundStyle(Color.continuumPrimary)
+                        } else if let serverName = target.serverName {
                             Text(serverName)
                                 .font(.subheadline)
                                 .foregroundStyle(Color.continuumSecondaryText)
@@ -104,7 +108,7 @@ struct SiloCastTargetPickerView: View {
 
 #if DEBUG
 #Preview("Searching") {
-    SiloCastTargetPickerView(request: nil, controller: SiloCastController())
+    SiloControlTargetPickerView(request: nil, controller: SiloControlClient())
 }
 #endif
 #endif

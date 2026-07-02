@@ -1,17 +1,17 @@
 import Foundation
 
-enum SiloCastProtocol {
+enum SiloControlProtocol {
     static let version = 1
     static let serviceType = "_silocast._tcp"
 }
 
-enum SiloCastPeerRole: String, Codable, Equatable, Sendable {
+enum SiloControlPeerRole: String, Codable, Equatable, Sendable {
     case phone
     case tv
 }
 
-struct SiloCastHello: Codable, Equatable, Sendable {
-    let role: SiloCastPeerRole
+struct SiloControlHello: Codable, Equatable, Sendable {
+    let role: SiloControlPeerRole
     let deviceName: String
     let deviceId: String
     let serverId: String?
@@ -19,7 +19,7 @@ struct SiloCastHello: Codable, Equatable, Sendable {
     let supportedVersions: [Int]
 }
 
-struct SiloCastPlaybackRequest: Codable, Equatable, Sendable {
+struct SiloControlPlaybackRequest: Codable, Equatable, Sendable {
     let contentId: String
     let fileId: Int?
     let audioTrackIndex: Int?
@@ -28,12 +28,12 @@ struct SiloCastPlaybackRequest: Codable, Equatable, Sendable {
     let resumePosition: Double?
 }
 
-struct SiloCastLaunchRequest: Codable, Equatable, Sendable {
+struct SiloControlLaunchRequest: Codable, Equatable, Sendable {
     let serverId: String
-    let playback: SiloCastPlaybackRequest
+    let playback: SiloControlPlaybackRequest
 }
 
-struct SiloCastTrack: Codable, Equatable, Identifiable, Sendable {
+struct SiloControlTrack: Codable, Equatable, Identifiable, Sendable {
     let kind: String
     let trackId: Int64
     let title: String
@@ -42,13 +42,13 @@ struct SiloCastTrack: Codable, Equatable, Identifiable, Sendable {
     var id: String { "\(kind)-\(trackId)" }
 }
 
-struct SiloCastOption: Codable, Equatable, Identifiable, Sendable {
+struct SiloControlOption: Codable, Equatable, Identifiable, Sendable {
     let id: String
     let label: String
     let detail: String?
 }
 
-struct SiloCastPlaybackState: Codable, Equatable, Sendable {
+struct SiloControlPlaybackState: Codable, Equatable, Sendable {
     let contentId: String?
     let sessionId: String?
     let title: String
@@ -58,11 +58,11 @@ struct SiloCastPlaybackState: Codable, Equatable, Sendable {
     let isBuffering: Bool
     let currentTime: Double
     let duration: Double
-    let audioTracks: [SiloCastTrack]
-    let subtitleTracks: [SiloCastTrack]
+    let audioTracks: [SiloControlTrack]
+    let subtitleTracks: [SiloControlTrack]
     let selectedAudioTrackId: Int64?
     let selectedSubtitleTrackId: Int64?
-    let qualityOptions: [SiloCastOption]
+    let qualityOptions: [SiloControlOption]
     let activeQualityId: String
     let isQualitySwitching: Bool
     let playbackSpeed: Double
@@ -81,7 +81,7 @@ struct SiloCastPlaybackState: Codable, Equatable, Sendable {
     let error: String?
 }
 
-struct SiloCastControlCommand: Codable, Equatable, Sendable {
+struct SiloControlCommand: Codable, Equatable, Sendable {
     enum Name: String, Codable, Sendable {
         case play
         case pause
@@ -130,75 +130,75 @@ struct SiloCastControlCommand: Codable, Equatable, Sendable {
         self.milliseconds = milliseconds
     }
 
-    static let play = SiloCastControlCommand(name: .play)
-    static let pause = SiloCastControlCommand(name: .pause)
-    static let playPause = SiloCastControlCommand(name: .playPause)
-    static let stop = SiloCastControlCommand(name: .stop)
+    static let play = SiloControlCommand(name: .play)
+    static let pause = SiloControlCommand(name: .pause)
+    static let playPause = SiloControlCommand(name: .playPause)
+    static let stop = SiloControlCommand(name: .stop)
 
-    static func seek(seconds: Double) -> SiloCastControlCommand {
-        SiloCastControlCommand(name: .seek, seconds: seconds)
+    static func seek(seconds: Double) -> SiloControlCommand {
+        SiloControlCommand(name: .seek, seconds: seconds)
     }
 
-    static func selectAudioTrack(_ trackId: Int64) -> SiloCastControlCommand {
-        SiloCastControlCommand(name: .selectAudioTrack, trackId: trackId)
+    static func selectAudioTrack(_ trackId: Int64) -> SiloControlCommand {
+        SiloControlCommand(name: .selectAudioTrack, trackId: trackId)
     }
 
-    static func selectSubtitleTrack(_ trackId: Int64?) -> SiloCastControlCommand {
-        SiloCastControlCommand(name: .selectSubtitleTrack, trackId: trackId)
+    static func selectSubtitleTrack(_ trackId: Int64?) -> SiloControlCommand {
+        SiloControlCommand(name: .selectSubtitleTrack, trackId: trackId)
     }
 
-    static func setPlaybackSpeed(_ speed: Double) -> SiloCastControlCommand {
-        SiloCastControlCommand(name: .setPlaybackSpeed, speed: speed)
+    static func setPlaybackSpeed(_ speed: Double) -> SiloControlCommand {
+        SiloControlCommand(name: .setPlaybackSpeed, speed: speed)
     }
 
-    static func setQuality(_ qualityId: String) -> SiloCastControlCommand {
-        SiloCastControlCommand(name: .setQuality, value: qualityId)
+    static func setQuality(_ qualityId: String) -> SiloControlCommand {
+        SiloControlCommand(name: .setQuality, value: qualityId)
     }
 
-    static func setVideoGravity(_ value: String) -> SiloCastControlCommand {
-        SiloCastControlCommand(name: .setVideoGravity, value: value)
+    static func setVideoGravity(_ value: String) -> SiloControlCommand {
+        SiloControlCommand(name: .setVideoGravity, value: value)
     }
 
-    static func setHDREnabled(_ enabled: Bool) -> SiloCastControlCommand {
-        SiloCastControlCommand(name: .setHDREnabled, enabled: enabled)
+    static func setHDREnabled(_ enabled: Bool) -> SiloControlCommand {
+        SiloControlCommand(name: .setHDREnabled, enabled: enabled)
     }
 
-    static func setSubtitleSyncMs(_ milliseconds: Int) -> SiloCastControlCommand {
-        SiloCastControlCommand(name: .setSubtitleSyncMs, milliseconds: milliseconds)
+    static func setSubtitleSyncMs(_ milliseconds: Int) -> SiloControlCommand {
+        SiloControlCommand(name: .setSubtitleSyncMs, milliseconds: milliseconds)
     }
 
-    static func setSubtitlePosition(_ value: String) -> SiloCastControlCommand {
-        SiloCastControlCommand(name: .setSubtitlePosition, value: value)
+    static func setSubtitlePosition(_ value: String) -> SiloControlCommand {
+        SiloControlCommand(name: .setSubtitlePosition, value: value)
     }
 
-    static let playNext = SiloCastControlCommand(name: .playNext)
+    static let playNext = SiloControlCommand(name: .playNext)
 
-    static func setVolume(_ volume: Double) -> SiloCastControlCommand {
-        SiloCastControlCommand(name: .setVolume, volume: volume)
+    static func setVolume(_ volume: Double) -> SiloControlCommand {
+        SiloControlCommand(name: .setVolume, volume: volume)
     }
 
-    static func setMuted(_ muted: Bool) -> SiloCastControlCommand {
-        SiloCastControlCommand(name: .setMuted, enabled: muted)
+    static func setMuted(_ muted: Bool) -> SiloControlCommand {
+        SiloControlCommand(name: .setMuted, enabled: muted)
     }
 }
 
-struct SiloCastErrorMessage: Codable, Equatable, Sendable {
+struct SiloControlErrorMessage: Codable, Equatable, Sendable {
     let code: String
     let message: String
 }
 
-enum SiloCastMessage: Equatable, Sendable {
-    case hello(SiloCastHello)
-    case launch(SiloCastLaunchRequest)
-    case control(SiloCastControlCommand)
-    case state(SiloCastPlaybackState)
-    case error(SiloCastErrorMessage)
+enum SiloControlMessage: Equatable, Sendable {
+    case hello(SiloControlHello)
+    case launch(SiloControlLaunchRequest)
+    case control(SiloControlCommand)
+    case state(SiloControlPlaybackState)
+    case error(SiloControlErrorMessage)
     case ping
     case pong
     case close
 }
 
-extension SiloCastMessage: Codable {
+extension SiloControlMessage: Codable {
     private enum CodingKeys: String, CodingKey {
         case type, v
         case hello, launch, control, state, error
@@ -217,7 +217,7 @@ extension SiloCastMessage: Codable {
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(SiloCastProtocol.version, forKey: .v)
+        try c.encode(SiloControlProtocol.version, forKey: .v)
         switch self {
         case .hello(let hello):
             try c.encode(Kind.hello, forKey: .type)
@@ -248,15 +248,15 @@ extension SiloCastMessage: Codable {
         let kind = try c.decode(Kind.self, forKey: .type)
         switch kind {
         case .hello:
-            self = .hello(try c.decode(SiloCastHello.self, forKey: .hello))
+            self = .hello(try c.decode(SiloControlHello.self, forKey: .hello))
         case .launch:
-            self = .launch(try c.decode(SiloCastLaunchRequest.self, forKey: .launch))
+            self = .launch(try c.decode(SiloControlLaunchRequest.self, forKey: .launch))
         case .control:
-            self = .control(try c.decode(SiloCastControlCommand.self, forKey: .control))
+            self = .control(try c.decode(SiloControlCommand.self, forKey: .control))
         case .state:
-            self = .state(try c.decode(SiloCastPlaybackState.self, forKey: .state))
+            self = .state(try c.decode(SiloControlPlaybackState.self, forKey: .state))
         case .error:
-            self = .error(try c.decode(SiloCastErrorMessage.self, forKey: .error))
+            self = .error(try c.decode(SiloControlErrorMessage.self, forKey: .error))
         case .ping:
             self = .ping
         case .pong:

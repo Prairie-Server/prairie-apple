@@ -39,7 +39,7 @@ struct TVMainTabView: View {
     @State private var panelFocusEntryToken = 0
     @State private var panelHasFocus = false
     @State private var panelFocusExitTask: Task<Void, Never>?
-    @State private var castReceiver = TVCastReceiver.shared
+    @State private var controlReceiver = TVControlReceiver.shared
     /// Bar element to re-focus after Menu-ing out of a panel — its own
     /// anchor, so focus returns to the dwelled tab/avatar (§7).
     @State private var panelReturnFocus: TVTopMenuPanel?
@@ -55,6 +55,7 @@ struct TVMainTabView: View {
     @State private var contentFocusRequest = 1
     @Namespace private var tabContentNamespace
     @Environment(AudioPlaybackStore.self) private var audioStore
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private static let panelFocusExitCloseDelayNanoseconds: UInt64 = 80_000_000
@@ -90,8 +91,8 @@ struct TVMainTabView: View {
                 )
             }
 
-            if let standbyState = castReceiver.standbyState {
-                TVCastStandbyView(receiver: castReceiver, state: standbyState)
+            if let standbyState = controlReceiver.standbyState {
+                TVControlStandbyView(receiver: controlReceiver, state: standbyState)
                     .transition(reduceMotion ? .identity : .opacity)
                     .zIndex(20)
             }
@@ -147,7 +148,7 @@ struct TVMainTabView: View {
             // Re-read tab-visibility prefs for the now-known profile (the
             // singleton may hold the previous profile's value after a switch).
             navPrefs.refresh()
-            castReceiver.start(router: router)
+            controlReceiver.start(router: router)
             async let profileTask: Void = loadCurrentProfile()
             async let librariesTask: Void = loadLibraries()
             _ = await (profileTask, librariesTask)
@@ -158,10 +159,18 @@ struct TVMainTabView: View {
             ensureSelectedRootIsVisible()
         }
         .onDisappear {
-            castReceiver.stop()
+            controlReceiver.stop()
         }
         .onChange(of: ServerRegistry.shared.activeServerId) {
-            castReceiver.start(router: router)
+            controlReceiver.start(router: router)
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            // Returning from a suspension can leave the Bonjour listener dead
+            // (its state handler nils it out); restart so phones can still
+            // find this TV. No-op when the listener is healthy.
+            if newPhase == .active {
+                controlReceiver.start(router: router)
+            }
         }
     }
 

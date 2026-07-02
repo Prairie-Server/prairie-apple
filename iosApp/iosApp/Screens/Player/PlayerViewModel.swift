@@ -898,6 +898,9 @@ class PlayerViewModel {
         /// prepare through `OfflinePlaybackBuilder` instead of a server
         /// session, so retry after an error stays on the offline path.
         var offlineDownloadId: String? = nil
+        /// Explicit quality for this load (mid-stream quality-change replan);
+        /// wins over `PlayerSettings.preferredQuality` in the bridge.
+        var preferredQualityOverride: String? = nil
     }
 
     /// Where a `beginFreshLoad` invocation came from. Determines (a) whether
@@ -2980,7 +2983,8 @@ class PlayerViewModel {
                     preferredSubtitleTrackIndex: request.preferredSubtitleTrackIndex,
                     startFromBeginning: request.startFromBeginning,
                     resumePosition: resumePosition,
-                    allowNearEndResume: allowNearEndResume
+                    allowNearEndResume: allowNearEndResume,
+                    preferredQualityOverride: request.preferredQualityOverride
                 )
             }
             let timeoutTask = Task<Void, Never> { [startTask] in
@@ -3005,7 +3009,8 @@ class PlayerViewModel {
                 preferredSubtitleTrackIndex: request.preferredSubtitleTrackIndex,
                 startFromBeginning: request.startFromBeginning,
                 resumePosition: resumePosition,
-                allowNearEndResume: allowNearEndResume
+                allowNearEndResume: allowNearEndResume,
+                preferredQualityOverride: request.preferredQualityOverride
             )
         }
     }
@@ -3421,11 +3426,40 @@ class PlayerViewModel {
                 selectedVersion: $0
             )
         } ?? true
-        if !qualityRequiresTranscode,
-           plan.delivery == .direct || plan.delivery == .remux {
-            activeQualityId = resolvedQualityId
-            qualitySwitchError = nil
-            return
+        if !qualityRequiresTranscode {
+            if plan.delivery == .direct || plan.delivery == .remux {
+                activeQualityId = resolvedQualityId
+                qualitySwitchError = nil
+                return
+            }
+            if plan.delivery == .transcode, let lastLoadRequest {
+                // Currently transcoding, but the requested quality (e.g. back
+                // to Auto after a manual downgrade) no longer needs it. An
+                // in-place transcode restart can only produce HLS again —
+                // replan the whole session so the server can hand back direct
+                // play. Same pattern as interruption recovery: preserve the
+                // current track selections and resume at the current position.
+                var request = LoadRequest(
+                    contentId: lastLoadRequest.contentId,
+                    preferredFileId: lastLoadRequest.preferredFileId,
+                    preferredAudioTrackIndex: resolvedAudioTrackIndexForResume(),
+                    preferredSubtitleTrackIndex: resolvedSubtitleTrackIndexForResume(),
+                    preferredSidecarSubtitleTrackId: resolvedSidecarSubtitleTrackIdForResume(),
+                    startFromBeginning: false,
+                    offlineDownloadId: lastLoadRequest.offlineDownloadId
+                )
+                request.preferredQualityOverride = resolvedQualityId
+                let target = currentTime.isFinite ? max(0, currentTime) : 0
+                qualitySwitchError = nil
+                beginFreshLoad(
+                    request: request,
+                    progressPosition: target,
+                    finalizeCurrentSession: true,
+                    resumePositionOverride: target,
+                    allowNearEndResume: true
+                )
+                return
+            }
         }
 
         let target = currentTime.isFinite ? max(0, currentTime) : 0
@@ -6311,7 +6345,7 @@ class PlayerViewModel {
     }
 }
 
-private enum SiloCastPlayerControlError: LocalizedError {
+private enum SiloControlPlayerError: LocalizedError {
     case missingSeekPosition
     case missingTrackId
     case missingSpeed
@@ -6348,7 +6382,7 @@ private enum SiloCastPlayerControlError: LocalizedError {
 
 extension PlayerViewModel {
     @MainActor
-    func applySiloCastControl(_ command: SiloCastControlCommand) throws {
+    func applySiloControlCommand(_ command: SiloControlCommand) throws {
         switch command.name {
         case .play:
             activePlayer.play()
@@ -6360,7 +6394,7 @@ extension PlayerViewModel {
             togglePlayPause()
         case .seek:
             guard let seconds = command.seconds else {
-                throw SiloCastPlayerControlError.missingSeekPosition
+                throw SiloControlPlayerError.missingSeekPosition
             }
             seekTo(seconds: seconds)
         case .stop:
@@ -6368,10 +6402,10 @@ extension PlayerViewModel {
             requestRemoteDismiss()
         case .selectAudioTrack:
             guard let trackId = command.trackId else {
-                throw SiloCastPlayerControlError.missingTrackId
+                throw SiloControlPlayerError.missingTrackId
             }
             guard let track = audioTracks.first(where: { $0.trackId == trackId }) else {
-                throw SiloCastPlayerControlError.trackNotFound
+                throw SiloControlPlayerError.trackNotFound
             }
             selectAudio(track)
         case .selectSubtitleTrack:
@@ -6380,53 +6414,53 @@ extension PlayerViewModel {
                 return
             }
             guard let track = subtitleTracks.first(where: { $0.trackId == trackId }) else {
-                throw SiloCastPlayerControlError.trackNotFound
+                throw SiloControlPlayerError.trackNotFound
             }
             selectSubtitle(track)
         case .setPlaybackSpeed:
             guard let speed = command.speed, speed.isFinite, speed > 0 else {
-                throw SiloCastPlayerControlError.missingSpeed
+                throw SiloControlPlayerError.missingSpeed
             }
             setPlaybackSpeed(speed)
         case .setQuality:
             guard let value = command.value else {
-                throw SiloCastPlayerControlError.missingValue
+                throw SiloControlPlayerError.missingValue
             }
             switchQuality(value)
         case .setVideoGravity:
             guard let value = command.value else {
-                throw SiloCastPlayerControlError.missingValue
+                throw SiloControlPlayerError.missingValue
             }
             guard let gravity = VideoGravity(rawValue: value) else {
-                throw SiloCastPlayerControlError.invalidVideoGravity
+                throw SiloControlPlayerError.invalidVideoGravity
             }
             setVideoGravity(gravity)
         case .setHDREnabled:
             guard let enabled = command.enabled else {
-                throw SiloCastPlayerControlError.missingEnabledValue
+                throw SiloControlPlayerError.missingEnabledValue
             }
             setHDREnabled(enabled)
         case .setSubtitleSyncMs:
             guard let milliseconds = command.milliseconds else {
-                throw SiloCastPlayerControlError.missingMilliseconds
+                throw SiloControlPlayerError.missingMilliseconds
             }
             setSubtitleSyncMilliseconds(milliseconds)
         case .setSubtitlePosition:
             guard let value = command.value else {
-                throw SiloCastPlayerControlError.missingValue
+                throw SiloControlPlayerError.missingValue
             }
             guard let position = SubtitlePositionPreset(rawValue: value) else {
-                throw SiloCastPlayerControlError.invalidSubtitlePosition
+                throw SiloControlPlayerError.invalidSubtitlePosition
             }
             setSubtitlePosition(position)
         case .setVolume:
             guard let volume = command.volume, volume.isFinite else {
-                throw SiloCastPlayerControlError.missingValue
+                throw SiloControlPlayerError.missingValue
             }
             applyUserVolume(Float(volume))
         case .setMuted:
             guard let enabled = command.enabled else {
-                throw SiloCastPlayerControlError.missingEnabledValue
+                throw SiloControlPlayerError.missingEnabledValue
             }
             applyUserMuted(enabled)
         case .playNext:
@@ -6435,7 +6469,7 @@ extension PlayerViewModel {
     }
 
     @MainActor
-    func makeSiloCastPlaybackState(contentId: String?) -> SiloCastPlaybackState {
+    func makeSiloControlPlaybackState(contentId: String?) -> SiloControlPlaybackState {
         let liveContentId = lastLoadRequest?.contentId ?? contentId
         let titleText = metadata.primaryTitle.isEmpty ? title : metadata.primaryTitle
         let subtitleText = [metadata.seriesTitle, metadata.episodeTag]
@@ -6445,7 +6479,7 @@ extension PlayerViewModel {
             }
             .joined(separator: " · ")
 
-        return SiloCastPlaybackState(
+        return SiloControlPlaybackState(
             contentId: liveContentId,
             sessionId: activePlaybackSessionId,
             title: titleText.isEmpty ? "Loading" : titleText,
@@ -6455,11 +6489,11 @@ extension PlayerViewModel {
             isBuffering: isBuffering,
             currentTime: currentTime,
             duration: duration,
-            audioTracks: audioTracks.map(makeSiloCastTrack),
-            subtitleTracks: subtitleTracks.map(makeSiloCastTrack),
+            audioTracks: audioTracks.map(makeSiloControlTrack),
+            subtitleTracks: subtitleTracks.map(makeSiloControlTrack),
             selectedAudioTrackId: selectedAudioId,
             selectedSubtitleTrackId: selectedSubtitleId,
-            qualityOptions: qualityOptions.map(makeSiloCastOption),
+            qualityOptions: qualityOptions.map(makeSiloControlOption),
             activeQualityId: activeQualityId,
             isQualitySwitching: isQualitySwitching,
             playbackSpeed: settings.playbackSpeed,
@@ -6479,8 +6513,8 @@ extension PlayerViewModel {
         )
     }
 
-    private func makeSiloCastTrack(_ track: PlayerTrack) -> SiloCastTrack {
-        SiloCastTrack(
+    private func makeSiloControlTrack(_ track: PlayerTrack) -> SiloControlTrack {
+        SiloControlTrack(
             kind: track.kind.rawValue,
             trackId: track.trackId,
             title: track.primaryLabel,
@@ -6488,8 +6522,8 @@ extension PlayerViewModel {
         )
     }
 
-    private func makeSiloCastOption(_ option: ApplePlaybackQualityOption) -> SiloCastOption {
-        SiloCastOption(
+    private func makeSiloControlOption(_ option: ApplePlaybackQualityOption) -> SiloControlOption {
+        SiloControlOption(
             id: option.id,
             label: option.labelWithBitrate,
             detail: option.subtitle

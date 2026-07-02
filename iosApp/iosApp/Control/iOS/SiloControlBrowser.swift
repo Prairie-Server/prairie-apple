@@ -2,22 +2,25 @@
 import Foundation
 import Network
 
-struct SiloCastTarget: Identifiable, Equatable {
+struct SiloControlTarget: Identifiable, Equatable {
     let id: String
     let name: String
     let endpoint: NWEndpoint
     let serverId: String
     let serverName: String?
+    /// The TV's advertised "currently playing" flag (Bonjour TXT `playing`).
+    /// False for TVs running an older build that doesn't advertise it.
+    var isPlaying: Bool = false
 
-    static func == (lhs: SiloCastTarget, rhs: SiloCastTarget) -> Bool {
-        lhs.id == rhs.id
+    static func == (lhs: SiloControlTarget, rhs: SiloControlTarget) -> Bool {
+        lhs.id == rhs.id && lhs.isPlaying == rhs.isPlaying
     }
 }
 
 @MainActor
 @Observable
-final class SiloCastBrowser {
-    private(set) var found: [SiloCastTarget] = []
+final class SiloControlBrowser {
+    private(set) var found: [SiloControlTarget] = []
     private var browser: NWBrowser?
 
     func start() {
@@ -25,7 +28,7 @@ final class SiloCastBrowser {
         let params = NWParameters()
         params.includePeerToPeer = true
         let browser = NWBrowser(
-            for: .bonjourWithTXTRecord(type: SiloCastProtocol.serviceType, domain: nil),
+            for: .bonjourWithTXTRecord(type: SiloControlProtocol.serviceType, domain: nil),
             using: params
         )
         browser.browseResultsChangedHandler = { [weak self] results, _ in
@@ -51,17 +54,18 @@ final class SiloCastBrowser {
         found = []
     }
 
-    private static func makeTarget(_ result: NWBrowser.Result) -> SiloCastTarget? {
+    private static func makeTarget(_ result: NWBrowser.Result) -> SiloControlTarget? {
         guard case let .bonjour(txt) = result.metadata else { return nil }
         guard let serverId = txt["server"], !serverId.isEmpty else { return nil }
         let deviceId = txt["id"] ?? "\(result.endpoint)"
         let name = txt["name"] ?? "Silo TV"
-        return SiloCastTarget(
+        return SiloControlTarget(
             id: deviceId,
             name: name,
             endpoint: result.endpoint,
             serverId: serverId,
-            serverName: txt["serverName"]
+            serverName: txt["serverName"],
+            isPlaying: txt["playing"] == "1"
         )
     }
 }

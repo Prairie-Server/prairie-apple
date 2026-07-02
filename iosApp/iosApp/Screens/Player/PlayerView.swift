@@ -225,12 +225,12 @@ struct PlayerView: View {
                 offlineDownloadId: offlineDownloadId
             )
             #if os(tvOS)
-            TVCastReceiver.shared.registerPlayer(viewModel, contentId: contentId)
+            TVControlReceiver.shared.registerPlayer(viewModel, contentId: contentId)
             #endif
         }
         .onDisappear {
             #if os(tvOS)
-            TVCastReceiver.shared.unregisterPlayer(viewModel)
+            TVControlReceiver.shared.unregisterPlayer(viewModel)
             #endif
             viewModel.cleanup()
             #if os(iOS)

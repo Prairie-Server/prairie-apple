@@ -194,7 +194,8 @@ actor PlaybackSessionBridge {
         preferredSubtitleTrackIndex: Int? = nil,
         startFromBeginning: Bool,
         resumePosition: Double? = nil,
-        allowNearEndResume: Bool = false
+        allowNearEndResume: Bool = false,
+        preferredQualityOverride: String? = nil
     ) async throws -> PreparedPlayback {
         logger.info("Fetching watch detail for \(contentId, privacy: .public)")
         let watchDetail: WatchDetail = try await ContinuumAPI.shared.get(
@@ -206,8 +207,10 @@ actor PlaybackSessionBridge {
             throw APIError.httpError(statusCode: 404)
         }
 
+        // A mid-stream quality-change replan passes an explicit override
+        // (e.g. back to Auto) that must win over the persisted setting.
         let preferredQuality = normalizedQualityPreference(
-            PlayerSettings.shared.preferredQuality
+            preferredQualityOverride ?? PlayerSettings.shared.preferredQuality
         )
         let normalizedResumePosition: Double? = {
             guard let resumePosition, resumePosition.isFinite, resumePosition >= 0 else {
@@ -265,11 +268,16 @@ actor PlaybackSessionBridge {
         // target if the server decides remux/transcode is needed. The server
         // itself infers delivery strategy from the codec/container caps
         // below and does not read a `quality_preference` field.
-        let resolvedQualityPreference = requestedQualityPreference(
-            preferredQuality: preferredQuality,
-            selectedVersion: selectedVersion,
-            hasManualSelection: preferredFileId != nil
-        )
+        // An explicit override is the user's in-player choice — honor it
+        // directly instead of re-deriving from the manually selected version
+        // (which would report the version's native tier as the active quality).
+        let resolvedQualityPreference = preferredQualityOverride != nil
+            ? preferredQuality
+            : requestedQualityPreference(
+                preferredQuality: preferredQuality,
+                selectedVersion: selectedVersion,
+                hasManualSelection: preferredFileId != nil
+            )
         let profileId = await TokenStore.shared.getProfileId()
         let request = StartPlaybackRequest(
             fileId: selectedVersion.fileId,

@@ -1,12 +1,12 @@
 #if os(iOS)
 import SwiftUI
 
-/// Resolves poster/backdrop artwork for the cast remote from the `contentId`
-/// already present in the cast playback state — no wire-protocol field needed.
+/// Resolves poster/backdrop artwork for the TV remote from the `contentId`
+/// already present in the control playback state — no wire-protocol field needed.
 /// Reuses the same item-detail path (cache → API) the detail screen uses.
 @MainActor
 @Observable
-final class SiloCastArtworkResolver {
+final class SiloControlArtworkResolver {
     private(set) var posterURL: String?
     private(set) var backdropURL: String?
     private var resolvedContentId: String?
@@ -43,7 +43,7 @@ final class SiloCastArtworkResolver {
 
 /// Full-bleed blurred-artwork backdrop behind the now-playing content.
 /// Falls back to flat OLED black when no artwork is available.
-struct SiloCastArtworkBackground: View {
+struct SiloControlArtworkBackground: View {
     let urlString: String?
 
     var body: some View {

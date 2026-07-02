@@ -2,13 +2,13 @@
 import Foundation
 import Observation
 
-/// Bridges the ~0.5–1 Hz authoritative cast state into a smooth, responsive
+/// Bridges the ~0.5–1 Hz authoritative TV playback state into a smooth, responsive
 /// view model: interpolates `currentTime` between snapshots and lets transport
 /// taps reflect instantly (optimistic) until the TV confirms.
 @MainActor
 @Observable
 final class RemotePlaybackClock {
-    private(set) var state: SiloCastPlaybackState?
+    private(set) var state: SiloControlPlaybackState?
     private var anchorTime: Double = 0
     private var anchorDate = Date(timeIntervalSince1970: 0)
 
@@ -31,7 +31,7 @@ final class RemotePlaybackClock {
     /// a genuine seek/loop on the TV and honored immediately.
     private static let maxBackwardSmoothing: Double = 1.5
 
-    func ingest(_ next: SiloCastPlaybackState, asOf now: Date = Date()) {
+    func ingest(_ next: SiloControlPlaybackState, asOf now: Date = Date()) {
         let priorDisplay = displayTime(asOf: now)
         state = next
 

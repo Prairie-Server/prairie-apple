@@ -18,13 +18,13 @@ struct ItemDetailView: View {
 }
 
 #if os(iOS)
-/// Identifiable box so a one-shot `SiloCastPlaybackRequest` can drive a
+/// Identifiable box so a one-shot `SiloControlPlaybackRequest` can drive a
 /// `.sheet(item:)`. `id` keys off `contentId` so re-presenting for the
 /// same item is idempotent.
-private struct CastRequestBox: Identifiable {
-    let request: SiloCastPlaybackRequest
+private struct ControlRequestBox: Identifiable {
+    let request: SiloControlPlaybackRequest
     var id: String { request.contentId }
-    init(_ request: SiloCastPlaybackRequest) { self.request = request }
+    init(_ request: SiloControlPlaybackRequest) { self.request = request }
 }
 #endif
 
@@ -62,8 +62,8 @@ private struct ItemDetailPhoneContent: View {
     @State private var refreshOnPlayerDismiss = false
     @State private var offlinePlayChoice: OfflinePlayChoice?
     #if os(iOS)
-    @Environment(SiloCastController.self) private var castController
-    @State private var castRequestBox: CastRequestBox?
+    @Environment(SiloControlClient.self) private var siloControl
+    @State private var controlRequestBox: ControlRequestBox?
     #endif
     @Environment(AppRouter.self) private var router
 
@@ -132,9 +132,9 @@ private struct ItemDetailPhoneContent: View {
             if let detail = viewModel.detail, isDirectlyPlayable(detail) {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        castFromDetail(currentCastRequest(for: detail))
+                        playOnTV(currentControlRequest(for: detail))
                     } label: {
-                        Image(systemName: castController.hasActiveSession
+                        Image(systemName: siloControl.hasActiveSession
                             ? "appletvremote.gen4.fill"
                             : "appletvremote.gen4")
                     }
@@ -143,8 +143,8 @@ private struct ItemDetailPhoneContent: View {
                 }
             }
         }
-        .sheet(item: $castRequestBox) { box in
-            SiloCastTargetPickerView(request: box.request, controller: castController)
+        .sheet(item: $controlRequestBox) { box in
+            SiloControlTargetPickerView(request: box.request, controller: siloControl)
         }
         #endif
     }
@@ -160,8 +160,8 @@ private struct ItemDetailPhoneContent: View {
     /// Builds the cast request for the visible movie/episode using the
     /// IDENTICAL expressions as the `MovieDetailContent.onPlay` callback
     /// (resume-aware: play from the saved position when available).
-    private func currentCastRequest(for detail: ItemDetail) -> SiloCastPlaybackRequest {
-        currentCastRequest(
+    private func currentControlRequest(for detail: ItemDetail) -> SiloControlPlaybackRequest {
+        currentControlRequest(
             contentId: contentId,
             fileId: playbackFileId(for: detail),
             audioTrackIndex: preferredAudioTrackIndex,
@@ -171,15 +171,15 @@ private struct ItemDetailPhoneContent: View {
         )
     }
 
-    private func currentCastRequest(
+    private func currentControlRequest(
         contentId: String,
         fileId: Int?,
         audioTrackIndex: Int?,
         subtitleTrackIndex: Int?,
         startFromBeginning: Bool,
         resumePosition: Double?
-    ) -> SiloCastPlaybackRequest {
-        SiloCastPlaybackRequest(
+    ) -> SiloControlPlaybackRequest {
+        SiloControlPlaybackRequest(
             contentId: contentId,
             fileId: fileId,
             audioTrackIndex: audioTrackIndex,
@@ -189,13 +189,13 @@ private struct ItemDetailPhoneContent: View {
         )
     }
 
-    private func castFromDetail(_ request: SiloCastPlaybackRequest) {
-        if castController.hasActiveSession {
+    private func playOnTV(_ request: SiloControlPlaybackRequest) {
+        if siloControl.hasActiveSession {
             // Already connected ⇒ cast this item now.
-            Task { await castController.launch(request) }
+            Task { await siloControl.launch(request) }
         } else {
             // No session ⇒ pick a TV, then cast-and-play in one step.
-            castRequestBox = CastRequestBox(request)
+            controlRequestBox = ControlRequestBox(request)
         }
     }
     #endif
@@ -632,8 +632,8 @@ private struct ItemDetailPhoneContent: View {
         resumePosition: Double?
     ) {
         #if os(iOS)
-        if castController.hasActiveSession {
-            let request = SiloCastPlaybackRequest(
+        if siloControl.hasActiveSession {
+            let request = SiloControlPlaybackRequest(
                 contentId: contentId,
                 fileId: fileId,
                 audioTrackIndex: audioTrackIndex,
@@ -642,7 +642,7 @@ private struct ItemDetailPhoneContent: View {
                 resumePosition: resumePosition
             )
             Task {
-                await castController.launch(request)
+                await siloControl.launch(request)
             }
             return
         }

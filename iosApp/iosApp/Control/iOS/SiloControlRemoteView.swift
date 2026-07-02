@@ -3,18 +3,18 @@ import Foundation
 import SwiftUI
 
 /// Native "now-playing" remote for controlling Silo playback on an Apple TV.
-/// Thin wrapper: observes the cast session and drives the presentational
+/// Thin wrapper: observes the control session and drives the presentational
 /// `RemoteNowPlayingContent` with plain state + a command callback.
-struct SiloCastRemoteControlView: View {
-    @Bindable var controller: SiloCastController
+struct SiloControlRemoteView: View {
+    @Bindable var controller: SiloControlClient
     @Environment(\.dismiss) private var dismiss
-    @State private var artwork = SiloCastArtworkResolver()
+    @State private var artwork = SiloControlArtworkResolver()
     @State private var isShowingPicker = false
 
     var body: some View {
         NavigationStack {
             ZStack {
-                SiloCastArtworkBackground(urlString: artwork.backdropURL ?? artwork.posterURL)
+                SiloControlArtworkBackground(urlString: artwork.backdropURL ?? artwork.posterURL)
                 content
             }
             .navigationTitle("")
@@ -57,7 +57,7 @@ struct SiloCastRemoteControlView: View {
                 }
             }
             .sheet(isPresented: $isShowingPicker) {
-                SiloCastTargetPickerView(request: nil, controller: controller)
+                SiloControlTargetPickerView(request: nil, controller: controller)
             }
         }
         .preferredColorScheme(.dark)
@@ -90,7 +90,7 @@ struct SiloCastRemoteControlView: View {
         }
     }
 
-    private func idleConnectedView(state: SiloCastPlaybackState) -> some View {
+    private func idleConnectedView(state: SiloControlPlaybackState) -> some View {
         VStack(spacing: 18) {
             Image(systemName: "appletvremote.gen4")
                 .font(.system(size: 44, weight: .medium))
@@ -127,6 +127,14 @@ struct SiloCastRemoteControlView: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                     .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.continuumError.opacity(0.9)))
+                Button {
+                    isShowingPicker = true
+                } label: {
+                    Label("Choose a TV", systemImage: "tv")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .buttonStyle(.bordered)
+                .tint(Color.continuumOnSurface)
             } else {
                 ProgressView()
                 Text("Connecting to \(controller.activeTarget?.name ?? "Silo TV")…")
@@ -139,13 +147,13 @@ struct SiloCastRemoteControlView: View {
 }
 
 /// Pure presentational now-playing layout — no controller dependency, so it
-/// previews with mock `SiloCastPlaybackState`.
+/// previews with mock `SiloControlPlaybackState`.
 private struct RemoteNowPlayingContent: View {
-    let state: SiloCastPlaybackState
+    let state: SiloControlPlaybackState
     let clock: RemotePlaybackClock
     let targetName: String?
     let posterURL: String?
-    let onCommand: (SiloCastControlCommand) -> Void
+    let onCommand: (SiloControlCommand) -> Void
     let onTogglePlayPause: () -> Void
     let onSeek: (Double) -> Void
     let onPlayNext: () -> Void
@@ -521,18 +529,18 @@ private struct RemoteChipLabel: View {
 }
 
 #if DEBUG
-private extension SiloCastPlaybackState {
-    static func previewPlaying() -> SiloCastPlaybackState {
-        SiloCastPlaybackState(
+private extension SiloControlPlaybackState {
+    static func previewPlaying() -> SiloControlPlaybackState {
+        SiloControlPlaybackState(
             contentId: "preview", sessionId: "s1", title: "The Bear",
             subtitle: "Season 3 · Episode 4 · Children",
             isPlaying: true, isLoading: false, isBuffering: false,
             currentTime: 1104, duration: 2895,
-            audioTracks: [SiloCastTrack(kind: "audio", trackId: 1, title: "English 5.1", detail: "AC-3")],
-            subtitleTracks: [SiloCastTrack(kind: "subtitle", trackId: 10, title: "English", detail: nil)],
+            audioTracks: [SiloControlTrack(kind: "audio", trackId: 1, title: "English 5.1", detail: "AC-3")],
+            subtitleTracks: [SiloControlTrack(kind: "subtitle", trackId: 10, title: "English", detail: nil)],
             selectedAudioTrackId: 1, selectedSubtitleTrackId: nil,
-            qualityOptions: [SiloCastOption(id: "auto", label: "Auto", detail: nil),
-                             SiloCastOption(id: "1080", label: "1080p", detail: nil)],
+            qualityOptions: [SiloControlOption(id: "auto", label: "Auto", detail: nil),
+                             SiloControlOption(id: "1080", label: "1080p", detail: nil)],
             activeQualityId: "auto", isQualitySwitching: false,
             playbackSpeed: 1.0, videoGravity: VideoGravity.fit.rawValue, hdrEnabled: false,
             supportsVideoGravity: true, supportsHDRToggle: true,
@@ -547,7 +555,7 @@ private extension SiloCastPlaybackState {
 
 #Preview("Now Playing") {
     ZStack {
-        SiloCastArtworkBackground(urlString: nil)
+        SiloControlArtworkBackground(urlString: nil)
         RemoteNowPlayingContent(
             state: .previewPlaying(),
             clock: RemotePlaybackClock(),

@@ -24,8 +24,8 @@ struct HomeView: View {
     @State private var refreshHideTask: Task<Void, Never>?
     private let chromeFadeDistance: CGFloat = 72
     #if os(iOS)
-    @State private var isShowingCastPicker = false
-    @Environment(SiloCastController.self) private var castController
+    @State private var isShowingControlPicker = false
+    @Environment(SiloControlClient.self) private var siloControl
     /// Breathing room between the status-bar safe area and the floating header,
     /// so the logo + action icons sit comfortably below the Dynamic Island
     /// rather than crowding it (matching Plex's tight-but-relaxed top spacing).
@@ -118,8 +118,8 @@ struct HomeView: View {
                 // (matching Plex's top-right icon row).
                 HStack(spacing: ContinuumTheme.topBarIconSpacing) {
                     #if os(iOS)
-                    SiloCastControlModeButton(controller: castController) {
-                        isShowingCastPicker = true
+                    SiloControlModeButton(controller: siloControl) {
+                        isShowingControlPicker = true
                     }
                     #endif
 
@@ -167,8 +167,8 @@ struct HomeView: View {
             await refreshHome()
         }
         #if os(iOS)
-        .sheet(isPresented: $isShowingCastPicker) {
-            SiloCastTargetPickerView(request: nil, controller: castController)
+        .sheet(isPresented: $isShowingControlPicker) {
+            SiloControlTargetPickerView(request: nil, controller: siloControl)
         }
         #endif
         #endif

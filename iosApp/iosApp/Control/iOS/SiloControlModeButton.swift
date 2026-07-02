@@ -1,8 +1,8 @@
 #if os(iOS)
 import SwiftUI
 
-struct SiloCastControlModeButton: View {
-    @Bindable var controller: SiloCastController
+struct SiloControlModeButton: View {
+    @Bindable var controller: SiloControlClient
     let onChooseTarget: () -> Void
 
     var body: some View {
@@ -53,7 +53,7 @@ struct SiloCastControlModeButton: View {
 #if DEBUG
 #Preview {
     HStack(spacing: 20) {
-        SiloCastControlModeButton(controller: SiloCastController(), onChooseTarget: {})
+        SiloControlModeButton(controller: SiloControlClient(), onChooseTarget: {})
     }
     .padding()
     .background(Color.continuumBackground)

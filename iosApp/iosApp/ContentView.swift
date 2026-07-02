@@ -4,7 +4,7 @@ struct ContentView: View {
     @State private var router = AppRouter()
     @State private var audioStore = AudioPlaybackStore()
     #if os(iOS)
-    @State private var castController = SiloCastController()
+    @State private var siloControl = SiloControlClient()
     #endif
     @State private var debugPlayContentId: String?
     @State private var didAttemptDebugAutoPlay = false
@@ -29,7 +29,7 @@ struct ContentView: View {
         authContent
         .environment(audioStore)
         #if os(iOS)
-        .environment(castController)
+        .environment(siloControl)
         #endif
         .environmentObject(overlayPrefs)
         .preferredColorScheme(.dark)
@@ -98,9 +98,9 @@ struct ContentView: View {
             #if os(iOS)
             switch newPhase {
             case .active:
-                castController.appDidBecomeActive()
+                siloControl.appDidBecomeActive()
             case .background:
-                castController.appDidEnterBackground()
+                siloControl.appDidEnterBackground()
                 // Keep series monitoring alive while backgrounded; only
                 // worth a wake when the profile can download at all.
                 if DownloadManager.shared.downloadsEnabled {
@@ -575,7 +575,7 @@ struct MainTabView: View {
     @Namespace private var zoomNamespace
     @Environment(AudioPlaybackStore.self) private var audioStore
     #if os(iOS)
-    @Environment(SiloCastController.self) private var castController
+    @Environment(SiloControlClient.self) private var siloControl
     #endif
     #if !os(macOS)
     @Environment(\.horizontalSizeClass) private var hSize
@@ -590,6 +590,13 @@ struct MainTabView: View {
             }
         }
         .tint(.continuumOnSurface)
+        #if os(iOS)
+        // Cold-launch path for silent remote-control resume: scenePhase may
+        // already be .active when the authenticated UI first appears, so the
+        // scenePhase onChange alone would miss it. Idempotent — the controller
+        // guards against duplicate probes.
+        .task { siloControl.attemptAutoResumeIfIdle() }
+        #endif
         .onChange(of: router.requestedTab) { _, tab in
             guard let tab else { return }
             selectedTab = tab
@@ -617,10 +624,10 @@ struct MainTabView: View {
         }
         #if os(iOS)
         .sheet(isPresented: Binding(
-            get: { castController.isShowingRemoteControl },
-            set: { if !$0 { castController.hideRemoteControl() } }
+            get: { siloControl.isShowingRemoteControl },
+            set: { if !$0 { siloControl.hideRemoteControl() } }
         )) {
-            SiloCastRemoteControlView(controller: castController)
+            SiloControlRemoteView(controller: siloControl)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }

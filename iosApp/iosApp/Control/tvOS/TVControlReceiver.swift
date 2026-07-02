@@ -5,15 +5,24 @@ import OSLog
 
 @MainActor
 @Observable
-final class TVCastReceiver {
-    static let shared = TVCastReceiver()
+final class TVControlReceiver {
+    static let shared = TVControlReceiver()
 
     private var listener: NWListener?
     private var advertisedServerId: String?
+    /// Bumped whenever we intentionally cancel/replace the listener, so its
+    /// state handler can tell a system-initiated failure (restart) from our
+    /// own teardown (ignore).
+    private var listenerGeneration = 0
+    /// Mirrors "is a player registered" into the Bonjour TXT record so phones
+    /// can see that this TV is playing *before* connecting. A bare connection
+    /// with no player takes over the TV screen (standby view), so the phone's
+    /// silent auto-reconnect must only target TVs that are actually playing.
+    private var isPlaybackAdvertised = false
     private weak var router: AppRouter?
-    private var activeSession: SiloCastSession?
+    private var activeSession: SiloControlSession?
     private var activeConnectionId: UUID?
-    private(set) var standbyState: TVCastStandbyState?
+    private(set) var standbyState: TVControlStandbyState?
     private var readTask: Task<Void, Never>?
     private var stateTask: Task<Void, Never>?
     private var heartbeatTask: Task<Void, Never>?
@@ -28,7 +37,7 @@ final class TVCastReceiver {
     private var remoteControllerName: String?
     private nonisolated static let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "com.continuum.app",
-        category: "cast.receiver"
+        category: "control.receiver"
     )
 
     private init() {}
@@ -44,21 +53,28 @@ final class TVCastReceiver {
         }
 
         stop()
+        startListener(server: server)
+    }
+
+    private func startListener(server: ServerEntry) {
+        listenerGeneration += 1
+        let generation = listenerGeneration
 
         let device = AppleDeviceIdentity.current
         let txt = NWTXTRecord([
-            "v": String(SiloCastProtocol.version),
+            "v": String(SiloControlProtocol.version),
             "name": device.name,
             "id": device.id,
             "server": server.id,
-            "serverName": server.displayName
+            "serverName": server.displayName,
+            "playing": isPlaybackAdvertised ? "1" : "0"
         ])
 
         do {
-            let listener = try NWListener(using: SiloCastSession.tlsParameters())
+            let listener = try NWListener(using: SiloControlSession.tlsParameters())
             listener.service = NWListener.Service(
                 name: device.name,
-                type: SiloCastProtocol.serviceType,
+                type: SiloControlProtocol.serviceType,
                 txtRecord: txt
             )
             listener.newConnectionHandler = { [weak self] connection in
@@ -66,20 +82,56 @@ final class TVCastReceiver {
                     await self?.accept(connection)
                 }
             }
-            listener.stateUpdateHandler = { state in
-                if case .failed(let error) = state {
-                    Self.logger.error("cast listener failed: \(String(describing: error), privacy: .public)")
+            listener.stateUpdateHandler = { [weak self] state in
+                Task { @MainActor in
+                    guard let self, self.listenerGeneration == generation else { return }
+                    switch state {
+                    case .failed(let error):
+                        Self.logger.error("control listener failed: \(String(describing: error), privacy: .public)")
+                        self.scheduleListenerRestart()
+                    case .cancelled:
+                        // We bump the generation before cancelling ourselves, so a
+                        // current-generation cancel is the system tearing us down
+                        // (e.g. after suspension) — recover the advertisement.
+                        self.scheduleListenerRestart()
+                    default:
+                        break
+                    }
                 }
             }
             listener.start(queue: .main)
             self.listener = listener
             advertisedServerId = server.id
         } catch {
-            Self.logger.error("failed to start cast listener: \(String(describing: error), privacy: .public)")
+            Self.logger.error("failed to start control listener: \(String(describing: error), privacy: .public)")
         }
     }
 
+    private func scheduleListenerRestart() {
+        listener = nil
+        advertisedServerId = nil
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard let self, self.listener == nil, let router = self.router else { return }
+            self.start(router: router)
+        }
+    }
+
+    /// Rebuilds the Bonjour advertisement with an updated `playing` TXT flag.
+    /// Recreating the listener does not disturb the accepted control session.
+    private func setPlaybackAdvertised(_ playing: Bool) {
+        guard isPlaybackAdvertised != playing else { return }
+        isPlaybackAdvertised = playing
+        guard listener != nil, let server = ServerRegistry.shared.activeServer,
+              advertisedServerId == server.id else { return }
+        listenerGeneration += 1
+        listener?.cancel()
+        listener = nil
+        startListener(server: server)
+    }
+
     func stop() {
+        listenerGeneration += 1
         listener?.cancel()
         listener = nil
         advertisedServerId = nil
@@ -96,6 +148,7 @@ final class TVCastReceiver {
         standbyState = nil
         startStateUpdates()
         sendState()
+        setPlaybackAdvertised(true)
     }
 
     func unregisterPlayer(_ viewModel: PlayerViewModel) {
@@ -106,6 +159,7 @@ final class TVCastReceiver {
         stateTask = nil
         refreshStandbyState()
         sendState()
+        setPlaybackAdvertised(false)
     }
 
     private func accept(_ connection: NWConnection) async {
@@ -114,7 +168,7 @@ final class TVCastReceiver {
             closeActiveSession(sendClose: true)
         }
 
-        let session = SiloCastSession(connection: connection)
+        let session = SiloControlSession(connection: connection)
         let connectionId = UUID()
         activeSession = session
         activeConnectionId = connectionId
@@ -138,7 +192,7 @@ final class TVCastReceiver {
     }
 
     private func startReadLoop(
-        stream: AsyncThrowingStream<SiloCastMessage, Error>,
+        stream: AsyncThrowingStream<SiloControlMessage, Error>,
         connectionId: UUID
     ) {
         readTask?.cancel()
@@ -161,7 +215,7 @@ final class TVCastReceiver {
         }
     }
 
-    private func handle(_ message: SiloCastMessage, connectionId: UUID) {
+    private func handle(_ message: SiloControlMessage, connectionId: UUID) {
         guard activeConnectionId == connectionId else { return }
         // NOTE: liveness is reset only on `.pong` (below), not on every inbound
         // message. A `.pong` is the controller's reply to our ping, so it's the
@@ -206,7 +260,7 @@ final class TVCastReceiver {
         }
     }
 
-    private func handleLaunch(_ launch: SiloCastLaunchRequest) {
+    private func handleLaunch(_ launch: SiloControlLaunchRequest) {
         guard launch.serverId == ServerRegistry.shared.activeServerId else {
             sendError(code: "server_mismatch", message: "This Apple TV is connected to a different Silo server.")
             return
@@ -225,13 +279,13 @@ final class TVCastReceiver {
         sendLoadingState(for: playback.contentId)
     }
 
-    private func handleControl(_ command: SiloCastControlCommand) {
+    private func handleControl(_ command: SiloControlCommand) {
         if command.name == .stop {
             stopRemotePlayback()
             return
         }
 
-        // Volume, mute, and next-episode all flow through applySiloCastControl
+        // Volume, mute, and next-episode all flow through applySiloControlCommand
         // below; only .stop needs special handling (it dismisses the player).
         guard let playerViewModel else {
             sendError(code: "player_not_ready", message: "The TV player is not ready yet.")
@@ -239,7 +293,7 @@ final class TVCastReceiver {
         }
 
         do {
-            try playerViewModel.applySiloCastControl(command)
+            try playerViewModel.applySiloControlCommand(command)
             sendState()
         } catch {
             sendError(code: "command_failed", message: error.localizedDescription)
@@ -263,17 +317,10 @@ final class TVCastReceiver {
 
     private func closeActiveSession(sendClose: Bool) {
         let session = activeSession
-        if let session {
-            if sendClose {
-                Task { await session.closeGracefully() }
-            } else {
-                Task { await session.close() }
-            }
-        }
+        let read = readTask
         activeSession = nil
         activeConnectionId = nil
         remoteControllerName = nil
-        readTask?.cancel()
         readTask = nil
         stateTask?.cancel()
         stateTask = nil
@@ -282,6 +329,27 @@ final class TVCastReceiver {
         missedHeartbeats = 0
         isAuthorized = false
         standbyState = nil
+
+        guard let session else {
+            read?.cancel()
+            return
+        }
+        // Send the goodbye BEFORE cancelling the read task. Cancelling the
+        // consumer fires the message stream's onTermination, which tears the
+        // connection down and races ahead of the `.close` — the peer then
+        // sees a bare EOF, reads it as a dropped connection, and instantly
+        // auto-reconnects (the "Disconnect Remote loops right back" bug).
+        // Stray inbound messages during the goodbye are dropped by the
+        // activeConnectionId guard (already nil).
+        Self.logger.info("control: closing session sendClose=\(sendClose, privacy: .public)")
+        Task {
+            if sendClose {
+                await session.closeGracefully()
+            } else {
+                await session.close()
+            }
+            read?.cancel()
+        }
     }
 
     private func stopRemotePlayback() {
@@ -292,6 +360,7 @@ final class TVCastReceiver {
         router?.presentedPlayer = nil
         refreshStandbyState()
         sendState()
+        setPlaybackAdvertised(false)
     }
 
     private func refreshStandbyState() {
@@ -299,7 +368,7 @@ final class TVCastReceiver {
             standbyState = nil
             return
         }
-        standbyState = TVCastStandbyState(
+        standbyState = TVControlStandbyState(
             controllerName: remoteControllerName,
             serverName: ServerRegistry.shared.activeServer?.displayName
         )
@@ -314,7 +383,7 @@ final class TVCastReceiver {
                 guard let self, self.activeConnectionId == connectionId else { return }
                 self.missedHeartbeats += 1
                 if self.missedHeartbeats > Self.maxMissedHeartbeats {
-                    Self.logger.info("cast: controller heartbeat timed out; closing session")
+                    Self.logger.info("control: controller heartbeat timed out; closing session")
                     self.closeActiveSession(sendClose: false)
                     return
                 }
@@ -328,7 +397,7 @@ final class TVCastReceiver {
         authWatchdogTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: Self.authGracePeriod)
             guard let self, self.activeConnectionId == connectionId, !self.isAuthorized else { return }
-            Self.logger.info("cast: controller never authorized; closing session")
+            Self.logger.info("control: controller never authorized; closing session")
             self.closeActiveSession(sendClose: true)
         }
     }
@@ -346,9 +415,9 @@ final class TVCastReceiver {
 
     private func sendState() {
         guard let session = activeSession else { return }
-        let state: SiloCastPlaybackState
+        let state: SiloControlPlaybackState
         if let playerViewModel {
-            state = playerViewModel.makeSiloCastPlaybackState(contentId: playerContentId)
+            state = playerViewModel.makeSiloControlPlaybackState(contentId: playerContentId)
         } else {
             state = idleState()
         }
@@ -357,7 +426,7 @@ final class TVCastReceiver {
 
     private func sendLoadingState(for contentId: String) {
         guard let session = activeSession else { return }
-        let state = SiloCastPlaybackState(
+        let state = SiloControlPlaybackState(
             contentId: contentId,
             sessionId: nil,
             title: "Loading",
@@ -390,24 +459,24 @@ final class TVCastReceiver {
 
     private func sendError(code: String, message: String) {
         guard let session = activeSession else { return }
-        session.enqueue(.error(SiloCastErrorMessage(code: code, message: message)))
+        session.enqueue(.error(SiloControlErrorMessage(code: code, message: message)))
     }
 
-    private func makeHello() -> SiloCastMessage {
+    private func makeHello() -> SiloControlMessage {
         let device = AppleDeviceIdentity.current
         let server = ServerRegistry.shared.activeServer
-        return .hello(SiloCastHello(
+        return .hello(SiloControlHello(
             role: .tv,
             deviceName: device.name,
             deviceId: device.id,
             serverId: server?.id,
             serverName: server?.displayName,
-            supportedVersions: [SiloCastProtocol.version]
+            supportedVersions: [SiloControlProtocol.version]
         ))
     }
 
-    private func idleState() -> SiloCastPlaybackState {
-        SiloCastPlaybackState(
+    private func idleState() -> SiloControlPlaybackState {
+        SiloControlPlaybackState(
             contentId: nil,
             sessionId: nil,
             title: "Ready",
