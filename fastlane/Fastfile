@@ -196,19 +196,26 @@ end
 # user default; once its file is later removed, macOS pops "Keychain Not
 # Found" prompts at random for unrelated apps on the runner. Snapshot the
 # original state before any lane runs and restore it on success and error.
+#
+# Keychains only exist on macOS; the reserve_build_numbers lane runs on a
+# Linux runner where `security` is absent, so gate every hook on mac? too.
+
+def ci_keychain_managed?
+  is_ci && FastlaneCore::Helper.mac?
+end
 
 before_all do |_lane, _options|
-  next unless is_ci
+  next unless ci_keychain_managed?
   ENV["FL_ORIG_DEFAULT_KC"] = `security default-keychain -d user`.scan(/"([^"]+)"/).flatten.first.to_s
   ENV["FL_ORIG_KC_LIST"]    = `security list-keychains   -d user`.scan(/"([^"]+)"/).flatten.join(":")
 end
 
 after_all do |_lane, _options|
-  restore_ci_keychain_state if is_ci
+  restore_ci_keychain_state if ci_keychain_managed?
 end
 
 error do |_lane, _exception, _options|
-  restore_ci_keychain_state if is_ci
+  restore_ci_keychain_state if ci_keychain_managed?
 end
 
 # Each step is independently rescued so a failure in one doesn't abort the

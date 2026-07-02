@@ -48,3 +48,4 @@ Thumbs.db
 .swiftpm/
 docs/*
 !docs/tvos-focus.md
+!docs/release/*
