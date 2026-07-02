@@ -4,6 +4,28 @@ Native Apple clients for the [Silo](https://github.com/Silo-Server/silo-server) 
 
 This repo builds iOS, tvOS, and the early macOS target. It preserves the existing Apple bundle IDs, keychain groups, and signing IDs for TestFlight and install continuity, but user-facing names, docs, and server references now use Silo.
 
+## TestFlight
+
+Try the latest beta builds of the iOS and tvOS apps:
+
+**[Join the Silo TestFlight beta](https://testflight.apple.com/join/XZy8cu5q)**
+
+## Screenshots
+
+### iOS
+
+<p>
+  <img src="project-images/silo-apple-native/04-home.png" width="260" alt="iOS home screen" />
+  <img src="project-images/silo-apple-native/09-movie-detail.png" width="260" alt="iOS movie detail" />
+  <img src="project-images/silo-apple-native/05-libraries.png" width="260" alt="iOS movies library" />
+</p>
+
+### tvOS
+
+<p>
+  <img src="project-images/silo-tvos/05-tv-home.png" width="800" alt="tvOS home screen" />
+</p>
+
 ## Layout
 
 - `iosApp/iosApp/` - shared SwiftUI app code for iOS, tvOS, and macOS
