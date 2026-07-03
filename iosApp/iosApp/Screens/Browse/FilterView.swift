@@ -195,7 +195,7 @@ struct FilterView: View {
                     .font(.continuumBody)
                     .foregroundColor(.continuumOnSurface)
             }
-            .tint(Color.continuumOnSurface)
+            .tint(Color.continuumAccent)
             .listRowBackground(Color.clear)
             .filterListRowSeparatorHidden()
             .onChange(of: preserve) { _, newValue in

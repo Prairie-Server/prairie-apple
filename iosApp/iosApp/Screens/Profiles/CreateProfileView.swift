@@ -331,7 +331,7 @@ struct CreateProfileView: View {
                                     .foregroundColor(.continuumSecondaryText)
                             }
                         }
-                        .tint(.continuumPrimary)
+                        .tint(.continuumAccent)
 
                         Button("Create Profile") {
                             Task { await createProfile() }

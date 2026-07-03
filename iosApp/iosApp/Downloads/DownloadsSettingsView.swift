@@ -18,6 +18,7 @@ struct DownloadsSettingsView: View {
         Form {
             Section {
                 Toggle("Download over Wi-Fi only", isOn: $settings.wifiOnly)
+                    .tint(.continuumAccent)
                 if formats.count > 1 {
                     Picker("Quality", selection: $settings.preferredFormat) {
                         ForEach(formats, id: \.self) { format in
@@ -38,6 +39,7 @@ struct DownloadsSettingsView: View {
 
             Section("Series Monitoring Defaults") {
                 Toggle("Delete watched episodes", isOn: $settings.defaultDeleteWatched)
+                    .tint(.continuumAccent)
                 Stepper(
                     settings.defaultMaxStorageGB == 0
                         ? "Storage limit: Unlimited"
@@ -50,6 +52,7 @@ struct DownloadsSettingsView: View {
 
             Section {
                 Toggle("Keep watched downloads", isOn: $settings.keepWatchedDownloads)
+                    .tint(.continuumAccent)
             } header: {
                 Text("Cleanup")
             } footer: {

@@ -386,6 +386,9 @@ extension View {
         // during a request (regression vs ContinuumPrimaryButtonStyle).
         self
             .buttonStyle(.glassProminent)
+            // The global monochrome tint made prominent glass white-on-white;
+            // accent the fill so the label stays legible.
+            .tint(.continuumAccent)
             .disabled(isLoading)
             .overlay {
                 if isLoading {

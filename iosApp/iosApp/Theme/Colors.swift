@@ -24,6 +24,11 @@ extension Color {
     /// Primary text color (#EDEDED)
     static let continuumOnSurface = Color(hex: "#EDEDED")
 
+    /// Accent for enabled control states (toggle tracks, prominent buttons).
+    /// The monochrome palette made an on toggle a white knob on a white
+    /// track; this matches the web client's blue-theme primary.
+    static let continuumAccent = Color(hex: "#78AEFC")
+
     /// Muted/secondary text — primary at 60% opacity (#99EDEDED)
     static let continuumSecondaryText = Color(hex: "#99EDEDED")
 

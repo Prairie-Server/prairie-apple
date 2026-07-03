@@ -255,11 +255,13 @@ struct SeriesMonitorSheet: View {
                                     else { selectedSeasons.remove(season.seasonNumber) }
                                 }
                             ))
+                            .tint(.continuumAccent)
                         }
                     }
                 }
                 Section("Storage") {
                     Toggle("Delete watched episodes", isOn: $deleteWatched)
+                        .tint(.continuumAccent)
                     Picker("Limit", selection: $maxStorageGB) {
                         ForEach(storageLimitOptionsGB, id: \.self) { gb in
                             Text(gb == 0 ? "Unlimited" : "\(gb) GB").tag(gb)

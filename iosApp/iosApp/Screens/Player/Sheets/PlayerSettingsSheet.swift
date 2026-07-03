@@ -179,6 +179,7 @@ struct PlayerSettingsSheet: View {
                         viewModel.setHDREnabled(newValue)
                     }
                 ))
+                .tint(.continuumAccent)
             }
         } header: {
             Text("Video")
@@ -313,6 +314,7 @@ struct PlayerSettingsSheet: View {
                         Task { await viewModel.setSubtitleDeviceOverrideEnabled(enabled) }
                     }
                 ))
+                .tint(.continuumAccent)
             }
 
             Section("Text") {
@@ -335,6 +337,7 @@ struct PlayerSettingsSheet: View {
                 }
 
                 Toggle("Text outline", isOn: appearanceBoolBinding(\.textOutline))
+                    .tint(.continuumAccent)
 
                 Picker("Outline color", selection: appearanceStringBinding(\.textOutlineColor)) {
                     ForEach(SubtitleAppearance.outlineColors, id: \.hex) { color in
@@ -456,6 +459,7 @@ struct PlayerSettingsSheet: View {
                 get: { viewModel.settings.autoPlayNextEpisode },
                 set: { viewModel.settings.setAutoPlayNextEpisode($0) }
             ))
+            .tint(.continuumAccent)
         }
     }
 
@@ -626,6 +630,7 @@ struct PlayerSettingsSheet: View {
                 get: { viewModel.settings.autoPlayNextEpisode },
                 set: { viewModel.settings.setAutoPlayNextEpisode($0) }
             ))
+            .tint(.continuumAccent)
         }
     }
 
@@ -639,6 +644,7 @@ struct PlayerSettingsSheet: View {
                             viewModel.setHDREnabled(newValue)
                         }
                     ))
+                    .tint(.continuumAccent)
                     Text("Disable if colors look washed out or your display tone-maps incorrectly.")
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.6))
@@ -716,6 +722,7 @@ struct PlayerSettingsSheet: View {
                             Task { await viewModel.setSubtitleDeviceOverrideEnabled(enabled) }
                         }
                     ))
+                    .tint(.continuumAccent)
 
                     Picker("Font size", selection: appearanceEnumBinding(\.fontSize, SubtitleFontSizePreset.self)) {
                         ForEach(SubtitleFontSizePreset.allCases) { option in
@@ -736,6 +743,7 @@ struct PlayerSettingsSheet: View {
                     }
 
                     Toggle("Text outline", isOn: appearanceBoolBinding(\.textOutline))
+                        .tint(.continuumAccent)
 
                     Picker("Outline color", selection: appearanceStringBinding(\.textOutlineColor)) {
                         ForEach(SubtitleAppearance.outlineColors, id: \.hex) { color in

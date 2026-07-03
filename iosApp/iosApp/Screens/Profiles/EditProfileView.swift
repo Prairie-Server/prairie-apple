@@ -96,7 +96,7 @@ struct EditProfileView: View {
                                     .foregroundColor(.continuumSecondaryText)
                             }
                         }
-                        .tint(.continuumPrimary)
+                        .tint(.continuumAccent)
 
                         // Error
                         if let error {

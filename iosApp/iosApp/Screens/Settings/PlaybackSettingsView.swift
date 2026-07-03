@@ -69,7 +69,7 @@ struct PlaybackSettingsView: View {
                 }
             ))
             .foregroundStyle(Color.continuumOnSurface)
-            .tint(.continuumOnSurface)
+            .tint(.continuumAccent)
         } header: {
             Text("Streaming")
                 .foregroundStyle(Color.continuumSecondaryText)
@@ -92,7 +92,7 @@ struct PlaybackSettingsView: View {
                 }
             ))
             .foregroundStyle(Color.continuumOnSurface)
-            .tint(.continuumOnSurface)
+            .tint(.continuumAccent)
 
             Picker("Show Next Up", selection: Binding(
                 get: { viewModel.nextUpPromptSeconds },
@@ -120,7 +120,7 @@ struct PlaybackSettingsView: View {
                 }
             ))
             .foregroundStyle(Color.continuumOnSurface)
-            .tint(.continuumOnSurface)
+            .tint(.continuumAccent)
 
             Toggle("Skip Credits", isOn: Binding(
                 get: { viewModel.skipCredits },
@@ -130,7 +130,7 @@ struct PlaybackSettingsView: View {
                 }
             ))
             .foregroundStyle(Color.continuumOnSurface)
-            .tint(.continuumOnSurface)
+            .tint(.continuumAccent)
         } header: {
             Text("Episodes")
                 .foregroundStyle(Color.continuumSecondaryText)

@@ -101,7 +101,7 @@ struct SubtitleSettingsView: View {
                 )
             )
             .foregroundStyle(Color.continuumOnSurface)
-            .tint(.continuumOnSurface)
+            .tint(.continuumAccent)
         } header: {
             Text("Profile")
                 .foregroundStyle(Color.continuumSecondaryText)
@@ -132,7 +132,7 @@ struct SubtitleSettingsView: View {
                 )
             )
             .foregroundStyle(Color.continuumOnSurface)
-            .tint(.continuumOnSurface)
+            .tint(.continuumAccent)
 
             Picker("Font Size", selection: appearanceBinding(\.fontSize)) {
                 ForEach(SubtitleFontSizePreset.allCases) { option in
@@ -166,7 +166,7 @@ struct SubtitleSettingsView: View {
 
             Toggle("Text Outline", isOn: appearanceBinding(\.textOutline))
                 .foregroundStyle(Color.continuumOnSurface)
-                .tint(.continuumOnSurface)
+                .tint(.continuumAccent)
 
             ColorSwatchPicker(
                 title: "Outline Color",

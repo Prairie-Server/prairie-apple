@@ -196,6 +196,7 @@ struct SettingsView: View {
             )) {
                 SettingsRowLabel(title: "Show Audiobooks", systemImage: "book.closed.fill", color: .indigo)
             }
+            .tint(.continuumAccent)
             #endif
 
             NavigationLink {
