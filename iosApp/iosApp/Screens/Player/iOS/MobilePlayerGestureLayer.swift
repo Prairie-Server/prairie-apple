@@ -81,6 +81,12 @@ struct MobilePlayerGestureLayer: View {
                 feedbackOverlays(in: size)
             }
         }
+        // The controls scrim should swallow touches while the overlay is up,
+        // but SwiftUI tap recognizers on an occluded sibling can still track
+        // touches — rapid presses on the overlay's ±10s buttons registered
+        // here as a double-tap skip. Drop out of hit testing entirely while
+        // the overlay owns the screen.
+        .allowsHitTesting(!viewModel.showControls)
         .ignoresSafeArea()
         .onDisappear {
             // The layer can be torn out mid-gesture (loading state flips,
@@ -99,6 +105,10 @@ struct MobilePlayerGestureLayer: View {
 
     private func doubleTapGesture(in size: CGSize) -> some Gesture {
         SpatialTapGesture(count: 2).onEnded { value in
+            // Belt-and-braces for a recognizer that started tracking just
+            // before the overlay appeared: never double-tap-skip while the
+            // controls own the screen.
+            guard !viewModel.showControls else { return }
             let x = value.location.x
             // revealingControls: false — the flash below is the feedback;
             // summoning the overlay would drop its scrim on top of this
