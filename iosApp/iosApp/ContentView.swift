@@ -34,7 +34,9 @@ struct ContentView: View {
         .environmentObject(overlayPrefs)
         .preferredColorScheme(.dark)
         #if os(iOS)
-        .companionPairingCard()
+        // Hold the pairing offer until the startup splash logo finishes so a
+        // quickly-discovered TV doesn't pop the card over the animation.
+        .companionPairingCard(enabled: didFinishStartupSplash && router.authState != .loading)
         #endif
         .modifier(DebugPlayerPresentationModifier(
             contentId: debugPlayContentId,

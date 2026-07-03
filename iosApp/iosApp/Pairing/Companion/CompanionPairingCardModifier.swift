@@ -8,6 +8,9 @@ import SwiftUI
 /// The card is only offered when this device has a signed-in server to hand
 /// off, and browsing pauses while the app is backgrounded.
 struct CompanionPairingCardModifier: ViewModifier {
+    /// While false, discovery still runs but the card is withheld — used to
+    /// keep the pairing offer from popping over the startup splash animation.
+    var enabled: Bool = true
     @State private var browser = TVPairingBrowser()
     @State private var dismissed: Set<String> = []
     @State private var active: DiscoveredTV?
@@ -28,6 +31,10 @@ struct CompanionPairingCardModifier: ViewModifier {
                 // auto-clear when it disappears: once setup begins the TV stops
                 // advertising, and the card must persist to show progress/result.
                 if let tv = newValue { latch(tv) }
+            }
+            .onChange(of: enabled) { _, isEnabled in
+                // Splash just finished: offer any TV discovered in the meantime.
+                if isEnabled, let tv = candidate { latch(tv) }
             }
             .onChange(of: active) { old, new in
                 // A card just closed (its TV is now in `dismissed`); offer the
@@ -58,7 +65,7 @@ struct CompanionPairingCardModifier: ViewModifier {
     /// Show the card for `tv` — but only if this device actually has a
     /// signed-in server to offer; a signed-out phone gets no dead-end prompt.
     private func latch(_ tv: DiscoveredTV) {
-        guard active == nil else { return }
+        guard enabled, active == nil else { return }
         Task { @MainActor in
             guard await CompanionPairingCoordinator.hasServerWithToken() else { return }
             guard active == nil else { return }
@@ -68,6 +75,8 @@ struct CompanionPairingCardModifier: ViewModifier {
 }
 
 extension View {
-    func companionPairingCard() -> some View { modifier(CompanionPairingCardModifier()) }
+    func companionPairingCard(enabled: Bool = true) -> some View {
+        modifier(CompanionPairingCardModifier(enabled: enabled))
+    }
 }
 #endif
