@@ -108,8 +108,9 @@ private struct DoubleRangeSpinner: View {
 ///
 /// iOS renders a real settings hierarchy (Video / Audio / Subtitles /
 /// Session groups with disclosure sub-pages, diagnostics demoted to an
-/// Advanced page, no speed picker — speed lives in the overlay's quick
-/// menu). tvOS and macOS keep the flat form the HUD / Mac sheet expect.
+/// Advanced page; speed lives in the Session group — the overlay's quick
+/// pill hosts Quality). tvOS and macOS keep the flat form the HUD / Mac
+/// sheet expect.
 struct PlayerSettingsSheet: View {
     let viewModel: PlayerViewModel
     let sleepTimer: SleepTimer
@@ -444,8 +445,23 @@ struct PlayerSettingsSheet: View {
             }
     }
 
+    /// Speed ladder for the sheet's picker. Mirrors the ladder the old
+    /// overlay quick menu offered (the overlay pill now hosts Quality).
+    private static let speedOptions: [Double] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]
+
     private var sessionSection: some View {
         Section("Session") {
+            Picker("Speed", selection: Binding(
+                get: { Self.speedOptions.min(by: {
+                    abs($0 - viewModel.settings.playbackSpeed) < abs($1 - viewModel.settings.playbackSpeed)
+                }) ?? 1.0 },
+                set: { viewModel.setPlaybackSpeed($0) }
+            )) {
+                ForEach(Self.speedOptions, id: \.self) { speed in
+                    Text(speed == 1.0 ? "1×" : String(format: "%g×", speed)).tag(speed)
+                }
+            }
+
             sleepTimerPicker
 
             if sleepTimer.isActive {

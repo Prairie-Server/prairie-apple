@@ -7,7 +7,7 @@ import SwiftUI
 /// - Center: skip back 10s, play/pause, skip forward 10s
 /// - Bottom stack: time row (elapsed / status chips / remaining), capsule
 ///   scrubber with buffered range + intro tint + chapter ticks + scrub
-///   preview bubble, then a labeled action row (Speed menu, Audio &
+///   preview bubble, then a labeled action row (Quality menu, Audio &
 ///   Subtitles, Chapters, orientation Lock, More → settings sheet)
 ///
 /// The whole thing is wrapped in a tap-to-toggle gesture; auto-hide after 3 s
@@ -25,9 +25,6 @@ struct MobilePlayerControls: View {
     /// duration otherwise. Tap the label to flip — the native player idiom.
     @State private var showsRemainingTime = true
 
-    /// Speed choices offered by the quick menu. Mirrors the ladder the old
-    /// settings-sheet picker offered.
-    private static let speedOptions: [Double] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]
 
     var body: some View {
         // NOTE: the .sheet modifier MUST live outside the `showControls` gate.
@@ -432,9 +429,9 @@ struct MobilePlayerControls: View {
     // MARK: - Action row
 
     private enum ActionRowStyle {
-        case full      // labeled pills, value on the Speed pill
+        case full      // labeled pills, value on the Quality pill
         case compact   // shorter labels, lock folds to a circle
-        case icons     // circles everywhere except the Speed value pill
+        case icons     // circles everywhere except the Quality value pill
     }
 
     /// Labeled pill row. `ViewThatFits` tries the full labels first, then
@@ -452,7 +449,7 @@ struct MobilePlayerControls: View {
     private func actionRowContent(style: ActionRowStyle) -> some View {
         let noTracks = viewModel.audioTracks.isEmpty && viewModel.subtitleTracks.isEmpty
         return HStack(spacing: 8) {
-            speedMenu(compact: style != .full)
+            qualityMenu(compact: style != .full)
 
             Group {
                 if style == .icons {
@@ -496,30 +493,36 @@ struct MobilePlayerControls: View {
         }
     }
 
-    private func speedMenu(compact: Bool) -> some View {
+    private func qualityMenu(compact: Bool) -> some View {
         let menu = Menu {
-            ForEach(Self.speedOptions, id: \.self) { speed in
+            ForEach(viewModel.qualityOptions) { option in
                 Button {
-                    viewModel.setPlaybackSpeed(speed)
+                    viewModel.switchQuality(option.id)
                 } label: {
-                    if speed == viewModel.settings.playbackSpeed {
-                        Label(speedLabel(speed), systemImage: "checkmark")
+                    if option.id == viewModel.activeQualityId {
+                        Label(option.labelWithBitrate, systemImage: "checkmark")
                     } else {
-                        Text(speedLabel(speed))
+                        Text(option.labelWithBitrate)
                     }
                 }
             }
         } label: {
             HStack(spacing: 5) {
-                Image(systemName: "gauge.with.dots.needle.67percent")
-                    .font(.system(size: 12, weight: .semibold))
+                if viewModel.isQualitySwitching {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .tint(.white)
+                } else {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 12, weight: .semibold))
+                }
                 if compact {
-                    Text(speedValueText)
+                    Text(qualityValueText)
                         .font(.system(size: 12, weight: .semibold))
                 } else {
-                    Text("Speed")
+                    Text("Quality")
                         .font(.system(size: 12, weight: .semibold))
-                    Text(speedValueText)
+                    Text(qualityValueText)
                         .font(.system(size: 11, weight: .medium))
                         .opacity(0.7)
                 }
@@ -531,8 +534,8 @@ struct MobilePlayerControls: View {
         .menuStyle(.button)
 
         return Group {
-            // The prominent style flags a non-default speed at a glance.
-            if viewModel.settings.playbackSpeed == 1.0 {
+            // The prominent style flags a non-Auto quality cap at a glance.
+            if viewModel.activeQualityId == ApplePlaybackQuality.autoId {
                 menu.buttonStyle(.glass)
             } else {
                 menu.buttonStyle(.glassProminent)
@@ -540,19 +543,21 @@ struct MobilePlayerControls: View {
         }
         .buttonBorderShape(.capsule)
         // A native Menu offers no isPresented hook, so pin the controls the
-        // moment the label is tapped; `setPlaybackSpeed` re-arms auto-hide
+        // moment the label is tapped; `switchQuality` re-arms auto-hide
         // when a choice lands, and any later overlay tap does too.
         .simultaneousGesture(TapGesture().onEnded { viewModel.pinControlsVisible() })
-        .accessibilityLabel("Playback Speed")
-        .accessibilityValue(speedValueText)
+        .accessibilityLabel("Playback Quality")
+        .accessibilityValue(qualityValueText)
     }
 
-    private var speedValueText: String {
-        speedLabel(viewModel.settings.playbackSpeed)
-    }
-
-    private func speedLabel(_ speed: Double) -> String {
-        speed == 1.0 ? "1×" : String(format: "%g×", speed)
+    /// Short value for the pill — the tier's resolution ("1080p") rather
+    /// than the full "Up to 1080p HD (High)" menu label.
+    private var qualityValueText: String {
+        guard let active = viewModel.qualityOptions.first(where: { $0.id == viewModel.activeQualityId }),
+              !active.isAuto, !active.isOriginal, !active.resolution.isEmpty else {
+            return "Auto"
+        }
+        return active.resolution
     }
 
     private func lockControl(compact: Bool) -> some View {
