@@ -5379,7 +5379,17 @@ final class PlayerCore: NSObject {
 
         guard let overlay = subtitleOverlay else { return }
         let renderer = session.underlyingRenderer
-        guard renderer.hasAnyActiveTrack else { return }
+        guard renderer.hasAnyActiveTrack else {
+            // Disabling a track drops it without a final render pass —
+            // bailing here would leave the last composited cue on the
+            // layer indefinitely. Clearing every tick while inactive also
+            // covers an in-flight session-queue render re-pushing a stale
+            // image right after the drop. Mirrors the AVPlayer route.
+            DispatchQueue.main.async {
+                overlay.clear()
+            }
+            return
+        }
 
         let syncOffsetMs = Int64(session.currentParams.syncOffsetMs)
         let assNowMs = nowMs - syncOffsetMs
