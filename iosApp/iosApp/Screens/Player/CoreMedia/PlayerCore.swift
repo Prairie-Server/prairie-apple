@@ -312,6 +312,55 @@ final class PlayerCore: NSObject {
         endOfFileCoordinator.clear()
     }
 
+    // MARK: - Deferred track selection during load
+
+    /// `setAudioTrack` calls `markCancelled()`, which the FFmpeg interrupt
+    /// callback treats as "abort blocking I/O". If that fires while
+    /// `openAndDemux` is inside its startTime seek (e.g. a persisted or
+    /// detail-page audio selection applied as soon as tracks enumerate),
+    /// the aborted read poisons the matroska demuxer — the file is marked
+    /// broken and every subsequent seek lands near the start. A switch
+    /// requested while a load is in flight is parked here and applied via
+    /// the normal switch path once the open completes.
+    private let deferredTrackLock = NSLock()
+    private var _loadInProgress = false
+    /// `.some(id)` is a parked request; the inner `id` nil means "disable audio".
+    private var _deferredAudioTrackId: Int64??
+
+    private func beginLoadGate() {
+        deferredTrackLock.lock()
+        _loadInProgress = true
+        _deferredAudioTrackId = nil
+        deferredTrackLock.unlock()
+    }
+
+    /// Returns true if the switch was parked because a load is in flight.
+    private func deferAudioTrackSwitchIfLoading(_ id: Int64?) -> Bool {
+        deferredTrackLock.lock()
+        defer { deferredTrackLock.unlock() }
+        guard _loadInProgress else { return false }
+        _deferredAudioTrackId = .some(id)
+        return true
+    }
+
+    /// Ends the load gate. On a successful open, applies any parked audio
+    /// track switch through the normal cancel-and-switch path; on failure
+    /// the request is dropped (the VM re-applies selections on reload).
+    /// No-op outside a load, so failure funnels can call it unconditionally.
+    private func endLoadGate(applyDeferredSwitch: Bool) {
+        deferredTrackLock.lock()
+        _loadInProgress = false
+        let parked = _deferredAudioTrackId
+        _deferredAudioTrackId = nil
+        deferredTrackLock.unlock()
+        guard applyDeferredSwitch, let newId = parked, !isDisposed else { return }
+        Self.logger.info("applying deferred setAudioTrack(\(newId ?? -1)) after load")
+        markCancelled()
+        controlQueue.async { [weak self] in
+            self?.performAudioTrackSwitch(newId: newId)
+        }
+    }
+
     // MARK: - Seek coalescing
 
     /// Latest-wins latch for seek targets; see `runSeekWorker()`.
@@ -1273,6 +1322,9 @@ final class PlayerCore: NSObject {
     private func fireRejectionIfPending() -> Bool {
         guard let r = pendingRejection else { return false }
         pendingRejection = nil
+        // The load is being abandoned for a route replay; drop any parked
+        // track switch — the replacement backend re-applies selections.
+        endLoadGate(applyDeferredSwitch: false)
         DispatchQueue.main.async { [weak self] in
             self?.onUnsupportedStream?(r.reason, r.url, r.headers, r.startTime)
         }
@@ -1289,6 +1341,10 @@ final class PlayerCore: NSObject {
         lastLoadHeaders = headers
         lastLoadStartTime = startTime
         pendingRejection = nil
+
+        // Park any audio-track switch that arrives before the open
+        // completes — see `deferredTrackLock`.
+        beginLoadGate()
 
         // Signpost the full load span. Ends in `openAndDemux` after all
         // init steps complete (or `reportError` on failure).
@@ -2037,6 +2093,15 @@ final class PlayerCore: NSObject {
     func setAudioTrack(_ id: Int64?) {
         guard !isDisposed else { return }
         Self.logger.info("setAudioTrack(\(id ?? -1))")
+
+        // A switch arriving while `openAndDemux` is mid-flight must not
+        // `markCancelled()` — the interrupt callback would abort the open's
+        // startTime seek mid-read and corrupt demuxer state. Park it;
+        // `openAndDemux` applies it once the open completes.
+        if deferAudioTrackSwitchIfLoading(id) {
+            Self.logger.info("setAudioTrack(\(id ?? -1)) deferred until load completes")
+            return
+        }
 
         // Stop streaming before we start yanking state out from under the
         // feed closures.
@@ -3262,6 +3327,12 @@ final class PlayerCore: NSObject {
             os_signpost(.end, log: Self.signpostLog, name: "Load",
                         signpostID: loadSignpostID)
         }
+
+        // The open (and its startTime seek) is complete; it's now safe to
+        // apply a parked audio-track switch through the normal cancel-and-
+        // switch path. It restarts the demux loop itself, so if it cancels
+        // the one below immediately that's the standard switch sequence.
+        endLoadGate(applyDeferredSwitch: true)
 
         // Demux loop: push packets onto the bounded queues; block when full.
         runDemuxLoop()
@@ -5311,6 +5382,9 @@ final class PlayerCore: NSObject {
     }
 
     private func reportError(_ message: String) {
+        // If the failure happened mid-load, drop any parked track switch —
+        // the VM re-applies selections on reload. No-op otherwise.
+        endLoadGate(applyDeferredSwitch: false)
         Self.logger.error("\(message, privacy: .public)")
         print("[CMP] ERROR: \(message)")
         DispatchQueue.main.async { [weak self] in
