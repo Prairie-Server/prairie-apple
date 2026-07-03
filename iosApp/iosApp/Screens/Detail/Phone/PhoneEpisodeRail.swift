@@ -76,7 +76,7 @@ private struct PhoneEpisodeCard: View {
                     Text(episode.title ?? "Episode \(episode.episodeNumber)")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundColor(titleColor)
-                        .lineLimit(2, reservesSpace: true)
+                        .lineLimit(1)
                         .multilineTextAlignment(.leading)
 
                     if let metadataLine = episodeMetadataLine {
