@@ -5260,10 +5260,16 @@ final class PlayerCore: NSObject {
         // immediately. The in-band pipeline still serves selections made
         // during `openAndDemux`, where the demux head is at the playhead.
         if let extractor = ensureRuntimeSubtitleExtractor() {
+            // Same race as `performAudioTrackSwitch`: a selection applied
+            // while `openAndDemux` is still priming reads a ~0 playback
+            // clock. `pendingSkipBelowPTS` holds the requested anchor
+            // (load startTime or seek target) — without it, a resumed
+            // playback's initial subtitle selection feeds cues from the
+            // start of the file instead of the resume point.
             extractor.select(
                 trackId: SubtitleTrackIdSpace.makeAVPlayerEmbeddedTrackId(streamIndex: candidate),
                 slot: slot,
-                startSeconds: currentPlaybackTimeSeconds()
+                startSeconds: max(0, currentPlaybackTimeSeconds(), pendingSkipBelowPTS)
             )
             return
         }
@@ -5291,7 +5297,11 @@ final class PlayerCore: NSObject {
         guard let session = subtitleSession, let url = lastLoadURL else { return nil }
         let extractor = AVPlayerEmbeddedSubtitleExtractor(subtitleSession: session)
         extractor.currentMediaTimeProvider = { [weak self] in
-            self?.currentPlaybackTimeSeconds() ?? 0
+            guard let self else { return 0 }
+            // Pre-anchor the clock reads ~0; use the pending anchor so the
+            // read-ahead throttle doesn't stall a resume-point feed against
+            // a not-yet-started timeline.
+            return max(0, self.currentPlaybackTimeSeconds(), self.pendingSkipBelowPTS)
         }
         extractor.configure(
             source: AVPlayerSubtitleExtractionSource(
