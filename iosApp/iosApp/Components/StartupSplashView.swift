@@ -48,6 +48,15 @@ struct StartupSplashView: View {
                 .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
         }
         .ignoresSafeArea()
+        #elseif os(iOS)
+        GeometryReader { proxy in
+            let videoWidth = min(proxy.size.width * 0.6, 320)
+
+            StartupSplashPlayerSurface(player: player)
+                .frame(width: videoWidth, height: videoWidth * 9.0 / 16.0)
+                .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
+        }
+        .ignoresSafeArea()
         #else
         StartupSplashPlayerSurface(player: player)
             .ignoresSafeArea()
