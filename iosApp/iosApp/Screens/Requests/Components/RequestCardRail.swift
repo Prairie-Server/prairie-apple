@@ -9,6 +9,9 @@ enum RequestsUI {
     static let cardWidth: CGFloat = 220
     static let railSpacing: CGFloat = 32
     static let headerSpacing: CGFloat = 20
+    /// Headroom for the `.card` focus lift so scaled posters aren't clipped
+    /// by the rail's scroll bounds — same treatment as `TVSimilarRail`.
+    static let railVerticalPadding: CGFloat = 24
     #else
     static let cardWidth: CGFloat = ContinuumTheme.posterCardWidth
     static let railSpacing: CGFloat = 12
@@ -25,6 +28,19 @@ struct RequestCardRail<Item: Identifiable, Card: View>: View {
     @ViewBuilder let card: (Item) -> Card
 
     var body: some View {
+        #if os(tvOS)
+        ScrollView(.horizontal, showsIndicators: false) {
+            LazyHStack(alignment: .top, spacing: RequestsUI.railSpacing) {
+                ForEach(items) { item in
+                    card(item)
+                }
+            }
+            .padding(.vertical, RequestsUI.railVerticalPadding)
+        }
+        .scrollClipDisabled()
+        // Pull the rail back to the header rhythm the padding pushed out.
+        .padding(.vertical, -RequestsUI.railVerticalPadding)
+        #else
         ScrollView(.horizontal, showsIndicators: false) {
             LazyHStack(alignment: .top, spacing: RequestsUI.railSpacing) {
                 ForEach(items) { item in
@@ -32,5 +48,6 @@ struct RequestCardRail<Item: Identifiable, Card: View>: View {
                 }
             }
         }
+        #endif
     }
 }
