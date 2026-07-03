@@ -14,10 +14,10 @@ class HomeViewModel {
     var error: ErrorState?
 
     /// Sections for Home in server order, filtered to non-empty rows.
-    /// `featured` sections are intentionally excluded so Apple Home respects
-    /// the configured Home rows without rendering a separate hero surface.
+    /// `featured` sections render as ordinary rows in their server position —
+    /// Apple Home has no separate hero surface.
     var regularSections: [ResolvedSection] {
-        sections.filter { !$0.isFeatured && !$0.items.isEmpty }
+        sections.filter { !$0.items.isEmpty }
     }
 
     init() {

@@ -336,13 +336,14 @@ enum StartupContentPrefetcher {
             urls.append(url)
         }
 
-        // No client renders a featured hero anymore: entry lands on the first
-        // card of the first content row. Warm that row's logo + art first (so a
-        // cold start paints a finished first row), then the rest. (The first
-        // row's logo + backdrop are sized for the tvOS focus marquee; on other
-        // platforms only posters/episode stills render, so those two are
-        // speculative but harmless.)
-        let contentSections = response.sections.filter { !$0.isFeatured && !$0.items.isEmpty }
+        // No client renders a featured hero anymore — featured sections show
+        // as ordinary rows. Entry lands on the first card of the first content
+        // row. Warm that row's logo + art first (so a cold start paints a
+        // finished first row), then the rest. (The first row's logo + backdrop
+        // are sized for the tvOS focus marquee; on other platforms only
+        // posters/episode stills render, so those two are speculative but
+        // harmless.)
+        let contentSections = response.sections.filter { !$0.items.isEmpty }
         if let firstRow = contentSections.first {
             append(firstRow.items.first?.logoUrl)
             for item in firstRow.items {
