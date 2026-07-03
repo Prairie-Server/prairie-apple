@@ -1893,10 +1893,13 @@ final class PlayerCore: NSObject {
         } else {
             size = .zero
         }
-        guard size != videoPresentationSize else { return }
-        videoPresentationSize = size
+        // Compare-and-assign on main: `PlayerSurfaceHostView.attach` reads
+        // the property from the UI thread, so keep it main-confined rather
+        // than writing from the demux/control path.
         DispatchQueue.main.async { [weak self] in
-            self?.onVideoPresentationSizeChange?(size)
+            guard let self, size != self.videoPresentationSize else { return }
+            self.videoPresentationSize = size
+            self.onVideoPresentationSizeChange?(size)
         }
     }
 

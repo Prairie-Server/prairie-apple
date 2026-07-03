@@ -227,10 +227,12 @@ enum DetailPlaybackFormatting {
         var best: (SubtitleTrack, Int)?
         for track in tracks where track.index != nil {
             var score = 0
+            var strongSignal = false
             if let sigLang = sig.language, !sigLang.isEmpty,
                let lang = track.language,
                SubtitleAutoResolver.languagesMatch(lang, sigLang) {
                 score += 5
+                strongSignal = true
             }
             if sig.forced == (track.forced ?? false) {
                 score += 1
@@ -246,8 +248,12 @@ enum DetailPlaybackFormatting {
                let title = track.title ?? track.embeddedTitle,
                title.localizedCaseInsensitiveContains(sigLabel) {
                 score += 2
+                strongSignal = true
             }
-            if score > (best?.1 ?? 0) {
+            // Forced/HI/codec equality alone is meaningless (`false ==
+            // false` holds for nearly every track); require a language or
+            // label hit so a weak "match" can't override Auto.
+            if strongSignal, score > (best?.1 ?? 0) {
                 best = (track, score)
             }
         }
