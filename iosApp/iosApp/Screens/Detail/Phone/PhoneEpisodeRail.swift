@@ -9,10 +9,6 @@ struct PhoneEpisodeRail: View {
     let episodes: [EpisodeListItem]
     let onSelect: (String) -> Void
     var currentContentId: String? = nil
-    /// Enables the per-card compact download control; `nil` (rails without a
-    /// series scope) hides it. Capability gating happens per card so this
-    /// stays a plain pass-through.
-    var downloadContext: EpisodeDownloadContext? = nil
 
     private let cardWidth: CGFloat = 240
     private let stillHeight: CGFloat = 135   // 16:9 of 240
@@ -30,7 +26,6 @@ struct PhoneEpisodeRail: View {
                             cardWidth: cardWidth,
                             stillHeight: stillHeight,
                             stillCornerRadius: stillCornerRadius,
-                            downloadContext: downloadContext,
                             onSelect: { onSelect(episode.contentId) }
                         )
                         .id(episode.contentId)
@@ -57,29 +52,10 @@ private struct PhoneEpisodeCard: View {
     let cardWidth: CGFloat
     let stillHeight: CGFloat
     let stillCornerRadius: CGFloat
-    let downloadContext: EpisodeDownloadContext?
     let onSelect: () -> Void
-
-    private let downloadControlInset: CGFloat = 6
 
     var body: some View {
         cardButton
-            // Sibling overlay rather than a control nested inside the card
-            // button's label, so the menu / confirmation dialogs get their
-            // own hit target instead of competing with the card tap.
-            .overlay(alignment: .topTrailing) { downloadControl }
-    }
-
-    /// Compact one-tap download control pinned to the still's bottom-trailing
-    /// corner (top-trailing hosts the watched check). Reads the same
-    /// capability gate as every other download affordance.
-    @ViewBuilder
-    private var downloadControl: some View {
-        if let downloadContext, DownloadManager.shared.downloadsEnabled {
-            DownloadActionButton(episode: episode, context: downloadContext)
-                .padding(.top, stillHeight - DownloadActionButton.compactDiameter - downloadControlInset)
-                .padding(.trailing, downloadControlInset)
-        }
     }
 
     private var cardButton: some View {

@@ -253,20 +253,10 @@ struct MovieDetailContent<BelowOverview: View>: View {
                 PhoneEpisodeRail(
                     episodes: seasonEpisodes,
                     onSelect: onEpisodeTap,
-                    currentContentId: detail.contentId,
-                    downloadContext: episodeDownloadContext
+                    currentContentId: detail.contentId
                 )
             }
         }
-    }
-
-    /// Series scope for the per-card download controls; same seriesId
-    /// resolution as `SeriesDownloadMenuButton`.
-    private var episodeDownloadContext: EpisodeDownloadContext {
-        EpisodeDownloadContext(
-            seriesId: detail.seriesId ?? detail.contentId,
-            posterThumbhash: detail.posterThumbhash
-        )
     }
 
     private var episodeRailEyebrow: String {
