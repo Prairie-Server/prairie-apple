@@ -37,14 +37,16 @@ enum SubtitleFontSizePreset: String, Codable, CaseIterable, Identifiable {
         case .xxlarge: return 77
         }
         #elseif os(tvOS)
-        // Ladder rebased ~1.3x from the original tvOS values (large = old
-        // ~xlarge+) after the defaults read small on a living-room screen.
+        // Ladder shifted down one notch from the prior tvOS values (large =
+        // old medium) after the defaults read one size too big in the living
+        // room. Each preset now takes the prior rung's value; small is a new
+        // ~1.2x step below medium.
         switch self {
-        case .small: return 51
-        case .medium: return 63
-        case .large: return 74
-        case .xlarge: return 88
-        case .xxlarge: return 103
+        case .small: return 43
+        case .medium: return 51
+        case .large: return 63
+        case .xlarge: return 74
+        case .xxlarge: return 88
         }
         #else
         switch self {
