@@ -1,42 +1,48 @@
 #if os(tvOS)
 import SwiftUI
 
-/// Native tvOS settings root menu — modeled on Apple TV's own Settings
-/// app: a short `Form` of drill-in category rows (with their current
-/// value summarized on the trailing edge) instead of one giant wall of
-/// controls. Each category opens a dedicated sub-screen.
+/// Skyline-styled tvOS settings: a two-pane layout instead of a stock
+/// full-width `Form`. The left rail holds the profile card, the category
+/// list, and Sign Out; the right pane renders the focused category's
+/// controls inline. The pane follows rail focus live (like the system
+/// Settings app's split screens), so there is no drill-in navigation —
+/// which also sidesteps the tvOS 26 push-from-tab-Form problem that used
+/// to force every sub-screen through a `fullScreenCover`. Only option
+/// pickers still present as covers (`TVSettingsPickerSheet`).
 ///
-/// **Why covers instead of push.** `TVMainTabView` wraps a
-/// sidebar-adaptive `TabView` in a single outer `NavigationStack` bound
-/// to `router.path`. On tvOS 26, `NavigationLink` /
-/// `.pickerStyle(.navigationLink)` pushes from inside a tab's `Form`
-/// don't reach that outer stack — they either silently do nothing or
-/// queue behind the tab and only appear when the user exits Settings.
-/// A local `NavigationStack` doesn't capture them either. Presenting
-/// sub-screens via `.fullScreenCover(item:)` bypasses the ambiguity
-/// (plain `.sheet` renders as a narrow centered card on tvOS 26 that
-/// clips a `Form`); each cover hosts its own `NavigationStack` + `Form`.
-///
-/// `FocusAwareLabel` / `FocusAwareValueRow` / `FocusAwareAccountRow`
-/// flip each row's foreground to `continuumBackground` on focus so the
-/// inherited app-wide white `.tint` doesn't wash out text on the focus
-/// platter.
+/// Focus model: one native graph. Each pane is a `.focusSection()`;
+/// vertical movement stays in-pane and Left/Right bridges panes
+/// geometrically. No manual focus mutation (see docs/tvos-focus.md).
 struct TVSettingsView: View {
     @State private var viewModel = TVSettingsViewModel()
     @State private var showSignOutConfirm = false
-    @State private var activeScreen: SubScreen?
+    @State private var selectedCategory: TVSettingsCategory = .general
+    @FocusState private var railFocus: RailItem?
     @Environment(AppRouter.self) private var router
 
     var body: some View {
-        Form {
-            accountSection
-            preferencesSection
-            accountActionsSection
-            aboutSection
+        HStack(alignment: .top, spacing: 64) {
+            rail
+                .frame(width: 430)
+                .focusSection()
+
+            detailPane
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .focusSection()
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .safeAreaPadding(.horizontal, ContinuumTheme.Skyline.safeAreaX)
+        .safeAreaPadding(.top, 64)
+        .defaultFocus($railFocus, .category(selectedCategory))
         .task { await viewModel.load() }
-        .fullScreenCover(item: $activeScreen) { screen in
-            subScreen(for: screen)
+        .onChange(of: railFocus) { _, focus in
+            // The pane previews whatever category the rail focus rests on.
+            // Profile / Sign Out keep the last category visible.
+            if case .category(let category) = focus, category != selectedCategory {
+                withAnimation(.easeOut(duration: ContinuumTheme.normalDuration)) {
+                    selectedCategory = category
+                }
+            }
         }
         .onChange(of: viewModel.editorSubtitleLanguage) { _, _ in
             Task { await viewModel.saveProfilePrefs() }
@@ -60,18 +66,100 @@ struct TVSettingsView: View {
         }
     }
 
-    // MARK: - Account header (tappable — switches profile)
+    // MARK: - Left rail
 
-    private var accountSection: some View {
-        Section {
-            Button(action: switchProfile) {
-                FocusAwareAccountRow(
+    private var rail: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Settings")
+                .font(.system(size: 44, weight: .bold))
+                .foregroundColor(.continuumOnSurface)
+                .padding(.leading, 20)
+                .padding(.bottom, 26)
+
+            profileRow
+                .padding(.bottom, 22)
+
+            ForEach(TVSettingsCategory.allCases) { category in
+                categoryRow(category)
+            }
+
+            Spacer(minLength: 24)
+
+            signOutRow
+
+            Text("Silo \(Self.appVersion)")
+                .font(.system(size: 16, weight: .medium, design: .monospaced))
+                .tracking(1)
+                .foregroundColor(.continuumSecondaryText.opacity(0.7))
+                .padding(.leading, 20)
+                .padding(.top, 10)
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+        .padding(.bottom, 24)
+    }
+
+    private var profileRow: some View {
+        Button(action: switchProfile) {
+            HStack(spacing: 18) {
+                ProfileAvatarView(
+                    avatar: viewModel.profileAvatar,
                     name: viewModel.displayName,
-                    subtitle: viewModel.accountSubtitle,
-                    avatar: viewModel.profileAvatar
+                    size: 68
                 )
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(viewModel.displayName)
+                        .font(.system(size: 27, weight: .semibold))
+                        .lineLimit(1)
+                    Text(viewModel.accountSubtitle)
+                        .font(.system(size: 19))
+                        .opacity(0.62)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 0)
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 17, weight: .semibold))
+                    .opacity(0.5)
             }
         }
+        .buttonStyle(TVSettingsRailRowStyle())
+        .focused($railFocus, equals: .profile)
+    }
+
+    private func categoryRow(_ category: TVSettingsCategory) -> some View {
+        Button {
+            selectedCategory = category
+        } label: {
+            HStack(spacing: 16) {
+                Image(systemName: category.icon)
+                    .font(.system(size: 22, weight: .medium))
+                    .frame(width: 34)
+                Text(category.title)
+                    .font(.system(size: 27, weight: .medium))
+                Spacer(minLength: 0)
+            }
+        }
+        .buttonStyle(TVSettingsRailRowStyle(isSelected: category == selectedCategory))
+        .focused($railFocus, equals: .category(category))
+    }
+
+    private var signOutRow: some View {
+        Button {
+            showSignOutConfirm = true
+        } label: {
+            HStack(spacing: 16) {
+                Image(systemName: "rectangle.portrait.and.arrow.right")
+                    .font(.system(size: 22, weight: .medium))
+                    .frame(width: 34)
+                Text("Sign Out")
+                    .font(.system(size: 27, weight: .medium))
+                Spacer(minLength: 0)
+            }
+        }
+        .buttonStyle(TVSettingsRailRowStyle(isDestructive: true))
+        .focused($railFocus, equals: .signOut)
     }
 
     private func switchProfile() {
@@ -79,97 +167,154 @@ struct TVSettingsView: View {
         router.showProfileSelection()
     }
 
-    // MARK: - Preferences (drill-in categories)
+    // MARK: - Detail pane
 
-    private var preferencesSection: some View {
-        Section("Preferences") {
-            Button { activeScreen = .general } label: {
-                FocusAwareRowLabel(title: "General")
-            }
+    private var detailPane: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 8) {
+                paneHeader
 
-            Button { activeScreen = .playback } label: {
-                FocusAwareValueRow(
-                    title: "Playback",
-                    value: TVSettingsOptions.label(
-                        for: viewModel.preferredQuality,
-                        in: TVSettingsOptions.quality
-                    )
-                )
+                paneContent
+                    .padding(.top, 18)
             }
+            .frame(maxWidth: 1080, alignment: .leading)
+            .padding(.bottom, 64)
+        }
+        // Rebuild the scroll view per category so it opens at the top.
+        // Safe: selection only changes while focus is in the rail.
+        .id(selectedCategory)
+        .transition(.opacity)
+    }
 
-            Button { activeScreen = .subtitles } label: {
-                FocusAwareValueRow(
-                    title: "Subtitles",
-                    value: TVSettingsOptions.label(
-                        for: viewModel.editorSubtitleLanguage,
-                        in: TVSettingsOptions.subtitleLanguage
-                    )
-                )
-            }
+    private var paneHeader: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(selectedCategory.eyebrow)
+                .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                .tracking(2)
+                .foregroundColor(.continuumSecondaryText)
+
+            Text(selectedCategory.title)
+                .font(.system(size: 38, weight: .semibold))
+                .foregroundColor(.continuumOnSurface)
+
+            Text(selectedCategory.blurb)
+                .font(.system(size: 20))
+                .foregroundColor(.continuumSecondaryText)
+        }
+        .padding(.horizontal, 24)
+    }
+
+    @ViewBuilder
+    private var paneContent: some View {
+        switch selectedCategory {
+        case .general:
+            TVGeneralSettingsPane()
+        case .playback:
+            TVPlaybackSettingsPane(viewModel: viewModel)
+        case .subtitles:
+            TVSubtitleSettingsPane(viewModel: viewModel)
+        case .server:
+            serverPane
         }
     }
 
-    // MARK: - Account actions
+    // MARK: - Server pane
 
-    private var accountActionsSection: some View {
-        Section("Account") {
-            Button(role: .destructive) {
-                showSignOutConfirm = true
-            } label: {
-                FocusAwareLabel(
-                    title: "Sign Out",
-                    systemImage: "rectangle.portrait.and.arrow.right",
-                    isDestructive: true
-                )
-            }
-        }
-    }
+    private var serverPane: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TVSettingsSectionHeader("ACTIVE SERVER")
 
-    // MARK: - About / Server
-
-    private var aboutSection: some View {
-        Section("About") {
-            LabeledContent("Server", value: viewModel.serverDisplayName.isEmpty
-                ? "Not configured"
-                : viewModel.serverDisplayName)
+            TVSettingsInfoRow(
+                title: "Server",
+                value: viewModel.serverDisplayName.isEmpty
+                    ? "Not configured"
+                    : viewModel.serverDisplayName
+            )
 
             if !viewModel.serverUrl.isEmpty,
                viewModel.serverDisplayName != viewModel.serverUrl {
-                LabeledContent("URL", value: viewModel.serverUrl)
+                TVSettingsInfoRow(title: "Address", value: viewModel.serverUrl)
             }
 
             Button { router.navigate(to: .serverList) } label: {
-                FocusAwareLabel(title: "Manage Servers", systemImage: "server.rack")
+                HStack(spacing: 16) {
+                    Image(systemName: "server.rack")
+                        .font(.system(size: 22, weight: .medium))
+                    Text("Manage Servers")
+                        .font(.system(size: 26))
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 18, weight: .semibold))
+                        .opacity(0.55)
+                }
             }
+            .buttonStyle(TVSettingsPaneRowStyle())
 
-            LabeledContent("Version", value: Self.appVersion)
+            TVSettingsSectionHeader("ABOUT")
+
+            TVSettingsInfoRow(title: "App Version", value: Self.appVersion)
         }
     }
 
-    // MARK: - Sub-screens
+    // MARK: - Rail model
 
-    @ViewBuilder
-    private func subScreen(for screen: SubScreen) -> some View {
-        switch screen {
-        case .general:
-            TVGeneralSettingsView()
-        case .playback:
-            TVPlaybackSettingsView(viewModel: viewModel)
-        case .subtitles:
-            TVSubtitleSettingsView(viewModel: viewModel)
-        }
-    }
-
-    enum SubScreen: String, Identifiable {
-        case general
-        case playback
-        case subtitles
-
-        var id: String { rawValue }
+    enum RailItem: Hashable {
+        case profile
+        case category(TVSettingsCategory)
+        case signOut
     }
 
     private static var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+    }
+}
+
+// MARK: - Categories
+
+enum TVSettingsCategory: String, CaseIterable, Identifiable {
+    case general
+    case playback
+    case subtitles
+    case server
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .general: return "General"
+        case .playback: return "Playback"
+        case .subtitles: return "Subtitles"
+        case .server: return "Server"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .general: return "gearshape"
+        case .playback: return "play.rectangle"
+        case .subtitles: return "captions.bubble"
+        case .server: return "server.rack"
+        }
+    }
+
+    var eyebrow: String {
+        switch self {
+        case .general, .playback, .subtitles: return "PREFERENCES"
+        case .server: return "CONNECTION"
+        }
+    }
+
+    var blurb: String {
+        switch self {
+        case .general:
+            return "App-level options for this Apple TV."
+        case .playback:
+            return "Streaming quality and episode behavior for this Apple TV."
+        case .subtitles:
+            return "Language, behavior, and on-screen appearance."
+        case .server:
+            return "The Silo server this Apple TV is connected to."
+        }
     }
 }
 #endif

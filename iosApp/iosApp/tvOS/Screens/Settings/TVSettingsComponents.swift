@@ -84,6 +84,231 @@ enum TVSettingsOptions {
     }
 }
 
+// MARK: - Rail row style
+
+/// Left-rail row: quiet at rest, `chrome.selected` fill when it is the
+/// active category, white platter with dark content on focus. Matches the
+/// Skyline panel-row grammar (`TVBrowsePanelRowStyle`) with a selected
+/// state added.
+struct TVSettingsRailRowStyle: ButtonStyle {
+    var isSelected: Bool = false
+    var isDestructive: Bool = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        TVSettingsRailRowBody(
+            configuration: configuration,
+            isSelected: isSelected,
+            isDestructive: isDestructive
+        )
+    }
+}
+
+private struct TVSettingsRailRowBody: View {
+    let configuration: ButtonStyleConfiguration
+    let isSelected: Bool
+    let isDestructive: Bool
+    @Environment(\.isFocused) private var isFocused
+
+    var body: some View {
+        configuration.label
+            .padding(.horizontal, 20)
+            .padding(.vertical, 15)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .foregroundColor(foreground)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(fill)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(
+                        isSelected && !isFocused
+                            ? Color.continuumChromeSelectedBorder
+                            : Color.clear,
+                        lineWidth: 1
+                    )
+            )
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
+    }
+
+    private var foreground: Color {
+        if isDestructive {
+            return isFocused ? Color(hex: "#D22F3F") : .continuumError
+        }
+        return isFocused ? .continuumBackground : .continuumOnSurface
+    }
+
+    private var fill: Color {
+        if isFocused { return .continuumOnSurface }
+        if isSelected { return .continuumChromeSelectedFill }
+        return .clear
+    }
+}
+
+// MARK: - Pane row style
+
+/// Detail-pane row: faint glass fill with a hairline at rest, white
+/// platter with dark content on focus.
+struct TVSettingsPaneRowStyle: ButtonStyle {
+    var isDestructive: Bool = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        TVSettingsPaneRowBody(configuration: configuration, isDestructive: isDestructive)
+    }
+}
+
+private struct TVSettingsPaneRowBody: View {
+    let configuration: ButtonStyleConfiguration
+    let isDestructive: Bool
+    @Environment(\.isFocused) private var isFocused
+
+    var body: some View {
+        configuration.label
+            .padding(.horizontal, 24)
+            .padding(.vertical, 17)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .foregroundColor(foreground)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(isFocused ? Color.continuumOnSurface : Color.continuumChromeRestingFill)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(
+                        isFocused ? Color.clear : Color.continuumChromeRestingBorder,
+                        lineWidth: 1
+                    )
+            )
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
+    }
+
+    private var foreground: Color {
+        if isDestructive {
+            return isFocused ? Color(hex: "#D22F3F") : .continuumError
+        }
+        return isFocused ? .continuumBackground : .continuumOnSurface
+    }
+}
+
+// MARK: - Pane rows
+
+/// Picker row: title, current value, chevron. Activating it presents the
+/// option sheet.
+struct TVSettingsPickerRow: View {
+    let title: String
+    let value: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 16) {
+                Text(title)
+                    .font(.system(size: 26))
+                    .lineLimit(1)
+                Spacer(minLength: 16)
+                Text(value)
+                    .font(.system(size: 24))
+                    .opacity(0.68)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 18, weight: .semibold))
+                    .opacity(0.55)
+            }
+        }
+        .buttonStyle(TVSettingsPaneRowStyle())
+    }
+}
+
+/// One-press boolean row in the system-Settings idiom: click flips the
+/// value, the trailing text reads On / Off. (Same pattern as the player
+/// info HUD — no `Toggle`, whose system chrome fights the custom layout.)
+struct TVSettingsToggleRow: View {
+    let title: String
+    let isOn: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 16) {
+                Text(title)
+                    .font(.system(size: 26))
+                    .lineLimit(1)
+                Spacer(minLength: 16)
+                Text(isOn ? "On" : "Off")
+                    .font(.system(size: 24, weight: isOn ? .semibold : .regular))
+                    .opacity(isOn ? 0.9 : 0.55)
+            }
+        }
+        .buttonStyle(TVSettingsPaneRowStyle())
+        .accessibilityValue(isOn ? "On" : "Off")
+        .accessibilityAddTraits(.isToggle)
+    }
+}
+
+/// Read-only fact row (server name, version). Focusable so the d-pad
+/// flows through it naturally, but activating it does nothing — same as
+/// the About rows in the system Settings app.
+struct TVSettingsInfoRow: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        Button {} label: {
+            HStack(spacing: 16) {
+                Text(title)
+                    .font(.system(size: 26))
+                    .lineLimit(1)
+                Spacer(minLength: 16)
+                Text(value)
+                    .font(.system(size: 24))
+                    .opacity(0.68)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+        }
+        .buttonStyle(TVSettingsPaneRowStyle())
+    }
+}
+
+// MARK: - Section header / footer
+
+/// Mono uppercase section eyebrow, matching the Skyline dropdown and
+/// filter-panel header grammar.
+struct TVSettingsSectionHeader: View {
+    let title: String
+
+    init(_ title: String) { self.title = title }
+
+    var body: some View {
+        Text(title)
+            .font(.system(size: 15, weight: .semibold, design: .monospaced))
+            .tracking(2)
+            .foregroundColor(.continuumSecondaryText)
+            .padding(.horizontal, 24)
+            .padding(.top, 26)
+            .padding(.bottom, 6)
+    }
+}
+
+/// Explanatory caption under a section's rows.
+struct TVSettingsFooter: View {
+    let text: String
+
+    init(_ text: String) { self.text = text }
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 19))
+            .foregroundColor(.continuumSecondaryText)
+            .padding(.horizontal, 24)
+            .padding(.top, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 // MARK: - Picker sheet
 
 /// Modal option picker presented by `.fullScreenCover(item:)` (tvOS 26
@@ -140,8 +365,8 @@ struct TVSettingsPickerSheet: View {
                     }
                 }
             }
+            .frame(maxWidth: 960)
             .navigationTitle(title)
-            .safeAreaPadding(.horizontal, ContinuumTheme.safePadding)
             .safeAreaPadding(.vertical, ContinuumTheme.safePadding / 2)
             .background(Color.continuumBackground.ignoresSafeArea())
         }
@@ -189,10 +414,14 @@ private struct TVSettingsPickerOptionRow: View {
     private var isFocused: Bool { focusedOptionID == option.id }
 
     var body: some View {
-        HStack {
+        HStack(spacing: 16) {
+            Image(systemName: "checkmark")
+                .font(.system(size: 22, weight: .semibold))
+                .opacity(isSelected ? 1 : 0)
+
             VStack(alignment: .leading, spacing: 3) {
                 Text(option.label)
-                    .font(.system(size: 30, weight: .medium))
+                    .font(.system(size: 28, weight: .medium))
                     .lineLimit(1)
 
                 if let previewFontName = option.previewFontName {
@@ -202,19 +431,22 @@ private struct TVSettingsPickerOptionRow: View {
                         .opacity(0.72)
                 }
             }
-            .foregroundStyle(isFocused ? Color.continuumBackground : .continuumOnSurface)
+
             Spacer(minLength: 0)
-            if isSelected {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 24, weight: .semibold))
-                    .foregroundStyle(isFocused ? Color.continuumBackground : .continuumOnSurface)
-            }
         }
-        .padding(.horizontal, 26)
-        .padding(.vertical, 16)
+        .foregroundStyle(isFocused ? Color.continuumBackground : .continuumOnSurface)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 15)
         .background(
-            RoundedRectangle(cornerRadius: 14)
-                .fill(isFocused ? Color.white : Color.continuumSurfaceElevated.opacity(0.74))
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(isFocused ? Color.continuumOnSurface : Color.continuumChromeRestingFill)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(
+                    isFocused ? Color.clear : Color.continuumChromeRestingBorder,
+                    lineWidth: 1
+                )
         )
         .contentShape(RoundedRectangle(cornerRadius: 14))
         .focusable(true)
@@ -273,124 +505,6 @@ struct TVSettingsSubtitlePreview: View {
             RoundedRectangle(cornerRadius: 8)
                 .stroke(Color(hex: appearance.textOutlineColor), lineWidth: 2)
         }
-    }
-}
-
-// MARK: - Focus-aware row primitives
-
-/// Label-style row (icon + title) that flips to a dark foreground when
-/// the enclosing Button gains focus, so text stays legible against the
-/// light focus platter despite the app-wide white tint.
-struct FocusAwareLabel: View {
-    let title: String
-    let systemImage: String
-    var isDestructive: Bool = false
-
-    @Environment(\.isFocused) private var isFocused
-
-    var body: some View {
-        Label(title, systemImage: systemImage)
-            .foregroundStyle(foreground)
-    }
-
-    private var foreground: Color {
-        if isFocused { return .continuumBackground }
-        return isDestructive ? .continuumError : .continuumOnSurface
-    }
-}
-
-/// Title + trailing value row for drill-in and picker rows. Flips both
-/// pieces dark on focus, matching `FocusAwareLabel`.
-struct FocusAwareValueRow: View {
-    let title: String
-    let value: String
-
-    @Environment(\.isFocused) private var isFocused
-
-    var body: some View {
-        LabeledContent {
-            Text(value).foregroundStyle(valueColor)
-        } label: {
-            Text(title).foregroundStyle(titleColor)
-        }
-    }
-
-    private var titleColor: Color {
-        isFocused ? .continuumBackground : .continuumOnSurface
-    }
-
-    private var valueColor: Color {
-        (isFocused ? Color.continuumBackground : Color.continuumOnSurface).opacity(0.6)
-    }
-}
-
-/// Focus-aware text label for icon-less Form rows (`Toggle`s and plain
-/// action buttons). Destructive rows flip from red to the dark platter
-/// color on focus, exactly like `FocusAwareLabel`.
-struct FocusAwareRowLabel: View {
-    let title: String
-    var isDestructive: Bool = false
-
-    @Environment(\.isFocused) private var isFocused
-
-    var body: some View {
-        Text(title)
-            .foregroundStyle(foreground)
-    }
-
-    private var foreground: Color {
-        if isFocused { return .continuumBackground }
-        return isDestructive ? .continuumError : .continuumOnSurface
-    }
-}
-
-/// Tappable account row at the top of Settings. Switches profile on
-/// activation and flips foreground colors on focus like every other
-/// row in the Form.
-struct FocusAwareAccountRow: View {
-    let name: String
-    let subtitle: String
-    let avatar: String?
-
-    @Environment(\.isFocused) private var isFocused
-
-    var body: some View {
-        HStack(spacing: 20) {
-            ProfileAvatarView(
-                avatar: avatar,
-                name: name,
-                size: 72,
-                backgroundColor: isFocused
-                    ? Color.continuumBackground.opacity(0.15)
-                    : .continuumSurfaceElevated,
-                textColor: isFocused ? .continuumBackground : .continuumOnSurface
-            )
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(name)
-                    .font(.headline)
-                    .foregroundStyle(primaryColor)
-
-                Text(subtitle)
-                    .font(.subheadline)
-                    .foregroundStyle(secondaryColor)
-            }
-
-            Spacer(minLength: 0)
-
-            Image(systemName: "chevron.right")
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(secondaryColor)
-        }
-        .padding(.vertical, 4)
-    }
-
-    private var primaryColor: Color {
-        isFocused ? .continuumBackground : .continuumOnSurface
-    }
-
-    private var secondaryColor: Color {
-        (isFocused ? Color.continuumBackground : Color.continuumOnSurface).opacity(0.6)
     }
 }
 #endif

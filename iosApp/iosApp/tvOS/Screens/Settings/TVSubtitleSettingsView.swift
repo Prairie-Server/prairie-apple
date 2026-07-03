@@ -1,25 +1,21 @@
 #if os(tvOS)
 import SwiftUI
 
-/// Subtitles sub-screen of tvOS Settings, presented as a full-screen
-/// cover from the root menu. Profile-wide prefs (language / behavior /
-/// forced) save through the root view's `onChange` handlers; the
+/// Subtitles pane of tvOS Settings, rendered inline in the right pane of
+/// the two-pane `TVSettingsView`. Profile-wide prefs (language / behavior
+/// / forced) save through the root view's `onChange` handlers; the
 /// appearance block writes a per-device override directly.
-struct TVSubtitleSettingsView: View {
+struct TVSubtitleSettingsPane: View {
     @Bindable var viewModel: TVSettingsViewModel
     @State private var activePicker: PickerKind?
 
     var body: some View {
-        NavigationStack {
-            Form {
-                profileSection
-                if AICapabilities.shared.metadataEnabled {
-                    metadataLanguageSection
-                }
-                appearanceSection
+        VStack(alignment: .leading, spacing: 8) {
+            profileSection
+            if AICapabilities.shared.metadataEnabled {
+                metadataLanguageSection
             }
-            .navigationTitle("Subtitles")
-            .background(Color.continuumBackground.ignoresSafeArea())
+            appearanceSection
         }
         .fullScreenCover(item: $activePicker) { kind in
             pickerSheet(for: kind)
@@ -28,92 +24,86 @@ struct TVSubtitleSettingsView: View {
 
     // MARK: - Sections
 
+    @ViewBuilder
     private var profileSection: some View {
-        Section {
-            Button { activePicker = .language } label: {
-                FocusAwareValueRow(
-                    title: "Language",
-                    value: TVSettingsOptions.label(for: viewModel.editorSubtitleLanguage, in: TVSettingsOptions.subtitleLanguage)
-                )
-            }
+        TVSettingsSectionHeader("PROFILE")
 
-            Button { activePicker = .mode } label: {
-                FocusAwareValueRow(
-                    title: "Behavior",
-                    value: TVSettingsOptions.label(for: viewModel.editorSubtitleMode, in: TVSettingsOptions.subtitleMode)
-                )
-            }
+        TVSettingsPickerRow(
+            title: "Language",
+            value: TVSettingsOptions.label(for: viewModel.editorSubtitleLanguage, in: TVSettingsOptions.subtitleLanguage)
+        ) { activePicker = .language }
 
-            Toggle(isOn: Binding(
-                get: { viewModel.editorShowForcedSubtitles == "on" },
-                set: { viewModel.editorShowForcedSubtitles = $0 ? "on" : "off" }
-            )) {
-                FocusAwareRowLabel(title: "Show Forced Subtitles")
-            }
-        } header: {
-            Text("Profile")
-        } footer: {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Used to pick a matching track when one is available. Forced subtitles cover foreign-language dialogue even when subtitles are off or set to auto.")
-                prefSaveFooter
-            }
+        TVSettingsPickerRow(
+            title: "Behavior",
+            value: TVSettingsOptions.label(for: viewModel.editorSubtitleMode, in: TVSettingsOptions.subtitleMode)
+        ) { activePicker = .mode }
+
+        TVSettingsToggleRow(
+            title: "Show Forced Subtitles",
+            isOn: viewModel.editorShowForcedSubtitles == "on"
+        ) {
+            viewModel.editorShowForcedSubtitles =
+                viewModel.editorShowForcedSubtitles == "on" ? "off" : "on"
         }
+
+        TVSettingsFooter("Used to pick a matching track when one is available. Forced subtitles cover foreign-language dialogue even when subtitles are off or set to auto.")
+        prefSaveFooter
     }
 
+    @ViewBuilder
     private var metadataLanguageSection: some View {
-        Section {
-            Button { activePicker = .metadataLanguage } label: {
-                FocusAwareValueRow(
-                    title: "Metadata Language",
-                    value: TVSettingsOptions.label(for: viewModel.editorPreferredMetadataLanguage, in: TVSettingsOptions.metadataLanguage)
-                )
-            }
-        } header: {
-            Text("Metadata")
-        } footer: {
-            Text("Translates descriptions and taglines into your preferred language when available. Titles are never translated.")
-        }
+        TVSettingsSectionHeader("METADATA")
+
+        TVSettingsPickerRow(
+            title: "Metadata Language",
+            value: TVSettingsOptions.label(for: viewModel.editorPreferredMetadataLanguage, in: TVSettingsOptions.metadataLanguage)
+        ) { activePicker = .metadataLanguage }
+
+        TVSettingsFooter("Translates descriptions and taglines into your preferred language when available. Titles are never translated.")
     }
 
+    @ViewBuilder
     private var appearanceSection: some View {
-        Section {
-            Toggle(isOn: Binding(
-                get: { viewModel.subtitleUsesDeviceAppearanceOverride },
-                set: { enabled in
-                    Task { await viewModel.setSubtitleDeviceOverrideEnabled(enabled) }
-                }
-            )) {
-                FocusAwareRowLabel(title: "Custom Appearance")
-            }
+        TVSettingsSectionHeader("APPEARANCE")
 
-            pickerRow("Font Size", options: TVSettingsOptions.subtitleSize,
-                      selection: viewModel.subtitleAppearance.fontSize.rawValue, kind: .fontSize)
-            pickerRow("Font Family", options: TVSettingsOptions.fontFamily,
-                      selection: viewModel.subtitleAppearance.fontFamily.rawValue, kind: .fontFamily)
-            pickerRow("Font Color", options: TVSettingsOptions.fontColor,
-                      selection: viewModel.subtitleAppearance.fontColor.lowercased(), kind: .fontColor)
-
-            Toggle(isOn: appearanceBoolBinding(\.textOutline)) {
-                FocusAwareRowLabel(title: "Text Outline")
-            }
-
-            pickerRow("Outline Color", options: TVSettingsOptions.outlineColor,
-                      selection: viewModel.subtitleAppearance.textOutlineColor.lowercased(), kind: .outlineColor)
-            pickerRow("Background Style", options: TVSettingsOptions.backgroundStyle,
-                      selection: viewModel.subtitleAppearance.backgroundStyle.rawValue, kind: .backgroundStyle)
-            pickerRow("Background Opacity", options: TVSettingsOptions.backgroundOpacity,
-                      selection: String(viewModel.subtitleAppearance.backgroundOpacity), kind: .backgroundOpacity)
-            pickerRow("Background Color", options: TVSettingsOptions.backgroundColor,
-                      selection: viewModel.subtitleAppearance.backgroundColor.lowercased(), kind: .backgroundColor)
-            pickerRow("Position", options: TVSettingsOptions.position,
-                      selection: viewModel.subtitleAppearance.position.rawValue, kind: .position)
-        } header: {
-            Text("Appearance")
-        } footer: {
-            Text(viewModel.subtitleUsesDeviceAppearanceOverride
-                 ? "Appearance is saved on the server for this profile on this Apple TV."
-                 : "Appearance is using the server fallback for this profile on this Apple TV.")
+        TVSettingsToggleRow(
+            title: "Custom Appearance",
+            isOn: viewModel.subtitleUsesDeviceAppearanceOverride
+        ) {
+            let enabled = !viewModel.subtitleUsesDeviceAppearanceOverride
+            Task { await viewModel.setSubtitleDeviceOverrideEnabled(enabled) }
         }
+
+        pickerRow("Font Size", options: TVSettingsOptions.subtitleSize,
+                  selection: viewModel.subtitleAppearance.fontSize.rawValue, kind: .fontSize)
+        pickerRow("Font Family", options: TVSettingsOptions.fontFamily,
+                  selection: viewModel.subtitleAppearance.fontFamily.rawValue, kind: .fontFamily)
+        pickerRow("Font Color", options: TVSettingsOptions.fontColor,
+                  selection: viewModel.subtitleAppearance.fontColor.lowercased(), kind: .fontColor)
+
+        TVSettingsToggleRow(
+            title: "Text Outline",
+            isOn: viewModel.subtitleAppearance.textOutline
+        ) {
+            var next = viewModel.subtitleAppearance
+            next.textOutline.toggle()
+            Task { await viewModel.setSubtitleAppearance(next) }
+        }
+
+        pickerRow("Outline Color", options: TVSettingsOptions.outlineColor,
+                  selection: viewModel.subtitleAppearance.textOutlineColor.lowercased(), kind: .outlineColor)
+        pickerRow("Background Style", options: TVSettingsOptions.backgroundStyle,
+                  selection: viewModel.subtitleAppearance.backgroundStyle.rawValue, kind: .backgroundStyle)
+        pickerRow("Background Opacity", options: TVSettingsOptions.backgroundOpacity,
+                  selection: String(viewModel.subtitleAppearance.backgroundOpacity), kind: .backgroundOpacity)
+        pickerRow("Background Color", options: TVSettingsOptions.backgroundColor,
+                  selection: viewModel.subtitleAppearance.backgroundColor.lowercased(), kind: .backgroundColor)
+        pickerRow("Position", options: TVSettingsOptions.position,
+                  selection: viewModel.subtitleAppearance.position.rawValue, kind: .position)
+
+        TVSettingsFooter(viewModel.subtitleUsesDeviceAppearanceOverride
+            ? "Appearance is saved on the server for this profile on this Apple TV."
+            : "Appearance is using the server fallback for this profile on this Apple TV.")
     }
 
     @ViewBuilder
@@ -121,12 +111,15 @@ struct TVSubtitleSettingsView: View {
         if let state = viewModel.prefSaveState {
             switch state {
             case .saving:
-                Text("Saving…")
+                TVSettingsFooter("Saving…")
             case .saved:
-                Text("Saved")
+                TVSettingsFooter("Saved")
             case .failed(let err):
                 Text("Couldn't save: \(err)")
+                    .font(.system(size: 19))
                     .foregroundStyle(.red)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 4)
             }
         }
     }
@@ -139,12 +132,10 @@ struct TVSubtitleSettingsView: View {
         selection: String,
         kind: PickerKind
     ) -> some View {
-        Button { activePicker = kind } label: {
-            FocusAwareValueRow(
-                title: title,
-                value: TVSettingsOptions.label(for: selection, in: options)
-            )
-        }
+        TVSettingsPickerRow(
+            title: title,
+            value: TVSettingsOptions.label(for: selection, in: options)
+        ) { activePicker = kind }
     }
 
     // MARK: - Pickers
@@ -258,17 +249,6 @@ struct TVSubtitleSettingsView: View {
                 guard let intValue = Int(value) else { return }
                 var next = viewModel.subtitleAppearance
                 next[keyPath: keyPath] = intValue
-                Task { await viewModel.setSubtitleAppearance(next) }
-            }
-        )
-    }
-
-    private func appearanceBoolBinding(_ keyPath: WritableKeyPath<SubtitleAppearance, Bool>) -> Binding<Bool> {
-        Binding(
-            get: { viewModel.subtitleAppearance[keyPath: keyPath] },
-            set: { value in
-                var next = viewModel.subtitleAppearance
-                next[keyPath: keyPath] = value
                 Task { await viewModel.setSubtitleAppearance(next) }
             }
         )

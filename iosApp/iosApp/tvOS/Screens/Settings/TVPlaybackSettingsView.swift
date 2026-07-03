@@ -1,23 +1,18 @@
 #if os(tvOS)
 import SwiftUI
 
-/// Playback sub-screen of tvOS Settings, presented as a full-screen
-/// cover from the root menu (push navigation inside the tab's `Form`
-/// is unreliable on tvOS 26 — see `TVSettingsView`). Option pickers
-/// are nested full-screen covers.
-struct TVPlaybackSettingsView: View {
+/// Playback pane of tvOS Settings, rendered inline in the right pane of
+/// the two-pane `TVSettingsView`. Option pickers present as full-screen
+/// covers (plain sheets render as narrow clipped cards on tvOS 26).
+struct TVPlaybackSettingsPane: View {
     @Bindable var viewModel: TVSettingsViewModel
     @State private var activePicker: PickerKind?
 
     var body: some View {
-        NavigationStack {
-            Form {
-                streamingSection
-                episodesSection
-                resetSection
-            }
-            .navigationTitle("Playback")
-            .background(Color.continuumBackground.ignoresSafeArea())
+        VStack(alignment: .leading, spacing: 8) {
+            streamingSection
+            episodesSection
+            resetSection
         }
         .fullScreenCover(item: $activePicker) { kind in
             pickerSheet(for: kind)
@@ -26,89 +21,87 @@ struct TVPlaybackSettingsView: View {
 
     // MARK: - Sections
 
+    @ViewBuilder
     private var streamingSection: some View {
-        Section {
-            Button { activePicker = .quality } label: {
-                FocusAwareValueRow(
-                    title: "Quality",
-                    value: TVSettingsOptions.label(for: viewModel.preferredQuality, in: TVSettingsOptions.quality)
-                )
-            }
+        TVSettingsSectionHeader("STREAMING")
 
-            Button { activePicker = .audioLanguage } label: {
-                FocusAwareValueRow(
-                    title: "Audio Language",
-                    value: TVSettingsOptions.label(for: viewModel.preferredAudioLanguage, in: TVSettingsOptions.audioLanguage)
-                )
-            }
+        TVSettingsPickerRow(
+            title: "Quality",
+            value: TVSettingsOptions.label(for: viewModel.preferredQuality, in: TVSettingsOptions.quality)
+        ) { activePicker = .quality }
 
-            Toggle(isOn: Binding(
-                get: { viewModel.preferProfile7HDR10Fallback },
-                set: { value in
-                    viewModel.preferProfile7HDR10Fallback = value
-                    Task { await viewModel.setPreferProfile7HDR10Fallback(value) }
-                }
-            )) {
-                FocusAwareRowLabel(title: "Profile 7 HDR10 Fallback")
-            }
-        } header: {
-            Text("Streaming")
-        } footer: {
-            Text("The fallback plays Dolby Vision Profile 7 as HDR10 on this Apple TV.")
+        TVSettingsPickerRow(
+            title: "Audio Language",
+            value: TVSettingsOptions.label(for: viewModel.preferredAudioLanguage, in: TVSettingsOptions.audioLanguage)
+        ) { activePicker = .audioLanguage }
+
+        TVSettingsToggleRow(
+            title: "Profile 7 HDR10 Fallback",
+            isOn: viewModel.preferProfile7HDR10Fallback
+        ) {
+            let value = !viewModel.preferProfile7HDR10Fallback
+            viewModel.preferProfile7HDR10Fallback = value
+            Task { await viewModel.setPreferProfile7HDR10Fallback(value) }
         }
+
+        TVSettingsFooter("The fallback plays Dolby Vision Profile 7 as HDR10 on this Apple TV.")
     }
 
+    @ViewBuilder
     private var episodesSection: some View {
-        Section("Episodes") {
-            Toggle(isOn: Binding(
-                get: { viewModel.autoPlayNext },
-                set: { value in
-                    viewModel.autoPlayNext = value
-                    Task { await viewModel.setAutoPlayNext(value) }
-                }
-            )) {
-                FocusAwareRowLabel(title: "Auto-Play Next Episode")
-            }
+        TVSettingsSectionHeader("EPISODES")
 
-            Button { activePicker = .nextUpPrompt } label: {
-                FocusAwareValueRow(
-                    title: "Show Next Up",
-                    value: TVSettingsOptions.label(for: String(viewModel.nextUpPromptSeconds), in: TVSettingsOptions.nextUpPrompt)
-                )
-            }
+        TVSettingsToggleRow(
+            title: "Auto-Play Next Episode",
+            isOn: viewModel.autoPlayNext
+        ) {
+            let value = !viewModel.autoPlayNext
+            viewModel.autoPlayNext = value
+            Task { await viewModel.setAutoPlayNext(value) }
+        }
 
-            Toggle(isOn: Binding(
-                get: { viewModel.skipIntros },
-                set: { value in
-                    viewModel.skipIntros = value
-                    Task { await viewModel.setSkipIntros(value) }
-                }
-            )) {
-                FocusAwareRowLabel(title: "Skip Intros")
-            }
+        TVSettingsPickerRow(
+            title: "Show Next Up",
+            value: TVSettingsOptions.label(for: String(viewModel.nextUpPromptSeconds), in: TVSettingsOptions.nextUpPrompt)
+        ) { activePicker = .nextUpPrompt }
 
-            Toggle(isOn: Binding(
-                get: { viewModel.skipCredits },
-                set: { value in
-                    viewModel.skipCredits = value
-                    Task { await viewModel.setSkipCredits(value) }
-                }
-            )) {
-                FocusAwareRowLabel(title: "Skip Credits")
-            }
+        TVSettingsToggleRow(
+            title: "Skip Intros",
+            isOn: viewModel.skipIntros
+        ) {
+            let value = !viewModel.skipIntros
+            viewModel.skipIntros = value
+            Task { await viewModel.setSkipIntros(value) }
+        }
+
+        TVSettingsToggleRow(
+            title: "Skip Credits",
+            isOn: viewModel.skipCredits
+        ) {
+            let value = !viewModel.skipCredits
+            viewModel.skipCredits = value
+            Task { await viewModel.setSkipCredits(value) }
         }
     }
 
+    @ViewBuilder
     private var resetSection: some View {
-        Section {
-            Button(role: .destructive) {
-                Task { await viewModel.resetPlaybackDeviceSettings() }
-            } label: {
-                FocusAwareRowLabel(title: "Reset Playback Overrides", isDestructive: true)
+        TVSettingsSectionHeader("RESET")
+
+        Button {
+            Task { await viewModel.resetPlaybackDeviceSettings() }
+        } label: {
+            HStack(spacing: 16) {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.system(size: 22, weight: .medium))
+                Text("Reset Playback Overrides")
+                    .font(.system(size: 26))
+                Spacer(minLength: 0)
             }
-        } footer: {
-            Text("Resets playback choices for this Apple TV and profile back to the server fallback.")
         }
+        .buttonStyle(TVSettingsPaneRowStyle(isDestructive: true))
+
+        TVSettingsFooter("Resets playback choices for this Apple TV and profile back to the server fallback.")
     }
 
     // MARK: - Pickers
