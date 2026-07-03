@@ -43,6 +43,10 @@ struct MobilePlayerGestureLayer: View {
     @State private var gaugeFraction: Double = 0
     @State private var gaugeHideTask: Task<Void, Never>?
 
+    /// Video-gravity mode announced after a pinch; shown briefly as a toast.
+    @State private var gravityToast: VideoGravity?
+    @State private var gravityToastHideTask: Task<Void, Never>?
+
     /// Width of the brightness/volume strips along each screen edge.
     private static let edgeZoneWidth: CGFloat = 88
 
@@ -94,6 +98,7 @@ struct MobilePlayerGestureLayer: View {
             viewModel.endHoldFastForward()
             skipFlashHideTask?.cancel()
             gaugeHideTask?.cancel()
+            gravityToastHideTask?.cancel()
         }
     }
 
@@ -175,9 +180,13 @@ struct MobilePlayerGestureLayer: View {
         MagnificationGesture()
             .onEnded { scale in
                 if scale > 1.08 {
-                    viewModel.setVideoGravity(nextVideoGravity(after: viewModel.settings.videoGravity))
+                    let gravity = nextVideoGravity(after: viewModel.settings.videoGravity)
+                    viewModel.setVideoGravity(gravity)
+                    showGravityToast(gravity)
                 } else if scale < 0.92 {
-                    viewModel.setVideoGravity(previousVideoGravity(before: viewModel.settings.videoGravity))
+                    let gravity = previousVideoGravity(before: viewModel.settings.videoGravity)
+                    viewModel.setVideoGravity(gravity)
+                    showGravityToast(gravity)
                 }
             }
     }
@@ -210,6 +219,16 @@ struct MobilePlayerGestureLayer: View {
         }
     }
 
+    private func showGravityToast(_ gravity: VideoGravity) {
+        withAnimation(.easeOut(duration: 0.15)) { gravityToast = gravity }
+        gravityToastHideTask?.cancel()
+        gravityToastHideTask = Task {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.25)) { gravityToast = nil }
+        }
+    }
+
     private func scheduleGaugeHide() {
         gaugeHideTask?.cancel()
         gaugeHideTask = Task {
@@ -229,6 +248,13 @@ struct MobilePlayerGestureLayer: View {
                 )
                 .transition(.opacity)
                 .id(flash.id)
+                .allowsHitTesting(false)
+        }
+
+        if let gravity = gravityToast {
+            gravityToastChip(for: gravity)
+                .position(x: size.width / 2, y: 46)
+                .transition(.opacity)
                 .allowsHitTesting(false)
         }
 
@@ -260,6 +286,27 @@ struct MobilePlayerGestureLayer: View {
         .foregroundStyle(.white)
         .frame(width: 74, height: 74)
         .siloGlass(in: Circle())
+    }
+
+    private func gravityToastChip(for gravity: VideoGravity) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: gravityToastIcon(for: gravity))
+                .font(.system(size: 12, weight: .semibold))
+            Text(gravity.label)
+                .font(.system(size: 14, weight: .bold))
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .siloGlass(in: Capsule())
+    }
+
+    private func gravityToastIcon(for gravity: VideoGravity) -> String {
+        switch gravity {
+        case .fit:     return "rectangle.arrowtriangle.2.inward"
+        case .fill:    return "rectangle.arrowtriangle.2.outward"
+        case .stretch: return "arrow.left.and.right.square"
+        }
     }
 
     private var holdFastForwardChip: some View {
