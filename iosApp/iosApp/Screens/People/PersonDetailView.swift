@@ -41,6 +41,9 @@ final class PersonDetailViewModel {
 
     private static let metadataRefreshWindowSeconds: TimeInterval = 120
     private static let metadataRefreshPollInterval: Duration = .seconds(3)
+    /// Consecutive unchanged polls after which the person is treated as
+    /// settled — the server refresh ran and this is all the metadata it has.
+    private static let metadataRefreshSettledPollCount = 5
     private static let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "com.continuum.app",
         category: "PersonDetail"
@@ -51,6 +54,7 @@ final class PersonDetailViewModel {
     private var generation = 0
     private var metadataRefreshTask: Task<Void, Never>?
     private var autoRefreshRequestedPersonId: Int?
+    private var metadataRefreshExhaustedPersonId: Int?
 
     #if os(tvOS)
     private var prefetchedPosterURLs: Set<URL> = []
@@ -141,6 +145,7 @@ final class PersonDetailViewModel {
             return
         }
         guard metadataRefreshTask == nil else { return }
+        guard metadataRefreshExhaustedPersonId != person.id else { return }
 
         let shouldQueueRefresh = autoRefreshRequestedPersonId != person.id
         if shouldQueueRefresh {
@@ -162,7 +167,7 @@ final class PersonDetailViewModel {
             metadataRefreshTask = nil
             isRefreshingMetadata = false
             if !wasCancelled, person?.isMetadataIncomplete == true {
-                autoRefreshRequestedPersonId = nil
+                metadataRefreshExhaustedPersonId = personId
             }
             Self.logger.debug("finishMetadataRefresh personId=\(personId, privacy: .public) cancelled=\(wasCancelled, privacy: .public)")
         }
@@ -174,6 +179,7 @@ final class PersonDetailViewModel {
         }
 
         let deadline = Date.now.addingTimeInterval(Self.metadataRefreshWindowSeconds)
+        var unchangedPolls = 0
         while !Task.isCancelled && Date.now < deadline {
             do {
                 try await Task.sleep(for: Self.metadataRefreshPollInterval)
@@ -186,6 +192,15 @@ final class PersonDetailViewModel {
             do {
                 let updatedPerson = try await ContinuumAPI.shared.person(id: personId)
                 guard personId == self.personId else { return }
+                if updatedPerson == person {
+                    unchangedPolls += 1
+                    if unchangedPolls >= Self.metadataRefreshSettledPollCount {
+                        Self.logger.debug("settledMetadataRefresh personId=\(personId, privacy: .public)")
+                        return
+                    }
+                    continue
+                }
+                unchangedPolls = 0
                 person = updatedPerson
                 if !updatedPerson.isMetadataIncomplete {
                     Self.logger.debug("completeMetadataRefresh personId=\(personId, privacy: .public)")
@@ -284,7 +299,9 @@ struct PersonDetailView: View {
         #else
         PhonePersonDetailContent(person: person, viewModel: viewModel)
             .refreshable {
+                async let overlayRefresh: Void = OverlayPrefsStore.shared.refresh()
                 await viewModel.reload()
+                await overlayRefresh
             }
         #endif
     }
