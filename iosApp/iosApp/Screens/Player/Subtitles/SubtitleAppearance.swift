@@ -195,7 +195,7 @@ struct SubtitleAppearance: Codable, Equatable {
         fontFamily: .sansSerif,
         fontColor: "#ffffff",
         backgroundColor: "#000000",
-        backgroundStyle: .shadow,
+        backgroundStyle: .box,
         backgroundOpacity: 75,
         textOutline: false,
         textOutlineColor: "#000000",
