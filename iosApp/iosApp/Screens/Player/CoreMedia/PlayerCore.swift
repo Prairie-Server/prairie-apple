@@ -772,6 +772,16 @@ final class PlayerCore: NSObject {
 
     private let embeddedSubtitlePipeline = EmbeddedSubtitlePipeline()
 
+    /// Dedicated subtitle-only FFmpeg context for runtime embedded-track
+    /// switches (shared implementation with the AVPlayer route). The main
+    /// demuxer runs tens of seconds ahead of the playhead and discards
+    /// packets of unselected subtitle streams, so enabling a track through
+    /// the in-band pipeline mid-playback would show no cues until the
+    /// playhead crosses the toggle-time demux head. This context re-opens
+    /// the source, seeks to the playhead, and feeds libass immediately.
+    /// Created lazily on the first runtime switch; reset per load.
+    private var runtimeSubtitleExtractor: AVPlayerEmbeddedSubtitleExtractor?
+
     /// libass-backed subtitle session. Created eagerly in `init()` so the
     /// overlay view can receive a non-nil renderer reference before the
     /// first `load()` is issued — otherwise `layoutSubviews` never pushes
@@ -1407,6 +1417,10 @@ final class PlayerCore: NSObject {
         // but keep the renderer/library alive — the overlay view already
         // holds a weak reference to it and we don't want to break that.
         subtitleSession?.teardown()
+        // The runtime extractor is bound to the previous load's URL;
+        // rebuild lazily against the new source on the next switch.
+        runtimeSubtitleExtractor?.teardown()
+        runtimeSubtitleExtractor = nil
         applyCurrentSubtitleStyling()
 
         // Re-open. This zeroes the cancel flag inside `resetCancellation`.
@@ -1803,6 +1817,11 @@ final class PlayerCore: NSObject {
             self.lastReportedSeconds = -1
             self.onTimeChange?(target)
         }
+
+        // Extractor-fed subtitle slots re-seek their own context to the
+        // new target (re-select is a fresh open + seek). Runs only on the
+        // final seek of a scrub burst — superseded seeks returned above.
+        runtimeSubtitleExtractor?.seek(to: target)
 
         // Restart demux + feeds from the seek point. Re-check disposal —
         // dispose() may have landed while we were blocked in
@@ -2358,7 +2377,7 @@ final class PlayerCore: NSObject {
                     isExternal: false,
                     // Phase 3: subtitle rendering is live. The selected stream
                     // is whichever decoder we've opened.
-                    isSelected: streamIndex == embeddedSubtitlePipeline.streamIndex(for: .primary),
+                    isSelected: streamIndex == selectedEmbeddedSubtitleStreamIndex(slot: .primary),
                     ffIndex: Int(streamIndex),
                     srcId: nil
                 ))
@@ -2919,8 +2938,17 @@ final class PlayerCore: NSObject {
         return Self.containsAtmosHint(track.title) || Self.containsAtmosHint(track.codec)
     }
 
+    /// Embedded subtitle stream selected in `slot`, regardless of which
+    /// mechanism feeds it: the in-band pipeline (selections made during
+    /// open) or the runtime extractor (mid-playback switches). -1 = none.
+    private func selectedEmbeddedSubtitleStreamIndex(slot: SubtitleSlot) -> Int32 {
+        let pipelineIndex = embeddedSubtitlePipeline.streamIndex(for: slot)
+        if pipelineIndex >= 0 { return pipelineIndex }
+        return runtimeSubtitleExtractor?.selectedStreamIndex(for: slot) ?? -1
+    }
+
     private func currentSubtitleStats() -> String? {
-        let subtitleStreamIndex = embeddedSubtitlePipeline.streamIndex(for: .primary)
+        let subtitleStreamIndex = selectedEmbeddedSubtitleStreamIndex(slot: .primary)
         guard subtitleStreamIndex >= 0 else { return "Off" }
         if let track = currentTracks.first(where: { $0.kind == .sub && $0.trackId == Int64(subtitleStreamIndex) }) {
             return track.title ?? track.lang ?? track.codec ?? "On"
@@ -5192,6 +5220,7 @@ final class PlayerCore: NSObject {
         // selection).
         if let newId, SubtitleTrackIdSpace.isAILive(newId) {
             embeddedSubtitlePipeline.tearDownEmbeddedSlot(slot: slot)
+            runtimeSubtitleExtractor?.stopFeeding(slot: slot)
             return
         }
 
@@ -5201,12 +5230,14 @@ final class PlayerCore: NSObject {
         // this slot.
         if let newId, SubtitleTrackIdSpace.isSidecar(newId) {
             embeddedSubtitlePipeline.tearDownEmbeddedSlot(slot: slot)
+            runtimeSubtitleExtractor?.stopFeeding(slot: slot)
             let idx = SubtitleTrackIdSpace.sidecarIndex(from: newId)
             subtitleSession?.openSidecar(urlIndex: idx, slot: slot)
             return
         }
 
         embeddedSubtitlePipeline.tearDownEmbeddedSlot(slot: slot)
+        runtimeSubtitleExtractor?.stopFeeding(slot: slot)
 
         guard let formatCtx, let newId else {
             // No new track — user disabled subtitles in this slot.
@@ -5219,6 +5250,26 @@ final class PlayerCore: NSObject {
             subtitleSession?.closeSlot(slot)
             return
         }
+
+        // Runtime enable goes through the dedicated extractor, not the
+        // in-band pipeline: the main demuxer has already read (and, with
+        // the stream unselected, discarded) the subtitle packets for the
+        // whole buffered region ahead of the playhead, so an in-band feed
+        // would render nothing until that buffer plays through. The
+        // extractor seeks its own context to the playhead and feeds cues
+        // immediately. The in-band pipeline still serves selections made
+        // during `openAndDemux`, where the demux head is at the playhead.
+        if let extractor = ensureRuntimeSubtitleExtractor() {
+            extractor.select(
+                trackId: SubtitleTrackIdSpace.makeAVPlayerEmbeddedTrackId(streamIndex: candidate),
+                slot: slot,
+                startSeconds: currentPlaybackTimeSeconds()
+            )
+            return
+        }
+
+        // No source URL to re-open (should not happen after a successful
+        // load) — fall back to the in-band feed.
         if !setupSubtitleDecoder(streamIndex: candidate, slot: slot) {
             Self.logger.warning(
                 "setSubtitleTrack: decoder setup failed for id=\(candidate) slot=\(slot.rawValue)"
@@ -5231,6 +5282,28 @@ final class PlayerCore: NSObject {
             session: subtitleSession,
             isCancelled: { [weak self] in self?.isCancelled ?? true }
         )
+    }
+
+    /// Lazily creates the runtime subtitle extractor for the current
+    /// load. Runs on `controlQueue`.
+    private func ensureRuntimeSubtitleExtractor() -> AVPlayerEmbeddedSubtitleExtractor? {
+        if let runtimeSubtitleExtractor { return runtimeSubtitleExtractor }
+        guard let session = subtitleSession, let url = lastLoadURL else { return nil }
+        let extractor = AVPlayerEmbeddedSubtitleExtractor(subtitleSession: session)
+        extractor.currentMediaTimeProvider = { [weak self] in
+            self?.currentPlaybackTimeSeconds() ?? 0
+        }
+        extractor.configure(
+            source: AVPlayerSubtitleExtractionSource(
+                mediaURL: url,
+                requestHeaders: lastLoadHeaders,
+                routeLabel: "coremedia-runtime",
+                seekable: true
+            ),
+            probe: false
+        )
+        runtimeSubtitleExtractor = extractor
+        return extractor
     }
 
     // MARK: - Font attachments
@@ -5405,6 +5478,8 @@ final class PlayerCore: NSObject {
         audioOutputConfig = nil
 
         embeddedSubtitlePipeline.teardown()
+        runtimeSubtitleExtractor?.teardown()
+        runtimeSubtitleExtractor = nil
 
         videoStreamIndex = -1
         audioStreamIndex = -1
