@@ -640,15 +640,14 @@ private final class CompositorCanvas {
                 continue
             }
 
-            // libass documents render output as RRGGBBTT, where TT is
-            // inverted transparency. The Apple xcframework we are using
-            // can expose the ASS-native AABBGGRR packing through Swift.
-            // Prefer documented order, but fall back when it would make
-            // an otherwise opaque ASS-style color fully transparent.
-            let color = img.color
-            let documented = unpackDocumentedRenderColor(color)
-            let assNative = unpackASSNativeColor(color)
-            let rgba = documented.alpha == 0 && assNative.alpha > 0 ? assNative : documented
+            // libass render output color is RRGGBBTT, where TT is inverted
+            // transparency. (An earlier fallback here re-read the color as
+            // AABBGGRR when the documented read looked fully transparent —
+            // that was masking incorrectly packed override-style colors
+            // from SubtitleStylingOverride, and it resurrected genuinely
+            // faded-out glyphs as opaque. Both are fixed; trust the
+            // documented order.)
+            let rgba = unpackDocumentedRenderColor(img.color)
             if rgba.alpha == 0 {
                 current = img.next
                 continue
@@ -725,13 +724,4 @@ private final class CompositorCanvas {
         )
     }
 
-    private func unpackASSNativeColor(_ color: UInt32) -> (r: UInt8, g: UInt8, b: UInt8, alpha: UInt8) {
-        let transparency = UInt8((color >> 24) & 0xFF)
-        return (
-            UInt8(color & 0xFF),
-            UInt8((color >> 8) & 0xFF),
-            UInt8((color >> 16) & 0xFF),
-            UInt8(255 - UInt16(transparency))
-        )
-    }
 }

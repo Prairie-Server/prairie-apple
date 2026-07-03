@@ -69,6 +69,28 @@ final class SubtitleStylingOverrideTests: XCTestCase {
         XCTAssertEqual(fields[6], "&H80000000")
     }
 
+    // MARK: - Struct color packing (libass internal RRGGBBAA)
+
+    func testStructColorPackingIsInternalRGBA() {
+        // Black box at 75% opacity: alpha byte (100-75)*255/100 = 63 = 0x3F
+        // must land in the LOW byte, not the red channel — packing it high
+        // rendered the default box as opaque dark red.
+        XCTAssertEqual(
+            SubtitleStylingOverride.assColor(hexRGBUInt: "#000000", alphaByte: 0x3F),
+            0x0000003F
+        )
+        // Opaque white text.
+        XCTAssertEqual(
+            SubtitleStylingOverride.assColor(hexRGBUInt: "#FFFFFF", alphaByte: 0x00),
+            0xFFFFFF00
+        )
+        // Channel order: pure red opaque → R in the high byte.
+        XCTAssertEqual(
+            SubtitleStylingOverride.assColor(hexRGBUInt: "#FF0000", alphaByte: 0x00),
+            0xFF000000
+        )
+    }
+
     // MARK: - Font size presets (rebased so large == old xxlarge)
 
     func testFontSizePresetsRebasedAroundLarge() {

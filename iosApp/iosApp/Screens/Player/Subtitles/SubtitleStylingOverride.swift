@@ -264,7 +264,7 @@ enum SubtitleStylingOverride {
         style.FontName = fontCString
         style.FontSize = params.fontSize
         style.PrimaryColour = assColor(hexRGBUInt: params.textColorHex, alphaByte: 0x00)
-        style.SecondaryColour = 0x00FFFFFF
+        style.SecondaryColour = 0xFFFFFF00 // opaque white, internal RRGGBBAA
         style.OutlineColour = assColor(hexRGBUInt: params.effectiveOutlineColorHex, alphaByte: 0x00)
         style.BackColour = assColor(
             hexRGBUInt: params.backgroundColorHex,
@@ -359,13 +359,15 @@ enum SubtitleStylingOverride {
         return String(format: "&H%02X%02X%02X%02X", alphaByte, b, g, r)
     }
 
-    /// ASS color format (numeric form, used in struct fields):
-    /// `(alpha<<24) | (blue<<16) | (green<<8) | red` per libass convention.
-    /// Note: libass stores this as UInt32 little-endian but the struct
-    /// field type in C is `uint32_t`.
-    private static func assColor(hexRGBUInt: String, alphaByte: UInt8) -> UInt32 {
+    /// libass internal color format (numeric form, used in `ASS_Style`
+    /// struct fields): `0xRRGGBBAA` with inverted alpha in the low byte
+    /// (00 = opaque, FF = transparent). This is what libass's own parser
+    /// produces (`parse_color_tag` byte-swaps the file-format `&HAABBGGRR`
+    /// value) and what `ass_set_selective_style_override` copies verbatim —
+    /// it is NOT the ASS file format. Internal for tests.
+    static func assColor(hexRGBUInt: String, alphaByte: UInt8) -> UInt32 {
         let (r, g, b) = rgbBytes(fromHex: hexRGBUInt)
-        return (UInt32(alphaByte) << 24) | (UInt32(b) << 16) | (UInt32(g) << 8) | UInt32(r)
+        return (UInt32(r) << 24) | (UInt32(g) << 16) | (UInt32(b) << 8) | UInt32(alphaByte)
     }
 
     /// Parse `#RRGGBB` (or `RRGGBB`) into raw bytes. Falls back to
