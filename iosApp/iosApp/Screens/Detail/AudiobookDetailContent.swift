@@ -12,7 +12,7 @@ struct AudiobookDetailContent: View {
 
     var body: some View {
         #if os(tvOS)
-        tvBody
+        TVAudiobookDetailView(detail: detail, onNavigateToItem: onNavigateToItem)
         #else
         phoneBody
         #endif
@@ -58,59 +58,6 @@ struct AudiobookDetailContent: View {
         }
     }
 
-    #if os(tvOS)
-    private var tvBody: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: sectionSpacing) {
-                header
-                aboutSection
-
-                if !parts.isEmpty {
-                    detailSection(title: "Parts") {
-                        VStack(spacing: 10) {
-                            ForEach(parts.indices, id: \.self) { index in
-                                partRow(part: parts[index], fallbackIndex: index)
-                            }
-                        }
-                    }
-                }
-
-                if !displayChapters.isEmpty {
-                    detailSection(title: "Chapters") {
-                        VStack(spacing: 10) {
-                            ForEach(displayChapters) { chapter in
-                                chapterRow(chapter)
-                            }
-                        }
-                    }
-                }
-
-                commonSections
-            }
-            .padding(.horizontal, ContinuumTheme.safePadding)
-            .padding(.top, topPadding)
-            .padding(.bottom, bottomPadding)
-        }
-        .continuumBackground()
-    }
-
-    private var header: some View {
-        ZStack(alignment: .bottomLeading) {
-            audiobookBackdrop
-            HStack(alignment: .center, spacing: 56) {
-                cover(size: coverSize)
-                headerText
-                    .frame(maxWidth: 900, alignment: .leading)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, ContinuumTheme.safePadding)
-            .padding(.bottom, 64)
-            .padding(.top, 120)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-    #endif
-
     private var narrationsSection: some View {
         detailSection(title: "Alternate Narrations") {
             VStack(spacing: 10) {
@@ -143,163 +90,6 @@ struct AudiobookDetailContent: View {
             }
         }
     }
-
-    // MARK: - tvOS header (10-foot cinematic layout)
-
-    #if os(tvOS)
-    private var headerText: some View {
-        VStack(alignment: headerAlignment, spacing: 14) {
-            audiobookEyebrow
-            Text(detail.title)
-                .font(titleFont)
-                .fontWeight(.bold)
-                .multilineTextAlignment(headerTextAlignment)
-                .foregroundColor(.continuumOnSurface)
-
-            if !metadataLine.isEmpty {
-                Text(metadataLine)
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(headerTextAlignment)
-            }
-
-            if let publisher = detail.audiobook?.publisher, !publisher.isEmpty {
-                Text(publisher)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-
-            actionRow
-                .padding(.top, 8)
-        }
-    }
-
-    @ViewBuilder
-    private var actionRow: some View {
-        // The hero pills own their focus appearance — system bordered
-        // styles render white-on-white here because the tvOS root tints
-        // controls with `.continuumOnSurface`.
-        HStack(spacing: 24) {
-            TVPrimaryPillButton(icon: primaryActionIcon, title: primaryPlayLabel) {
-                primaryAction()
-            }
-
-            TVSecondaryPillButton(icon: "arrow.counterclockwise", title: "Start Over") {
-                audioStore.play(contentId: detail.contentId, restart: true)
-            }
-
-            if !otherNarrations.isEmpty {
-                Menu {
-                    ForEach(otherNarrations) { narration in
-                        Button { onNavigateToItem(narration.contentId) } label: {
-                            Text(narration.narrators.isEmpty ? narration.title
-                                 : narration.narrators.joined(separator: ", "))
-                        }
-                    }
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "person.wave.2").font(.system(size: 22, weight: .semibold))
-                        Text("NARRATION").font(.system(size: 18, weight: .bold)).tracking(1.0).opacity(0.6)
-                        Text(currentNarratorLabel).font(.system(size: 22, weight: .semibold)).lineLimit(1)
-                        Image(systemName: "chevron.down").font(.system(size: 15, weight: .bold)).opacity(0.6)
-                    }
-                }
-                .menuStyle(.button)
-                .buttonStyle(TVPillButtonStyle(kind: .secondary))
-            }
-        }
-    }
-
-    /// A blurred, darkened wash of the square cover stands in for a 16:9
-    /// backdrop, keeping the audiobook page in the cinematic family.
-    @ViewBuilder
-    private var audiobookBackdrop: some View {
-        ZStack {
-            if let url = detail.posterUrl, !url.isEmpty {
-                AsyncImageView(url: url, thumbhash: detail.posterThumbhash,
-                               targetSize: CGSize(width: 600, height: 600), contentMode: .fill)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 760)
-                    .clipped()
-                    .blur(radius: 60)
-                    .opacity(0.5)
-            } else {
-                Color.continuumSurface.frame(height: 760)
-            }
-            LinearGradient(
-                stops: [
-                    .init(color: Color.continuumBackground.opacity(0.55), location: 0.0),
-                    .init(color: Color.continuumBackground.opacity(0.30), location: 0.5),
-                    .init(color: Color.continuumBackground, location: 1.0),
-                ],
-                startPoint: .top, endPoint: .bottom
-            )
-            .frame(height: 760)
-        }
-        .frame(height: 760)
-        .clipped()
-    }
-
-    private var audiobookEyebrow: some View {
-        HStack(spacing: 12) {
-            Rectangle().fill(Color.white.opacity(0.85))
-                .frame(width: 34, height: 4).cornerRadius(2)
-            Text("AUDIOBOOK")
-                .font(.system(size: 18, weight: .bold)).tracking(3)
-                .foregroundColor(.white.opacity(0.78))
-        }
-    }
-
-    private func chapterRow(_ chapter: DisplayChapter) -> some View {
-        Button {
-            audioStore.play(
-                contentId: detail.contentId,
-                restart: false,
-                startPosition: chapter.startSeconds
-            )
-        } label: {
-            HStack(spacing: 14) {
-                Image(systemName: "list.bullet.indent")
-                    .foregroundStyle(.secondary)
-                    .frame(width: 28)
-                Text(chapter.title)
-                    .font(.continuumBody)
-                    .lineLimit(1)
-                Spacer()
-                Text(PlayerTimeFormatter.formatHMS(chapter.startSeconds))
-                    .font(.continuumCaption)
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-            }
-            .contentShape(Rectangle())
-            .padding(.horizontal, 28)
-            .padding(.vertical, 18)
-        }
-        .buttonStyle(TVAudiobookRowStyle())
-    }
-
-    private func partRow(part: FileVersion, fallbackIndex: Int) -> some View {
-        HStack(spacing: 14) {
-            Image(systemName: "waveform")
-                .foregroundStyle(.secondary)
-                .frame(width: 28)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(partTitle(part, fallbackIndex: fallbackIndex))
-                    .font(.continuumBody)
-                    .lineLimit(1)
-                Text(partSubtitle(part))
-                    .font(.continuumCaption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer()
-            Text(PlayerTimeFormatter.formatRuntime(partDuration(part)))
-                .font(.continuumCaption)
-                .foregroundStyle(.secondary)
-        }
-        .padding(.vertical, 4)
-    }
-    #endif
 
     // MARK: - iOS / macOS hero
 
@@ -785,29 +575,6 @@ struct AudiobookDetailContent: View {
         }
     }
 
-    @ViewBuilder
-    private func cover(size: CGFloat) -> some View {
-        if let url = detail.posterUrl, !url.isEmpty {
-            AsyncImageView(
-                url: url,
-                thumbhash: detail.posterThumbhash,
-                targetSize: CGSize(width: size, height: size),
-                contentMode: .fill
-            )
-            .frame(width: size, height: size)
-            .clipShape(RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius))
-        } else {
-            RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius)
-                .fill(Color.continuumSurfaceElevated)
-                .frame(width: size, height: size)
-                .overlay {
-                    Image(systemName: "book.closed")
-                        .font(.system(size: size * 0.22, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                }
-        }
-    }
-
     // MARK: - Audiobook timeline data
 
     private var parts: [FileVersion] {
@@ -897,47 +664,6 @@ struct AudiobookDetailContent: View {
         AudiobookPlaybackContext.partDuration(part)
     }
 
-    private func joinedNames(_ people: [AudiobookPerson]?) -> String? {
-        people?
-            .map(\.name)
-            .filter { !$0.isEmpty }
-            .joined(separator: ", ")
-    }
-
-    #if os(tvOS)
-    private var currentNarratorLabel: String {
-        guard let names = joinedNames(detail.audiobook?.narrators), !names.isEmpty else {
-            return "Default"
-        }
-        return names
-    }
-
-    private var metadataLine: String {
-        var tokens: [String] = []
-        if let authors = joinedNames(detail.audiobook?.authors), !authors.isEmpty {
-            tokens.append(authors)
-        }
-        if let narrators = joinedNames(detail.audiobook?.narrators), !narrators.isEmpty {
-            tokens.append("Narrated by \(narrators)")
-        }
-        let runtime = PlayerTimeFormatter.formatRuntime(totalDurationSeconds)
-        if !runtime.isEmpty {
-            tokens.append(runtime)
-        }
-        return tokens.joined(separator: "  ")
-    }
-
-    private var primaryPlayLabel: String {
-        if let resumePosition {
-            return "Resume \(PlayerTimeFormatter.formatHMS(resumePosition))"
-        }
-        if isFinished {
-            return "Play Again"
-        }
-        return "Play"
-    }
-    #endif
-
     /// Total book duration, preferring the server's authoritative value and
     /// falling back to the stitched part durations.
     private var totalDurationSeconds: Double {
@@ -948,20 +674,6 @@ struct AudiobookDetailContent: View {
             return duration
         }
         return parts.reduce(0) { $0 + partDuration($1) }
-    }
-
-    /// Codec / container metadata is server-tooling detail — kept off the
-    /// hero entirely and shown without bitrate (the old "0 kbps" came from
-    /// integer-dividing a kbps value by 1000).
-    private func partSubtitle(_ part: FileVersion) -> String {
-        var tokens: [String] = []
-        if let codec = part.codecAudio, !codec.isEmpty {
-            tokens.append(codec.uppercased())
-        }
-        if let container = part.container, !container.isEmpty {
-            tokens.append(container.uppercased())
-        }
-        return tokens.isEmpty ? "Audio part" : tokens.joined(separator: "  ")
     }
 
     // MARK: - iOS / macOS hero data
@@ -1081,29 +793,15 @@ struct AudiobookDetailContent: View {
 
     // MARK: - Platform metrics
 
-    private var sectionTitleFont: Font {
-        #if os(tvOS)
-        return .title2
-        #else
-        return .headline
-        #endif
-    }
+    // The shared About / rail sections now render only on iOS & macOS — the
+    // tvOS audiobook page is `TVAudiobookDetailView` — so these carry phone
+    // values only. They stay outside `#if` so the shared section builders
+    // still resolve when the file is compiled for tvOS.
+    private var sectionTitleFont: Font { .headline }
 
-    private var aboutFont: Font {
-        #if os(tvOS)
-        return .body
-        #else
-        return .system(size: 15)
-        #endif
-    }
+    private var aboutFont: Font { .system(size: 15) }
 
-    private var relatedPosterWidth: CGFloat {
-        #if os(tvOS)
-        return 220
-        #else
-        return 110
-        #endif
-    }
+    private var relatedPosterWidth: CGFloat { 110 }
 
     private var relatedPosterHeight: CGFloat {
         // Audiobook covers are square — don't stretch them into the
@@ -1111,47 +809,13 @@ struct AudiobookDetailContent: View {
         relatedPosterWidth
     }
 
-    private var sectionSpacing: CGFloat {
-        #if os(tvOS)
-        return 48
-        #else
-        return 30
-        #endif
-    }
+    private var sectionSpacing: CGFloat { 30 }
 
-    private var railSpacing: CGFloat {
-        #if os(tvOS)
-        return 30
-        #else
-        return 12
-        #endif
-    }
+    private var railSpacing: CGFloat { 12 }
 
-    private var topPadding: CGFloat {
-        #if os(tvOS)
-        return 0
-        #else
-        return 0
-        #endif
-    }
+    private var bottomPadding: CGFloat { 44 }
 
-    private var bottomPadding: CGFloat {
-        #if os(tvOS)
-        return 80
-        #else
-        return 44
-        #endif
-    }
-
-    #if os(tvOS)
-    private var coverSize: CGFloat { 360 }
-
-    private var titleFont: Font { .system(size: 56, weight: .bold) }
-
-    private var headerAlignment: HorizontalAlignment { .leading }
-
-    private var headerTextAlignment: TextAlignment { .leading }
-    #else
+    #if !os(tvOS)
     private var phoneCoverSize: CGFloat { 196 }
 
     private var phoneBackdropHeight: CGFloat { 470 }
@@ -1213,37 +877,3 @@ private struct AudiobookResumePill: View {
 }
 #endif
 
-#if os(tvOS)
-/// Native list-row focus grammar for chapter rows (mirrors
-/// `TVLibraryPickerRowStyle`): white fill + black text on focus, faint
-/// resting fill, gentle scale — instead of the plain-style halo that
-/// blows a full-width row up into a giant white slab.
-private struct TVAudiobookRowStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        TVAudiobookRowBody(configuration: configuration)
-    }
-}
-
-private struct TVAudiobookRowBody: View {
-    let configuration: ButtonStyleConfiguration
-
-    @Environment(\.isFocused) private var isFocused
-
-    var body: some View {
-        configuration.label
-            .foregroundColor(isFocused ? .black : .white)
-            .background(
-                RoundedRectangle(cornerRadius: ContinuumTheme.smallCornerRadius, style: .continuous)
-                    .fill(isFocused ? Color.white : Color.white.opacity(0.06))
-            )
-            .shadow(
-                color: isFocused ? .black.opacity(0.4) : .clear,
-                radius: isFocused ? 18 : 0,
-                y: isFocused ? 8 : 0
-            )
-            .scaleEffect(isFocused ? 1.015 : 1.0)
-            .animation(.easeOut(duration: 0.15), value: isFocused)
-            .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
-    }
-}
-#endif

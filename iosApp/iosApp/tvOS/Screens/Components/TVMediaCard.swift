@@ -11,6 +11,9 @@ struct TVMediaCard: View {
     let title: String
     let posterUrl: String
     var year: Int? = nil
+    /// Optional second caption line rendered in place of the year (same
+    /// type treatment) — e.g. "Book 3" on audiobook series rails.
+    var subtitle: String? = nil
     var userState: MediaItemUserState? = nil
     /// Data for optional overlay badges. `nil` skips overlay rendering;
     /// callers without per-item OverlaySummary should leave it off.
@@ -127,8 +130,8 @@ struct TVMediaCard: View {
                 .truncationMode(.tail)
                 .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
 
-            if let year {
-                Text(String(year))
+            if let secondLine = subtitle ?? year.map(String.init) {
+                Text(secondLine)
                     .font(.system(size: 18, weight: .regular))
                     .foregroundColor(.continuumSecondaryText)
             }
