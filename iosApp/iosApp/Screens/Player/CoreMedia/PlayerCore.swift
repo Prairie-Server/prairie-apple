@@ -2402,7 +2402,13 @@ final class PlayerCore: NSObject {
         // The audio timebase (and frame duration) may have changed.
         configurePacketQueueTiming()
 
-        let resumeSeconds = max(0, currentPlaybackTimeSeconds())
+        // The playback clock may not have been primed yet when a track switch
+        // races `openAndDemux` (e.g. a persisted or detail-page audio
+        // selection applied during load), in which case it reads ~0.
+        // `pendingSkipBelowPTS` holds the last requested anchor (load
+        // startTime or seek target); never resume behind it, or an early
+        // switch silently rewinds playback to the start of the file.
+        let resumeSeconds = max(0, currentPlaybackTimeSeconds(), pendingSkipBelowPTS)
         pendingSkipBelowPTS = resumeSeconds
         skippedPreTargetVideoFrames = 0
         skippedPreTargetAudioFrames = 0
