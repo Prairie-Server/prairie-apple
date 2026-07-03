@@ -104,6 +104,14 @@ final class PlayerCore: NSObject {
     /// view when re-attaching (e.g. on window/screen change) so EDR can be
     /// re-evaluated without replaying the whole stream. Always 0 on tvOS.
     private(set) var lastSigPeak: Double = 0
+    /// Pixel-aspect-corrected presentation size of the active video stream,
+    /// derived from `videoFormatDescription`. `.zero` until the format is
+    /// known. The hosting view sizes the subtitle overlay to the displayed
+    /// video rect with it, so libass font scale tracks the video frame
+    /// rather than the full view.
+    private(set) var videoPresentationSize: CGSize = .zero
+    /// Fires on main whenever `videoPresentationSize` changes.
+    var onVideoPresentationSizeChange: ((CGSize) -> Void)?
 
     // MARK: - Master clock
 
@@ -1851,6 +1859,28 @@ final class PlayerCore: NSObject {
     /// per load (after dynamicRange is known) and whenever `setHDREnabled`
     /// changes the preference. No-op on tvOS — HDR is handled via
     /// AVDisplayManager there, not EDR.
+    /// Recomputes `videoPresentationSize` from the current
+    /// `videoFormatDescription` and notifies the hosting view on main when
+    /// it changes. Called wherever `videoFormatDescription` is assigned or
+    /// cleared.
+    private func publishVideoPresentationSize() {
+        let size: CGSize
+        if let fd = videoFormatDescription {
+            size = CMVideoFormatDescriptionGetPresentationDimensions(
+                fd,
+                usePixelAspectRatio: true,
+                useCleanAperture: true
+            )
+        } else {
+            size = .zero
+        }
+        guard size != videoPresentationSize else { return }
+        videoPresentationSize = size
+        DispatchQueue.main.async { [weak self] in
+            self?.onVideoPresentationSizeChange?(size)
+        }
+    }
+
     private func publishSigPeakIfNeeded() {
         #if os(iOS)
         // 1.1 is a sentinel "HDR content present" value; the actual peak
@@ -3638,6 +3668,7 @@ final class PlayerCore: NSObject {
             return false
         }
         videoFormatDescription = fd
+        publishVideoPresentationSize()
         return true
     }
 
@@ -3807,6 +3838,7 @@ final class PlayerCore: NSObject {
         )
         if simplified.session != nil {
             videoFormatDescription = simplifiedFormatDescription
+            publishVideoPresentationSize()
         }
         return simplified
         #else
@@ -5365,6 +5397,7 @@ final class PlayerCore: NSObject {
 
         videoDecodeMode = .videoToolbox
         videoFormatDescription = nil
+        publishVideoPresentationSize()
         videoDecodeOutputDimensions = nil
         useUntimedCompressedVideoSamples = false
         isRebuildingDecoder = false
