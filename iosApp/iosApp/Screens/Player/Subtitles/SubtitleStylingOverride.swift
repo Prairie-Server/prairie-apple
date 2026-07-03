@@ -48,9 +48,6 @@ enum SubtitleStylingOverride {
         var syncOffsetMs: Int
 
         var effectiveBorderSize: Double {
-            if backgroundStyle == .box && backgroundOpacityPercent > 0 {
-                return max(1.5, min(4, fontSize * 0.07))
-            }
             if borderSize > 0 {
                 return max(2, min(4, fontSize * 0.08))
             }
@@ -59,6 +56,47 @@ enum SubtitleStylingOverride {
 
         var effectiveOutlineColorHex: String {
             backgroundStyle == .outline ? backgroundColorHex : borderColorHex
+        }
+
+        /// True when the user wants a background box drawn behind the text.
+        var boxEnabled: Bool {
+            backgroundStyle == .box && backgroundOpacityPercent > 0
+        }
+
+        /// Padding of the background box around the text, in the 1080-line
+        /// playfield. Passed through the ASS `Shadow` field: libass's
+        /// BorderStyle 4 uses the shadow size as box padding (and skips the
+        /// drop shadow itself).
+        var boxPadding: Double {
+            boxEnabled ? max(3, min(12, fontSize * 0.15)) : 0
+        }
+
+        /// ASS border style: 4 draws a per-event background rectangle
+        /// filled with `BackColour` (honoring its alpha), unlike 3 whose
+        /// box is per glyph run and filled with the *outline* colour at
+        /// full opacity — which is why 3 can't do translucent boxes.
+        var assBorderStyle: Int {
+            boxEnabled ? 4 : 1
+        }
+
+        /// Value for the ASS `Shadow` field: drop-shadow depth for the
+        /// shadow style, box padding for the box style (see `boxPadding`).
+        var assShadow: Double {
+            backgroundStyle == .shadow ? 1.5 : boxPadding
+        }
+
+        /// Inverted ASS alpha byte for `BackColour` (0x00 opaque … 0xFF
+        /// transparent). Box: user opacity. Shadow: 50% black so the drop
+        /// shadow is actually visible. Otherwise fully transparent.
+        var backgroundAlphaByte: UInt8 {
+            switch backgroundStyle {
+            case .box:
+                return UInt8(max(0, min(255, (100 - backgroundOpacityPercent) * 255 / 100)))
+            case .shadow:
+                return 0x80
+            case .outline, .none:
+                return 0xFF
+            }
         }
 
         static let referenceFontSize: Double = SubtitleAppearance.default.fontSize.pointSize
@@ -112,15 +150,15 @@ enum SubtitleStylingOverride {
     ) -> String {
         let primary = assColor(hexRGB: params.textColorHex, alphaByte: 0x00)
         let outline = assColor(hexRGB: params.effectiveOutlineColorHex, alphaByte: 0x00)
-        let effectiveOpacity = params.backgroundStyle == .box ? params.backgroundOpacityPercent : 0
-        let bgAlpha = UInt8(max(0, min(255, (100 - effectiveOpacity) * 255 / 100)))
-        let back = assColor(hexRGB: params.backgroundColorHex, alphaByte: bgAlpha)
+        let back = assColor(hexRGB: params.backgroundColorHex, alphaByte: params.backgroundAlphaByte)
         let alignment = (slot == .secondary) ? 8 : primaryHeaderAlignment(for: params)
 
-        // BorderStyle 1 = outline + shadow; BorderStyle 3 = opaque box.
-        // Use box iff the user enabled a non-transparent background.
-        let borderStyle = effectiveOpacity > 0 ? 3 : 1
-        let shadow = params.backgroundStyle == .shadow ? 1.5 : 0
+        // BorderStyle 1 = outline + shadow; BorderStyle 4 = per-event
+        // background box filled with BackColour (so its alpha carries the
+        // user's opacity). The Shadow field doubles as box padding under
+        // BorderStyle 4 — see `Parameters.assShadow`.
+        let borderStyle = params.assBorderStyle
+        let shadow = params.assShadow
         let borderSize = params.effectiveBorderSize
 
         // Playfield resolution. 1920x1080 is the cross-industry default —
@@ -228,9 +266,10 @@ enum SubtitleStylingOverride {
         style.PrimaryColour = assColor(hexRGBUInt: params.textColorHex, alphaByte: 0x00)
         style.SecondaryColour = 0x00FFFFFF
         style.OutlineColour = assColor(hexRGBUInt: params.effectiveOutlineColorHex, alphaByte: 0x00)
-        let effectiveOpacity = params.backgroundStyle == .box ? params.backgroundOpacityPercent : 0
-        let bgAlpha = UInt8(max(0, min(255, (100 - effectiveOpacity) * 255 / 100)))
-        style.BackColour = assColor(hexRGBUInt: params.backgroundColorHex, alphaByte: bgAlpha)
+        style.BackColour = assColor(
+            hexRGBUInt: params.backgroundColorHex,
+            alphaByte: params.backgroundAlphaByte
+        )
         // ScaleX/Y are doubles where 1.0 = 100%. The integer 100 here
         // would scale text to 100x authored size (10,000%).
         style.ScaleX = 1.0
@@ -242,8 +281,8 @@ enum SubtitleStylingOverride {
         // authored FontSize=16 grid. Default 0.5 outline + 1.5 shadow
         // matches the web player's "shadow" default (no heavy outline).
         style.Outline = params.effectiveBorderSize
-        style.Shadow = params.backgroundStyle == .shadow ? 1.5 : 0
-        style.BorderStyle = effectiveOpacity > 0 ? 3 : 1
+        style.Shadow = params.assShadow
+        style.BorderStyle = Int32(params.assBorderStyle)
         style.Alignment = Int32(primaryStyleAlignment(for: params))
         style.MarginL = 60
         style.MarginR = 60
