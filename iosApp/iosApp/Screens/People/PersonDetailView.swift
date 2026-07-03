@@ -252,8 +252,6 @@ struct PersonDetailView: View {
 
     var body: some View {
         rootContent
-            .navigationTitle(viewModel.person?.name ?? "Person")
-            .continuumNavigationTitleDisplayMode(.inline)
             .onAppear {
                 viewModel.resumeMetadataRefreshIfNeeded()
             }
