@@ -37,12 +37,14 @@ enum SubtitleFontSizePreset: String, Codable, CaseIterable, Identifiable {
         case .xxlarge: return 77
         }
         #elseif os(tvOS)
+        // Ladder rebased ~1.3x from the original tvOS values (large = old
+        // ~xlarge+) after the defaults read small on a living-room screen.
         switch self {
-        case .small: return 39
-        case .medium: return 48
-        case .large: return 56
-        case .xlarge: return 67
-        case .xxlarge: return 78
+        case .small: return 51
+        case .medium: return 63
+        case .large: return 74
+        case .xlarge: return 88
+        case .xxlarge: return 103
         }
         #else
         switch self {

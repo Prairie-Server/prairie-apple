@@ -107,6 +107,13 @@ final class SubtitleRenderer {
     // so we don't churn libass's internal caches.
     private var lastWidth: Int32 = 0
     private var lastHeight: Int32 = 0
+    /// libass margins in pixels: distance from the overlay frame's edges to
+    /// the displayed video rect. Non-zero only when the host sizes the
+    /// overlay beyond the video (tvOS full-frame overlay).
+    private var lastMarginTop: Int32 = 0
+    private var lastMarginBottom: Int32 = 0
+    private var lastMarginLeft: Int32 = 0
+    private var lastMarginRight: Int32 = 0
     private var frameSizeDirty = false
 
     // Most recent user styling params per slot. Re-applied after any
@@ -235,7 +242,8 @@ final class SubtitleRenderer {
             SubtitleStylingOverride.apply(
                 renderer: self.renderer(for: slot),
                 params: self.currentParams,
-                isNativeASS: isNativeASS
+                isNativeASS: isNativeASS,
+                slot: slot
             )
         }
     }
@@ -284,7 +292,8 @@ final class SubtitleRenderer {
             SubtitleStylingOverride.apply(
                 renderer: self.renderer(for: slot),
                 params: self.currentParams,
-                isNativeASS: isNativeASS
+                isNativeASS: isNativeASS,
+                slot: slot
             )
         }
     }
@@ -391,24 +400,20 @@ final class SubtitleRenderer {
 
     // MARK: - Frame size
 
-    /// Update the libass frame/storage size. Called by the overlay view's
-    /// `layoutSubviews`. Safe from main thread — hops internally.
-    func updateFrameSize(_ size: CGSize, scale: CGFloat) {
+    /// Update the libass frame/storage size and video-area margins. Called
+    /// by the overlay view's `layoutSubviews`. Safe from main thread — hops
+    /// internally.
+    func updateFrameSize(
+        _ size: CGSize,
+        scale: CGFloat,
+        videoInsets: SubtitleVideoInsets = .zero
+    ) {
         let w = Int32(max(1, size.width * scale))
         let h = Int32(max(1, size.height * scale))
+        let margins = Self.pixelMargins(for: videoInsets, scale: scale)
         sessionQueue.async { [weak self] in
             guard let self else { return }
-            if w == self.lastWidth && h == self.lastHeight { return }
-            self.forEachRenderer {
-                ass_set_frame_size($0, w, h)
-                ass_set_storage_size($0, w, h)
-                ass_set_pixel_aspect($0, 1.0)
-            }
-            self.lastWidth = w
-            self.lastHeight = h
-            self.frameSizeDirty = true
-            // Canvas will be reallocated on the next dirty render.
-            self.canvas = nil
+            self.applyFrameGeometryOnSessionQueue(width: w, height: h, margins: margins)
         }
     }
 
@@ -428,12 +433,14 @@ final class SubtitleRenderer {
             SubtitleStylingOverride.apply(
                 renderer: self.primaryRenderer,
                 params: params,
-                isNativeASS: primaryHandle?.isNativeASS ?? false
+                isNativeASS: primaryHandle?.isNativeASS ?? false,
+                slot: .primary
             )
             SubtitleStylingOverride.apply(
                 renderer: self.secondaryRenderer,
                 params: params,
-                isNativeASS: secondaryHandle?.isNativeASS ?? false
+                isNativeASS: secondaryHandle?.isNativeASS ?? false,
+                slot: .secondary
             )
             self.frameSizeDirty = true  // force repaint on next tick
         }
@@ -447,12 +454,13 @@ final class SubtitleRenderer {
     func renderOnSessionQueue(
         atMilliseconds now: Int64,
         frameSize: CGSize,
-        scale: CGFloat
+        scale: CGFloat,
+        videoInsets: SubtitleVideoInsets = .zero
     ) -> SubtitleRenderOutput {
         guard primaryRenderer != nil || secondaryRenderer != nil else {
             return SubtitleRenderOutput(image: nil, isDirty: false)
         }
-        ensureFrameSizeOnSessionQueue(frameSize, scale: scale)
+        ensureFrameSizeOnSessionQueue(frameSize, scale: scale, videoInsets: videoInsets)
 
         handleLock.lock()
         let primaryHandle = primary
@@ -496,20 +504,56 @@ final class SubtitleRenderer {
 
     private func ensureFrameSizeOnSessionQueue(
         _ size: CGSize,
-        scale: CGFloat
+        scale: CGFloat,
+        videoInsets: SubtitleVideoInsets = .zero
     ) {
         let safeScale = scale.isFinite && scale > 0 ? scale : 1
         let w = Int32(max(1, size.width * safeScale))
         let h = Int32(max(1, size.height * safeScale))
-        if w == lastWidth && h == lastHeight { return }
+        let margins = Self.pixelMargins(for: videoInsets, scale: safeScale)
+        applyFrameGeometryOnSessionQueue(width: w, height: h, margins: margins)
+    }
+
+    private static func pixelMargins(
+        for insets: SubtitleVideoInsets,
+        scale: CGFloat
+    ) -> (top: Int32, bottom: Int32, left: Int32, right: Int32) {
+        let safeScale = scale.isFinite && scale > 0 ? scale : 1
+        func px(_ points: CGFloat) -> Int32 {
+            Int32(max(0, (points * safeScale).rounded()))
+        }
+        return (px(insets.top), px(insets.bottom), px(insets.left), px(insets.right))
+    }
+
+    private func applyFrameGeometryOnSessionQueue(
+        width w: Int32,
+        height h: Int32,
+        margins: (top: Int32, bottom: Int32, left: Int32, right: Int32)
+    ) {
+        let sizeChanged = w != lastWidth || h != lastHeight
+        let marginsChanged = margins.top != lastMarginTop
+            || margins.bottom != lastMarginBottom
+            || margins.left != lastMarginLeft
+            || margins.right != lastMarginRight
+        guard sizeChanged || marginsChanged else { return }
         forEachRenderer {
             ass_set_frame_size($0, w, h)
             ass_set_storage_size($0, w, h)
+            // Margins mark the video area inside the frame; libass keys
+            // font scaling to that area, and `use_margins` placement (set
+            // per-slot in SubtitleStylingOverride.apply) may render regular
+            // cues into the margin bars.
+            ass_set_margins($0, margins.top, margins.bottom, margins.left, margins.right)
             ass_set_pixel_aspect($0, 1.0)
         }
         lastWidth = w
         lastHeight = h
+        lastMarginTop = margins.top
+        lastMarginBottom = margins.bottom
+        lastMarginLeft = margins.left
+        lastMarginRight = margins.right
         frameSizeDirty = true
+        // Canvas will be reallocated on the next dirty render.
         canvas = nil
     }
 

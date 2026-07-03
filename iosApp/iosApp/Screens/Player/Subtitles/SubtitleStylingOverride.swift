@@ -68,7 +68,13 @@ enum SubtitleStylingOverride {
         /// BorderStyle 4 uses the shadow size as box padding (and skips the
         /// drop shadow itself).
         var boxPadding: Double {
-            boxEnabled ? max(3, min(12, fontSize * 0.15)) : 0
+            guard boxEnabled else { return 0 }
+            #if os(iOS) || os(tvOS)
+            // Tighter box: roughly half the original padding.
+            return max(2, min(7, fontSize * 0.08))
+            #else
+            return max(3, min(12, fontSize * 0.15))
+            #endif
         }
 
         /// ASS border style: 4 draws a per-event background rectangle
@@ -222,16 +228,28 @@ enum SubtitleStylingOverride {
     ///   skip color/font/border overrides so the creative work renders
     ///   as the author intended. Sync offset still applies in the overlay
     ///   pump, outside libass style overrides.
+    /// - Parameter slot: which subtitle slot this renderer draws. Only the
+    ///   primary slot participates in `use_margins` placement below.
     static func apply(
         renderer: OpaquePointer?,
         params: Parameters,
-        isNativeASS: Bool
+        isNativeASS: Bool,
+        slot: SubtitleSlot
     ) {
         guard let renderer else { return }
 
         // libass line_position collapses multi-line cues onto the override
         // position. Use margins/alignment from the style override instead.
         ass_set_line_position(renderer, 0)
+
+        // `use_margins` lets regular (non-\pos) events render across the
+        // full overlay frame instead of only the video area, so the
+        // "Bottom" preset can sit in the letterbox bar below the picture
+        // when the overlay extends past the video rect (tvOS). Margins are
+        // zero when the overlay is video-rect sized, making this a no-op
+        // elsewhere. Native ASS keeps authored layout inside the video.
+        let useMargins = !isNativeASS && slot == .primary && params.verticalPosition >= 100
+        ass_set_use_margins(renderer, useMargins ? 1 : 0)
 
         if isNativeASS {
             ass_set_font_scale(renderer, 1.0)
@@ -316,7 +334,23 @@ enum SubtitleStylingOverride {
         }
 
         // Bottom-aligned ASS margins are distance from the bottom edge:
-        // smaller values render lower. Anchor the bottom-aligned presets:
+        // smaller values render lower.
+        #if os(tvOS)
+        // tvOS: "Lower Third" hugs the video's bottom edge (Bottom's old
+        // anchor), while "Bottom" is measured against the full TV frame —
+        // `use_margins` in `apply(...)` drops it into the letterbox bar
+        // below the picture when one exists — with a slightly larger
+        // margin so it doesn't sit flush against the frame edge.
+        switch p {
+        case 0...70:
+            return 30
+        case 71...100:
+            return 60
+        default:
+            return interpolateMargin(position: p, from: 100, to: 150, marginFrom: 60, marginTo: 10)
+        }
+        #else
+        // Anchor the bottom-aligned presets:
         //   lower-third (70) -> 220px
         //   bottom (100)     -> 30px
         //   extreme (150)    -> 10px
@@ -326,6 +360,7 @@ enum SubtitleStylingOverride {
         default:
             return interpolateMargin(position: p, from: 100, to: 150, marginFrom: 30, marginTo: 10)
         }
+        #endif
     }
 
     private static func primaryHeaderAlignment(for params: Parameters) -> Int {

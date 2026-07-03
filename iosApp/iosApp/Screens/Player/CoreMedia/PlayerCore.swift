@@ -5394,6 +5394,7 @@ final class PlayerCore: NSObject {
         let syncOffsetMs = Int64(session.currentParams.syncOffsetMs)
         let assNowMs = nowMs - syncOffsetMs
         let bounds = overlay.bounds
+        let videoInsets = overlay.videoInsets
         #if os(macOS)
         let scale = overlay.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
         #else
@@ -5418,7 +5419,8 @@ final class PlayerCore: NSObject {
             let out = renderer.renderOnSessionQueue(
                 atMilliseconds: assNowMs,
                 frameSize: bounds.size,
-                scale: scale
+                scale: scale,
+                videoInsets: videoInsets
             )
             if liveDiag {
                 Self.logger.info(

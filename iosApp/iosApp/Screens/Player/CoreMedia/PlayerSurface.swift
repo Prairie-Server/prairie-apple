@@ -119,11 +119,20 @@ final class PlayerSurfaceHostView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         displayLayer.frame = bounds
-        subtitleOverlay.frame = VideoDisplayRect.compute(
+        let videoRect = VideoDisplayRect.compute(
             videoSize: videoPresentationSize,
             bounds: bounds,
             gravity: displayLayer.videoGravity
         )
+        #if os(tvOS)
+        // Full-frame overlay with libass margins marking the video area:
+        // fonts keep scaling with the video rect, and the "Bottom" position
+        // preset can render below the picture into the letterbox bar.
+        subtitleOverlay.frame = bounds
+        subtitleOverlay.videoInsets = SubtitleVideoInsets(videoRect: videoRect, bounds: bounds)
+        #else
+        subtitleOverlay.frame = videoRect
+        #endif
     }
 
     override func didMoveToWindow() {
