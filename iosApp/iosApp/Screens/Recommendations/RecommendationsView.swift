@@ -15,6 +15,7 @@ struct RecommendationsView: View {
 
     @State private var viewModel = RecommendationsViewModel()
     @State private var currentProfile: UserProfile?
+    @State private var savedListSelection: SavedShortcut = .watchlist
     @Environment(AppRouter.self) private var router
 
     var body: some View {
@@ -25,7 +26,9 @@ struct RecommendationsView: View {
             }
         #if !os(tvOS)
             .refreshable {
+                async let overlayRefresh: Void = OverlayPrefsStore.shared.refresh()
                 await viewModel.refresh()
+                await overlayRefresh
             }
         #endif
     }
@@ -103,7 +106,7 @@ struct RecommendationsView: View {
                     } else if viewModel.isLoading {
                         Color.clear
                     } else {
-                        emptyState
+                        savedListsFallback
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -111,11 +114,26 @@ struct RecommendationsView: View {
         }
     }
 
+    /// True when recommendations loaded fine but the server had nothing to
+    /// suggest (e.g. embeddings disabled). The shortcut row then acts as a
+    /// selector for the inline Watchlist/Favorites fallback instead of
+    /// navigating away.
+    private var showsSavedListsFallback: Bool {
+        viewModel.sections.isEmpty && viewModel.error == nil && !viewModel.isLoading
+    }
+
     private var shortcutsRow: some View {
         SavedShortcutsRow(
             focusRequest: focusRequest,
             isTopMenuFocused: isTopMenuFocused,
-            onSelect: { router.navigate(to: $0.route) },
+            selection: showsSavedListsFallback ? savedListSelection : nil,
+            onSelect: { shortcut in
+                if showsSavedListsFallback {
+                    savedListSelection = shortcut
+                } else {
+                    router.navigate(to: shortcut.route)
+                }
+            },
             onMoveUp: onTopMenuFocusRequest
         )
     }
@@ -142,31 +160,25 @@ struct RecommendationsView: View {
         }
     }
 
+    /// Shown when the server has no recommendation sections: rather than an
+    /// empty promise, surface the user's saved lists inline. The shortcut row
+    /// above acts as the selector between the two.
     @ViewBuilder
-    private var emptyState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 44))
-                .foregroundColor(.continuumOnSurface.opacity(0.3))
-
-            Text("No recommendations yet")
-                .font(.continuumSubheadline)
-                .foregroundColor(.continuumOnSurface)
-
-            Text("Watch some content and we'll learn what you like.")
+    private var savedListsFallback: some View {
+        VStack(spacing: ContinuumTheme.smallPadding) {
+            Text("No recommendations yet — showing your saved titles.")
                 .font(.continuumCaption)
                 .foregroundColor(.continuumSecondaryText)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, ContinuumTheme.largePadding)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, contentHorizontalPadding)
+                .padding(.top, ContinuumTheme.smallPadding)
 
-            #if os(tvOS)
-            Button("Refresh") {
-                Task { await viewModel.loadRecommendations() }
+            switch savedListSelection {
+            case .watchlist:
+                WatchlistView(showsNavigationTitle: false)
+            case .favorites:
+                FavoritesView(showsNavigationTitle: false)
             }
-            .buttonStyle(ContinuumPrimaryButtonStyle())
-            .frame(width: 240)
-            .padding(.top, ContinuumTheme.padding)
-            #endif
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -207,6 +219,9 @@ struct RecommendationsView: View {
 private struct SavedShortcutsRow: View {
     var focusRequest: Int = 0
     var isTopMenuFocused: Bool = false
+    /// Non-nil puts the row in selector mode (inline saved-lists fallback):
+    /// the matching capsule renders selected instead of the row navigating.
+    var selection: SavedShortcut? = nil
     let onSelect: (SavedShortcut) -> Void
     let onMoveUp: (() -> Void)?
 
@@ -238,7 +253,7 @@ private struct SavedShortcutsRow: View {
                     }
                     .labelStyle(.titleAndIcon)
                 }
-                .buttonStyle(SavedShortcutButtonStyle())
+                .buttonStyle(SavedShortcutButtonStyle(isSelected: selection == shortcut))
                 .accessibilityLabel(shortcut.rawValue)
                 .focused($focusedShortcut, equals: shortcut)
                 #if os(tvOS)
@@ -327,28 +342,47 @@ private enum SavedShortcut: String, CaseIterable, Identifiable {
 }
 
 private struct SavedShortcutButtonStyle: ButtonStyle {
+    var isSelected: Bool = false
+
     func makeBody(configuration: Configuration) -> some View {
-        SavedShortcutButtonBody(configuration: configuration)
+        SavedShortcutButtonBody(configuration: configuration, isSelected: isSelected)
     }
 }
 
 private struct SavedShortcutButtonBody: View {
     let configuration: ButtonStyleConfiguration
+    let isSelected: Bool
 
     @Environment(\.isFocused) private var isFocused
 
+    /// tvOS keeps the filled capsule as the focus indicator, so a selected-
+    /// but-unfocused capsule only gets a stronger stroke and a faint fill.
+    /// On touch/pointer platforms there is no focus, so selection owns the
+    /// filled treatment outright.
+    private var isProminent: Bool {
+        #if os(tvOS)
+        return isFocused
+        #else
+        return isFocused || isSelected
+        #endif
+    }
+
     var body: some View {
         configuration.label
-            .foregroundColor(isFocused ? .continuumBackground : .continuumOnSurface)
+            .foregroundColor(isProminent ? .continuumBackground : .continuumOnSurface)
             .padding(.horizontal, horizontalPadding)
             .frame(height: height)
             .background(
                 Capsule()
-                    .fill(isFocused ? Color.continuumOnSurface.opacity(0.96) : Color.clear)
+                    .fill(
+                        isProminent
+                            ? Color.continuumOnSurface.opacity(0.96)
+                            : (isSelected ? Color.white.opacity(0.14) : Color.clear)
+                    )
             )
             .overlay(
                 Capsule().stroke(
-                    isFocused ? Color.white : Color.white.opacity(0.3),
+                    isFocused ? Color.white : Color.white.opacity(isSelected ? 0.7 : 0.3),
                     lineWidth: isFocused ? 3 : 1.5
                 )
             )
@@ -374,6 +408,7 @@ private struct SavedShortcutButtonBody: View {
             #endif
             .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: configuration.isPressed)
             .animation(ContinuumTheme.springAnimation, value: isFocused)
+            .animation(ContinuumTheme.springAnimation, value: isSelected)
     }
 
     private var height: CGFloat {
