@@ -173,6 +173,7 @@ final class LoopbackSegmentStore {
         self.memoryBudgetBytes = memoryBudgetBytes
         self.debugDirectory = debugDirectory
         self.spillPolicy = spillPolicy
+        _ = PlaybackDiskBudget.sweepOrphanedSpillDirectories
         if spillPolicy.isEnabled {
             let dir = FileManager.default.temporaryDirectory
                 .appendingPathComponent("continuum-dv-hls", isDirectory: true)
@@ -400,8 +401,10 @@ final class LoopbackSegmentStore {
                 guard offset <= segment.data.count else { return (Data(), true) }
                 return (segment.data.subdata(in: offset..<segment.data.count), true)
             }
+            // mmap + .uncached: spilled segments are immutable after their
+            // atomic write; let the kernel page them instead of the heap.
             if let url = spilledSegments[name],
-               let data = try? Data(contentsOf: url) {
+               let data = try? Data(contentsOf: url, options: [.alwaysMapped, .uncached]) {
                 guard offset <= data.count else { return (Data(), true) }
                 return (data.subdata(in: offset..<data.count), true)
             }
