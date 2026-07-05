@@ -148,6 +148,17 @@ struct PlayerView: View {
                         .allowsHitTesting(false)
                     }
                     #else
+                    // The full controls overlay (and its close button) only
+                    // mounts once the decoder opens the file, so a standalone
+                    // close control has to cover the load/buffer phase —
+                    // otherwise the only way out of a stalled start is
+                    // force-quitting the app. tvOS gets this via Menu in
+                    // `onExitCommand`; macOS keeps its controls (and Escape)
+                    // during loading.
+                    if viewModel.isLoading {
+                        loadingCloseButton
+                    }
+
                     if !viewModel.isLoading {
                         // Invisible gestures (tap-to-toggle, double-tap skip,
                         // hold-2×, edge swipes, pinch) live in a dedicated
@@ -302,6 +313,30 @@ struct PlayerView: View {
             }
         }
     }
+
+    #if !os(tvOS)
+    /// Close control shown while the player is still loading/buffering, in
+    /// the same spot (and glass style) as the close button in
+    /// `MobilePlayerControls`' top strip so the two read as one control.
+    private var loadingCloseButton: some View {
+        HStack {
+            Button(action: { dismissPlayer() }) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 40, height: 40)
+            }
+            .buttonStyle(.glass)
+            .buttonBorderShape(.circle)
+            .accessibilityLabel("Close Player")
+
+            Spacer()
+        }
+        .padding(.horizontal)
+        .padding(.top)
+        .transition(.opacity)
+    }
+    #endif
 
     private var playbackLoadingIndicator: some View {
         ProgressView()
