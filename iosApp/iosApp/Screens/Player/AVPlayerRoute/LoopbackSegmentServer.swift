@@ -1,9 +1,9 @@
 //
-//  DVSegmentServer.swift
+//  LoopbackSegmentServer.swift
 //  Continuum (iOS + tvOS) — Dolby Vision Profile 5 AVPlayer route
 //
 //  Tiny HTTP server bound to 127.0.0.1:<random port>. Serves the HLS playlist
-//  and fMP4 segments that `DVSegmentWriter` writes to a session-scoped temp
+//  and fMP4 segments that `LoopbackSegmentWriter` writes to a session-scoped temp
 //  directory, so AVPlayer can consume them via a URL it accepts natively.
 //
 //  Uses `Network.framework`'s `NWListener` so we pull in zero dependencies.
@@ -26,16 +26,18 @@ import Foundation
 import Network
 import OSLog
 
-final class DVSegmentServer {
+final class LoopbackSegmentServer {
+    // Temporary [CMP-LIFE]: session-pool leak attribution.
+    deinit { print("[CMP-LIFE] deinit LoopbackSegmentServer") }
     private static let startupRequestLogLimit = 80
     private static let responseChunkBytes = 256 * 1024
     private static let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "com.continuum.app",
-        category: "DVSegmentServer"
+        category: "LoopbackSegmentServer"
     )
 
     let rootDirectory: URL?
-    private let segmentStore: DVSegmentStore?
+    private let segmentStore: LoopbackSegmentStore?
 
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "com.continuum.dv.hlsserver", qos: .userInitiated)
@@ -46,6 +48,18 @@ final class DVSegmentServer {
     /// log. Suppresses AVPlayer's identical retry probes — the first request
     /// for each unique signature is logged, repeats are silent.
     private var loggedRequestSignatures: Set<String> = []
+    /// Total HTTP requests parsed this session (playlist, init, segments —
+    /// including misses: a consumer requesting anything is still alive).
+    /// Monotonic. The `AVPlayerBackend` startup watchdog compares snapshots
+    /// to distinguish a slow-but-fetching AVPlayer from one whose loader
+    /// pipeline died and stopped requesting entirely.
+    private var totalRequestCount: UInt64 = 0
+
+    var servedRequestCount: UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        return totalRequestCount
+    }
 
     /// Port the OS assigned us. Only valid once `start()` has returned
     /// successfully (the listener is bound and in `.ready` state).
@@ -56,7 +70,7 @@ final class DVSegmentServer {
         self.segmentStore = nil
     }
 
-    init(segmentStore: DVSegmentStore) {
+    init(segmentStore: LoopbackSegmentStore) {
         self.rootDirectory = nil
         self.segmentStore = segmentStore
     }
@@ -77,7 +91,7 @@ final class DVSegmentServer {
             )
             listener = try NWListener(using: params)
         } catch {
-            throw DVSegmentServerError.listenerInitFailed(error)
+            throw LoopbackSegmentServerError.listenerInitFailed(error)
         }
         self.listener = listener
 
@@ -103,7 +117,7 @@ final class DVSegmentServer {
                             resumeOnce(.success(p.rawValue))
                         }
                     case .failed(let err):
-                        resumeOnce(.failure(DVSegmentServerError.listenerFailed(err)))
+                        resumeOnce(.failure(LoopbackSegmentServerError.listenerFailed(err)))
                     case .cancelled:
                         break
                     default:
@@ -120,11 +134,11 @@ final class DVSegmentServer {
                 // timeout as distinct from a genuine bind failure so the
                 // caller sees a specific error.
                 queue.asyncAfter(deadline: .now() + 2) {
-                    resumeOnce(.failure(DVSegmentServerError.bindTimeout))
+                    resumeOnce(.failure(LoopbackSegmentServerError.bindTimeout))
                 }
             }
             let serving = self.rootDirectory?.path ?? "memory-store-\(self.segmentStore?.generation ?? 0)"
-            Self.logger.info("DVSegmentServer listening on 127.0.0.1:\(port) serving \(serving, privacy: .public)")
+            Self.logger.info("LoopbackSegmentServer listening on 127.0.0.1:\(port) serving \(serving, privacy: .public)")
         } catch {
             listener.cancel()
             self.listener = nil
@@ -227,6 +241,9 @@ final class DVSegmentServer {
         let method = String(parts[0])
         let rawPath = String(parts[1])
         let path = rawPath.split(separator: "?").first.map(String.init) ?? rawPath
+        lock.lock()
+        totalRequestCount &+= 1
+        lock.unlock()
 
         var rangeHeader: String?
         for line in lines.dropFirst() {
@@ -310,21 +327,48 @@ final class DVSegmentServer {
         )
     }
 
+    /// VOD serving mode (loopback-primary plan, 1e): resolves a segment the
+    /// store doesn't hold — the backend requests a coalesced producer restart
+    /// and waits, bounded, for the bytes. Runs off the server's queue so a
+    /// slow resolution never stalls playlist/init requests.
+    var vodSegmentMissResolver: ((Int) -> LoopbackSegmentStore.ResourceResult)?
+
     private func respondWithStoreResource(
         path: String,
         method: HTTPMethod,
         range rangeHeader: String?,
         started: CFAbsoluteTime,
         on connection: NWConnection,
-        store: DVSegmentStore
+        store: LoopbackSegmentStore
     ) {
+        if let index = LoopbackSegmentStore.segmentIndex(fromName: path) {
+            store.declareVODTarget(index)
+        }
         switch store.resource(path: path) {
-        case .missing:
+        case .missing, .gone:
+            if let resolver = vodSegmentMissResolver,
+               let index = LoopbackSegmentStore.segmentIndex(fromName: path) {
+                DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                    guard let self else { return }
+                    switch resolver(index) {
+                    case .found(let resource):
+                        self.respondWithResource(
+                            resource,
+                            requestPath: path,
+                            method: method,
+                            range: rangeHeader,
+                            started: started,
+                            on: connection
+                        )
+                    case .missing, .gone:
+                        self.logRequest(method: method, path: path, status: 404, bytes: 0, range: rangeHeader, started: started)
+                        self.respondError(404, "Not Found", on: connection)
+                    }
+                }
+                return
+            }
             logRequest(method: method, path: path, status: 404, bytes: 0, range: rangeHeader, started: started)
             respondError(404, "Not Found", on: connection)
-        case .gone:
-            logRequest(method: method, path: path, status: 410, bytes: 0, range: rangeHeader, started: started)
-            respondError(410, "Gone", on: connection)
         case .found(let resource):
             respondWithResource(
                 resource,
@@ -338,7 +382,7 @@ final class DVSegmentServer {
     }
 
     private func respondWithResource(
-        _ resource: DVSegmentStore.Resource,
+        _ resource: LoopbackSegmentStore.Resource,
         requestPath: String,
         method: HTTPMethod,
         range rangeHeader: String?,
@@ -367,8 +411,124 @@ final class DVSegmentServer {
                 started: started,
                 on: connection
             )
+        case .progressive(let name, let mime):
+            respondWithProgressiveStream(
+                name: name,
+                mime: mime,
+                requestPath: requestPath,
+                method: method,
+                range: rangeHeader,
+                started: started,
+                on: connection
+            )
         }
     }
+
+    /// Streams a segment the producer is still writing: 200 with no
+    /// Content-Length and `Connection: close` (read-until-close body), bytes
+    /// forwarded as the store publishes fragments. Cuts seek latency — the
+    /// player parses the anchor segment while the tail is still being
+    /// produced instead of waiting for the complete 30–60 MB file. Range
+    /// headers are deliberately ignored (an origin MAY serve 200 to a Range
+    /// request; AVPlayer sends none against this server today).
+    private func respondWithProgressiveStream(
+        name: String,
+        mime: String,
+        requestPath: String,
+        method: HTTPMethod,
+        range rangeHeader: String?,
+        started: CFAbsoluteTime,
+        on connection: NWConnection
+    ) {
+        guard method == .get, let store = segmentStore else {
+            logRequest(method: method, path: requestPath, status: 200, bytes: 0, range: rangeHeader, started: started)
+            var header = "HTTP/1.1 200 OK\r\n"
+            header += "Content-Type: \(mime)\r\n"
+            header += "Cache-Control: no-store\r\n"
+            header += "Connection: close\r\n\r\n"
+            send(Data(header.utf8), on: connection, andClose: true)
+            return
+        }
+        var header = "HTTP/1.1 200 OK\r\n"
+        header += "Content-Type: \(mime)\r\n"
+        header += "Cache-Control: no-store\r\n"
+        header += "Connection: close\r\n\r\n"
+        logRequest(method: method, path: requestPath, status: 200, bytes: 0, range: rangeHeader, started: started)
+        let overallDeadline = Date().addingTimeInterval(Self.progressiveStreamMaxSeconds)
+        send(Data(header.utf8), on: connection, andClose: false) { [weak self] in
+            self?.pumpProgressiveStream(
+                name: name,
+                offset: 0,
+                store: store,
+                overallDeadline: overallDeadline,
+                requestPath: requestPath,
+                started: started,
+                on: connection
+            )
+        }
+    }
+
+    /// One pump step: blocking-read the next delta off the store (bounded
+    /// poll), send it, and reschedule until the segment completes, the
+    /// overall deadline passes, or the connection dies. Runs off the store's
+    /// condition variable on a background queue; sends are chained through
+    /// NWConnection completions so the socket applies backpressure.
+    private func pumpProgressiveStream(
+        name: String,
+        offset: Int,
+        store: LoopbackSegmentStore,
+        overallDeadline: Date,
+        requestPath: String,
+        started: CFAbsoluteTime,
+        on connection: NWConnection
+    ) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            let (delta, complete) = store.readProgressiveSegment(
+                named: name,
+                from: offset,
+                deadline: min(overallDeadline, Date().addingTimeInterval(0.25))
+            )
+            let nextOffset = offset + delta.count
+            let finish: () -> Void = { [weak self] in
+                self?.logRequest(
+                    method: .get, path: requestPath + " (progressive)",
+                    status: 200, bytes: nextOffset, range: nil, started: started
+                )
+                connection.send(
+                    content: nil, contentContext: .finalMessage, isComplete: true,
+                    completion: .contentProcessed { _ in connection.cancel() }
+                )
+            }
+            let continuePump: () -> Void = { [weak self] in
+                guard Date() < overallDeadline, connection.state == .ready else {
+                    finish()
+                    return
+                }
+                self?.pumpProgressiveStream(
+                    name: name, offset: nextOffset, store: store,
+                    overallDeadline: overallDeadline, requestPath: requestPath,
+                    started: started, on: connection
+                )
+            }
+            if delta.isEmpty {
+                complete ? finish() : continuePump()
+                return
+            }
+            connection.send(
+                content: delta, contentContext: .defaultMessage, isComplete: false,
+                completion: .contentProcessed { error in
+                    if error != nil {
+                        connection.cancel()
+                        return
+                    }
+                    complete ? finish() : continuePump()
+                }
+            )
+        }
+    }
+
+    private static let progressiveStreamMaxSeconds: TimeInterval = 45
 
     private func respondWithData(
         _ data: Data,
@@ -654,7 +814,7 @@ final class DVSegmentServer {
 
 }
 
-enum DVSegmentServerError: Error {
+enum LoopbackSegmentServerError: Error {
     case listenerInitFailed(Error?)
     case listenerFailed(NWError)
     case bindTimeout

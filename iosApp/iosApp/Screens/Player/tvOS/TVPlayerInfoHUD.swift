@@ -125,14 +125,11 @@ struct TVPlayerInfoHUD: View {
         // tallest pane's needs — content-hugging here would resize the panel
         // on every tab swap, which cascades into a SwiftUI relayout pass.
         .frame(maxWidth: 1100, minHeight: 380, maxHeight: 380)
-        .background(
-            // `.regularMaterial` carries enough light that the panel lifts
-            // off the video without any extra dark tint. Over a fully-black
-            // frame it renders near-clear — acceptable because the stroke
-            // + shadow still define the edge.
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .fill(.regularMaterial)
-        )
+        // Glass carries enough light that the panel lifts off the video
+        // without extra dark tint; the stroke + shadow still define the
+        // edge over a fully-black frame. Low-power TVs draw a flat
+        // translucent fill instead (see siloPlayerGlass).
+        .siloPlayerGlass(in: RoundedRectangle(cornerRadius: 28, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 28, style: .continuous)
                 .stroke(Color.white.opacity(0.14), lineWidth: 1)
@@ -575,10 +572,10 @@ private struct InfoPane: View {
     }
 
     private var streamRows: [(String, String)] {
-        var rows: [(String, String)] = [("Route", viewModel.activeRouteLabel)]
-        if let decision = viewModel.routeDecisionSummary {
-            rows.append(("Decision", decision))
-        }
+        // One concise route line (engine · delivery). The decision trace
+        // and full route diagnostics stay in the Stats pane / settings —
+        // this pane is the casual "what am I watching" surface.
+        var rows: [(String, String)] = [("Route", viewModel.playbackRouteDisplay)]
         if let audio = viewModel.audioTracks.first(where: { $0.trackId == viewModel.selectedAudioId }) {
             var bits: [String] = []
             if let codec = audio.codec, !codec.isEmpty { bits.append(codec.uppercased()) }
@@ -951,10 +948,7 @@ private struct HUDPickerDialog: View {
         .padding(.horizontal, 34)
         .padding(.vertical, 28)
         .frame(width: 620, alignment: .topLeading)
-        .background(
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .fill(.regularMaterial)
-        )
+        .siloPlayerGlass(in: RoundedRectangle(cornerRadius: 28, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 28, style: .continuous)
                 .stroke(Color.white.opacity(0.18), lineWidth: 1)
@@ -1046,6 +1040,7 @@ private struct SubtitleAppearanceDialog: View {
 
     private enum Field: Hashable {
         case close
+        case matchSystem
         case style
         case font
         case size
@@ -1075,6 +1070,14 @@ private struct SubtitleAppearanceDialog: View {
 
                 ScrollView(showsIndicators: true) {
                     VStack(spacing: 2) {
+                        HUDToggleRow(
+                            label: "Match device style",
+                            isOn: viewModel.settings.subtitleMatchesSystemAppearance
+                        ) { enabled in
+                            viewModel.setSubtitleMatchesSystemAppearance(enabled)
+                        }
+                        .focused($focusedField, equals: .matchSystem)
+
                         HUDSettingRow(
                             label: "Style",
                             value: viewModel.settings.subtitleAppearance.backgroundStyle.label
@@ -1087,7 +1090,12 @@ private struct SubtitleAppearanceDialog: View {
                                     selection: viewModel.settings.subtitleAppearance.backgroundStyle.rawValue,
                                     onSelect: { value in
                                         if let style = SubtitleBackgroundStylePreset(rawValue: value) {
-                                            updateAppearance { $0.backgroundStyle = style }
+                                            updateAppearance {
+                                                $0.backgroundStyle = style
+                                                if style == .box && $0.backgroundOpacity == 0 {
+                                                    $0.backgroundOpacity = SubtitleAppearance.default.backgroundOpacity
+                                                }
+                                            }
                                         }
                                     }
                                 )
@@ -1163,8 +1171,12 @@ private struct SubtitleAppearanceDialog: View {
 
                         HUDSettingRow(
                             label: "Outline",
-                            value: label(for: viewModel.settings.subtitleAppearance.textOutlineColor, in: Self.outlineColorOptions),
-                            colorHex: viewModel.settings.subtitleAppearance.textOutlineColor
+                            value: viewModel.settings.subtitleAppearance.textOutline
+                                ? label(for: viewModel.settings.subtitleAppearance.textOutlineColor, in: Self.outlineColorOptions)
+                                : "—",
+                            colorHex: viewModel.settings.subtitleAppearance.textOutline
+                                ? viewModel.settings.subtitleAppearance.textOutlineColor
+                                : nil
                         ) {
                             presentPicker(
                                 for: .outlineColor,
@@ -1173,7 +1185,11 @@ private struct SubtitleAppearanceDialog: View {
                                     options: Self.outlineColorOptions,
                                     selection: viewModel.settings.subtitleAppearance.textOutlineColor,
                                     onSelect: { value in
-                                        updateAppearance { $0.textOutlineColor = value }
+                                        // Picking a color turns the outline on.
+                                        updateAppearance {
+                                            $0.textOutlineColor = value
+                                            $0.textOutline = true
+                                        }
                                     }
                                 )
                             )
@@ -1182,8 +1198,12 @@ private struct SubtitleAppearanceDialog: View {
 
                         HUDSettingRow(
                             label: "Background",
-                            value: label(for: viewModel.settings.subtitleAppearance.backgroundColor, in: Self.backgroundColorOptions),
-                            colorHex: viewModel.settings.subtitleAppearance.backgroundColor
+                            value: viewModel.settings.subtitleAppearance.backgroundStyle == .box
+                                ? label(for: viewModel.settings.subtitleAppearance.backgroundColor, in: Self.backgroundColorOptions)
+                                : "—",
+                            colorHex: viewModel.settings.subtitleAppearance.backgroundStyle == .box
+                                ? viewModel.settings.subtitleAppearance.backgroundColor
+                                : nil
                         ) {
                             presentPicker(
                                 for: .backgroundColor,
@@ -1192,7 +1212,14 @@ private struct SubtitleAppearanceDialog: View {
                                     options: Self.backgroundColorOptions,
                                     selection: viewModel.settings.subtitleAppearance.backgroundColor,
                                     onSelect: { value in
-                                        updateAppearance { $0.backgroundColor = value }
+                                        // Picking a color switches the style to Box.
+                                        updateAppearance {
+                                            $0.backgroundColor = value
+                                            $0.backgroundStyle = .box
+                                            if $0.backgroundOpacity == 0 {
+                                                $0.backgroundOpacity = SubtitleAppearance.default.backgroundOpacity
+                                            }
+                                        }
                                     }
                                 )
                             )
@@ -1248,10 +1275,7 @@ private struct SubtitleAppearanceDialog: View {
             .padding(.horizontal, 34)
             .padding(.vertical, 28)
             .frame(width: 720, alignment: .topLeading)
-            .background(
-                RoundedRectangle(cornerRadius: 28, style: .continuous)
-                    .fill(.regularMaterial)
-            )
+            .siloPlayerGlass(in: RoundedRectangle(cornerRadius: 28, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 28, style: .continuous)
                     .stroke(Color.white.opacity(0.18), lineWidth: 1)
@@ -1320,7 +1344,7 @@ private struct SubtitleAppearanceDialog: View {
     }
 
     private static let backgroundStyleOptions: [HUDDropdownOption] =
-        SubtitleBackgroundStylePreset.allCases.map { .init(id: $0.rawValue, label: $0.label) }
+        SubtitleBackgroundStylePreset.selectableCases.map { .init(id: $0.rawValue, label: $0.label) }
 
     private static let fontFamilyOptions: [HUDDropdownOption] =
         SubtitleFontFamilyPreset.allCases.map { .init(id: $0.rawValue, label: $0.label) }

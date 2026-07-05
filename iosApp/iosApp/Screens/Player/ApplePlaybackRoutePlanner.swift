@@ -75,6 +75,9 @@ struct ApplePlaybackPlannerInput {
     let selectedPrimarySubtitleTrackId: Int64?
     let selectedSecondarySubtitleTrackId: Int64?
     let hlsRouteFeatureEnabled: Bool
+    /// Stage 2 rollout gate: lifts the loopback startup-unreliable blockers
+    /// and serves eligible sources through the VOD plan mode.
+    let siloPlayerPrimaryEnabled: Bool
     let preferProfile7HDR10Fallback: Bool
     /// Captured at plan-creation time so route choice and degradation
     /// warnings can reflect the actual output, not just source metadata.
@@ -93,6 +96,7 @@ struct ApplePlaybackPlannerInput {
         selectedPrimarySubtitleTrackId: Int64?,
         selectedSecondarySubtitleTrackId: Int64?,
         hlsRouteFeatureEnabled: Bool,
+        siloPlayerPrimaryEnabled: Bool = false,
         preferProfile7HDR10Fallback: Bool,
         displayCapabilities: ApplePlaybackDisplayCapabilities = .unknown
     ) {
@@ -106,6 +110,7 @@ struct ApplePlaybackPlannerInput {
         self.selectedPrimarySubtitleTrackId = selectedPrimarySubtitleTrackId
         self.selectedSecondarySubtitleTrackId = selectedSecondarySubtitleTrackId
         self.hlsRouteFeatureEnabled = hlsRouteFeatureEnabled
+        self.siloPlayerPrimaryEnabled = siloPlayerPrimaryEnabled
         self.preferProfile7HDR10Fallback = preferProfile7HDR10Fallback
         self.displayCapabilities = displayCapabilities
     }
@@ -129,6 +134,13 @@ struct ApplePlaybackRoutePlanner {
     /// gate routing here. Exposed `static` so callers share one source of truth.
     static let siloBitmapSubtitleCodecs: Set<String> = [
         "pgs", "hdmv_pgs_subtitle", "dvd_subtitle", "dvb_subtitle", "vobsub"
+    ]
+    /// Bitmap codecs the SiloPlayer route renders client-side: the AVPlayer
+    /// subtitle extractor decodes them into RGBA cue images for the overlay,
+    /// so they no longer force the compatibility (burn-in transcode) route.
+    /// DVB stays out — its broadcast region/CLUT model is unvalidated here.
+    static let siloClientRenderedBitmapSubtitleCodecs: Set<String> = [
+        "pgs", "hdmv_pgs_subtitle", "dvd_subtitle", "vobsub"
     ]
 
     func makeExecutionPlan(input: ApplePlaybackPlannerInput) -> PlaybackExecutionPlan {
@@ -176,7 +188,8 @@ struct ApplePlaybackRoutePlanner {
                 pendingAudioFfIndex: input.pendingAudioFfIndex,
                 preferredAudioTrackIndex: input.preferredAudioTrackIndex,
                 selectedPrimarySubtitleTrackId: input.selectedPrimarySubtitleTrackId,
-                selectedSecondarySubtitleTrackId: input.selectedSecondarySubtitleTrackId
+                selectedSecondarySubtitleTrackId: input.selectedSecondarySubtitleTrackId,
+                siloPlayerPrimaryEnabled: input.siloPlayerPrimaryEnabled
             )
             if directLoopbackVideoMode == nil, let mode = siloAssessment.videoMode {
                 directLoopbackVideoMode = mode
@@ -191,25 +204,26 @@ struct ApplePlaybackRoutePlanner {
                     streamRequest: input.streamRequest,
                     videoMode: videoMode,
                     videoRange: Self.videoRange(for: videoMode, source: selectedVersion),
-                    sourceStartTimeSeconds: session.position
+                    sourceStartTimeSeconds: session.position,
+                    servingMode: input.siloPlayerPrimaryEnabled ? .vodPlan : .event
                 )
             }
             if directDolbyVisionProfile == 7, directLoopbackSession != nil {
-                engine = .avPlayerLocalDVLoopback
+                engine = .siloPlayerLoopback
                 parityBlockers = []
-                routeCapabilities = .avPlayerLocalDVLoopback
+                routeCapabilities = .siloPlayerLoopback
                 reason = input.preferProfile7HDR10Fallback
                     ? "dolby_vision_profile7_hdr10_fallback_loopback"
                     : "dolby_vision_profile7_to81_base_layer_loopback"
             } else if directDolbyVisionProfile == 5, directLoopbackSession != nil {
-                engine = .avPlayerLocalDVLoopback
+                engine = .siloPlayerLoopback
                 parityBlockers = []
-                routeCapabilities = .avPlayerLocalDVLoopback
+                routeCapabilities = .siloPlayerLoopback
                 reason = "dolby_vision_profile5_loopback"
             } else if directDolbyVisionProfile == 8, directLoopbackSession != nil {
-                engine = .avPlayerLocalDVLoopback
+                engine = .siloPlayerLoopback
                 parityBlockers = []
-                routeCapabilities = .avPlayerLocalDVLoopback
+                routeCapabilities = .siloPlayerLoopback
                 reason = directDvProfile8BaseLayer == .hlg
                     ? "dolby_vision_profile84_passthrough_loopback"
                     : "dolby_vision_profile81_passthrough_loopback"
@@ -219,9 +233,9 @@ struct ApplePlaybackRoutePlanner {
                 routeCapabilities = .avPlayerNativeDirect
                 reason = "native_direct_asset"
             } else if siloAssessment.isEligible, directLoopbackSession != nil {
-                engine = .avPlayerLocalDVLoopback
+                engine = .siloPlayerLoopback
                 parityBlockers = []
-                routeCapabilities = .avPlayerLocalDVLoopback
+                routeCapabilities = .siloPlayerLoopback
                 reason = siloAssessment.reason
             } else {
                 #if os(macOS)
@@ -264,13 +278,13 @@ struct ApplePlaybackRoutePlanner {
                         ? "profile84_passthrough_loopback_selected"
                         : "profile81_passthrough_loopback_selected"
                 )
-            } else if siloAssessment.isEligible, engine == .avPlayerLocalDVLoopback {
+            } else if siloAssessment.isEligible, engine == .siloPlayerLoopback {
                 trace.append("\(siloAssessment.reason)_selected")
             }
             let fallbackOrderToken: String = switch engine {
             case .avPlayerNativeDirect:
                 "fallback_order_native_silo_compatibility"
-            case .avPlayerLocalDVLoopback:
+            case .siloPlayerLoopback:
                 "fallback_order_silo_compatibility"
             case .playerCoreDirect:
                 "fallback_order_compatibility_only"
@@ -311,7 +325,7 @@ struct ApplePlaybackRoutePlanner {
             engine: engine,
             startMode: startMode,
             streamRequest: input.streamRequest,
-            loopbackSession: engine == .avPlayerLocalDVLoopback ? directLoopbackSession : nil,
+            loopbackSession: engine == .siloPlayerLoopback ? directLoopbackSession : nil,
             capabilities: routeCapabilities.backendCapabilities,
             routeCapabilities: routeCapabilities,
             requirements: input.routeRequirements,
@@ -363,7 +377,8 @@ struct ApplePlaybackRoutePlanner {
         streamRequest: StreamRequest,
         videoMode: LoopbackSessionSpec.VideoMode,
         videoRange: String = "PQ",
-        sourceStartTimeSeconds: Double = 0
+        sourceStartTimeSeconds: Double = 0,
+        servingMode: LoopbackServingMode = .event
     ) -> LoopbackSessionSpec? {
         let tracks = normalizedLoopbackAudioTracks(
             for: version,
@@ -432,7 +447,8 @@ struct ApplePlaybackRoutePlanner {
                 compatibilityBrand: compatibilityBrand,
                 videoRange: videoRange,
                 mayClaimAtmos: preservesAtmos
-            )
+            ),
+            servingMode: servingMode
         )
     }
 }
@@ -524,7 +540,8 @@ private extension ApplePlaybackRoutePlanner {
         pendingAudioFfIndex: Int?,
         preferredAudioTrackIndex: Int?,
         selectedPrimarySubtitleTrackId: Int64?,
-        selectedSecondarySubtitleTrackId: Int64?
+        selectedSecondarySubtitleTrackId: Int64?,
+        siloPlayerPrimaryEnabled: Bool = false
     ) -> SiloRouteAssessment {
         var blockers: [String] = []
         var trace: [String] = ["silo_assessment"]
@@ -579,9 +596,20 @@ private extension ApplePlaybackRoutePlanner {
             selectedSecondarySubtitleTrackId: selectedSecondarySubtitleTrackId
         )
         let bitmapSubtitleCodecs = mandatoryEmbeddedSubtitleCodecs.filter { siloBitmapSubtitleCodecs.contains($0) }
-        if !bitmapSubtitleCodecs.isEmpty {
+        let blockedBitmapSubtitleCodecs = bitmapSubtitleCodecs.filter {
+            !siloClientRenderedBitmapSubtitleCodecs.contains($0)
+        }
+        if !blockedBitmapSubtitleCodecs.isEmpty {
             blockers.append("bitmap_subtitles_require_compatibility")
-            trace.append("silo_bitmap_subtitles_\(bitmapSubtitleCodecs.joined(separator: "_"))")
+            trace.append("silo_bitmap_subtitles_\(blockedBitmapSubtitleCodecs.joined(separator: "_"))")
+        }
+        let clientRenderedBitmapSubtitleCodecs = bitmapSubtitleCodecs.filter {
+            siloClientRenderedBitmapSubtitleCodecs.contains($0)
+        }
+        if !clientRenderedBitmapSubtitleCodecs.isEmpty {
+            trace.append(
+                "silo_bitmap_subtitles_client_rendered_\(clientRenderedBitmapSubtitleCodecs.joined(separator: "_"))"
+            )
         }
         let nonTextSubtitleCodecs = mandatoryEmbeddedSubtitleCodecs.filter {
             !siloTextSubtitleCodecs.contains($0) && !siloBitmapSubtitleCodecs.contains($0)
@@ -604,9 +632,9 @@ private extension ApplePlaybackRoutePlanner {
             degradations.append("Loopback audio may use an explicit lossy fallback.")
         }
 
-        if !PlaybackEngineKind.avPlayerLocalDVLoopback.routeCapabilities
+        if !PlaybackEngineKind.siloPlayerLoopback.routeCapabilities
             .blockingReasons(for: requirements).isEmpty {
-            blockers.append(contentsOf: PlaybackEngineKind.avPlayerLocalDVLoopback.routeCapabilities
+            blockers.append(contentsOf: PlaybackEngineKind.siloPlayerLoopback.routeCapabilities
                 .blockingReasons(for: requirements))
         }
 
@@ -625,27 +653,32 @@ private extension ApplePlaybackRoutePlanner {
         } else {
             reason = "\(videoCodec)_container_loopback"
         }
-        if mode == .passthroughH264 {
-            // The local loopback writer fragments H.264 at source keyframes.
+        if mode == .passthroughH264, !siloPlayerPrimaryEnabled {
+            // The EVENT loopback writer fragments H.264 at source keyframes.
             // Long-GOP MKVs can show one frame, then stall while AVPlayer waits
-            // on sparse fMP4/HLS fragments. Use the Compatibility route until
-            // H.264 loopback has a seek-safe short-fragment strategy.
+            // on sparse fMP4/HLS fragments. The VOD serving mode (Stage 2 gate)
+            // removes the growing-playlist startup dependency — the full title
+            // is advertised at load and AVPlayer buffers against it.
             return blockedSilo(
                 blockers: ["h264_loopback_startup_unreliable"],
                 trace: trace + ["silo_reason_\(reason)", "silo_h264_loopback_disabled"],
                 degradations: degradations
             )
         }
-        if mode == .passthroughHEVC, (Self.transferKind(for: selectedVersion) ?? "SDR") == "SDR" {
+        if mode == .passthroughHEVC,
+           (Self.transferKind(for: selectedVersion) ?? "SDR") == "SDR",
+           !siloPlayerPrimaryEnabled {
             // Plain SDR HEVC has the same long-fragment startup risk without a
             // Dolby Vision/HDR video presentation claim that requires AVPlayer
-            // ownership. Keep it on CompatibilityPlayer until Silo can fragment
-            // independently of sparse source keyframes.
+            // ownership; lifted by the same VOD gate as H.264 above.
             return blockedSilo(
                 blockers: ["hevc_sdr_loopback_startup_unreliable"],
                 trace: trace + ["silo_reason_\(reason)", "silo_hevc_sdr_loopback_disabled"],
                 degradations: degradations
             )
+        }
+        if siloPlayerPrimaryEnabled {
+            trace.append("silo_vod_gate_open")
         }
         return SiloRouteAssessment(
             isEligible: true,
@@ -699,7 +732,7 @@ private extension ApplePlaybackRoutePlanner {
                 audioMode: "server_output",
                 subtitleMode: "server_or_sidecar"
             )
-        case .avPlayerLocalDVLoopback:
+        case .siloPlayerLoopback:
             return PlaybackNormalizationSummary(
                 containerMode: "local_fmp4_hls",
                 videoMode: loopbackSession?.videoMode.logToken ?? "loopback_unresolved",
@@ -730,7 +763,13 @@ private extension ApplePlaybackRoutePlanner {
         case .passthroughProfile8(.hlg):
             return "HLG"
         case .passthroughHEVC:
-            return source.flatMap(transferKind(for:)) ?? "PQ"
+            // Unknown transfer resolves to SDR, not PQ: the master playlist
+            // carrying this token is never served to AVPlayer (playback
+            // starts from the media playlist), so its only behavioral
+            // consumer is the HDR display-criteria policy — and forcing an
+            // HDR10 HDMI mode switch for content we can't verify as HDR is
+            // strictly worse than skipping the criteria write.
+            return source.flatMap(transferKind(for:)) ?? "SDR"
         case .passthroughH264:
             return "SDR"
         }

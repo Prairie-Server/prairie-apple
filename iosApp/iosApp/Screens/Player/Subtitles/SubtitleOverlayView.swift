@@ -11,6 +11,12 @@
 //  `SubtitleRenderer` produces on its dedicated queue. We don't compose
 //  on the main thread; we only assign the already-baked image.
 //
+//  Bitmap subtitle tracks (PGS/DVD) render through a second layer group:
+//  one sublayer per active cue image, framed by the caller in overlay
+//  points (the overlay is sized to the video rect, so normalized cue
+//  rects scale directly). Both layers coexist so a text track in one
+//  slot and a bitmap track in the other composite correctly.
+//
 
 import CoreGraphics
 import QuartzCore
@@ -25,6 +31,63 @@ private func withoutImplicitLayerAnimation(_ updates: () -> Void) {
     CATransaction.setDisableActions(true)
     updates()
     CATransaction.commit()
+}
+
+/// One positioned bitmap subtitle cue. `frame` is the image rect in
+/// overlay points (top-left origin). `backgroundFrame` is the
+/// preference-driven backing box around it — equal to `frame` when no
+/// box is drawn. All layout math lives with the caller; the overlay
+/// only assigns layer geometry.
+struct BitmapCuePlacement {
+    let image: CGImage
+    let frame: CGRect
+    let backgroundFrame: CGRect
+    let backgroundColor: CGColor?
+    let cornerRadius: CGFloat
+}
+
+/// Grow/shrink the host's sublayer list to exactly `count` cue layer
+/// pairs: a container (the preference-driven backing box) holding one
+/// image sublayer. Cue images are pre-cropped to their frames, so
+/// `.resize` maps the image 1:1 onto its layer. Callers wrap this in a
+/// no-animation transaction.
+private func syncBitmapCueLayerCount(_ count: Int, host: CALayer) {
+    var current = host.sublayers?.count ?? 0
+    while current > count {
+        host.sublayers?.last?.removeFromSuperlayer()
+        current -= 1
+    }
+    while current < count {
+        let container = CALayer()
+        container.isOpaque = false
+        container.masksToBounds = false
+        let image = CALayer()
+        image.contentsGravity = .resize
+        image.isOpaque = false
+        container.addSublayer(image)
+        host.addSublayer(container)
+        current += 1
+    }
+}
+
+/// Assign one placement to its container/image layer pair. The image
+/// frame is expressed in the container's coordinate space.
+private func applyBitmapCuePlacement(_ placement: BitmapCuePlacement, to container: CALayer) {
+    container.frame = placement.backgroundFrame
+    container.backgroundColor = placement.backgroundColor
+    container.cornerRadius = placement.cornerRadius
+    guard let imageLayer = container.sublayers?.first else { return }
+    imageLayer.contents = placement.image
+    imageLayer.frame = CGRect(
+        x: placement.frame.minX - placement.backgroundFrame.minX,
+        y: placement.frame.minY - placement.backgroundFrame.minY,
+        width: placement.frame.width,
+        height: placement.frame.height
+    )
+}
+
+private func removeBitmapCueLayers(host: CALayer) {
+    host.sublayers?.forEach { $0.removeFromSuperlayer() }
 }
 
 #if canImport(UIKit)
@@ -51,15 +114,22 @@ final class SubtitleOverlayView: UIView {
     /// any other decoration the view might grow in the future.
     private let contentsLayer = CALayer()
 
+    /// Container for bitmap subtitle cue layers (PGS/DVD): one sublayer
+    /// per active cue, replaced wholesale by `updateBitmapCues`.
+    private let bitmapCueHost = CALayer()
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
         isUserInteractionEnabled = false
         // Overlay sits above the AVSampleBufferDisplayLayer; having
-        // its own layer inside makes the z-order explicit.
-        contentsLayer.contentsGravity = .resizeAspectFill
+        // its own layer inside makes the z-order explicit. Contents are
+        // rendered at the layer's exact pixel size, so `.resize` maps 1:1.
+        contentsLayer.contentsGravity = .resize
         contentsLayer.isOpaque = false
         layer.addSublayer(contentsLayer)
+        bitmapCueHost.isOpaque = false
+        layer.addSublayer(bitmapCueHost)
         // The composited image is a libass-rendered bitmap, not text.
         // Without a textual representation VoiceOver would either announce
         // a misleading static label or read raw image-element noise; hide
@@ -75,10 +145,16 @@ final class SubtitleOverlayView: UIView {
         fatalError("init(coder:) not implemented")
     }
 
+    /// Placement of the current composited image in overlay points; nil
+    /// means the image covers the full bounds. Kept so layout passes
+    /// don't stretch a bounded image back over the whole overlay.
+    private var contentsFrameOverride: CGRect?
+
     override func layoutSubviews() {
         super.layoutSubviews()
         withoutImplicitLayerAnimation {
-            contentsLayer.frame = bounds
+            contentsLayer.frame = contentsFrameOverride ?? bounds
+            bitmapCueHost.frame = bounds
         }
         pushFrameGeometry()
     }
@@ -101,12 +177,40 @@ final class SubtitleOverlayView: UIView {
         renderer?.updateFrameSize(bounds.size, scale: scale, videoInsets: videoInsets)
     }
 
-    /// Assign the newest composited image. Call on main thread.
-    func updateContents(_ image: CGImage?) {
-        // CALayer.contents takes `Any?` — pass `image` directly to avoid
-        // the ARC/CFType dance of an explicit `as CGImage`.
+    /// Assign the newest composited image. `frame` is the image's
+    /// placement in overlay points (top-left origin); nil or `.zero`
+    /// means the image covers the full bounds. Call on main thread.
+    func updateContents(_ image: CGImage?, frame: CGRect? = nil) {
         withoutImplicitLayerAnimation {
+            if image != nil, let frame, frame != .zero {
+                contentsFrameOverride = frame
+            } else {
+                contentsFrameOverride = nil
+            }
+            contentsLayer.frame = contentsFrameOverride ?? bounds
+            // CALayer.contents takes `Any?` — pass `image` directly to avoid
+            // the ARC/CFType dance of an explicit `as CGImage`.
             contentsLayer.contents = image
+        }
+    }
+
+    /// Replace the bitmap cue layers with the given placements. Frames
+    /// are in overlay points, top-left origin (the caller has already
+    /// scaled normalized cue rects by the overlay bounds). Call on main.
+    func updateBitmapCues(_ placements: [BitmapCuePlacement]) {
+        withoutImplicitLayerAnimation {
+            syncBitmapCueLayerCount(placements.count, host: bitmapCueHost)
+            guard let sublayers = bitmapCueHost.sublayers else { return }
+            for (index, placement) in placements.enumerated() {
+                applyBitmapCuePlacement(placement, to: sublayers[index])
+            }
+        }
+    }
+
+    /// Remove every bitmap cue layer. Call on main.
+    func clearBitmapCues() {
+        withoutImplicitLayerAnimation {
+            removeBitmapCueLayers(host: bitmapCueHost)
         }
     }
 
@@ -115,6 +219,7 @@ final class SubtitleOverlayView: UIView {
     func clear() {
         withoutImplicitLayerAnimation {
             contentsLayer.contents = nil
+            removeBitmapCueLayers(host: bitmapCueHost)
         }
     }
 }
@@ -140,6 +245,13 @@ final class SubtitleOverlayView: NSView {
     /// hosting `AVPlayerView`.
     private let contentsLayer = CALayer()
 
+    /// Container for bitmap subtitle cue layers (PGS/DVD): one sublayer
+    /// per active cue, replaced wholesale by `updateBitmapCues`.
+    /// Geometry-flipped so cue frames use the same top-left origin the
+    /// UIKit variant (and the normalized cue rects) use, despite AppKit's
+    /// bottom-left layer space.
+    private let bitmapCueHost = CALayer()
+
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
@@ -147,10 +259,14 @@ final class SubtitleOverlayView: NSView {
         layer?.zPosition = 10_000
         layer?.isOpaque = false
         layer?.masksToBounds = false
-        contentsLayer.contentsGravity = .resizeAspectFill
+        contentsLayer.contentsGravity = .resize
         contentsLayer.isOpaque = false
         contentsLayer.zPosition = 10_000
         layer?.addSublayer(contentsLayer)
+        bitmapCueHost.isOpaque = false
+        bitmapCueHost.zPosition = 10_001
+        bitmapCueHost.isGeometryFlipped = true
+        layer?.addSublayer(bitmapCueHost)
     }
 
     @available(*, unavailable)
@@ -168,9 +284,14 @@ final class SubtitleOverlayView: NSView {
         updateLayout()
     }
 
+    /// Placement of the current composited image in overlay points,
+    /// top-left origin; nil means the image covers the full bounds.
+    private var contentsFrameOverride: CGRect?
+
     private func updateLayout() {
         withoutImplicitLayerAnimation {
-            contentsLayer.frame = bounds
+            applyContentsFrame()
+            bitmapCueHost.frame = bounds
         }
         let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
         withoutImplicitLayerAnimation {
@@ -179,10 +300,55 @@ final class SubtitleOverlayView: NSView {
         renderer?.updateFrameSize(bounds.size, scale: scale, videoInsets: videoInsets)
     }
 
-    /// Assign the newest composited image. Call on main thread.
-    func updateContents(_ image: CGImage?) {
+    /// `contentsLayer` is not geometry-flipped, so a bounded frame given
+    /// in top-left-origin overlay points must be flipped into AppKit's
+    /// bottom-left layer space.
+    private func applyContentsFrame() {
+        if let frame = contentsFrameOverride {
+            contentsLayer.frame = CGRect(
+                x: frame.minX,
+                y: bounds.height - frame.maxY,
+                width: frame.width,
+                height: frame.height
+            )
+        } else {
+            contentsLayer.frame = bounds
+        }
+    }
+
+    /// Assign the newest composited image. `frame` is the image's
+    /// placement in overlay points (top-left origin); nil or `.zero`
+    /// means the image covers the full bounds. Call on main thread.
+    func updateContents(_ image: CGImage?, frame: CGRect? = nil) {
         withoutImplicitLayerAnimation {
+            if image != nil, let frame, frame != .zero {
+                contentsFrameOverride = frame
+            } else {
+                contentsFrameOverride = nil
+            }
+            applyContentsFrame()
             contentsLayer.contents = image
+        }
+    }
+
+    /// Replace the bitmap cue layers with the given placements. Frames
+    /// are in overlay points, top-left origin — `bitmapCueHost` is
+    /// geometry-flipped (the flip is inherited by the container's own
+    /// sublayers), so no manual y-flip is needed. Call on main.
+    func updateBitmapCues(_ placements: [BitmapCuePlacement]) {
+        withoutImplicitLayerAnimation {
+            syncBitmapCueLayerCount(placements.count, host: bitmapCueHost)
+            guard let sublayers = bitmapCueHost.sublayers else { return }
+            for (index, placement) in placements.enumerated() {
+                applyBitmapCuePlacement(placement, to: sublayers[index])
+            }
+        }
+    }
+
+    /// Remove every bitmap cue layer. Call on main.
+    func clearBitmapCues() {
+        withoutImplicitLayerAnimation {
+            removeBitmapCueLayers(host: bitmapCueHost)
         }
     }
 
@@ -191,6 +357,7 @@ final class SubtitleOverlayView: NSView {
     func clear() {
         withoutImplicitLayerAnimation {
             contentsLayer.contents = nil
+            removeBitmapCueLayers(host: bitmapCueHost)
         }
     }
 }

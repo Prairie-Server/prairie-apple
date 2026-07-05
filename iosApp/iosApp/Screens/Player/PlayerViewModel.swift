@@ -525,6 +525,14 @@ class PlayerViewModel {
         }
         return currentRouteCapabilities.routeLabel
     }
+    /// One-line, user-facing route description for the player HUD:
+    /// engine family plus delivery, e.g. "SiloPlayer · Direct Stream".
+    var playbackRouteDisplay: String {
+        guard let activeExecutionPlan else {
+            return currentRouteCapabilities.routeLabel
+        }
+        return "\(activeExecutionPlan.routeFamily.displayLabel) · \(activeExecutionPlan.appPlaybackLabel)"
+    }
     var routeStatusRows: [PlayerRouteStatusRow] {
         let capabilities = currentRouteCapabilities
         var rows = [
@@ -968,6 +976,10 @@ class PlayerViewModel {
         return activeExecutionPlan?.routeCapabilities ?? activeRouteKind.routeCapabilities
     }
 
+    /// Re-applies subtitle styling when the user edits the system's
+    /// Subtitles & Captioning preferences mid-playback.
+    private var systemCaptionObserverToken: NSObjectProtocol?
+
     init() {
         activePlayer = .none
         activeRouteKind = .playerCoreDirect
@@ -1034,6 +1046,16 @@ class PlayerViewModel {
 
         sleepTimer.configure { [weak self] in
             self?.activePlayer.pause()
+        }
+
+        systemCaptionObserverToken = NotificationCenter.default.addObserver(
+            forName: SystemCaptionAppearance.settingsChangedNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self, self.settings.subtitleMatchesSystemAppearance else { return }
+            self.settings.refreshSubtitleSystemAppearance()
+            self.applySubtitleAppearanceToPlayer()
         }
         settingsRefreshTask = Task { @MainActor [weak self] in
             await self?.refreshSettingsFromServer()
@@ -1209,6 +1231,7 @@ class PlayerViewModel {
             var enrichedStats = stats
             self.applySourceCacheStats(&enrichedStats)
             self.applyFileBitrateStats(&enrichedStats)
+            self.applySourceOriginLabel(&enrichedStats)
             self.playbackStats = enrichedStats
         }
         cb.onEndOfFile = { [weak self] in
@@ -1825,7 +1848,7 @@ class PlayerViewModel {
     private func attemptSiloRouteCompatibilityFallback(after message: String) -> Bool {
         guard !isDisposed,
               let activeExecutionPlan,
-              activeExecutionPlan.engine == .avPlayerLocalDVLoopback,
+              activeExecutionPlan.engine == .siloPlayerLoopback,
               !hasAttemptedSiloRouteCompatibilityFallback else {
             return false
         }
@@ -1917,6 +1940,7 @@ class PlayerViewModel {
                 selectedPrimarySubtitleTrackId: selectedSubtitleId,
                 selectedSecondarySubtitleTrackId: selectedSecondarySubtitleId,
                 hlsRouteFeatureEnabled: Self.appleHLSRouteFeatureFlagEnabled(),
+                siloPlayerPrimaryEnabled: LoopbackServingMode.gated == .vodPlan,
                 preferProfile7HDR10Fallback: settings.preferProfile7HDR10Fallback,
                 displayCapabilities: ApplePlaybackDisplayCapabilities.probe()
             )
@@ -1992,10 +2016,15 @@ class PlayerViewModel {
         installPlayer(for: loadPlan.engine)
         let startTime = loadPlan.startMode.seconds
         let backendTimelineOffset = avPlayerTimelineOffset(for: loadPlan, startTime: startTime)
-        if loadPlan.engine == .avPlayerLocalDVLoopback {
+        if loadPlan.engine == .siloPlayerLoopback {
             playbackTimelineOffset = backendTimelineOffset
         }
         activePlayer.avBackend?.setMediaTimelineOffset(backendTimelineOffset)
+        // Temporary [CMP-MEM]: feed proxy cache stats into the backend's
+        // periodic footprint log line.
+        activePlayer.avBackend?.proxyStatsProvider = { [weak self] in
+            self?.sourceProxy?.stats()
+        }
         do {
             try playbackCoordinator.load(plan: loadPlan)
             activePlayer = ActivePlayer(renderTarget: playbackCoordinator.renderTarget)
@@ -2034,7 +2063,7 @@ class PlayerViewModel {
               plan.engine != .avPlayerHLS,
               plan.engine != .playerCoreDirect,
               ["http", "https"].contains(plan.sourceStreamRequest.url.scheme?.lowercased()) else {
-            if plan.engine == .avPlayerLocalDVLoopback {
+            if plan.engine == .siloPlayerLoopback {
                 throw SourceProxyPreparationError.unsupportedSourceURL
             }
             return SourceProxyPreparation(plan: plan, proxy: nil)
@@ -2067,13 +2096,13 @@ class PlayerViewModel {
             try await proxy.start()
             guard let localURL = proxy.localURL else {
                 proxy.stop()
-                if plan.engine == .avPlayerLocalDVLoopback {
+                if plan.engine == .siloPlayerLoopback {
                     throw SourceProxyPreparationError.missingLocalURL
                 }
                 return SourceProxyPreparation(plan: plan, proxy: nil)
             }
             proxy.setSourceBitrate(sourceBitrateBps(for: plan))
-            if plan.engine != .avPlayerLocalDVLoopback {
+            if plan.engine != .siloPlayerLoopback {
                 proxy.startPrefetch(at: initialSourcePrefetchOffset(for: plan))
             }
             Self.logger.info("[CMP-SOURCE-CACHE] enabled route=\(plan.engine.label, privacy: .public) budgetBytes=\(cacheBudget, privacy: .public)")
@@ -2092,7 +2121,8 @@ class PlayerViewModel {
                     sourceVideoFrameRate: session.sourceVideoFrameRate,
                     selectedAudio: session.selectedAudio,
                     availableAudioTracks: session.availableAudioTracks,
-                    manifestMetadata: session.manifestMetadata
+                    manifestMetadata: session.manifestMetadata,
+                    servingMode: session.servingMode
                 )
             }
             let proxiedPlan = PlaybackExecutionPlan(
@@ -2115,14 +2145,14 @@ class PlayerViewModel {
                 normalizationSummary: plan.normalizationSummary,
                 validationClaims: plan.validationClaims
             )
-            if plan.engine == .avPlayerLocalDVLoopback, loopbackSession == nil {
+            if plan.engine == .siloPlayerLoopback, loopbackSession == nil {
                 proxy.stop()
                 throw SourceProxyPreparationError.missingLoopbackSession
             }
             return SourceProxyPreparation(plan: proxiedPlan, proxy: proxy)
         } catch {
             proxy.stop()
-            if plan.engine == .avPlayerLocalDVLoopback {
+            if plan.engine == .siloPlayerLoopback {
                 Self.logger.info("[CMP-SOURCE-CACHE] required proxy failed route=\(plan.engine.label, privacy: .public) error=\(String(describing: error), privacy: .public)")
                 throw error
             }
@@ -2133,7 +2163,7 @@ class PlayerViewModel {
 
     private func sourceCacheBudget(for plan: PlaybackExecutionPlan) -> Int {
         switch plan.engine {
-        case .avPlayerLocalDVLoopback:
+        case .siloPlayerLoopback:
             return PlaybackSourceCache.siloLoopbackMemoryBudgetBytes
         case .playerCoreDirect, .avPlayerNativeDirect, .avPlayerHLS:
             if let bps = sourceBitrateBps(for: plan), bps >= 200_000_000 {
@@ -2174,7 +2204,7 @@ class PlayerViewModel {
         session: PlaybackSessionResponse,
         requestedStart: Double?
     ) -> Double {
-        if plan.engine == .avPlayerLocalDVLoopback {
+        if plan.engine == .siloPlayerLoopback {
             let start = plan.startMode.seconds
             return start.isFinite ? max(0, start) : 0
         }
@@ -2197,7 +2227,7 @@ class PlayerViewModel {
         startTime: Double
     ) -> Double {
         switch plan.engine {
-        case .avPlayerLocalDVLoopback:
+        case .siloPlayerLoopback:
             return startTime.isFinite ? max(0, startTime) : 0
         case .avPlayerHLS:
             return playbackTimelineOffset
@@ -2307,11 +2337,11 @@ class PlayerViewModel {
             c.setAudioDelay(Double(settings.audioSyncMs) / 1000.0)
             c.setSubtitleDelay(Double(settings.subtitleSyncMs) / 1000.0)
             c.setVideoGravity(settings.videoGravity.avGravity)
-            c.applySubtitleAppearance(settings.subtitleAppearance)
+            c.applySubtitleAppearance(settings.effectiveSubtitleAppearance)
         case .avPlayer(let a):
             a.setSpeed(settings.playbackSpeed)
             a.setSubtitleDelay(Double(settings.subtitleSyncMs) / 1000.0)
-            a.applySubtitleAppearance(settings.subtitleAppearance)
+            a.applySubtitleAppearance(settings.effectiveSubtitleAppearance)
         }
     }
 
@@ -2320,9 +2350,9 @@ class PlayerViewModel {
         case .none:
             return
         case .coreMedia(let c):
-            c.applySubtitleAppearance(settings.subtitleAppearance)
+            c.applySubtitleAppearance(settings.effectiveSubtitleAppearance)
         case .avPlayer(let a):
-            a.applySubtitleAppearance(settings.subtitleAppearance)
+            a.applySubtitleAppearance(settings.effectiveSubtitleAppearance)
         }
     }
 
@@ -2354,6 +2384,12 @@ class PlayerViewModel {
     @MainActor
     func setSubtitleDeviceOverrideEnabled(_ enabled: Bool) async {
         await settings.setSubtitleDeviceOverrideEnabled(enabled)
+        applySubtitleAppearanceToPlayer()
+    }
+
+    @MainActor
+    func setSubtitleMatchesSystemAppearance(_ enabled: Bool) {
+        settings.setSubtitleMatchesSystemAppearance(enabled)
         applySubtitleAppearanceToPlayer()
     }
 
@@ -3831,7 +3867,7 @@ class PlayerViewModel {
 
     private func reloadLocalLoopbackForSeekBeforeAnchor(to target: Double) -> Bool {
         guard let plan = activeExecutionPlan,
-              plan.engine == .avPlayerLocalDVLoopback,
+              plan.engine == .siloPlayerLoopback,
               let loopbackSession = plan.loopbackSession else {
             return false
         }
@@ -4972,8 +5008,12 @@ class PlayerViewModel {
     /// we still need to guarantee the backend is torn down so audio can't
     /// outlive the view. `dispose()` is idempotent.
     deinit {
+        print("[CMP-LIFE] deinit PlayerViewModel")
         Self.logger.info("PlayerViewModel.deinit")
         isDisposed = true
+        if let systemCaptionObserverToken {
+            NotificationCenter.default.removeObserver(systemCaptionObserverToken)
+        }
         freshLoadTask?.cancel()
         staleSessionRecoveryTask?.cancel()
         serverOutageRecoveryTask?.cancel()
@@ -5433,6 +5473,21 @@ class PlayerViewModel {
         }
     }
 
+    /// Backends report the source they were handed, which behind the
+    /// source proxy or loopback is the in-app 127.0.0.1 server — an
+    /// implementation detail, not the origin. Rewrite it to the true
+    /// origin host from the active plan for the HUD.
+    private func applySourceOriginLabel(_ stats: inout PlaybackStats) {
+        guard let source = stats.source else { return }
+        let localTokens: Set<String> = ["127.0.0.1", "localhost", "::1", "local"]
+        guard localTokens.contains(source), let plan = activeExecutionPlan else { return }
+        let origin = plan.sourceStreamRequest.url.host
+            ?? URL(string: plan.sourceStreamRequest.serverUrl)?.host
+        if let origin {
+            stats.source = origin
+        }
+    }
+
     private func applySourceCacheStats(_ stats: inout PlaybackStats) {
         guard let sourceProxy else { return }
         let sourceStats = sourceProxy.stats()
@@ -5628,7 +5683,8 @@ class PlayerViewModel {
                 compatibilityBrand: compatibilityBrand,
                 videoRange: videoRange,
                 mayClaimAtmos: preservesAtmos
-            )
+            ),
+            servingMode: .gated
         )
     }
 
@@ -5835,7 +5891,7 @@ class PlayerViewModel {
 
     private var activeRouteUsesEmbeddedAVPlayerSubtitleExtraction: Bool {
         switch activeRouteKind {
-        case .avPlayerNativeDirect, .avPlayerLocalDVLoopback:
+        case .avPlayerNativeDirect, .siloPlayerLoopback:
             return true
         case .playerCoreDirect, .avPlayerHLS:
             return false
@@ -6563,7 +6619,7 @@ extension PlayerViewModel {
             supportsVideoGravity: backendCapabilities.supportsVideoGravity,
             supportsHDRToggle: backendCapabilities.supportsHDRToggle,
             subtitleSyncMs: settings.subtitleSyncMs,
-            subtitlePosition: settings.subtitleAppearance.position.rawValue,
+            subtitlePosition: settings.effectiveSubtitleAppearance.position.rawValue,
             supportsSubtitleDelay: backendCapabilities.supportsSubtitleDelay,
             supportsSubtitlePosition: backendCapabilities.supportsSubtitleStyling,
             volume: Double(userVolume),

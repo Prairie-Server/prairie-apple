@@ -72,6 +72,20 @@ struct SubtitleRenderOutput {
     /// diagnostic to tell "cue painted" from "cue fed but rendered nothing"
     /// (e.g. a font/shaping miss).
     var hasContent: Bool = false
+    // Temporary [CMP-SUBDIAG] fields: which input made this render dirty.
+    var diagChangePrimary: Int32 = 0
+    var diagChangeSecondary: Int32 = 0
+    var diagWasFrameSizeDirty: Bool = false
+    var diagGeometryApplies: Int = 0
+    // Temporary [CMP-SUBDIAG] fields: what libass produced this render.
+    var diagImageCount: Int = 0
+    var diagImageBytes: Int = 0
+    var diagTrackEvents: Int32 = 0
+    /// Placement of `image` in overlay points (top-left origin). The
+    /// composite covers only the union of the rects libass painted, not
+    /// the full frame; the overlay positions its contents layer here.
+    /// `.zero` when `image` is nil.
+    var imageFrame: CGRect = .zero
 }
 
 final class SubtitleRenderer {
@@ -115,6 +129,16 @@ final class SubtitleRenderer {
     private var lastMarginLeft: Int32 = 0
     private var lastMarginRight: Int32 = 0
     private var frameSizeDirty = false
+    // Temporary [CMP-SUBDIAG]: geometry (frame size / margin) applies.
+    private var geometryApplyCount = 0
+    // Temporary [CMP-SUBFEED]: fed dialogue chunks logged.
+    private var diagFeedLogCount = 0
+    // Temporary [CMP-SUBIMG]: per-image dumps on fingerprint change.
+    private var diagImageDumpCount = 0
+    /// FNV-1a fingerprint of the last composited image list. 0 = nothing
+    /// composited yet (distinct from the FNV offset basis an empty list
+    /// hashes to, so the first render always composites).
+    private var lastCompositedImageFingerprint: UInt64 = 0
 
     // Most recent user styling params per slot. Re-applied after any
     // track swap (since overrides live on the renderer, not the track,
@@ -144,13 +168,13 @@ final class SubtitleRenderer {
             }
             library = lib
 
-            // Silence all but errors. Level 5 = warning, we keep those
-            // for surfacing font lookup failures etc.
-            ass_set_message_cb(lib, { level, _, _, _ in
-                // libass occasionally fires level 0 (fatal) during style
-                // parsing; even those we swallow because the renderer
-                // simply produces no output for unparseable chunks.
-                _ = level
+            // Temporary [CMP-SUBDIAG]: surface libass warnings (level <= 5)
+            // to stdout to catch per-render font-selection failures. The
+            // shipping callback swallows everything.
+            ass_set_message_cb(lib, { level, fmt, args, _ in
+                guard level <= 5, let fmt, let args else { return }
+                let message = NSString(format: String(cString: fmt), arguments: args) as String
+                print("[CMP-SUBASS] L\(level) \(message)")
             }, nil)
 
             guard let primary = ass_renderer_init(lib) else {
@@ -380,6 +404,10 @@ final class SubtitleRenderer {
             }()
             self.handleLock.unlock()
             guard let h = handle else { return }
+            self.diagFeedLogCount += 1
+            if self.diagFeedLogCount <= 6 {
+                print("[CMP-SUBFEED] #\(self.diagFeedLogCount) slot=\(slot) start=\(startMs) dur=\(durationMs) text=\(String(text.prefix(160)))")
+            }
             text.withCString { cstr in
                 let len = Int32(strlen(cstr))
                 ass_process_chunk(h.ptr, cstr, len, startMs, durationMs)
@@ -408,6 +436,22 @@ final class SubtitleRenderer {
 
     // MARK: - Frame size
 
+    /// Pixel scale actually used for libass rasterization. Low-power Apple
+    /// TVs (A12 and earlier) cap the raster at 1080p-class sizes: at the 4K
+    /// UI scale libass shapes and rasterizes every glyph at 4x the pixel
+    /// area, which dominates the residual cue-change render cost there. The
+    /// overlay layer upscales the composite to the display instead, trading
+    /// a little edge sharpness for the raster time.
+    static func renderScale(for size: CGSize, requested scale: CGFloat) -> CGFloat {
+        let safe = scale.isFinite && scale > 0 ? scale : 1
+        guard capsRenderAt1080p, size.height > 0 else { return safe }
+        return min(safe, max(1, 1080 / size.height))
+    }
+
+    /// AppleTV14,x (A15, 3rd-gen 4K) is the first model with headroom for
+    /// 4K glyph rasterization; earlier models cap at 1080p.
+    private static let capsRenderAt1080p = DevicePower.isLowPowerAppleTV
+
     /// Update the libass frame/storage size and video-area margins. Called
     /// by the overlay view's `layoutSubviews`. Safe from main thread — hops
     /// internally.
@@ -416,9 +460,10 @@ final class SubtitleRenderer {
         scale: CGFloat,
         videoInsets: SubtitleVideoInsets = .zero
     ) {
-        let w = Int32(max(1, size.width * scale))
-        let h = Int32(max(1, size.height * scale))
-        let margins = Self.pixelMargins(for: videoInsets, scale: scale)
+        let renderScale = Self.renderScale(for: size, requested: scale)
+        let w = Int32(max(1, size.width * renderScale))
+        let h = Int32(max(1, size.height * renderScale))
+        let margins = Self.pixelMargins(for: videoInsets, scale: renderScale)
         sessionQueue.async { [weak self] in
             guard let self else { return }
             self.applyFrameGeometryOnSessionQueue(width: w, height: h, margins: margins)
@@ -501,22 +546,137 @@ final class SubtitleRenderer {
             return ass_render_frame(renderer, $0.ptr, now, &changePrimary)
         }
         let hasContent = imgPrimary != nil || imgSecondary != nil
-        let anyChange = changePrimary != 0 || changeSecondary != 0 || frameSizeDirty
+        let wasFrameSizeDirty = frameSizeDirty
+
+        // libass's detect_change flag is unreliable here: it reports
+        // content change (2) on every render of a static cue. The culprit
+        // is the background-box layer — libass re-rasterizes the box bitmap
+        // every frame into a rotating buffer pool, so its pointer differs
+        // per render even though the pixels are identical (text glyph
+        // bitmaps cache with stable pointers). Trusting the flag — or
+        // pointer identity — meant compositing + snapshotting the
+        // full-frame 4K canvas every vsync a cue was visible (100-400 ms
+        // per frame, scaling with glyph size). Fingerprint the image list
+        // by placement, color, and SAMPLED bitmap content so an
+        // identical-but-reallocated bitmap fingerprints identically, and
+        // composite only on real change.
+        var imageFingerprint: UInt64 = 0xcbf2_9ce4_8422_2325
+        func mix(_ value: UInt64) {
+            imageFingerprint = (imageFingerprint ^ value) &* 0x0000_0100_0000_01b3
+        }
+        for head in [imgSecondary, imgPrimary] {
+            var node = head
+            while let cur = node {
+                let img = cur.pointee
+                mix(UInt64(bitPattern: Int64(img.dst_x)))
+                mix(UInt64(bitPattern: Int64(img.dst_y)))
+                mix(UInt64(bitPattern: Int64(img.w)))
+                mix(UInt64(bitPattern: Int64(img.h)))
+                mix(UInt64(img.color))
+                if let bitmap = img.bitmap, img.h > 0, img.w > 0 {
+                    let total = Int(img.stride) * (Int(img.h) - 1) + Int(img.w)
+                    let step = max(1, total / 64)
+                    var offset = 0
+                    while offset < total {
+                        mix(UInt64(bitmap[offset]))
+                        offset += step
+                    }
+                }
+                node = img.next
+            }
+        }
+        let imagesChanged = imageFingerprint != lastCompositedImageFingerprint
+        let anyChange = imagesChanged || frameSizeDirty
+        if imagesChanged, imgPrimary != nil, diagImageDumpCount < 12 {
+            diagImageDumpCount += 1
+            var node = imgPrimary
+            var idx = 0
+            while let cur = node, idx < 6 {
+                let img = cur.pointee
+                let ptrTag = (img.bitmap.map { UInt(bitPattern: UnsafeRawPointer($0)) } ?? 0) & 0xFFFFF
+                print("[CMP-SUBIMG] dump#\(diagImageDumpCount) img\(idx) ptr=\(String(ptrTag, radix: 16)) x=\(img.dst_x) y=\(img.dst_y) w=\(img.w) h=\(img.h) color=\(String(img.color, radix: 16)) now=\(now)")
+                idx += 1
+                node = img.next
+            }
+        }
+        var diagImageCount = 0
+        var diagImageBytes = 0
+        for head in [imgPrimary, imgSecondary] {
+            var node = head
+            while let cur = node {
+                diagImageCount += 1
+                diagImageBytes += Int(cur.pointee.h) * Int(cur.pointee.stride)
+                node = cur.pointee.next
+            }
+        }
+        let diagTrackEvents = primaryHandle.map { $0.ptr.pointee.n_events } ?? 0
         if !anyChange {
-            return SubtitleRenderOutput(image: nil, isDirty: false, hasContent: hasContent)
+            return SubtitleRenderOutput(
+                image: nil, isDirty: false, hasContent: hasContent,
+                diagChangePrimary: changePrimary, diagChangeSecondary: changeSecondary,
+                diagWasFrameSizeDirty: wasFrameSizeDirty, diagGeometryApplies: geometryApplyCount,
+                diagImageCount: diagImageCount, diagImageBytes: diagImageBytes,
+                diagTrackEvents: diagTrackEvents
+            )
         }
 
-        // Composite into the canvas. Secondary first so primary draws
-        // on top if they happen to overlap.
-        let canvas = ensureCanvas(widthPx: widthPx, heightPx: heightPx)
-        canvas.clear()
-        if let imgSecondary { canvas.draw(imageList: imgSecondary) }
-        if let imgPrimary   { canvas.draw(imageList: imgPrimary) }
-
         frameSizeDirty = false
+        lastCompositedImageFingerprint = imageFingerprint
+
+        // Composite only the union of the rects libass painted. The
+        // full-frame canvas was the dominant render cost on tvOS: at 4K
+        // (scale 2) every cue change cleared, copied (`makeImage`), and
+        // re-uploaded a 33 MiB buffer when the painted region is
+        // typically 1-2 MiB. Clipped to the frame like `draw` does.
+        var minX = widthPx, minY = heightPx, maxX = 0, maxY = 0
+        for head in [imgSecondary, imgPrimary] {
+            var node = head
+            while let cur = node {
+                let img = cur.pointee
+                if img.w > 0, img.h > 0, img.bitmap != nil {
+                    minX = min(minX, max(0, Int(img.dst_x)))
+                    minY = min(minY, max(0, Int(img.dst_y)))
+                    maxX = max(maxX, min(widthPx, Int(img.dst_x) + Int(img.w)))
+                    maxY = max(maxY, min(heightPx, Int(img.dst_y) + Int(img.h)))
+                }
+                node = img.next
+            }
+        }
+        guard maxX > minX, maxY > minY else {
+            // Cue ended (or everything rasterized off-frame): dirty with a
+            // nil image so the overlay clears without a full-frame pass.
+            return SubtitleRenderOutput(
+                image: nil, isDirty: true, hasContent: hasContent,
+                diagChangePrimary: changePrimary, diagChangeSecondary: changeSecondary,
+                diagWasFrameSizeDirty: wasFrameSizeDirty, diagGeometryApplies: geometryApplyCount,
+                diagImageCount: diagImageCount, diagImageBytes: diagImageBytes,
+                diagTrackEvents: diagTrackEvents
+            )
+        }
+
+        // Secondary first so primary draws on top if they overlap.
+        let canvas = ensureCanvas(widthPx: maxX - minX, heightPx: maxY - minY)
+        canvas.clear()
+        if let imgSecondary { canvas.draw(imageList: imgSecondary, offsetX: minX, offsetY: minY) }
+        if let imgPrimary   { canvas.draw(imageList: imgPrimary, offsetX: minX, offsetY: minY) }
 
         let cgImage = canvas.snapshot(scale: scale)
-        return SubtitleRenderOutput(image: cgImage, isDirty: true, hasContent: hasContent)
+        // Canvas pixels map to points through the (possibly capped) render
+        // scale, not the requested display scale.
+        let renderScale = Self.renderScale(for: frameSize, requested: scale)
+        return SubtitleRenderOutput(
+            image: cgImage, isDirty: true, hasContent: hasContent,
+            diagChangePrimary: changePrimary, diagChangeSecondary: changeSecondary,
+            diagWasFrameSizeDirty: wasFrameSizeDirty, diagGeometryApplies: geometryApplyCount,
+            diagImageCount: diagImageCount, diagImageBytes: diagImageBytes,
+            diagTrackEvents: diagTrackEvents,
+            imageFrame: CGRect(
+                x: CGFloat(minX) / renderScale,
+                y: CGFloat(minY) / renderScale,
+                width: CGFloat(maxX - minX) / renderScale,
+                height: CGFloat(maxY - minY) / renderScale
+            )
+        )
     }
 
     private func ensureFrameSizeOnSessionQueue(
@@ -524,10 +684,10 @@ final class SubtitleRenderer {
         scale: CGFloat,
         videoInsets: SubtitleVideoInsets = .zero
     ) {
-        let safeScale = scale.isFinite && scale > 0 ? scale : 1
-        let w = Int32(max(1, size.width * safeScale))
-        let h = Int32(max(1, size.height * safeScale))
-        let margins = Self.pixelMargins(for: videoInsets, scale: safeScale)
+        let renderScale = Self.renderScale(for: size, requested: scale)
+        let w = Int32(max(1, size.width * renderScale))
+        let h = Int32(max(1, size.height * renderScale))
+        let margins = Self.pixelMargins(for: videoInsets, scale: renderScale)
         applyFrameGeometryOnSessionQueue(width: w, height: h, margins: margins)
     }
 
@@ -553,6 +713,10 @@ final class SubtitleRenderer {
             || margins.left != lastMarginLeft
             || margins.right != lastMarginRight
         guard sizeChanged || marginsChanged else { return }
+        geometryApplyCount += 1
+        if geometryApplyCount <= 20 || geometryApplyCount % 60 == 0 {
+            print("[CMP-SUBGEOM] #\(geometryApplyCount) \(w)x\(h) margins=\(margins.top)/\(margins.bottom)/\(margins.left)/\(margins.right) was=\(lastWidth)x\(lastHeight) \(lastMarginTop)/\(lastMarginBottom)/\(lastMarginLeft)/\(lastMarginRight)")
+        }
         forEachRenderer {
             ass_set_frame_size($0, w, h)
             ass_set_storage_size($0, w, h)
@@ -594,6 +758,14 @@ final class SubtitleRenderer {
         ass_set_storage_size(renderer, 1920, 1080)
         ass_set_pixel_aspect(renderer, 1.0)
         ass_set_use_margins(renderer, 1)
+        // At a full-frame 4K canvas with the enlarged tvOS size ladder and
+        // letterbox font compensation, a single styled cue's glyph bitmaps
+        // can exceed libass's default bitmap cache (~30 MB). Once that
+        // happens every render is a cache miss: full re-rasterization
+        // (~100-200 ms at 3840×2160) and detect_change flags content change
+        // on every frame because the bitmaps are newly allocated. Raise the
+        // ceiling so steady-state renders of a static cue are cache hits.
+        ass_set_cache_limits(renderer, 0, 128)
 
         // Font lookup via the AUTODETECT provider, which resolves to
         // CoreText on Apple platforms when libass is built without
@@ -692,7 +864,9 @@ private final class CompositorCanvas {
     }
 
     /// Walk a libass `ASS_Image*` linked list and composite each rect's
-    /// alpha mask + flat color into the canvas.
+    /// alpha mask + flat color into the canvas. `offsetX`/`offsetY` map
+    /// frame-space destinations into this canvas (the caller sizes the
+    /// canvas to the union of the painted rects, not the full frame).
     ///
     /// The libass `color` field is `RRGGBBAA` with alpha inverted
     /// (00 = opaque, FF = transparent). Each pixel's effective alpha is
@@ -700,15 +874,15 @@ private final class CompositorCanvas {
     /// channels are premultiplied by that effective alpha and blended
     /// over the existing canvas contents using straightforward `over`
     /// compositing.
-    func draw(imageList head: UnsafeMutablePointer<ASS_Image>) {
+    func draw(imageList head: UnsafeMutablePointer<ASS_Image>, offsetX: Int = 0, offsetY: Int = 0) {
         var current: UnsafeMutablePointer<ASS_Image>? = head
         while let node = current {
             let img = node.pointee
             let w = Int(img.w)
             let h = Int(img.h)
             let stride = Int(img.stride)
-            let dstX = Int(img.dst_x)
-            let dstY = Int(img.dst_y)
+            let dstX = Int(img.dst_x) - offsetX
+            let dstY = Int(img.dst_y) - offsetY
             guard w > 0, h > 0, let bitmap = img.bitmap else {
                 current = img.next
                 continue

@@ -1,5 +1,5 @@
 //
-//  DVSegmentWriter.swift
+//  LoopbackSegmentWriter.swift
 //  Continuum (iOS + tvOS) — Dolby Vision AVPlayer loopback route
 //
 //  Re-demuxes a remote source with libavformat, re-muxes it into fragmented
@@ -83,10 +83,55 @@ enum DVTrueHDMajorSyncScanner {
     }
 }
 
-final class DVSegmentWriter {
+/// Latch-once detector for HDR10+ dynamic tone-mapping metadata in a
+/// compressed HEVC bitstream. SMPTE ST 2094-40 metadata travels in an
+/// ITU-T T.35 user-data-registered SEI whose payload opens with a fixed
+/// six-byte header: country code 0xB5 (USA), provider code 0x003C
+/// (Samsung), provider-oriented code 0x0001, application identifier 4.
+/// The header contains no adjacent 0x00 0x00 pair, so HEVC
+/// emulation-prevention bytes (inserted only after two zero bytes) can
+/// never split a match — scanning the raw escaped bitstream is safe.
+/// A chance collision inside entropy-coded slice data is ~2^-48 per byte
+/// offset, negligible; the badge impact would be cosmetic anyway.
+struct HDR10PlusSEIDetector {
+    private static let metadataHeader: [UInt8] = [0xB5, 0x00, 0x3C, 0x00, 0x01, 0x04]
+
+    /// True once any scanned packet has contained the header. Latched for
+    /// the detector's lifetime; later scans short-circuit without reading.
+    private(set) var detected = false
+
+    /// Scans one compressed packet. Returns true only for the FIRST packet
+    /// that carries the header; every later call returns false.
+    mutating func scan(bytes: UnsafePointer<UInt8>, count: Int) -> Bool {
+        guard !detected, count >= Self.metadataHeader.count else { return false }
+        for offset in 0...(count - Self.metadataHeader.count) {
+            if bytes[offset] == Self.metadataHeader[0],
+               bytes[offset + 1] == Self.metadataHeader[1],
+               bytes[offset + 2] == Self.metadataHeader[2],
+               bytes[offset + 3] == Self.metadataHeader[3],
+               bytes[offset + 4] == Self.metadataHeader[4],
+               bytes[offset + 5] == Self.metadataHeader[5] {
+                detected = true
+                return true
+            }
+        }
+        return false
+    }
+
+    mutating func scan(_ data: Data) -> Bool {
+        data.withUnsafeBytes { rawBuffer in
+            guard let base = rawBuffer.bindMemory(to: UInt8.self).baseAddress else { return false }
+            return scan(bytes: base, count: data.count)
+        }
+    }
+}
+
+final class LoopbackSegmentWriter {
+    // Temporary [CMP-LIFE]: session-pool leak attribution.
+    deinit { print("[CMP-LIFE] deinit LoopbackSegmentWriter") }
     private static let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "com.continuum.app",
-        category: "DVSegmentWriter"
+        category: "LoopbackSegmentWriter"
     )
     private static let traceTopLevelBoxes = false
     private static let verboseSegmentLogging =
@@ -102,7 +147,7 @@ final class DVSegmentWriter {
     let sourceHeaders: [String: String]
     let sourceStartTimeSeconds: Double
     let outputDirectory: URL
-    let segmentStore: DVSegmentStore?
+    let segmentStore: LoopbackSegmentStore?
     let debugOutputDirectory: URL?
     let selectedAudioTrackIndex: Int
     let videoMode: LoopbackSessionSpec.VideoMode
@@ -169,6 +214,11 @@ final class DVSegmentWriter {
     /// Fires with a rolling estimate of how quickly FFmpeg is reading the
     /// remote source, not how quickly AVPlayer is reading localhost HLS.
     var onSourceDownloadStats: ((_ bitsPerSecond: Double?, _ totalBytesRead: Int64?) -> Void)?
+    /// Fires at most once per writer, when the video bitstream first carries
+    /// HDR10+ dynamic-metadata SEI. The backend installs it only for sessions
+    /// whose stats badge currently reads "HDR10" and has not flipped yet;
+    /// nil disables the per-packet scan entirely.
+    var onHDR10PlusMetadataDetected: (() -> Void)?
     struct GeneratedMediaStats: Equatable {
         let generation: UInt64
         let rollingBitrateBps: Double?
@@ -199,7 +249,11 @@ final class DVSegmentWriter {
     var onFinished: ((_ error: Error?) -> Void)?
 
     // MARK: - Internal state (muxQueue only)
-    private let muxQueue = DispatchQueue(label: "com.continuum.dv.mux", qos: .userInitiated)
+    /// `.utility`, deliberately: the producer runs 20-60 s ahead of the
+    /// playhead, so it never needs a performance core. At `.userInitiated`
+    /// its demux/remux bursts (100-160 Mbps during window fill) contend
+    /// with mediaserverd's 4K decode and the UI on A12-class Apple TVs.
+    private let muxQueue = DispatchQueue(label: "com.continuum.dv.mux", qos: .utility)
     /// Cancellation flag. Guarded by `cancelLock` so `stop()` can flip it
     /// from any thread — including while the mux loop is blocked inside
     /// `av_read_frame` waiting on a network read. FFmpeg's
@@ -234,6 +288,9 @@ final class DVSegmentWriter {
     /// (AVPlayerBackend installs observers on that signal) and two fires
     /// would double-add the periodic time observer.
     private var firstSegmentReadyFired = false
+    /// Latch-once HDR10+ SEI scan over outgoing video packets. Only consulted
+    /// while `onHDR10PlusMetadataDetected` is installed.
+    private var hdr10PlusSEIDetector = HDR10PlusSEIDetector()
     /// Tracks whether the playlist contains at least one video-bearing segment.
     /// Audio-only fragments before the first video sample are still discarded,
     /// but startup gating should not discard later segments while waiting for
@@ -272,6 +329,28 @@ final class DVSegmentWriter {
     /// EXT-X-ENDLIST so AVPlayer treats it as VOD.
     private var finished = false
     private var loggedMasterManifest = false
+    /// AVPlayer entry playlist. Apple grants premium-format claims (Dolby
+    /// Atmos MAT output for E-AC-3 JOC) at master-variant level; a
+    /// media-direct start never gets them. The historical iOS rejection of
+    /// our local master surface was the missing RESOLUTION/FRAME-RATE and
+    /// the faithful High-tier CODECS declaration — both fixed in
+    /// `emitMasterPlaylist`/`hevcRFC6381CodecString` (AetherEngine ships the
+    /// same master shape in production). Kill switch back to the old
+    /// media-direct start:
+    /// `defaults write <bundle> player.apple.loopback_master_start_enabled -bool NO`
+    private lazy var masterStartEnabled =
+        UserDefaults.standard.object(
+            forKey: "player.apple.loopback_master_start_enabled"
+        ) as? Bool ?? true
+    private var startupPlaylistName: String {
+        masterStartEnabled ? "master.m3u8" : "playlist.m3u8"
+    }
+    /// Output video dimensions, captured at stream setup for the master
+    /// playlist's RESOLUTION attribute (Apple's HLS authoring spec requires
+    /// RESOLUTION and FRAME-RATE on every variant; FRAME-RATE is
+    /// load-bearing — see `emitMasterPlaylist`).
+    private var masterVideoWidth: Int32 = 0
+    private var masterVideoHeight: Int32 = 0
     private var repairedMissingVideoDTSCount = 0
     private let startupWallTime = CFAbsoluteTimeGetCurrent()
     private var lastSourceStatsWallTime: CFAbsoluteTime?
@@ -298,6 +377,86 @@ final class DVSegmentWriter {
     /// Which input stream index supplies the video track. -1 until openOutput
     /// sets it.
     private var videoInputStreamIndex: Int = -1
+    // Temporary [CMP-SEAM] diagnostics (see rewritePacketForOutput).
+    private var vodSeamDidLogFirstAudio = false
+    private var vodSeamLastAudioEnd: Int64 = -1
+
+    // MARK: - Subtitle tap
+    // Text-subtitle streams stay in the demuxer keep-set; their packets are
+    // decoded inline on the mux thread (a text decode is a microsecond-scale
+    // parse) and emitted as cues. Set both callbacks before start().
+    var onSubtitleTapTracks: (([LoopbackSubtitleTapTrackInfo]) -> Void)?
+    var onSubtitleTapCue: ((LoopbackSubtitleTapCue) -> Void)?
+    /// Bitmap (PGS/DVD) subtitle tap. Unlike the text tap there is no
+    /// persistent cue store — decoded RGBA cues have real memory weight —
+    /// so bitmap streams stay readable but are only DECODED while one is
+    /// selected via `setBitmapSubtitleTapStream`. Cues carry source-axis
+    /// seconds; `trimActiveAt` mirrors the extractor's PGS semantics
+    /// (every composition, including an empty clear, supersedes what is
+    /// on screen). Fired on the mux thread.
+    var onBitmapSubtitleTapCue: ((_ streamIndex: Int, _ cues: [BitmapSubtitleCue], _ trimActiveAt: Double?) -> Void)?
+    /// Bitmap-subtitle input stream indices the tap can serve this run.
+    /// Fired on the mux thread from every writer (re)configure.
+    var onBitmapSubtitleTapTracks: (([Int]) -> Void)?
+    /// Per-input-stream decoder contexts for tapped text subtitle streams.
+    /// Mux-queue only; freed in teardown.
+    private var subtitleTapDecoders: [Int: UnsafeMutablePointer<AVCodecContext>] = [:]
+    private var subtitleTapTimeBases: [Int: AVRational] = [:]
+    // Bitmap tap state. Mux queue only, except the selection box below.
+    private var bitmapTapTimeBases: [Int: AVRational] = [:]
+    private var bitmapTapCodecpars: [Int: UnsafeMutablePointer<AVCodecParameters>] = [:]
+    private var bitmapTapDecoders: [Int: UnsafeMutablePointer<AVCodecContext>] = [:]
+    private var bitmapTapFallbackCanvas: (width: Int32, height: Int32) = (0, 0)
+    /// Rolling backlog of COMPRESSED bitmap-subtitle packets, per stream,
+    /// kept for every bitmap stream whether or not one is selected. The
+    /// producer's read head runs well ahead of both the playhead and the
+    /// (main-thread) selection call, so without a backlog every packet
+    /// read before selection lands is lost — PGS then shows nothing until
+    /// playback reaches the frontier. Compressed PGS is tiny relative to
+    /// its decoded RGBA (~kilobytes per cue), so buffering all streams is
+    /// cheap. Mux thread only.
+    private var bitmapTapBacklog: [Int: [(packet: UnsafeMutablePointer<AVPacket>, seconds: Double)]] = [:]
+    private var bitmapTapBacklogBytes: [Int: Int] = [:]
+    /// Per-stream caps: media window slightly wider than the cue store's
+    /// 300 s retention, plus a byte ceiling for pathological streams.
+    private static let bitmapTapBacklogWindowSeconds = 360.0
+    private static let bitmapTapBacklogByteCap = 16 << 20
+    /// Selected bitmap stream: written from the main thread, read per
+    /// packet on the mux thread. `drainPending` asks the mux thread to
+    /// replay the selected stream's backlog before further live decode.
+    private let bitmapTapSelectionLock = NSLock()
+    private var bitmapTapSelectedStreamLocked: Int?
+    private var bitmapTapDrainPendingLocked = false
+
+    /// Select (or clear) the bitmap subtitle stream the tap decodes.
+    /// Thread-safe; takes effect on the next packet of that stream. Every
+    /// non-nil selection schedules a backlog replay — the backend opens a
+    /// fresh cue store per activation, so the replay repopulates it from
+    /// the oldest buffered packet through the producer's read head.
+    func setBitmapSubtitleTapStream(_ streamIndex: Int?) {
+        bitmapTapSelectionLock.lock()
+        bitmapTapSelectedStreamLocked = streamIndex
+        if streamIndex != nil {
+            bitmapTapDrainPendingLocked = true
+        }
+        bitmapTapSelectionLock.unlock()
+    }
+
+    private func bitmapTapSelectedStream() -> Int? {
+        bitmapTapSelectionLock.lock()
+        defer { bitmapTapSelectionLock.unlock() }
+        return bitmapTapSelectedStreamLocked
+    }
+
+    /// Consume the drain request, returning the stream to replay (nil when
+    /// no drain is pending).
+    private func takeBitmapTapDrainRequest() -> Int? {
+        bitmapTapSelectionLock.lock()
+        defer { bitmapTapSelectionLock.unlock() }
+        guard bitmapTapDrainPendingLocked else { return nil }
+        bitmapTapDrainPendingLocked = false
+        return bitmapTapSelectedStreamLocked
+    }
     private var selectedAudioStreamIndex: Int = -1
     private var audioOutputStreamIndex: Int = -1
     private var trackTimeBasesByID: [UInt32: AVRational] = [:]
@@ -345,11 +504,42 @@ final class DVSegmentWriter {
     private var doviRecord: DoviRecord?
     private var outputAudioCodecID: AVCodecID?
     private var outputAudioCodecToken: String?
+    /// True when the selected copy-mode audio stream is E-AC-3 with a JOC
+    /// (Atmos) extension — `codecpar.profile == 30`
+    /// (`AV_PROFILE_EAC3_DDP_ATMOS`, libavcodec defs.h; set by the eac3
+    /// decoder during stream probing when the bitstream carries
+    /// `eac3_extension_type_a`). Drives the dec3 JOC surgery in
+    /// `writeInitSegment`.
+    private var selectedAudioIsAtmosJOC = false
     private var audioDecoderCtx: UnsafeMutablePointer<AVCodecContext>?
     private var audioEncoderCtx: UnsafeMutablePointer<AVCodecContext>?
+    /// Reused across every decoded bridge frame (receive_frame unrefs it);
+    /// allocated lazily on the mux queue, freed with the decoder.
+    private var audioDecodedFrame: UnsafeMutablePointer<AVFrame>?
     private var audioSwrCtx: OpaquePointer?
     private var audioSampleFifo: OpaquePointer?
     private var nextEncodedAudioPTS: Int64 = 0
+    /// VOD: whether `nextEncodedAudioPTS` has been anchored to the session
+    /// timeline. The bridged (re-encoded) audio track otherwise zero-bases
+    /// per producer run while remuxed video rides the plan axis; on a
+    /// mid-title resume AVPlayer then sees an audio track that never covers
+    /// the seek target and buffers forward forever without becoming ready
+    /// (living-room DV P7 + TrueHD→FLAC resume failure).
+    private var vodSeededBridgedAudioPTS = false
+    /// Seam stitching state: the bridged audio of every anchored run is
+    /// aligned to the run's own plan-boundary (session axis). A restarted
+    /// TrueHD/MLP decoder silently eats ~40ms of packets before its first
+    /// major_sync, so a source-accurate seed leaves that span as a hole in
+    /// the audio track at every producer seam — audible as an intermittent
+    /// glitch. The previous run's stored audio always ends at this
+    /// boundary (the cutter's span-assignment invariant; its encode
+    /// pipeline runs seconds ahead of the cut, so a counter handoff
+    /// overshoots — measured −2.3s on device). A gap after the boundary is
+    /// filled with encoded silence, an overlap is trimmed pre-timestamp.
+    private var vodPendingSeamSilenceFillSamples: Int64 = 0
+    private var vodPendingSeamTrimSamples: Int64 = 0
+    private static let vodSeamFillMaxSamples: Int64 = 48_000 // 1 s @ 48 kHz
+    private static let vodSeamTrimMaxSamples: Int64 = 12_000 // 250 ms @ 48 kHz
     private var audioDecodedFrameCount = 0
     private var audioDecodeErrorCount = 0
     private var videoOutputTrackID: UInt32?
@@ -359,10 +549,10 @@ final class DVSegmentWriter {
     /// AVIO write callback (synchronously inside `av_interleaved_write_frame`),
     /// so they cannot throw directly. The mux loop checks this after every
     /// `av_interleaved_write_frame`/`av_write_trailer` and rethrows.
-    private var fatalIOError: DVWriterError?
+    private var fatalIOError: LoopbackWriterError?
     /// Consecutive `av_interleaved_write_frame` failures. Reset on success.
     /// When this hits `maxConsecutiveMuxWriteFailures`, the mux loop aborts via
-    /// `DVWriterError.muxWriteFailures` so callers see a real error instead of
+    /// `LoopbackWriterError.muxWriteFailures` so callers see a real error instead of
     /// a silent no-op. Some negative codes are treated as fatal on first hit
     /// regardless of count — see `evaluateMuxWriteResult`.
     private var consecutiveMuxWriteFailures = 0
@@ -425,11 +615,15 @@ final class DVSegmentWriter {
     init(
         sessionSpec: LoopbackSessionSpec,
         outputDirectory: URL,
-        segmentStore: DVSegmentStore? = nil,
+        segmentStore: LoopbackSegmentStore? = nil,
         debugOutputDirectory: URL? = nil,
         targetSegmentDuration: Double = 4.0,
-        minimumStartupMediaDuration: Double? = nil
+        minimumStartupMediaDuration: Double? = nil,
+        vodPlan: LoopbackSegmentPlan? = nil,
+        vodBaseIndex: Int = 0,
+        recycledInputHandoff: LoopbackInputHandoff? = nil
     ) {
+        self.recycledInputHandoff = recycledInputHandoff
         self.sessionSpec = sessionSpec
         self.sourceURL = sessionSpec.sourceURL
         self.sourceHeaders = sessionSpec.headers
@@ -442,11 +636,582 @@ final class DVSegmentWriter {
         self.selectedAudioOutputMode = sessionSpec.selectedAudio.outputMode
         self.manifestMetadata = sessionSpec.manifestMetadata
         self.targetSegmentDuration = targetSegmentDuration
+        self.vodPlan = vodPlan
+        self.vodPlanProvidedAtInit = vodPlan != nil
+        self.vodBaseIndex = max(0, vodBaseIndex)
         self.minimumStartupMediaDuration = max(
             0,
             minimumStartupMediaDuration
                 ?? Self.defaultMinimumStartupMediaDuration(for: sessionSpec.videoMode)
         )
+    }
+
+    // MARK: - VOD serving mode (loopback-primary plan, Stage 1c)
+
+    /// Static-plan serving state. Populated only when the session spec asks
+    /// for `.vodPlan` AND a plan could be resolved; the EVENT path never
+    /// touches these. The plan is resolved once per player item — a
+    /// restarted producer receives the already-resolved plan via init and
+    /// must reproduce the same segment grid.
+    private var vodPlan: LoopbackSegmentPlan?
+    private let vodPlanProvidedAtInit: Bool
+    private let vodBaseIndex: Int
+    /// Incoming demuxer handoff from the producer this session replaces:
+    /// openInput claims it (bounded wait) instead of reopening the source.
+    private let recycledInputHandoff: LoopbackInputHandoff?
+    /// Outgoing handoff for the producer replacing THIS session. Set by
+    /// `stop(recyclingInputInto:)` under `cancelLock`; consumed by
+    /// `teardown()` on the mux queue.
+    private var outgoingInputHandoff: LoopbackInputHandoff?
+    /// True when this session runs on a recycled demuxer — its cue index is
+    /// already warm, so the restart re-seek skips the mid-file prewarm.
+    private var recycledInputActive = false
+    /// The interrupt-callback target for the input context (cancelLock-
+    /// protected). Fresh per writer; REPLACED by the adopted token when a
+    /// recycled demuxer is claimed, because FFmpeg's nested I/O contexts
+    /// hold copies of the callback pointing at the token from the original
+    /// open.
+    private var interruptToken = LoopbackInterruptToken()
+    /// Teardown-completed marker (cancelLock-protected): a stop() that
+    /// arrives after teardown must cancel its handoff immediately or the
+    /// successor burns its whole claim timeout on a dead publisher.
+    private var didTeardown = false
+    private var vodCutter: LoopbackSegmentCutter?
+    private var vodOpenSegmentIndex = 0
+    private var vodClosingSegmentIndex: Int?
+    private var vodHasRoutedVideo = false
+    private var vodDidFlushFirstFragment = false
+    /// True once the VOD pipeline is actually engaged for this session.
+    /// Resolution can fail (unknown duration, degenerate index); the writer
+    /// then degrades to the EVENT path instead of failing the load.
+    private var vodActive = false
+    /// Fired once, on the session that resolves the plan, so the backend can
+    /// hand the same plan to restarted producers.
+    var onSegmentPlanResolved: ((LoopbackSegmentPlan) -> Void)?
+    /// Fired (on the mux thread) once the session's effective anchor segment
+    /// is known — for a resume-first session this differs from the passed
+    /// base. The backend must seed the consumer window and its coverage
+    /// bookkeeping from this before production begins.
+    var onVODProducerAnchored: ((Int) -> Void)?
+    /// The session's true anchor: `vodBaseIndex` for explicit restarts,
+    /// resume-derived for a first session starting mid-title.
+    private var vodEffectiveBaseIndex = 0
+
+    /// Resolves (or installs) the segment plan and cutter. Runs after
+    /// `openInput` — the keyframe index needs `find_stream_info` plus the
+    /// cue-prewarm seek — and before `openOutput`/`writeHeader`, which pick
+    /// muxer flags off `vodActive`.
+    private func resolveVODPlanIfNeeded() throws {
+        guard sessionSpec.servingMode == .vodPlan else { return }
+        if vodPlan == nil {
+            if var plan = harvestVODPlan() {
+                // Resume-anchor bitstream check runs BEFORE the plan is
+                // published — the playlist and every restarted producer are
+                // built from whatever goes out here.
+                plan = resumeAnchorValidatedPlan(plan)
+                vodPlan = plan
+                onSegmentPlanResolved?(plan)
+            }
+        } else {
+            // Restarted (plan-provided) session: this demuxer's cue index is
+            // cold, and a matroska start seek without cues lands by linear
+            // estimate — up to a GOP away from the anchor, which misanchors
+            // production past the requested segment (living-room bug 2).
+            // Warm the cues exactly like the harvest path, then redo the
+            // start seek so it lands on the anchor keyframe.
+            prewarmVODCueIndexAndReseek()
+        }
+        guard let plan = vodPlan, plan.segmentCount > 0 else {
+            print("[CMP-AVP] vod plan unavailable; degrading to EVENT serving")
+            // A failed harvest may have bailed before its rewind/start seek
+            // (openInput no longer seeks for vodPlan sessions).
+            if let inCtx = inputCtx {
+                try? seekInputToStartTimeIfNeeded(inCtx)
+            }
+            return
+        }
+        // The effective anchor: an explicit restart passes its base, but a
+        // FIRST session resuming mid-title arrives with base 0 and a
+        // mid-title start time — its true anchor is the resume segment.
+        // Anchoring at 0 would park the producer against the consumer
+        // window seeded at its own segment and strand AVPlayer's resume
+        // fetches (the living-room resume startup timeout).
+        var effectiveBase = min(vodBaseIndex, plan.segmentCount - 1)
+        if sourceStartTimeSeconds > plan.anchorSourceSeconds + 0.05 {
+            effectiveBase = max(effectiveBase, plan.segmentIndex(
+                forPlaylistSeconds: sourceStartTimeSeconds - plan.anchorSourceSeconds
+            ))
+        }
+        vodEffectiveBaseIndex = effectiveBase
+        vodCutter = LoopbackSegmentCutter(
+            boundaries: Array(plan.boundaries[effectiveBase...]),
+            baseIndex: effectiveBase
+        )
+        vodOpenSegmentIndex = effectiveBase
+        onVODProducerAnchored?(effectiveBase)
+        print("[CMP-AVP] vod producer anchored segment=\(effectiveBase) start=\(sourceStartTimeSeconds)")
+        let anchorBoundarySeconds = plan.sourceStartSeconds(ofSegment: effectiveBase)
+        // The re-seek also runs whenever the resume-anchor probe consumed
+        // packets — even an on-boundary resume needs the cursor put back.
+        if resumeAnchorProbeMovedCursor || sourceStartTimeSeconds > anchorBoundarySeconds + 0.05,
+           let inCtx = inputCtx {
+            // Mid-segment resume: the open seek targeted the resume TIME,
+            // which parks the demuxer mid-GOP inside the anchor segment —
+            // the bootstrap then discards frames up to the NEXT keyframe
+            // and the anchor segment AVPlayer's resume pre-seek fetches is
+            // never produced (living-room startup stalls at segments
+            // 1549/1711: endless 404s → ladder → Compatibility fallback).
+            // Re-seek to the anchor BOUNDARY (a plan keyframe; cues are
+            // warm and no packets are consumed yet — the same contract the
+            // restart path relies on in prewarmVODCueIndexAndReseek).
+            try? seekInput(inCtx, toSeconds: anchorBoundarySeconds)
+            cmpLog("[CMP-AVP] vod anchor boundary re-seek boundary=\(anchorBoundarySeconds) resume=\(sourceStartTimeSeconds)")
+        }
+        vodAnchorPts = plan.boundaries[0]
+        if let inCtx = inputCtx,
+           videoInputStreamIndex >= 0,
+           let stream = inCtx.pointee.streams?[videoInputStreamIndex] {
+            vodVideoTimeBase = stream.pointee.time_base
+        }
+        vodAwaitingRestartKeyframe = effectiveBase > 0
+        vodPrerollDroppedVideo = 0
+        vodPrerollDroppedAudio = 0
+        vodActive = true
+        if selectedAudioOutputMode != .copy {
+            // Bridged audio re-encodes on a synthesized clock; the encoder
+            // counter is seeded from the first emitted frame's session-axis
+            // timestamp (see seedVODBridgedAudioPTSIfNeeded). Copy-mode
+            // sources are exact.
+            print("[CMP-AVP] vod: bridged audio (\(selectedAudioOutputMode)) — session-anchored at first emitted frame")
+        }
+    }
+
+    /// Session timeline anchor: the plan's first boundary, on the source
+    /// video time base. A plan constant, so every producer session — first
+    /// or restarted — applies the identical shift and a restarted segment's
+    /// tfdt continues the session timeline instead of zero-basing (M3).
+    private var vodAnchorPts: Int64 = 0
+    private var vodVideoTimeBase = AVRational(num: 1, den: 90000)
+    /// Restart pre-roll gate: the restarted demuxer seek can land before the
+    /// restart boundary; nothing before the first keyframe at-or-after that
+    /// boundary may reach the muxer, or the restarted segment differs from
+    /// its continuous twin.
+    private var vodAwaitingRestartKeyframe = false
+    private var vodFirstRoutedVideoDts: Int64?
+    /// Seam telemetry only (no behavior): packets the restart pre-roll gate
+    /// discards, reported once when the video gate opens so hardware passes
+    /// can size the decode-ramp seam. Mux thread only.
+    private var vodPrerollDroppedVideo = 0
+    private var vodPrerollDroppedAudio = 0
+
+    private func applyVODAnchorShift(
+        pkt: UnsafeMutablePointer<AVPacket>,
+        inputTimeBase: AVRational
+    ) {
+        guard vodAnchorPts != 0 else { return }
+        let anchor = av_rescale_q(vodAnchorPts, vodVideoTimeBase, inputTimeBase)
+        if pkt.pointee.dts != Int64.min { pkt.pointee.dts -= anchor }
+        if pkt.pointee.pts != Int64.min { pkt.pointee.pts -= anchor }
+    }
+
+    /// Drops packets that must not reach the muxer in VOD mode: restart
+    /// pre-roll video before the restart boundary's keyframe, audio ahead
+    /// of the video gate on a restart, and head-of-stream audio that would
+    /// map below the plan anchor (tfdt is unsigned and the muxer no longer
+    /// absorbs negatives with `avoid_negative_ts=disabled`).
+    private func vodShouldDropPacket(
+        pkt: UnsafeMutablePointer<AVPacket>,
+        inputIdx: Int
+    ) -> Bool {
+        guard vodActive, let plan = vodPlan else { return false }
+        if inputIdx == videoInputStreamIndex {
+            if vodAwaitingRestartKeyframe {
+                let isKeyframe = (pkt.pointee.flags & AV_PKT_FLAG_KEY) != 0
+                let boundary = plan.boundaries[min(vodEffectiveBaseIndex, plan.segmentCount - 1)]
+                if isKeyframe, pkt.pointee.pts != Int64.min, pkt.pointee.pts >= boundary {
+                    vodAwaitingRestartKeyframe = false
+                    vodFirstRoutedVideoDts = pkt.pointee.dts
+                    print("[CMP-AVP] vod restart preroll dropped video=\(vodPrerollDroppedVideo) audio=\(vodPrerollDroppedAudio) segment=\(vodEffectiveBaseIndex)")
+                    return false
+                }
+                vodPrerollDroppedVideo += 1
+                return true
+            }
+            if vodFirstRoutedVideoDts == nil {
+                vodFirstRoutedVideoDts = pkt.pointee.dts
+            }
+            return false
+        }
+        guard pkt.pointee.dts != Int64.min,
+              let inCtx = inputCtx,
+              videoInputStreamIndex >= 0,
+              let videoStream = inCtx.pointee.streams?[videoInputStreamIndex],
+              let thisStream = inCtx.pointee.streams?[inputIdx] else {
+            return false
+        }
+        let thresholdVideoTB: Int64
+        if vodEffectiveBaseIndex == 0 {
+            // Head of stream: audio at-or-after the plan anchor rides, even
+            // ahead of the first video packet — the source's A/V offset is
+            // part of the timeline. Audio before the anchor would map below
+            // tfdt 0 and is dropped.
+            thresholdVideoTB = vodAnchorPts
+        } else {
+            // Restart: audio waits for the video gate, then everything
+            // before the gate's DTS is dropped so the restarted interleave
+            // reproduces the continuous run's.
+            guard let gate = vodFirstRoutedVideoDts else {
+                vodPrerollDroppedAudio += 1
+                return true
+            }
+            thresholdVideoTB = gate
+        }
+        let threshold = av_rescale_q(
+            thresholdVideoTB,
+            videoStream.pointee.time_base,
+            thisStream.pointee.time_base
+        )
+        // A frame belongs to the timeline region its SPAN overlaps, not the
+        // region its start timestamp falls in: the demuxer's per-track seek
+        // lands on the audio sample containing the target instant, and the
+        // continuous run's interleaver assigns that same overlapping frame
+        // forward. Dropping it would lose exactly one frame per restart
+        // (and break restart byte-identity with the continuous run).
+        let duration = max(0, pkt.pointee.duration)
+        let drops: Bool
+        if duration > 0 {
+            drops = pkt.pointee.dts + duration <= threshold
+        } else {
+            drops = pkt.pointee.dts < threshold
+        }
+        if drops { vodPrerollDroppedAudio += 1 }
+        return drops
+    }
+
+    private func prewarmVODCueIndexAndReseek() {
+        guard let inCtx = inputCtx else { return }
+        // A recycled demuxer carries the previous session's cue index — the
+        // start seek below already lands on the anchor keyframe without the
+        // mid-file warm-up seek (which costs a range request into the
+        // remote source on every restart).
+        if !recycledInputActive {
+            let rawDuration = inCtx.pointee.duration
+            if rawDuration > 0 {
+                let durationSeconds = Double(rawDuration) / Double(AV_TIME_BASE)
+                if durationSeconds > 1 {
+                    let mid = Int64(durationSeconds * 0.5 * Double(AV_TIME_BASE))
+                    _ = avformat_seek_file(inCtx, -1, Int64.min, mid, Int64.max, AVSEEK_FLAG_BACKWARD)
+                }
+            }
+        }
+        if sourceStartTimeSeconds > 0 {
+            try? seekInputToStartTimeIfNeeded(inCtx)
+        } else {
+            _ = avformat_seek_file(inCtx, -1, Int64.min, 0, Int64.max, AVSEEK_FLAG_BACKWARD)
+        }
+    }
+
+    private func harvestVODPlan() -> LoopbackSegmentPlan? {
+        guard let inCtx = inputCtx,
+              videoInputStreamIndex >= 0,
+              let stream = inCtx.pointee.streams?[videoInputStreamIndex] else {
+            return nil
+        }
+        let rawDuration = inCtx.pointee.duration
+        guard rawDuration > 0 else { return nil }
+        let durationSeconds = Double(rawDuration) / Double(AV_TIME_BASE)
+
+        // Cue prewarm: a bounded mid-file seek forces the demuxer to load
+        // the container's keyframe index (MKV Cues / mp4 stss) before
+        // planning. Each read is bounded by the AVIO rw_timeout; a failed
+        // prewarm leaves whatever the open scan indexed and the plan's
+        // trust gates decide whether that is usable.
+        if durationSeconds > 1 {
+            let mid = Int64(durationSeconds * 0.5 * Double(AV_TIME_BASE))
+            _ = avformat_seek_file(inCtx, -1, Int64.min, mid, Int64.max, AVSEEK_FLAG_BACKWARD)
+        }
+
+        var keyframePts: [Int64] = []
+        let entryCount = avformat_index_get_entries_count(stream)
+        keyframePts.reserveCapacity(Int(entryCount))
+        for entryIndex in 0..<entryCount {
+            guard let entry = avformat_index_get_entry(stream, entryIndex) else { continue }
+            // AVINDEX_KEYFRAME == 0x0001 (bitfield; the macro doesn't import).
+            if (entry.pointee.flags & 1) != 0 {
+                keyframePts.append(entry.pointee.timestamp)
+            }
+        }
+
+        // Rewind to the session start; the prewarm seek moved the cursor.
+        if sourceStartTimeSeconds > 0 {
+            try? seekInputToStartTimeIfNeeded(inCtx)
+        } else {
+            _ = avformat_seek_file(inCtx, -1, Int64.min, 0, Int64.max, AVSEEK_FLAG_BACKWARD)
+        }
+
+        let tb = stream.pointee.time_base
+        let plan = LoopbackSegmentPlan.build(
+            keyframePts: keyframePts,
+            timeBaseNum: tb.num,
+            timeBaseDen: tb.den,
+            sourceDurationSeconds: durationSeconds,
+            targetSegmentDurationSeconds: targetSegmentDuration
+        )
+        print("[CMP-AVP] vod plan resolved segments=\(plan.segmentCount) keyframes=\(keyframePts.count) trusted=\(plan.usedKeyframeIndex) duration=\(String(format: "%.1f", plan.totalDurationSeconds))s")
+        return plan
+    }
+
+    /// Cap on how many plan boundaries the resume-anchor validation walks
+    /// back looking for a true random-access point. Each probe costs one
+    /// demuxer seek plus a partial GOP of reads (a range request on remote
+    /// sources), and every merged segment adds decode-and-discard lead-in
+    /// ahead of the resume frame.
+    private static let maxResumeAnchorWalkBack = 4
+    /// Whether the resume-anchor probe consumed demuxer packets — the
+    /// anchor-boundary re-seek in resolveVODPlanIfNeeded must then run even
+    /// when the resume time sits exactly on the anchor boundary.
+    private var resumeAnchorProbeMovedCursor = false
+
+    private struct AnchorOpenerProbe {
+        let codecID: AVCodecID
+        let nalLengthSize: Int
+    }
+
+    private enum AnchorOpenerVerdict {
+        case trueRAP
+        case notRAP(vclType: Int)
+        case inconclusive
+    }
+
+    /// Resume-anchor bitstream validation. The plan's boundaries come from
+    /// the container's keyframe index and `AV_PKT_FLAG_KEY`, both of which
+    /// can call a frame "key" that the bitstream does not back as a
+    /// random-access point (stale MKV cues, open-GOP H.264 I-frames).
+    /// Forward play never notices — the decode is continuous — but the
+    /// playlist advertises EXT-X-INDEPENDENT-SEGMENTS, so AVPlayer
+    /// cold-decodes the resume segment from its first sample, and a non-RAP
+    /// opener renders inter-predicted blocks against missing references
+    /// until the next true keyframe (the resume-time macroblocking).
+    ///
+    /// Verify the resume segment's opener in the bitstream; when it fails,
+    /// merge it into the nearest earlier segment whose opener IS a true RAP
+    /// (never forward — that would visibly skip content). The cold decode
+    /// then starts clean and the resume pre-seek discards the lead-in.
+    private func resumeAnchorValidatedPlan(
+        _ plan: LoopbackSegmentPlan
+    ) -> LoopbackSegmentPlan {
+        guard sourceStartTimeSeconds > plan.anchorSourceSeconds + 0.05,
+              plan.segmentCount > 0 else { return plan }
+        let requested = plan.segmentIndex(
+            forPlaylistSeconds: sourceStartTimeSeconds - plan.anchorSourceSeconds
+        )
+        guard requested > 0, let probe = makeAnchorOpenerProbe() else { return plan }
+        var candidate = requested
+        // Segment 0 is never probed: its boundary is the first indexed
+        // keyframe — the same frame a cold head start decodes from — and the
+        // head IRAP can arrive without AV_PKT_FLAG_KEY (the bootstrap's
+        // flag-repair case), which would false-negative here.
+        let lowest = max(1, requested - Self.maxResumeAnchorWalkBack)
+        while candidate >= lowest {
+            switch probeSegmentOpener(plan: plan, segment: candidate, probe: probe) {
+            case .trueRAP:
+                if candidate == requested {
+                    print("[CMP-AVP] vod resume anchor validated segment=\(requested)")
+                    return plan
+                }
+                print("[CMP-AVP] vod resume anchor walked back requested=\(requested) anchored=\(candidate)")
+                return plan.coalescingSegments(after: candidate, through: requested)
+            case .notRAP(let vclType):
+                print("[CMP-AVP] vod resume anchor segment=\(candidate) opener is not a RAP vcl=\(vclType); walking back")
+                candidate -= 1
+            case .inconclusive:
+                // Can't judge the bitstream (read failure, no VCL found).
+                // Keep the plan as harvested rather than churn seeks.
+                print("[CMP-AVP] vod resume anchor probe inconclusive segment=\(candidate); keeping plan")
+                return plan
+            }
+        }
+        if candidate == 0 {
+            print("[CMP-AVP] vod resume anchor walked back requested=\(requested) anchored=0")
+            return plan.coalescingSegments(after: 0, through: requested)
+        }
+        print("[CMP-AVP] vod resume anchor validation exhausted walk-back requested=\(requested); keeping plan")
+        return plan
+    }
+
+    /// Codec + NAL length prefix for the resume-anchor probe, parsed from
+    /// the input video stream's avcC/hvcC extradata. Nil (skip validation)
+    /// for other codecs or Annex-B extradata.
+    private func makeAnchorOpenerProbe() -> AnchorOpenerProbe? {
+        guard let inCtx = inputCtx,
+              videoInputStreamIndex >= 0,
+              let stream = inCtx.pointee.streams?[videoInputStreamIndex],
+              let codecpar = stream.pointee.codecpar,
+              let extradata = codecpar.pointee.extradata else { return nil }
+        let codecID = codecpar.pointee.codec_id
+        let extradataSize = Int(codecpar.pointee.extradata_size)
+        if codecID == AV_CODEC_ID_H264, extradataSize >= 7, extradata[0] == 1 {
+            return AnchorOpenerProbe(
+                codecID: codecID,
+                nalLengthSize: Int((extradata[4] & 0x03) + 1)
+            )
+        }
+        if codecID == AV_CODEC_ID_HEVC, extradataSize >= 23, extradata[0] == 1 {
+            return AnchorOpenerProbe(
+                codecID: codecID,
+                nalLengthSize: Int((extradata[21] & 0x03) + 1)
+            )
+        }
+        return nil
+    }
+
+    /// Seeks to a plan segment's boundary and inspects the packet the
+    /// restart gate would open that segment on (first container-flagged
+    /// keyframe at or after the boundary): does its bitstream actually hold
+    /// a random-access point? H.264 requires IDR (VCL NAL 5) — open-GOP
+    /// I-frames let later P-frames reference across them. HEVC accepts any
+    /// IRAP (VCL NAL 16-23): trailing pictures after a CRA are clean by
+    /// spec, and the cutter already keeps RASL pictures in the CRA's
+    /// segment.
+    private func probeSegmentOpener(
+        plan: LoopbackSegmentPlan,
+        segment: Int,
+        probe: AnchorOpenerProbe
+    ) -> AnchorOpenerVerdict {
+        guard let inCtx = inputCtx else { return .inconclusive }
+        do {
+            try seekInput(inCtx, toSeconds: plan.sourceStartSeconds(ofSegment: segment))
+        } catch {
+            return .inconclusive
+        }
+        resumeAnchorProbeMovedCursor = true
+        let boundary = plan.boundaries[segment]
+        var packetsRead = 0
+        while packetsRead < 600 {
+            let readPkt = av_packet_alloc()
+            let rc = av_read_frame(inCtx, readPkt)
+            guard rc >= 0, let pkt = readPkt else {
+                var free = readPkt
+                av_packet_free(&free)
+                return .inconclusive
+            }
+            packetsRead += 1
+            var verdict: AnchorOpenerVerdict?
+            if Int(pkt.pointee.stream_index) == videoInputStreamIndex,
+               (pkt.pointee.flags & AV_PKT_FLAG_KEY) != 0,
+               pkt.pointee.pts != Int64.min,
+               pkt.pointee.pts >= boundary {
+                verdict = anchorOpenerVerdict(pkt: pkt, probe: probe)
+            }
+            var free = readPkt
+            av_packet_free(&free)
+            if let verdict { return verdict }
+        }
+        return .inconclusive
+    }
+
+    private func anchorOpenerVerdict(
+        pkt: UnsafeMutablePointer<AVPacket>,
+        probe: AnchorOpenerProbe
+    ) -> AnchorOpenerVerdict {
+        guard let dataPtr = pkt.pointee.data else { return .inconclusive }
+        let packetBytes = UnsafeBufferPointer(start: dataPtr,
+                                              count: Int(pkt.pointee.size))
+        let vclType: Int?
+        let isRAP: Bool
+        if probe.codecID == AV_CODEC_ID_H264 {
+            vclType = ISOBoxSurgery.firstAVCVCLNALType(
+                packetBytes: packetBytes,
+                nalLengthSize: probe.nalLengthSize
+            )
+            isRAP = vclType == 5
+        } else {
+            vclType = ISOBoxSurgery.firstHEVCVCLNALType(
+                packetBytes: packetBytes,
+                nalLengthSize: probe.nalLengthSize
+            )
+            isRAP = vclType.map { (16...23).contains($0) } ?? false
+        }
+        guard let vclType else { return .inconclusive }
+        return isRAP ? .trueRAP : .notRAP(vclType: vclType)
+    }
+
+    /// Routes a video packet through the plan cutter and flushes the open
+    /// fragment when the packet opens a new segment. Runs BEFORE
+    /// `rewritePacketForOutput` so the packet's PTS is still on the source
+    /// video time base — the same axis as the plan boundaries.
+    private func vodCutBeforeVideoPacketIfNeeded(pkt: UnsafeMutablePointer<AVPacket>) throws {
+        guard vodActive, vodCutter != nil else { return }
+        let isKeyframe = (pkt.pointee.flags & AV_PKT_FLAG_KEY) != 0
+        let target = vodCutter!.index(pts: pkt.pointee.pts, isKeyframe: isKeyframe)
+        // Progressive anchor: request an interim fragment flush roughly
+        // every 1.5 s of routed video. The flush runs after this packet is
+        // written (main loop), so the fragment includes it.
+        if vodProgressiveAccumulating, pkt.pointee.pts != Int64.min {
+            if vodLastInterimFlushPts == Int64.min {
+                vodLastInterimFlushPts = pkt.pointee.pts
+            } else if pkt.pointee.pts - vodLastInterimFlushPts
+                        >= ticks(forSeconds: 1.5, timeBase: vodVideoTimeBase) {
+                vodInterimFlushRequested = true
+                vodLastInterimFlushPts = pkt.pointee.pts
+            }
+        }
+        if !vodHasRoutedVideo {
+            vodHasRoutedVideo = true
+            vodOpenSegmentIndex = target
+            return
+        }
+        guard target != vodOpenSegmentIndex else { return }
+        try performVODFragmentCut(closingSegment: vodOpenSegmentIndex)
+        vodOpenSegmentIndex = target
+        waitForVODWindowIfNeeded(nextSegmentIndex: target)
+    }
+
+    /// Producer pacing for the VOD mode: block before filling a segment past
+    /// the consumer's window (`target + forwardWindow`). Replaces the EVENT
+    /// generated-ahead throttle — and inherently parks when the playhead
+    /// wedges, since a frozen consumer stops advancing the target.
+    private func waitForVODWindowIfNeeded(nextSegmentIndex: Int) {
+        guard vodActive, let store = segmentStore else { return }
+        var logged = false
+        while !isCancelled, !store.vodProducerMayAppend(segmentIndex: nextSegmentIndex) {
+            if !logged {
+                logged = true
+                print("[CMP-AVP] vod window backpressure parked segment=\(nextSegmentIndex)")
+            }
+            // A parked producer reads no packets, so a bitmap subtitle
+            // enabled while parked would otherwise wait for the next
+            // append slot before its backlog replays.
+            drainBitmapTapBacklogIfNeeded()
+            usleep(200_000)
+        }
+    }
+
+    private func performVODFragmentCut(closingSegment: Int) throws {
+        guard let outCtx = outputCtx else { return }
+        vodClosingSegmentIndex = closingSegment
+        // Drain the interleaver before flushing: audio the muxer buffered
+        // while waiting for video DTS to catch up must land in the closing
+        // fragment, not spill into the next one.
+        let drainRC = av_interleaved_write_frame(outCtx, nil)
+        if drainRC < 0 {
+            throw LoopbackWriterError.muxWriteFailures(lastRC: drainRC, consecutive: 1)
+        }
+        let flushRC = av_write_frame(outCtx, nil)
+        if flushRC < 0 {
+            throw LoopbackWriterError.muxWriteFailures(lastRC: flushRC, consecutive: 1)
+        }
+        if !vodDidFlushFirstFragment {
+            vodDidFlushFirstFragment = true
+            // The first flush can split ftyp+moov and the fragment across
+            // two calls (delay_moov); flush once more so the closing
+            // segment is fully emitted before the next packet is written.
+            let secondRC = av_write_frame(outCtx, nil)
+            if secondRC < 0 {
+                throw LoopbackWriterError.muxWriteFailures(lastRC: secondRC, consecutive: 1)
+            }
+        }
+        try throwIfFatalIOError()
     }
 
     private static func defaultMinimumStartupMediaDuration(
@@ -480,13 +1245,29 @@ final class DVSegmentWriter {
         }
     }
 
-    func stop(completion: (() -> Void)? = nil) {
+    func stop(
+        recyclingInputInto handoff: LoopbackInputHandoff? = nil,
+        completion: (() -> Void)? = nil
+    ) {
         // Flip the flag synchronously so the in-flight `av_read_frame` bails
         // via the interrupt callback on its next poll, rather than waiting
         // for the muxQueue to drain.
         cancelLock.lock()
         _cancelled = true
+        let token = interruptToken
+        var deadHandoff: LoopbackInputHandoff?
+        if let handoff {
+            if didTeardown {
+                deadHandoff = handoff
+            } else {
+                outgoingInputHandoff = handoff
+            }
+        }
         cancelLock.unlock()
+        token.cancel()
+        // Teardown already ran — nothing will ever be published; release the
+        // successor to open fresh instead of waiting out its claim timeout.
+        deadHandoff?.cancelPublication()
 
         if let completion {
             muxQueue.async(execute: completion)
@@ -499,11 +1280,21 @@ final class DVSegmentWriter {
         do {
             try prepareOutputDirectory()
             try openInput()
+            try resolveVODPlanIfNeeded()
             try openOutput()
             // Prefetch + filter until we have a complete hvcC in extradata.
             // Filtered packets are stashed in pendingVideoPackets and replayed
             // below.
-            try bootstrapVideoExtradata()
+            if vodActive, vodPlanProvidedAtInit {
+                // Restarted VOD session: output extradata comes from codecpar
+                // (the same source the first session already validated). The
+                // bootstrap scan otherwise swallows up to a GOP of packets it
+                // never replays, misanchoring production past the restart
+                // target (living-room bug 2).
+                print("[CMP-AVP] vod restart: extradata bootstrap skipped")
+            } else {
+                try bootstrapVideoExtradata()
+            }
             try writeHeader()
             // writeHeader's `av_write_header` synchronously calls our AVIO
             // sink, which writes init.mp4 to disk via writeInitSegment. If
@@ -525,7 +1316,7 @@ final class DVSegmentWriter {
             let avNoPTS = Int64.min  // AV_NOPTS_VALUE
             while !isCancelled {
                 let rc: Int32
-                if DVSegmentWriter.traceThroughput {
+                if LoopbackSegmentWriter.traceThroughput {
                     let started = CFAbsoluteTimeGetCurrent()
                     rc = av_read_frame(inputCtx, packet)
                     throughputTiming.readMs += (CFAbsoluteTimeGetCurrent() - started) * 1000
@@ -549,6 +1340,17 @@ final class DVSegmentWriter {
                 if isCancelled {
                     continue
                 }
+                // Subtitle-tap streams are kept readable but never muxed:
+                // decode inline, emit cues, and move on before the stream
+                // map (they have no output stream).
+                if subtitleTapDecoders[inputIdx] != nil {
+                    tapDecodeSubtitlePacket(pkt: pkt, inputIdx: inputIdx)
+                    continue
+                }
+                if bitmapTapTimeBases[inputIdx] != nil {
+                    tapHandleBitmapSubtitlePacket(pkt: pkt, inputIdx: inputIdx)
+                    continue
+                }
                 guard let outIdx = streamMap[inputIdx] else { continue }
                 // Skip packets with no usable presentation timestamp. Some
                 // MKV/H.264 files expose the first keyframe with PTS but no
@@ -559,6 +1361,10 @@ final class DVSegmentWriter {
                     inputStreamIndex: inputIdx,
                     noPTS: avNoPTS
                 ) {
+                    continue
+                }
+
+                if vodActive, vodShouldDropPacket(pkt: pkt, inputIdx: inputIdx) {
                     continue
                 }
 
@@ -586,6 +1392,7 @@ final class DVSegmentWriter {
                     } else {
                         try transformVideoPacketIfNeeded(pkt)
                     }
+                    try vodCutBeforeVideoPacketIfNeeded(pkt: pkt)
                 }
 
                 if isCancelled {
@@ -594,7 +1401,7 @@ final class DVSegmentWriter {
                 rewritePacketForOutput(pkt: pkt, outStreamIndex: Int32(outIdx),
                                        inputStreamIndex: inputIdx)
                 let wr: Int32
-                if DVSegmentWriter.traceThroughput {
+                if LoopbackSegmentWriter.traceThroughput {
                     let started = CFAbsoluteTimeGetCurrent()
                     wr = av_interleaved_write_frame(outputCtx, pkt)
                     throughputTiming.muxMs += (CFAbsoluteTimeGetCurrent() - started) * 1000
@@ -602,11 +1409,19 @@ final class DVSegmentWriter {
                 } else {
                     wr = av_interleaved_write_frame(outputCtx, pkt)
                 }
-                try evaluateMuxWriteResult(wr, packet: pkt)
+                try evaluateMuxWriteResult(wr)
+                if vodInterimFlushRequested {
+                    vodInterimFlushRequested = false
+                    performVODInterimFragmentFlush()
+                }
             }
 
             if !isCancelled {
                 try finishTranscodedAudio()
+                if vodActive {
+                    // The trailer flushes the final open fragment; name it.
+                    vodClosingSegmentIndex = vodOpenSegmentIndex
+                }
                 let trailerRC = av_write_trailer(outputCtx)
                 try throwIfFatalIOError()
                 if trailerRC < 0 {
@@ -614,7 +1429,7 @@ final class DVSegmentWriter {
                     Self.logger.error(
                         "av_write_trailer failed: rc=\(trailerRC) (\(detail, privacy: .public))"
                     )
-                    throw DVWriterError.muxWriteFailures(
+                    throw LoopbackWriterError.muxWriteFailures(
                         lastRC: trailerRC,
                         consecutive: 1
                     )
@@ -627,7 +1442,7 @@ final class DVSegmentWriter {
                 onFinished?(nil)
             }
         } catch {
-            Self.logger.error("DVSegmentWriter failed: \(String(describing: error), privacy: .public)")
+            Self.logger.error("LoopbackSegmentWriter failed: \(String(describing: error), privacy: .public)")
             teardown()
             onFinished?(error)
         }
@@ -656,9 +1471,9 @@ final class DVSegmentWriter {
     /// Centralizes the post-`av_interleaved_write_frame` bookkeeping. If the
     /// write callback set `fatalIOError` (init/segment/playlist write to disk
     /// failed), rethrow immediately. Otherwise track consecutive failures and
-    /// throw `DVWriterError.muxWriteFailures` when the threshold is reached
+    /// throw `LoopbackWriterError.muxWriteFailures` when the threshold is reached
     /// (or immediately for unambiguously-fatal codes).
-    private func evaluateMuxWriteResult(_ rc: Int32, packet: UnsafeMutablePointer<AVPacket>? = nil) throws {
+    private func evaluateMuxWriteResult(_ rc: Int32) throws {
         try throwIfFatalIOError()
         if rc < 0 {
             consecutiveMuxWriteFailures += 1
@@ -666,9 +1481,12 @@ final class DVSegmentWriter {
             Self.logger.error(
                 "av_interleaved_write_frame failed: rc=\(rc) (\(detail, privacy: .public)) consecutive=\(self.consecutiveMuxWriteFailures)"
             )
+            // OSLog does not reach the devicectl console capture; mirror to
+            // stdout so on-device runs surface dropped packets.
+            print("[CMP-AVP] mux write failed rc=\(rc) (\(detail)) consecutive=\(consecutiveMuxWriteFailures)")
             if rc == avErrorInvalidData
                 || consecutiveMuxWriteFailures >= Self.maxConsecutiveMuxWriteFailures {
-                throw DVWriterError.muxWriteFailures(
+                throw LoopbackWriterError.muxWriteFailures(
                     lastRC: rc,
                     consecutive: consecutiveMuxWriteFailures
                 )
@@ -676,9 +1494,9 @@ final class DVSegmentWriter {
             return
         }
         consecutiveMuxWriteFailures = 0
-        if let packet {
-            recordMuxedPacketTimestamps(packet)
-        }
+        // Last-muxed timestamps are recorded pre-write in
+        // normalizeMuxerTimestampsIfNeeded; the packet is blank here
+        // (av_interleaved_write_frame takes ownership on success).
     }
 
     private func emitSourceDownloadStatsIfNeeded(force: Bool = false) {
@@ -724,24 +1542,82 @@ final class DVSegmentWriter {
         )
     }
 
-    private func openInput() throws {
-        var ctx: UnsafeMutablePointer<AVFormatContext>? = avformat_alloc_context()
-        guard ctx != nil else {
-            throw DVWriterError.allocInput
-        }
-
-        // Install an interrupt callback so `stop()` can unblock an in-flight
-        // network read. FFmpeg polls this between / during I/O ops; returning
-        // 1 causes `av_read_frame` (or open/probe) to bail with AVERROR_EXIT.
-        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
-        ctx!.pointee.interrupt_callback = AVIOInterruptCB(
+    /// Installs the cancellation poll on a context. FFmpeg polls it
+    /// between / during I/O ops; returning 1 bails `av_read_frame` (or
+    /// open/probe) with AVERROR_EXIT. The opaque target is the writer's
+    /// `interruptToken`, NEVER the writer itself: FFmpeg copies the
+    /// AVIOInterruptCB struct into the nested http/tcp URLContext and
+    /// AVIOContext at open time, and those copies must stay valid across
+    /// demuxer handoffs after this writer deallocates (living-room SIGSEGV
+    /// on the first recycled-demuxer seek).
+    private func installInterruptCallback(
+        on ctx: UnsafeMutablePointer<AVFormatContext>,
+        token: LoopbackInterruptToken
+    ) {
+        let tokenPtr = Unmanaged.passUnretained(token).toOpaque()
+        ctx.pointee.interrupt_callback = AVIOInterruptCB(
             callback: { opaque in
                 guard let opaque else { return 0 }
-                let writer = Unmanaged<DVSegmentWriter>.fromOpaque(opaque).takeUnretainedValue()
-                return writer.isCancelled ? 1 : 0
+                let token = Unmanaged<LoopbackInterruptToken>.fromOpaque(opaque).takeUnretainedValue()
+                return token.isCancelled ? 1 : 0
             },
-            opaque: selfPtr
+            opaque: tokenPtr
         )
+    }
+
+    private func openInput() throws {
+        // Producer restart: claim the retiring session's demuxer instead of
+        // reopening the source. Skips avformat_open_input +
+        // find_stream_info + the matroska cue warm — the dominant fixed
+        // cost of every seek-triggered restart. Any hiccup falls through
+        // to a fresh open.
+        if let handoff = recycledInputHandoff,
+           let recycled = handoff.claim(timeout: 1.5) {
+            // Adopt the token baked into the recycled context's nested I/O
+            // contexts; the retiring writer's stop() left it cancelled.
+            cancelLock.lock()
+            interruptToken = recycled.token
+            cancelLock.unlock()
+            recycled.token.reset()
+            if isCancelled {
+                // This writer was stopped between init and claim; re-cancel
+                // so the context's reads abort instead of riding rw_timeout.
+                recycled.token.cancel()
+            }
+            installInterruptCallback(on: recycled.context, token: recycled.token)
+            do {
+                videoInputStreamIndex = try Self.resolveSelectedVideoStreamIndex(
+                    in: recycled.context,
+                    videoMode: videoMode
+                )
+                Self.discardUnusedStreamsForMux(
+                    in: recycled.context,
+                    keepVideoIndex: videoInputStreamIndex,
+                    keepAudioOrdinal: shouldIncludeAudio ? selectedAudioTrackIndex : -1,
+                    keepAudioFfIndex: sessionSpec.selectedAudio.ffIndex,
+                    keepSubtitleIndices: subtitleTapKeepSet(in: recycled.context)
+                )
+                configureSubtitleTap(in: recycled.context)
+                inputCtx = recycled.context
+                recycledInputActive = true
+                print("[CMP-AVP] vod restart: recycled source demuxer")
+                return
+            } catch {
+                var doomed: UnsafeMutablePointer<AVFormatContext>? = recycled.context
+                avformat_close_input(&doomed)
+                print("[CMP-AVP] vod restart: recycled demuxer rejected (\(error)); reopening source")
+            }
+        }
+
+        var ctx: UnsafeMutablePointer<AVFormatContext>? = avformat_alloc_context()
+        guard ctx != nil else {
+            throw LoopbackWriterError.allocInput
+        }
+
+        cancelLock.lock()
+        let token = interruptToken
+        cancelLock.unlock()
+        installInterruptCallback(on: ctx!, token: token)
 
         var options: OpaquePointer?
         if !sourceHeaders.isEmpty {
@@ -768,10 +1644,10 @@ final class DVSegmentWriter {
         let rc = avformat_open_input(&ctx, inputLocation, nil, &options)
         av_dict_free(&options)
         if rc < 0 {
-            throw DVWriterError.openInput(rc)
+            throw LoopbackWriterError.openInput(rc)
         }
         guard let openedContext = ctx else {
-            throw DVWriterError.allocInput
+            throw LoopbackWriterError.allocInput
         }
         inputCtx = openedContext
 
@@ -793,14 +1669,27 @@ final class DVSegmentWriter {
             in: openedContext,
             keepVideoIndex: videoInputStreamIndex,
             keepAudioOrdinal: shouldIncludeAudio ? selectedAudioTrackIndex : -1,
-            keepAudioFfIndex: sessionSpec.selectedAudio.ffIndex
+            keepAudioFfIndex: sessionSpec.selectedAudio.ffIndex,
+            keepSubtitleIndices: subtitleTapKeepSet(in: openedContext)
         )
 
         if avformat_find_stream_info(openedContext, nil) < 0 {
-            throw DVWriterError.findStreamInfo
+            throw LoopbackWriterError.findStreamInfo
         }
+        configureSubtitleTap(in: openedContext)
 
-        try seekInputToStartTimeIfNeeded(openedContext)
+        if sessionSpec.servingMode != .vodPlan {
+            try seekInputToStartTimeIfNeeded(openedContext)
+        }
+        // VOD-plan sessions seek in resolveVODPlanIfNeeded instead: both the
+        // harvest and restart paths warm the matroska cue index and then
+        // seek — with cold cues a BACKWARD seek lands by linear estimate,
+        // potentially PAST the anchor segment's keyframe, and the producer
+        // never generates the segment AVPlayer's resume pre-seek fetches
+        // (living-room startup stall: resume 6199.7s mid-segment-1549,
+        // first produced segment was 1550). Seeking here as well was a
+        // wasted cold-cue seek — extra range requests into the remote
+        // source on every producer restart.
     }
 
     /// Marks every stream we won't mux as `AVDISCARD_ALL` so libavformat
@@ -813,7 +1702,8 @@ final class DVSegmentWriter {
         in ctx: UnsafeMutablePointer<AVFormatContext>,
         keepVideoIndex: Int,
         keepAudioOrdinal: Int,
-        keepAudioFfIndex: Int?
+        keepAudioFfIndex: Int?,
+        keepSubtitleIndices: Set<Int>
     ) {
         let nb = Int(ctx.pointee.nb_streams)
         var discardedSubtitles = 0
@@ -822,6 +1712,7 @@ final class DVSegmentWriter {
         var discardedExtraAudio = 0
         var keptVideo = 0
         var keptAudio = 0
+        var keptSubtitles = 0
         var audioOrdinal = 0
         if let streams = ctx.pointee.streams {
             for i in 0..<nb {
@@ -854,6 +1745,16 @@ final class DVSegmentWriter {
                     }
                     continue
                 }
+                if mediaType == AVMEDIA_TYPE_SUBTITLE, keepSubtitleIndices.contains(i) {
+                    // Subtitle-tap streams stay readable so their packets
+                    // arrive through the same av_read_frame loop that feeds
+                    // the muxer. Set explicitly (not just "don't discard")
+                    // because a RECYCLED demuxer carries the prior writer's
+                    // discard flags.
+                    stream.pointee.discard = AVDISCARD_DEFAULT
+                    keptSubtitles += 1
+                    continue
+                }
                 stream.pointee.discard = AVDISCARD_ALL
                 if mediaType == AVMEDIA_TYPE_SUBTITLE {
                     discardedSubtitles += 1
@@ -865,7 +1766,435 @@ final class DVSegmentWriter {
         // Log unconditionally — we want to confirm this ran even when the
         // walk finds nothing yet (e.g. some demuxers populate streams
         // lazily inside avformat_find_stream_info).
-        cmpLog("[CMP-AVP] mux probe filter total=\(nb) keptVideo=\(keptVideo) keptAudio=\(keptAudio) discardedExtraVideo=\(discardedExtraVideo) discardedExtraAudio=\(discardedExtraAudio) discardedSubtitles=\(discardedSubtitles) discardedOther=\(discardedOther)")
+        cmpLog("[CMP-AVP] mux probe filter total=\(nb) keptVideo=\(keptVideo) keptAudio=\(keptAudio) keptSubtitles=\(keptSubtitles) discardedExtraVideo=\(discardedExtraVideo) discardedExtraAudio=\(discardedExtraAudio) discardedSubtitles=\(discardedSubtitles) discardedOther=\(discardedOther)")
+    }
+
+    /// Streams to keep readable for the subtitle tap. Empty when no tap
+    /// consumer is wired, preserving the discard-everything behaviour.
+    private func subtitleTapKeepSet(
+        in ctx: UnsafeMutablePointer<AVFormatContext>
+    ) -> Set<Int> {
+        var keep: Set<Int> = []
+        if onSubtitleTapCue != nil {
+            keep.formUnion(Self.textSubtitleStreamIndices(in: ctx))
+        }
+        if onBitmapSubtitleTapCue != nil {
+            // Bitmap streams stay readable (their packets are a rounding
+            // error against the video interleave already being read) but
+            // are only decoded while selected.
+            keep.formUnion(Self.bitmapSubtitleStreamIndices(in: ctx))
+        }
+        return keep
+    }
+
+    /// Opens one text-subtitle decoder per tapped stream and reports the
+    /// track set (header + codec kind) to the tap consumer. Mux queue only;
+    /// runs on every writer start — restarts rebuild identical decoders.
+    private func configureSubtitleTap(in ctx: UnsafeMutablePointer<AVFormatContext>) {
+        guard onSubtitleTapCue != nil else { return }
+        freeSubtitleTapDecoders()
+        var infos: [LoopbackSubtitleTapTrackInfo] = []
+        guard let streams = ctx.pointee.streams else { return }
+        for i in Self.textSubtitleStreamIndices(in: ctx).sorted() {
+            guard let stream = streams[i],
+                  let codecparPtr = stream.pointee.codecpar,
+                  let codec = avcodec_find_decoder(codecparPtr.pointee.codec_id) else { continue }
+            var codecCtx = avcodec_alloc_context3(codec)
+            guard codecCtx != nil else { continue }
+            if avcodec_parameters_to_context(codecCtx, codecparPtr) < 0
+                || avcodec_open2(codecCtx, codec, nil) < 0 {
+                avcodec_free_context(&codecCtx)
+                continue
+            }
+            guard let openedCtx = codecCtx else { continue }
+            subtitleTapDecoders[i] = openedCtx
+            subtitleTapTimeBases[i] = stream.pointee.time_base
+
+            let codecID = codecparPtr.pointee.codec_id
+            let isNativeASS = codecID == AV_CODEC_ID_ASS || codecID == AV_CODEC_ID_SSA
+            let header: Data
+            if let sh = openedCtx.pointee.subtitle_header,
+               openedCtx.pointee.subtitle_header_size > 0 {
+                header = Data(bytes: sh, count: Int(openedCtx.pointee.subtitle_header_size))
+            } else if let ed = codecparPtr.pointee.extradata,
+                      codecparPtr.pointee.extradata_size > 0 {
+                header = Data(bytes: ed, count: Int(codecparPtr.pointee.extradata_size))
+            } else {
+                header = Data()
+            }
+            infos.append(LoopbackSubtitleTapTrackInfo(
+                streamIndex: i,
+                isNativeASS: isNativeASS,
+                header: header
+            ))
+        }
+        if !infos.isEmpty {
+            onSubtitleTapTracks?(infos)
+        }
+        configureBitmapSubtitleTap(in: ctx)
+    }
+
+    /// Records the bitmap-subtitle streams the tap can serve (time bases,
+    /// codec parameters, canvas fallback) without opening decoders —
+    /// decoding starts lazily on the first packet of a selected stream.
+    private func configureBitmapSubtitleTap(in ctx: UnsafeMutablePointer<AVFormatContext>) {
+        guard onBitmapSubtitleTapCue != nil else { return }
+        guard let streams = ctx.pointee.streams else { return }
+        // Bitmap decoders position rects against a canvas the track header
+        // can't always provide; seed from the container video dimensions.
+        for i in 0..<Int(ctx.pointee.nb_streams) {
+            guard let stream = streams[i],
+                  let codecparPtr = stream.pointee.codecpar else { continue }
+            if codecparPtr.pointee.codec_type == AVMEDIA_TYPE_VIDEO,
+               codecparPtr.pointee.width > 0, codecparPtr.pointee.height > 0 {
+                bitmapTapFallbackCanvas = (codecparPtr.pointee.width, codecparPtr.pointee.height)
+                break
+            }
+        }
+        var available: [Int] = []
+        for i in Self.bitmapSubtitleStreamIndices(in: ctx).sorted() {
+            guard let stream = streams[i],
+                  let codecparPtr = stream.pointee.codecpar else { continue }
+            bitmapTapTimeBases[i] = stream.pointee.time_base
+            bitmapTapCodecpars[i] = codecparPtr
+            available.append(i)
+        }
+        if !available.isEmpty {
+            onBitmapSubtitleTapTracks?(available)
+        }
+    }
+
+    private func freeSubtitleTapDecoders() {
+        for (_, ctx) in subtitleTapDecoders {
+            var doomed: UnsafeMutablePointer<AVCodecContext>? = ctx
+            avcodec_free_context(&doomed)
+        }
+        subtitleTapDecoders.removeAll()
+        subtitleTapTimeBases.removeAll()
+        for (_, ctx) in bitmapTapDecoders {
+            var doomed: UnsafeMutablePointer<AVCodecContext>? = ctx
+            avcodec_free_context(&doomed)
+        }
+        bitmapTapDecoders.removeAll()
+        bitmapTapTimeBases.removeAll()
+        bitmapTapCodecpars.removeAll()
+        freeBitmapTapBacklog()
+    }
+
+    /// Decode one tapped text-subtitle packet and emit its events. Text
+    /// decodes are parses — microseconds — so this runs inline on the mux
+    /// thread between av_read_frame calls.
+    private func tapDecodeSubtitlePacket(
+        pkt: UnsafeMutablePointer<AVPacket>,
+        inputIdx: Int
+    ) {
+        guard let codecCtx = subtitleTapDecoders[inputIdx],
+              let timeBase = subtitleTapTimeBases[inputIdx],
+              pkt.pointee.pts != Int64.min else { return }
+
+        var sub = AVSubtitle()
+        defer { avsubtitle_free(&sub) }
+        var gotSubtitle: Int32 = 0
+        let rc = avcodec_decode_subtitle2(codecCtx, &sub, &gotSubtitle, pkt)
+        guard rc >= 0, gotSubtitle != 0 else { return }
+
+        let basePtsSeconds = Double(pkt.pointee.pts)
+            * Double(timeBase.num) / Double(timeBase.den)
+        let startMs = Int64((basePtsSeconds + Double(sub.start_display_time) / 1000.0) * 1000.0)
+        let endMs: Int64 = {
+            if sub.end_display_time != UInt32.max,
+               sub.end_display_time > sub.start_display_time {
+                return Int64((basePtsSeconds + Double(sub.end_display_time) / 1000.0) * 1000.0)
+            }
+            if pkt.pointee.duration > 0 {
+                let durSeconds = Double(pkt.pointee.duration)
+                    * Double(timeBase.num) / Double(timeBase.den)
+                return startMs + Int64(durSeconds * 1000.0)
+            }
+            return startMs + 5000
+        }()
+        let durationMs = max(Int64(0), endMs - startMs)
+
+        for i in 0..<Int(sub.num_rects) {
+            guard let rect = sub.rects[i]?.pointee,
+                  rect.type == SUBTITLE_ASS,
+                  let assPtr = rect.ass else { continue }
+            let ass = String(cString: assPtr)
+            guard !ass.isEmpty else { continue }
+            onSubtitleTapCue?(LoopbackSubtitleTapCue(
+                streamIndex: inputIdx,
+                eventText: ass,
+                startMs: startMs,
+                durationMs: durationMs
+            ))
+        }
+    }
+
+    /// Route one tapped bitmap-subtitle packet: replay any pending backlog
+    /// first (so a just-landed selection sees packets read before it),
+    /// live-decode when the packet's stream is selected, and buffer it
+    /// either way — the rolling backlog is what future (re)selections
+    /// replay from.
+    private func tapHandleBitmapSubtitlePacket(
+        pkt: UnsafeMutablePointer<AVPacket>,
+        inputIdx: Int
+    ) {
+        drainBitmapTapBacklogIfNeeded()
+        if bitmapTapSelectedStream() == inputIdx {
+            tapDecodeBitmapSubtitlePacket(pkt: pkt, inputIdx: inputIdx)
+        }
+        bufferBitmapTapPacket(pkt: pkt, inputIdx: inputIdx)
+    }
+
+    /// Clone `pkt` into the stream's rolling backlog, pruning oldest-first
+    /// past the media window / byte cap. Mux thread only.
+    private func bufferBitmapTapPacket(
+        pkt: UnsafeMutablePointer<AVPacket>,
+        inputIdx: Int
+    ) {
+        guard let timeBase = bitmapTapTimeBases[inputIdx],
+              let clone = av_packet_clone(pkt) else { return }
+        let noPts = Int64.min
+        let ptsRaw: Int64 = pkt.pointee.pts != noPts ? pkt.pointee.pts
+            : (pkt.pointee.dts != noPts ? pkt.pointee.dts : 0)
+        let seconds = Double(ptsRaw) * Double(timeBase.num) / Double(timeBase.den)
+        var entries = bitmapTapBacklog[inputIdx] ?? []
+        var bytes = bitmapTapBacklogBytes[inputIdx] ?? 0
+        entries.append((packet: clone, seconds: seconds))
+        bytes += Int(clone.pointee.size)
+        while let oldest = entries.first,
+              bytes > Self.bitmapTapBacklogByteCap
+                || oldest.seconds < seconds - Self.bitmapTapBacklogWindowSeconds {
+            bytes -= Int(oldest.packet.pointee.size)
+            var doomed: UnsafeMutablePointer<AVPacket>? = oldest.packet
+            av_packet_free(&doomed)
+            entries.removeFirst()
+        }
+        bitmapTapBacklog[inputIdx] = entries
+        bitmapTapBacklogBytes[inputIdx] = bytes
+    }
+
+    /// Replay the selected stream's backlog through the decoder when a
+    /// selection is pending. Called from the read loops and from the VOD
+    /// backpressure park loop (a parked producer reads no packets, but a
+    /// mid-playback enable still needs its drain promptly). Packets stay
+    /// buffered afterwards — each activation opens a fresh cue store, so
+    /// a later re-selection replays the full window again. Mux thread only.
+    private func drainBitmapTapBacklogIfNeeded() {
+        guard let selected = takeBitmapTapDrainRequest(),
+              let entries = bitmapTapBacklog[selected], !entries.isEmpty else { return }
+        cmpLog("[CMP-TAP] bitmap backlog drain stream=\(selected) packets=\(entries.count)")
+        for entry in entries {
+            tapDecodeBitmapSubtitlePacket(pkt: entry.packet, inputIdx: selected)
+        }
+    }
+
+    private func freeBitmapTapBacklog() {
+        for (_, entries) in bitmapTapBacklog {
+            for entry in entries {
+                var doomed: UnsafeMutablePointer<AVPacket>? = entry.packet
+                av_packet_free(&doomed)
+            }
+        }
+        bitmapTapBacklog.removeAll()
+        bitmapTapBacklogBytes.removeAll()
+    }
+
+    /// Decode one tapped bitmap-subtitle packet (only while its stream is
+    /// selected) and emit converted cues. A PGS decode is palette+RLE work
+    /// on cue-sized regions — milliseconds, and cues are seconds apart —
+    /// so, like the text tap, it runs inline on the mux thread.
+    private func tapDecodeBitmapSubtitlePacket(
+        pkt: UnsafeMutablePointer<AVPacket>,
+        inputIdx: Int
+    ) {
+        guard bitmapTapSelectedStream() == inputIdx,
+              let timeBase = bitmapTapTimeBases[inputIdx],
+              let codecCtx = ensureBitmapTapDecoder(inputIdx: inputIdx) else { return }
+
+        var sub = AVSubtitle()
+        defer { avsubtitle_free(&sub) }
+        var gotSubtitle: Int32 = 0
+        let rc = avcodec_decode_subtitle2(codecCtx, &sub, &gotSubtitle, pkt)
+        let isPGS = codecCtx.pointee.codec_id == AV_CODEC_ID_HDMV_PGS_SUBTITLE
+        if rc >= 0, gotSubtitle == 0, isPGS, pkt.pointee.size > 30 {
+            // Some Matroska remuxes drop the PGS display-set END segment,
+            // leaving the decoder accumulating with nothing emitted. Push a
+            // minimal synthetic END segment at the same timestamps to flush
+            // the pending composition (mirrors the extractor's repair; only
+            // for substantial packets — tiny ones ARE end/control segments).
+            var payload = [UInt8](repeating: 0, count: 64)
+            payload[0] = 0x80
+            payload.withUnsafeMutableBufferPointer { buffer in
+                var synthetic = AVPacket()
+                synthetic.data = buffer.baseAddress
+                synthetic.size = 3
+                synthetic.pts = pkt.pointee.pts
+                synthetic.dts = pkt.pointee.dts
+                synthetic.duration = pkt.pointee.duration
+                synthetic.stream_index = pkt.pointee.stream_index
+                _ = avcodec_decode_subtitle2(codecCtx, &sub, &gotSubtitle, &synthetic)
+            }
+        }
+        guard rc >= 0, gotSubtitle != 0 else { return }
+
+        let noPts = Int64.min
+        let ptsRaw: Int64 = pkt.pointee.pts != noPts ? pkt.pointee.pts
+            : (pkt.pointee.dts != noPts ? pkt.pointee.dts : 0)
+        let basePtsSeconds = Double(ptsRaw) * Double(timeBase.num) / Double(timeBase.den)
+        let startMs = Int64((basePtsSeconds + Double(sub.start_display_time) / 1000.0) * 1000.0)
+        let endMs: Int64 = {
+            if sub.end_display_time != UInt32.max,
+               sub.end_display_time > sub.start_display_time {
+                return Int64((basePtsSeconds + Double(sub.end_display_time) / 1000.0) * 1000.0)
+            }
+            if pkt.pointee.duration > 0 {
+                let durSeconds = Double(pkt.pointee.duration)
+                    * Double(timeBase.num) / Double(timeBase.den)
+                return startMs + Int64(durSeconds * 1000.0)
+            }
+            // No explicit end anywhere. PGS relies on the next composition
+            // trimming this cue; 5 s is only the ceiling if the stream goes
+            // quiet.
+            return startMs + 5000
+        }()
+        let startSeconds = Double(startMs) / 1000.0
+        let endSeconds = Double(max(startMs, endMs)) / 1000.0
+
+        var cues: [BitmapSubtitleCue] = []
+        for i in 0..<Int(sub.num_rects) {
+            guard let rect = sub.rects[i]?.pointee,
+                  rect.type == SUBTITLE_BITMAP,
+                  let cue = Self.bitmapTapCue(
+                      from: rect,
+                      codecCtx: codecCtx,
+                      fallbackCanvas: bitmapTapFallbackCanvas,
+                      startSeconds: startSeconds,
+                      endSeconds: endSeconds
+                  ) else { continue }
+            cues.append(cue)
+        }
+        if isPGS {
+            // Every PGS composition — including an empty clear event —
+            // supersedes whatever is on screen.
+            onBitmapSubtitleTapCue?(inputIdx, cues, startSeconds)
+        } else if !cues.isEmpty {
+            // DVD subs carry explicit durations; empty events mean nothing.
+            onBitmapSubtitleTapCue?(inputIdx, cues, nil)
+        }
+    }
+
+    /// Lazily open the decoder for a selected bitmap stream.
+    private func ensureBitmapTapDecoder(inputIdx: Int) -> UnsafeMutablePointer<AVCodecContext>? {
+        if let existing = bitmapTapDecoders[inputIdx] { return existing }
+        guard let codecparPtr = bitmapTapCodecpars[inputIdx],
+              let codec = avcodec_find_decoder(codecparPtr.pointee.codec_id) else { return nil }
+        var codecCtx = avcodec_alloc_context3(codec)
+        guard codecCtx != nil else { return nil }
+        if avcodec_parameters_to_context(codecCtx, codecparPtr) < 0 {
+            avcodec_free_context(&codecCtx)
+            return nil
+        }
+        if codecCtx!.pointee.width == 0 { codecCtx!.pointee.width = bitmapTapFallbackCanvas.width }
+        if codecCtx!.pointee.height == 0 { codecCtx!.pointee.height = bitmapTapFallbackCanvas.height }
+        if avcodec_open2(codecCtx, codec, nil) < 0 {
+            avcodec_free_context(&codecCtx)
+            return nil
+        }
+        bitmapTapDecoders[inputIdx] = codecCtx
+        cmpLog("[CMP-TAP] bitmap decoder opened stream=\(inputIdx)")
+        return codecCtx
+    }
+
+    /// Convert one decoded bitmap rect into an overlay cue: paletted plane
+    /// → premultiplied RGBA (cropped to the opaque bounding box) → CGImage
+    /// positioned as a normalized rect against the subtitle canvas.
+    /// (Mirrors the extractor's conversion; the tap has no
+    /// OpenedSubtitleDecoder so canvas fallback is passed explicitly.)
+    private static func bitmapTapCue(
+        from rect: AVSubtitleRect,
+        codecCtx: UnsafeMutablePointer<AVCodecContext>,
+        fallbackCanvas: (width: Int32, height: Int32),
+        startSeconds: Double,
+        endSeconds: Double
+    ) -> BitmapSubtitleCue? {
+        guard rect.w > 0, rect.h > 0,
+              let indexPlane = rect.data.0,
+              let palette = rect.data.1
+        else { return nil }
+        guard let plane = BitmapSubtitlePalette.premultipliedRGBA(
+            indexPlane: indexPlane,
+            width: Int(rect.w),
+            height: Int(rect.h),
+            stride: Int(rect.linesize.0),
+            palette: palette
+        ), let image = BitmapSubtitlePalette.makeImage(from: plane) else { return nil }
+
+        let ctx = codecCtx.pointee
+        let canvasWidth = ctx.width > 0 ? ctx.width : fallbackCanvas.width
+        let canvasHeight = ctx.height > 0 ? ctx.height : fallbackCanvas.height
+        let normalizedFrame: CGRect
+        if canvasWidth > 0, canvasHeight > 0 {
+            normalizedFrame = CGRect(
+                x: Double(Int(rect.x) + plane.cropX) / Double(canvasWidth),
+                y: Double(Int(rect.y) + plane.cropY) / Double(canvasHeight),
+                width: Double(plane.cropWidth) / Double(canvasWidth),
+                height: Double(plane.cropHeight) / Double(canvasHeight)
+            )
+        } else {
+            normalizedFrame = CGRect(x: 0.2, y: 0.78, width: 0.6, height: 0.15)
+        }
+        return BitmapSubtitleCue(
+            startSeconds: startSeconds,
+            endSeconds: endSeconds,
+            image: image,
+            normalizedFrame: normalizedFrame
+        )
+    }
+
+    /// Input stream indices of bitmap subtitle codecs (PGS/DVD) the tap
+    /// can decode on demand. DVB is excluded, matching the extractor.
+    private static func bitmapSubtitleStreamIndices(
+        in ctx: UnsafeMutablePointer<AVFormatContext>
+    ) -> Set<Int> {
+        var indices: Set<Int> = []
+        guard let streams = ctx.pointee.streams else { return indices }
+        for i in 0..<Int(ctx.pointee.nb_streams) {
+            guard let stream = streams[i],
+                  let codecpar = stream.pointee.codecpar,
+                  codecpar.pointee.codec_type == AVMEDIA_TYPE_SUBTITLE else { continue }
+            let codecID = codecpar.pointee.codec_id
+            if codecID == AV_CODEC_ID_HDMV_PGS_SUBTITLE
+                || codecID == AV_CODEC_ID_DVD_SUBTITLE {
+                indices.insert(i)
+            }
+        }
+        return indices
+    }
+
+    /// Input stream indices of text subtitle codecs the tap can decode.
+    /// Bitmap codecs (PGS/DVD) go through the on-demand bitmap tap above —
+    /// their RGBA cues have real memory weight, so they are decoded only
+    /// while selected instead of harvested into a persistent store.
+    private static func textSubtitleStreamIndices(
+        in ctx: UnsafeMutablePointer<AVFormatContext>
+    ) -> Set<Int> {
+        var indices: Set<Int> = []
+        guard let streams = ctx.pointee.streams else { return indices }
+        for i in 0..<Int(ctx.pointee.nb_streams) {
+            guard let stream = streams[i],
+                  let codecpar = stream.pointee.codecpar,
+                  codecpar.pointee.codec_type == AVMEDIA_TYPE_SUBTITLE else { continue }
+            let codecID = codecpar.pointee.codec_id
+            if codecID == AV_CODEC_ID_ASS
+                || codecID == AV_CODEC_ID_SSA
+                || codecID == AV_CODEC_ID_SUBRIP
+                || codecID == AV_CODEC_ID_WEBVTT
+                || codecID == AV_CODEC_ID_MOV_TEXT {
+                indices.insert(i)
+            }
+        }
+        return indices
     }
 
     private static func resolveSelectedVideoStreamIndex(
@@ -906,7 +2235,7 @@ final class DVSegmentWriter {
             return fallbackIndex
         }
 
-        throw DVWriterError.noStreams
+        throw LoopbackWriterError.noStreams
     }
 
     private static func videoStreamLog(
@@ -922,8 +2251,14 @@ final class DVSegmentWriter {
         _ ctx: UnsafeMutablePointer<AVFormatContext>
     ) throws {
         guard sourceStartTimeSeconds.isFinite, sourceStartTimeSeconds > 0 else { return }
+        try seekInput(ctx, toSeconds: sourceStartTimeSeconds)
+    }
 
-        let timestamp = Int64(sourceStartTimeSeconds * Double(AV_TIME_BASE))
+    private func seekInput(
+        _ ctx: UnsafeMutablePointer<AVFormatContext>,
+        toSeconds seconds: Double
+    ) throws {
+        let timestamp = Int64(seconds * Double(AV_TIME_BASE))
         var result = avformat_seek_file(
             ctx,
             -1,
@@ -937,20 +2272,20 @@ final class DVSegmentWriter {
         }
         guard result >= 0 else {
             Self.logger.error(
-                "[CMP-AVP] loopback source seek failed requested=\(self.sourceStartTimeSeconds, privacy: .public) rc=\(result, privacy: .public)"
+                "[CMP-AVP] loopback source seek failed requested=\(seconds, privacy: .public) rc=\(result, privacy: .public)"
             )
-            throw DVWriterError.seekInput(result)
+            throw LoopbackWriterError.seekInput(result)
         }
 
         avformat_flush(ctx)
-        cmpLog("[CMP-AVP] loopback source seek requested=\(sourceStartTimeSeconds) rc=\(result)")
+        cmpLog("[CMP-AVP] loopback source seek requested=\(seconds) rc=\(result)")
     }
 
     /// Custom AVIOContext so the mp4 muxer's writes flow back into Swift
     /// where we can parse and split them into segment files.
     private func openOutput() throws {
         guard let inCtx = inputCtx else {
-            throw DVWriterError.allocOutput
+            throw LoopbackWriterError.allocOutput
         }
         selectedAudioStreamIndex = shouldIncludeAudio
             ? try resolveSelectedAudioStreamIndex(in: inCtx)
@@ -958,7 +2293,7 @@ final class DVSegmentWriter {
 
         let bufSize = 64 * 1024
         guard let buf = av_malloc(bufSize)?.assumingMemoryBound(to: UInt8.self) else {
-            throw DVWriterError.allocOutput
+            throw LoopbackWriterError.allocOutput
         }
         ioBuffer = buf
 
@@ -970,9 +2305,9 @@ final class DVSegmentWriter {
             /* read_packet */ nil,
             /* write_packet */ { opaque, bufPtr, bufSize in
                 guard let opaque, let bufPtr else { return 0 }
-                let writer = Unmanaged<DVSegmentWriter>.fromOpaque(opaque).takeUnretainedValue()
+                let writer = Unmanaged<LoopbackSegmentWriter>.fromOpaque(opaque).takeUnretainedValue()
                 let slice = UnsafeBufferPointer(start: bufPtr, count: Int(bufSize))
-                if DVSegmentWriter.traceThroughput {
+                if LoopbackSegmentWriter.traceThroughput {
                     let started = CFAbsoluteTimeGetCurrent()
                     writer.ingestMuxerBytes(slice)
                     writer.throughputTiming.muxIOMs += (CFAbsoluteTimeGetCurrent() - started) * 1000
@@ -987,14 +2322,14 @@ final class DVSegmentWriter {
         guard let avio else {
             av_free(ioBuffer)
             ioBuffer = nil
-            throw DVWriterError.allocOutput
+            throw LoopbackWriterError.allocOutput
         }
         ioContext = avio
 
         var out: UnsafeMutablePointer<AVFormatContext>?
         let rc = avformat_alloc_output_context2(&out, nil, "mp4", nil)
         if rc < 0 || out == nil {
-            throw DVWriterError.allocOutput
+            throw LoopbackWriterError.allocOutput
         }
         out!.pointee.pb = avio
         outputCtx = out
@@ -1004,7 +2339,7 @@ final class DVSegmentWriter {
         // `dvh1` for Dolby Vision, `hvc1` for plain HEVC HDR/SDR, or `avc1`
         // for H.264 passthrough.
         guard let outCtx = outputCtx else {
-            throw DVWriterError.allocOutput
+            throw LoopbackWriterError.allocOutput
         }
         let nbStreams = Int(inCtx.pointee.nb_streams)
         for i in 0..<nbStreams {
@@ -1023,13 +2358,15 @@ final class DVSegmentWriter {
             }
 
             guard let outStream = avformat_new_stream(outCtx, nil) else {
-                throw DVWriterError.allocOutput
+                throw LoopbackWriterError.allocOutput
             }
 
             if mediaType == AVMEDIA_TYPE_VIDEO {
                 if avcodec_parameters_copy(outStream.pointee.codecpar, codecpar) < 0 {
-                    throw DVWriterError.allocOutput
+                    throw LoopbackWriterError.allocOutput
                 }
+                masterVideoWidth = codecpar.pointee.width
+                masterVideoHeight = codecpar.pointee.height
                 outStream.pointee.time_base = inStream.pointee.time_base
                 outStream.pointee.codecpar.pointee.codec_tag = 0
                 let dovi = outputDoviConfig(from: readDoviConfig(codecpar: codecpar))
@@ -1061,10 +2398,10 @@ final class DVSegmentWriter {
             } else if selectedAudioOutputMode == .copy {
                 if !audioCodecSupportsMp4Mux(codecpar.pointee.codec_id) {
                     let codecName = String(cString: avcodec_get_name(codecpar.pointee.codec_id))
-                    throw DVWriterError.unsupportedSelectedAudioCodec(codecName)
+                    throw LoopbackWriterError.unsupportedSelectedAudioCodec(codecName)
                 }
                 if avcodec_parameters_copy(outStream.pointee.codecpar, codecpar) < 0 {
-                    throw DVWriterError.allocOutput
+                    throw LoopbackWriterError.allocOutput
                 }
                 if codecpar.pointee.sample_rate > 0 {
                     outStream.pointee.time_base = AVRational(num: 1, den: codecpar.pointee.sample_rate)
@@ -1075,8 +2412,16 @@ final class DVSegmentWriter {
                 ensureAudioFrameSize(codecpar: outStream.pointee.codecpar)
                 outputAudioCodecID = codecpar.pointee.codec_id
                 outputAudioCodecToken = codecToken(for: codecpar.pointee.codec_id)
+                // AV_PROFILE_EAC3_DDP_ATMOS (= 30): the eac3 decoder sets it
+                // during probing when the E-AC-3 bitstream carries a JOC
+                // (Atmos) extension. The vendored FFmpeg 7.1 muxer writes no
+                // dec3 JOC extension of its own, so writeInitSegment patches
+                // one in — without it AVFoundation classifies the track as
+                // plain E-AC-3 and Atmos never engages.
+                selectedAudioIsAtmosJOC = codecpar.pointee.codec_id == AV_CODEC_ID_EAC3
+                    && codecpar.pointee.profile == 30
                 let codecName = outputAudioCodecToken ?? String(cString: avcodec_get_name(codecpar.pointee.codec_id))
-                print("[CMP-AVP] selected audio copy sourceStream=\(i) codec=\(codecName) channels=\(codecpar.pointee.ch_layout.nb_channels)")
+                print("[CMP-AVP] selected audio copy sourceStream=\(i) codec=\(codecName) channels=\(codecpar.pointee.ch_layout.nb_channels) atmosJOC=\(selectedAudioIsAtmosJOC ? 1 : 0)")
             } else {
                 try openAudioTranscodePipeline(
                     inputStream: inStream,
@@ -1096,7 +2441,7 @@ final class DVSegmentWriter {
             }
 
         if streamMap.isEmpty {
-            throw DVWriterError.noStreams
+            throw LoopbackWriterError.noStreams
         }
 
         if shouldIncludeAudio {
@@ -1129,7 +2474,7 @@ final class DVSegmentWriter {
             audioOrdinal += 1
         }
 
-        throw DVWriterError.audioTranscodeSetup(
+        throw LoopbackWriterError.audioTranscodeSetup(
             "selected audio track \(selectedAudioTrackIndex) was not found in source stream map"
         )
     }
@@ -1164,12 +2509,16 @@ final class DVSegmentWriter {
                 av_packet_free(&free)
             }
             guard let outIdx = streamMap[inIdx] else { continue }
+            if vodActive, vodShouldDropPacket(pkt: pending, inputIdx: inIdx) { continue }
+            if inIdx == videoInputStreamIndex {
+                try vodCutBeforeVideoPacketIfNeeded(pkt: pending)
+            }
             rewritePacketForOutput(pkt: pending,
                                    outStreamIndex: Int32(outIdx),
                                    inputStreamIndex: inIdx)
             let wr = av_interleaved_write_frame(outCtx, pending)
             do {
-                try evaluateMuxWriteResult(wr, packet: pending)
+                try evaluateMuxWriteResult(wr)
             } catch {
                 Self.logger.error("pending \(label, privacy: .public) write failed")
                 throw error
@@ -1211,6 +2560,8 @@ final class DVSegmentWriter {
         var retainedPreVideoAudioBytes = 0
         var droppedPreVideoAudioPackets = 0
         var firstKeyframeNALSummary = "none"
+        var firstVideoPacketNALSummary = "none"
+        var repairedKeyframeFlags = 0
         let maxPackets = 8_000
         let maxVideoPackets = 128
         // Keep the newest selected pre-video audio packets. TrueHD major_sync
@@ -1236,7 +2587,28 @@ final class DVSegmentWriter {
             totalPacketsRead += 1
             let inIdx = Int(pkt.pointee.stream_index)
 
-            if pkt.pointee.dts == avNoPTS || pkt.pointee.pts == avNoPTS {
+            // Tap subtitle packets seen during bootstrap too (cues near the
+            // anchor). Checked before the DTS guard — subtitle packets
+            // legitimately carry PTS with no DTS.
+            if subtitleTapDecoders[inIdx] != nil {
+                tapDecodeSubtitlePacket(pkt: pkt, inputIdx: inIdx)
+                var free = readPkt
+                av_packet_free(&free)
+                continue
+            }
+            if bitmapTapTimeBases[inIdx] != nil {
+                tapHandleBitmapSubtitlePacket(pkt: pkt, inputIdx: inIdx)
+                var free = readPkt
+                av_packet_free(&free)
+                continue
+            }
+
+            // Packets without a PTS are unusable. A video packet with PTS
+            // but no DTS still reaches keyframe detection below — MKV/HEVC
+            // sources expose the head keyframe that way, and the stash path
+            // repairs its DTS exactly like the main loop does.
+            if pkt.pointee.pts == avNoPTS
+                || (pkt.pointee.dts == avNoPTS && inIdx != videoInputStreamIndex) {
                 var free = readPkt
                 av_packet_free(&free)
                 droppedPreVideoPackets += 1
@@ -1271,8 +2643,50 @@ final class DVSegmentWriter {
             }
 
             videoPacketsRead += 1
-            let isKeyframe = (pkt.pointee.flags & AV_PKT_FLAG_KEY) != 0
+            if videoPacketsRead == 1, let dataPtr = pkt.pointee.data {
+                firstVideoPacketNALSummary = ISOBoxSurgery.nalSummary(
+                    packetBytes: UnsafeBufferPointer(start: dataPtr,
+                                                     count: Int(pkt.pointee.size)),
+                    nalLengthSize: nalLengthSize
+                )
+            }
+            var isKeyframe = (pkt.pointee.flags & AV_PKT_FLAG_KEY) != 0
+            if !isKeyframe, let dataPtr = pkt.pointee.data {
+                // The matroska demuxer delivers the head-of-stream IRAP
+                // without AV_PKT_FLAG_KEY, so a flag-gated scan skips all of
+                // GOP 0 (a silent one-GOP video hole) — and when the GOP
+                // outruns the packet caps it gives up entirely, muxing a
+                // mid-GOP timeline whose tfdt no longer matches the playlist.
+                // AVPlayer then freezes its fetches and the startup watchdog
+                // burns ~15s before the Compatibility fallback (living-room
+                // Ali Wong stall). The bitstream is authoritative: any VCL
+                // IRAP NAL is a valid fragment opener, so repair the flag.
+                let packetBytes = UnsafeBufferPointer(start: dataPtr,
+                                                      count: Int(pkt.pointee.size))
+                if let irapType = ISOBoxSurgery.firstIRAPNALType(
+                    packetBytes: packetBytes,
+                    nalLengthSize: nalLengthSize
+                ) {
+                    pkt.pointee.flags |= AV_PKT_FLAG_KEY
+                    isKeyframe = true
+                    repairedKeyframeFlags += 1
+                    if repairedKeyframeFlags <= 3 {
+                        print("[CMP-AVP] bootstrap keyframe flag repaired via NAL scan type=\(irapType) pts=\(pkt.pointee.pts)")
+                    }
+                }
+            }
             guard isKeyframe else {
+                var free = readPkt
+                av_packet_free(&free)
+                droppedPreVideoPackets += 1
+                continue
+            }
+            if pkt.pointee.dts == avNoPTS,
+               !repairMissingMuxerTimestampsIfNeeded(
+                   pkt: pkt,
+                   inputStreamIndex: inIdx,
+                   noPTS: avNoPTS
+               ) {
                 var free = readPkt
                 av_packet_free(&free)
                 droppedPreVideoPackets += 1
@@ -1303,8 +2717,14 @@ final class DVSegmentWriter {
             let syncFound = isSelectedAudioTrueHD()
                 ? firstMLPMajorSyncIndex(in: pendingAudioPackets) != nil
                 : false
-            print("[CMP-AVP] bootstrap gave up: vps=\(vps.count) sps=\(sps.count) pps=\(pps.count) videoPackets=\(videoPacketsRead) totalPackets=\(totalPacketsRead) droppedPreVideo=\(droppedPreVideoPackets) retainedAudio=\(pendingAudioPackets.count) retainedAudioBytes=\(retainedPreVideoAudioBytes) droppedPreVideoAudio=\(droppedPreVideoAudioPackets) trueHDSyncFound=\(syncFound ? 1 : 0)")
-            return
+            print("[CMP-AVP] bootstrap gave up: vps=\(vps.count) sps=\(sps.count) pps=\(pps.count) videoPackets=\(videoPacketsRead) totalPackets=\(totalPacketsRead) droppedPreVideo=\(droppedPreVideoPackets) retainedAudio=\(pendingAudioPackets.count) retainedAudioBytes=\(retainedPreVideoAudioBytes) droppedPreVideoAudio=\(droppedPreVideoAudioPackets) trueHDSyncFound=\(syncFound ? 1 : 0) firstVideoNALs=\(firstVideoPacketNALSummary)")
+            // Muxing from here would start mid-GOP with a tfdt the playlist
+            // doesn't expect: AVPlayer freezes its fetches and the startup
+            // watchdog spends ~15s before falling back. Fail the session now
+            // so the route falls back immediately instead.
+            throw LoopbackWriterError.bootstrapFailed(
+                "no IRAP keyframe in \(videoPacketsRead) video packets (firstVideoNALs=\(firstVideoPacketNALSummary))"
+            )
         }
 
         if !vps.isEmpty, !sps.isEmpty, !pps.isEmpty {
@@ -1312,7 +2732,12 @@ final class DVSegmentWriter {
             setExtradata(codecpar: outStream.pointee.codecpar, data: hvcc)
             inputHvccHeader = hvcc
         } else if !headerHasParameterSets {
+            // Without parameter sets in hvcC or in-band, the sample entry is
+            // undecodable — same fetch-freeze endgame as the mid-GOP start.
             print("[CMP-AVP] bootstrap keyframe found but no VPS/SPS/PPS available in packet or hvcC")
+            throw LoopbackWriterError.bootstrapFailed(
+                "keyframe found but no VPS/SPS/PPS in packet or hvcC"
+            )
         }
         if let inStream = inCtx.pointee.streams?[videoInputStreamIndex] {
             doviConfig = outputDoviConfig(from: readDoviConfig(codecpar: inStream.pointee.codecpar))
@@ -1322,7 +2747,7 @@ final class DVSegmentWriter {
         let syncFound = isSelectedAudioTrueHD()
             ? firstMLPMajorSyncIndex(in: pendingAudioPackets) != nil
             : false
-        print("[CMP-AVP] bootstrap OK: hvcCParams=\(headerHasParameterSets ? 1 : 0) vps=\(vps.count) sps=\(sps.count) pps=\(pps.count) videoPackets=\(videoPacketsRead) totalPackets=\(totalPacketsRead) droppedPreVideo=\(droppedPreVideoPackets) pendingVideo=\(pendingVideoPackets.count) retainedAudio=\(pendingAudioPackets.count) retainedAudioBytes=\(retainedPreVideoAudioBytes) droppedPreVideoAudio=\(droppedPreVideoAudioPackets) trueHDSyncFound=\(syncFound ? 1 : 0) firstVideoNALs=\(firstKeyframeNALSummary) dovi=\(doviLog)")
+        print("[CMP-AVP] bootstrap OK: hvcCParams=\(headerHasParameterSets ? 1 : 0) vps=\(vps.count) sps=\(sps.count) pps=\(pps.count) videoPackets=\(videoPacketsRead) totalPackets=\(totalPacketsRead) droppedPreVideo=\(droppedPreVideoPackets) pendingVideo=\(pendingVideoPackets.count) retainedAudio=\(pendingAudioPackets.count) retainedAudioBytes=\(retainedPreVideoAudioBytes) droppedPreVideoAudio=\(droppedPreVideoAudioPackets) trueHDSyncFound=\(syncFound ? 1 : 0) repairedKeyFlags=\(repairedKeyframeFlags) firstVideoNALs=\(firstKeyframeNALSummary) dovi=\(doviLog)")
     }
 
     private func retainPreVideoAudioPacket(
@@ -1488,11 +2913,18 @@ final class DVSegmentWriter {
                 .joined()
         }
 
-        var codec = "\(sampleEntry).\(profileSpacePrefix)\(profileIDC).\(compatibilityString).\(tierFlag ? "H" : "L")\(levelIDC)"
-        if let constraintString, !constraintString.isEmpty {
-            codec += ".\(constraintString)"
-        }
-        return codec
+        // Always declare Main tier ('L') and omit the constraint suffix,
+        // whatever the stream's actual tier flag says. AVPlayer's
+        // master-level codec filter silently drops variants whose CODECS it
+        // won't claim — a faithful "hvc1.2.4.H150.B0" (High tier, device
+        // stream) was rejected with NSURLErrorDomain -1002 before the
+        // variant playlist was ever fetched, while the lenient Main-tier
+        // declaration is accepted everywhere (AetherEngine likewise always
+        // declares L and never a constraint suffix). The declaration only
+        // feeds variant selection; the bitstream is untouched.
+        _ = tierFlag
+        _ = constraintString
+        return "\(sampleEntry).\(profileSpacePrefix)\(profileIDC).\(compatibilityString).L\(levelIDC)"
     }
 
     private func reversedBits32(_ value: UInt32) -> UInt32 {
@@ -1626,16 +3058,16 @@ final class DVSegmentWriter {
     ) throws {
         guard let codecpar = inputStream.pointee.codecpar,
               let decoder = avcodec_find_decoder(codecpar.pointee.codec_id) else {
-            throw DVWriterError.audioTranscodeSetup("audio decoder unavailable")
+            throw LoopbackWriterError.audioTranscodeSetup("audio decoder unavailable")
         }
 
         var decoderCtx = avcodec_alloc_context3(decoder)
         guard decoderCtx != nil else {
-            throw DVWriterError.audioTranscodeSetup("audio decoder alloc failed")
+            throw LoopbackWriterError.audioTranscodeSetup("audio decoder alloc failed")
         }
         if avcodec_parameters_to_context(decoderCtx, codecpar) < 0 || avcodec_open2(decoderCtx, decoder, nil) < 0 {
             avcodec_free_context(&decoderCtx)
-            throw DVWriterError.audioTranscodeSetup("audio decoder open failed")
+            throw LoopbackWriterError.audioTranscodeSetup("audio decoder open failed")
         }
 
         let sourceChannels = max(
@@ -1746,6 +3178,7 @@ final class DVSegmentWriter {
             outputAudioCodecToken = candidate.codecToken
             audioOutputStreamIndex = Int(outputCtx?.pointee.nb_streams ?? 0) - 1
             nextEncodedAudioPTS = 0
+            vodSeededBridgedAudioPTS = false
             audioDecodedFrameCount = 0
             audioDecodeErrorCount = 0
             let sourceCodecName = String(cString: avcodec_get_name(codecpar.pointee.codec_id))
@@ -1758,7 +3191,7 @@ final class DVSegmentWriter {
 
         if !opened {
             avcodec_free_context(&decoderCtx)
-            throw DVWriterError.audioTranscodeSetup(lastError)
+            throw LoopbackWriterError.audioTranscodeSetup(lastError)
         }
     }
 
@@ -1972,18 +3405,17 @@ final class DVSegmentWriter {
         }
 
         let avErrorEOF = -Int32(bitPattern: 0x20464F45)
+        let decodedFrame = try reusableAudioDecodedFrame()
         while true {
-            var frame = av_frame_alloc()
-            guard let decodedFrame = frame else {
-                throw DVWriterError.allocOutput
-            }
+            // avcodec_receive_frame unrefs the destination before filling
+            // it, so one persistent frame serves every iteration — the
+            // bridge decodes ~30-90 frames/s and per-frame alloc/free was
+            // steady mux-thread churn.
             let recvR = avcodec_receive_frame(decoderCtx, decodedFrame)
             if recvR == avErrorAgain || recvR == avErrorEOF {
-                av_frame_free(&frame)
                 return
             }
             if recvR < 0 {
-                av_frame_free(&frame)
                 noteAudioDecodeError(stage: "receive", rc: recvR)
                 return
             }
@@ -1992,8 +3424,83 @@ final class DVSegmentWriter {
             if emitDecodedFrames {
                 try sendConvertedFrameToEncoder(decodedFrame)
             }
-            av_frame_free(&frame)
+            av_frame_unref(decodedFrame)
         }
+    }
+
+    private func reusableAudioDecodedFrame() throws -> UnsafeMutablePointer<AVFrame> {
+        if let frame = audioDecodedFrame { return frame }
+        guard let frame = av_frame_alloc() else {
+            throw LoopbackWriterError.allocOutput
+        }
+        audioDecodedFrame = frame
+        return frame
+    }
+
+    /// VOD: anchor the bridged-audio encoder clock to the session timeline
+    /// before the first emitted frame's samples are stamped. Remuxed video
+    /// packets get `applyVODAnchorShift` (source pts − plan.boundaries[0]);
+    /// the re-encoded audio track must start from the same axis or AVPlayer
+    /// sees disjoint track timelines on a mid-title resume and never reaches
+    /// readyToPlay. Priming frames never reach the encoder
+    /// (`emitDecodedFrames: false`), so the first frame seen here is the
+    /// first muxed-bound one — its source timestamp IS the audio anchor.
+    /// Frames without a usable timestamp defer seeding to the next frame.
+    private func seedVODBridgedAudioPTSIfNeeded(
+        from decodedFrame: UnsafeMutablePointer<AVFrame>,
+        encoderCtx: UnsafeMutablePointer<AVCodecContext>
+    ) {
+        guard vodActive, !vodSeededBridgedAudioPTS else { return }
+        guard let inCtx = inputCtx,
+              selectedAudioStreamIndex >= 0,
+              selectedAudioStreamIndex < Int(inCtx.pointee.nb_streams),
+              let stream = inCtx.pointee.streams?[selectedAudioStreamIndex] else { return }
+        var framePts = decodedFrame.pointee.best_effort_timestamp
+        if framePts == Int64.min { framePts = decodedFrame.pointee.pts }
+        guard framePts != Int64.min else { return }
+        let inTB = stream.pointee.time_base
+        let anchor = vodAnchorPts != 0
+            ? av_rescale_q(vodAnchorPts, vodVideoTimeBase, inTB)
+            : 0
+        // Same encoder-tick axis the per-sample counter advances on
+        // (`nextEncodedAudioPTS += nb_samples`, i.e. 1/sample_rate).
+        var encoderTB = encoderCtx.pointee.time_base
+        if encoderTB.num != 1 || encoderTB.den <= 0 {
+            encoderTB = AVRational(num: 1, den: encoderCtx.pointee.sample_rate)
+        }
+        let seed = max(0, av_rescale_q(framePts - anchor, inTB, encoderTB))
+        vodSeededBridgedAudioPTS = true
+        guard seed > 0 else { return }
+        var anchored = seed
+        // Align to the run's own plan boundary: the previous contiguous
+        // run's stored audio ends there, and the video track of this run
+        // starts there. The typical delta is the ~40ms the restarted MLP
+        // decoder ate finding major_sync (fill), or one straddling frame
+        // (trim). Deltas beyond the caps keep the source-accurate seed.
+        if let plan = vodPlan,
+           vodEffectiveBaseIndex >= 0,
+           vodEffectiveBaseIndex < plan.boundaries.count {
+            let boundarySession = plan.boundaries[vodEffectiveBaseIndex] - vodAnchorPts
+            let boundary = max(0, av_rescale_q(boundarySession, vodVideoTimeBase, encoderTB))
+            let delta = seed - boundary
+            if delta > 0, delta <= Self.vodSeamFillMaxSamples {
+                anchored = boundary
+                vodPendingSeamSilenceFillSamples = delta
+                print("[CMP-AVP] vod bridged audio seam stitch boundary=\(boundary) seed=\(seed) fillSilence=\(delta)")
+            } else if delta < 0, -delta <= Self.vodSeamTrimMaxSamples {
+                anchored = boundary
+                vodPendingSeamTrimSamples = -delta
+                print("[CMP-AVP] vod bridged audio seam stitch boundary=\(boundary) seed=\(seed) trimOverlap=\(-delta)")
+            } else if delta != 0 {
+                print("[CMP-AVP] vod bridged audio seam stitch skipped delta=\(delta) (beyond stitch caps)")
+            }
+        }
+        nextEncodedAudioPTS = anchored
+        let seconds = Double(anchored) * Double(encoderTB.num) / Double(max(1, encoderTB.den))
+        print(String(
+            format: "[CMP-AVP] vod bridged audio timeline anchored seed=%lld (%.3fs on session axis)",
+            anchored, seconds
+        ))
     }
 
     private func noteAudioDecodeError(stage: String, rc: Int32) {
@@ -2009,6 +3516,7 @@ final class DVSegmentWriter {
     private func sendConvertedFrameToEncoder(_ decodedFrame: UnsafeMutablePointer<AVFrame>) throws {
         guard let encoderCtx = audioEncoderCtx,
               let swr = audioSwrCtx else { return }
+        seedVODBridgedAudioPTSIfNeeded(from: decodedFrame, encoderCtx: encoderCtx)
 
         let inSamples = decodedFrame.pointee.nb_samples
         let outCapacity = swr_get_out_samples(swr, inSamples) + 32
@@ -2016,7 +3524,7 @@ final class DVSegmentWriter {
 
         var convertedFrame = av_frame_alloc()
         guard let outFrame = convertedFrame else {
-            throw DVWriterError.allocOutput
+            throw LoopbackWriterError.allocOutput
         }
         outFrame.pointee.nb_samples = outCapacity
         outFrame.pointee.format = encoderCtx.pointee.sample_fmt.rawValue
@@ -2024,7 +3532,7 @@ final class DVSegmentWriter {
         outFrame.pointee.ch_layout = encoderCtx.pointee.ch_layout
         if av_frame_get_buffer(outFrame, 0) < 0 {
             av_frame_free(&convertedFrame)
-            throw DVWriterError.audioTranscodeSetup("audio frame buffer alloc failed")
+            throw LoopbackWriterError.audioTranscodeSetup("audio frame buffer alloc failed")
         }
 
         var inPtrs = withUnsafeBytes(of: decodedFrame.pointee.data) { raw -> [UnsafePointer<UInt8>?] in
@@ -2047,18 +3555,25 @@ final class DVSegmentWriter {
         outFrame.pointee.nb_samples = converted
         let requiredFrameSize = encoderCtx.pointee.frame_size
         if requiredFrameSize > 0 {
+            try applyPendingSeamSilenceFillIfNeeded(encoderCtx: encoderCtx)
             try writeConvertedAudioToFifo(outFrame, sampleCount: converted)
+            drainPendingSeamTrimFromFifoIfNeeded()
             av_frame_free(&convertedFrame)
             try drainAudioSampleFifo(final: false)
             return
         }
 
+        // Seam stitching is FIFO-only; every bridged codec we configure
+        // (FLAC/AAC/AC3/EAC3) has a fixed frame_size and takes the FIFO
+        // path above. Drop any pending stitch rather than misapply it.
+        vodPendingSeamSilenceFillSamples = 0
+        vodPendingSeamTrimSamples = 0
         outFrame.pointee.pts = nextEncodedAudioPTS
         nextEncodedAudioPTS += Int64(converted)
         let sendR = avcodec_send_frame(encoderCtx, outFrame)
         av_frame_free(&convertedFrame)
         if sendR < 0 && sendR != avErrorAgain {
-            throw DVWriterError.audioTranscodeSetup("audio encoder send failed rc=\(sendR)")
+            throw LoopbackWriterError.audioTranscodeSetup("audio encoder send failed rc=\(sendR)")
         }
         try drainEncodedPackets()
     }
@@ -2068,7 +3583,7 @@ final class DVSegmentWriter {
         sampleCount: Int32
     ) throws {
         guard let fifo = audioSampleFifo else {
-            throw DVWriterError.audioTranscodeSetup("audio fifo unavailable")
+            throw LoopbackWriterError.audioTranscodeSetup("audio fifo unavailable")
         }
         let planePointers = unsafeBitCast(
             convertedFrame.pointee.extended_data,
@@ -2076,7 +3591,7 @@ final class DVSegmentWriter {
         )
         let writeR = av_audio_fifo_write(fifo, planePointers, sampleCount)
         if writeR < 0 || writeR != sampleCount {
-            throw DVWriterError.audioTranscodeSetup("audio fifo write failed rc=\(writeR)")
+            throw LoopbackWriterError.audioTranscodeSetup("audio fifo write failed rc=\(writeR)")
         }
     }
 
@@ -2102,7 +3617,7 @@ final class DVSegmentWriter {
 
             var frame = av_frame_alloc()
             guard let outFrame = frame else {
-                throw DVWriterError.allocOutput
+                throw LoopbackWriterError.allocOutput
             }
             outFrame.pointee.nb_samples = samplesToSend
             outFrame.pointee.format = encoderCtx.pointee.sample_fmt.rawValue
@@ -2110,7 +3625,7 @@ final class DVSegmentWriter {
             outFrame.pointee.ch_layout = encoderCtx.pointee.ch_layout
             if av_frame_get_buffer(outFrame, 0) < 0 {
                 av_frame_free(&frame)
-                throw DVWriterError.audioTranscodeSetup("audio fifo frame buffer alloc failed")
+                throw LoopbackWriterError.audioTranscodeSetup("audio fifo frame buffer alloc failed")
             }
 
             let planePointers = unsafeBitCast(
@@ -2120,7 +3635,7 @@ final class DVSegmentWriter {
             let readR = av_audio_fifo_read(fifo, planePointers, samplesToSend)
             if readR < 0 || readR != samplesToSend {
                 av_frame_free(&frame)
-                throw DVWriterError.audioTranscodeSetup("audio fifo read failed rc=\(readR)")
+                throw LoopbackWriterError.audioTranscodeSetup("audio fifo read failed rc=\(readR)")
             }
 
             outFrame.pointee.pts = nextEncodedAudioPTS
@@ -2130,11 +3645,66 @@ final class DVSegmentWriter {
         }
     }
 
+    /// Producer-seam gap fill: writes `vodPendingSeamSilenceFillSamples` of
+    /// silence into the sample FIFO before the run's first content samples,
+    /// covering [previous run's audio end, this run's first decoded frame)
+    /// so the track timeline stays contiguous and lipsync stays exact.
+    private func applyPendingSeamSilenceFillIfNeeded(
+        encoderCtx: UnsafeMutablePointer<AVCodecContext>
+    ) throws {
+        guard vodPendingSeamSilenceFillSamples > 0 else { return }
+        var remaining = vodPendingSeamSilenceFillSamples
+        vodPendingSeamSilenceFillSamples = 0
+        cmpLog("[CMP-AVP] vod seam silence fill samples=\(remaining)")
+        while remaining > 0 {
+            let n = Int32(min(remaining, 4096))
+            var frame = av_frame_alloc()
+            guard let silence = frame else {
+                throw LoopbackWriterError.allocOutput
+            }
+            silence.pointee.nb_samples = n
+            silence.pointee.format = encoderCtx.pointee.sample_fmt.rawValue
+            silence.pointee.sample_rate = encoderCtx.pointee.sample_rate
+            silence.pointee.ch_layout = encoderCtx.pointee.ch_layout
+            if av_frame_get_buffer(silence, 0) < 0 {
+                av_frame_free(&frame)
+                throw LoopbackWriterError.audioTranscodeSetup("seam silence buffer alloc failed")
+            }
+            _ = av_samples_set_silence(
+                silence.pointee.extended_data,
+                0,
+                n,
+                encoderCtx.pointee.ch_layout.nb_channels,
+                encoderCtx.pointee.sample_fmt
+            )
+            try writeConvertedAudioToFifo(silence, sampleCount: n)
+            av_frame_free(&frame)
+            remaining -= Int64(n)
+        }
+    }
+
+    /// Producer-seam overlap trim: drains duplicated leading samples out of
+    /// the FIFO before they are assigned timestamps, so a run whose first
+    /// decoded frame lands before the previous run's audio end doesn't
+    /// double-play that span (audible as phasing/"channels out of sync").
+    private func drainPendingSeamTrimFromFifoIfNeeded() {
+        guard vodPendingSeamTrimSamples > 0, let fifo = audioSampleFifo else { return }
+        let available = Int64(av_audio_fifo_size(fifo))
+        let n = min(vodPendingSeamTrimSamples, available)
+        guard n > 0 else { return }
+        if av_audio_fifo_drain(fifo, Int32(n)) >= 0 {
+            vodPendingSeamTrimSamples -= n
+            if vodPendingSeamTrimSamples == 0 {
+                cmpLog("[CMP-AVP] vod seam overlap trim complete samples=\(n)")
+            }
+        }
+    }
+
     private func sendPreparedAudioFrameToEncoder(_ frame: UnsafeMutablePointer<AVFrame>) throws {
         guard let encoderCtx = audioEncoderCtx else { return }
         let sendR = avcodec_send_frame(encoderCtx, frame)
         if sendR < 0 && sendR != avErrorAgain {
-            throw DVWriterError.audioTranscodeSetup("audio encoder send failed rc=\(sendR)")
+            throw LoopbackWriterError.audioTranscodeSetup("audio encoder send failed rc=\(sendR)")
         }
         try drainEncodedPackets()
     }
@@ -2149,7 +3719,7 @@ final class DVSegmentWriter {
             if isCancelled { return }
             var packet = av_packet_alloc()
             guard let encodedPacket = packet else {
-                throw DVWriterError.allocOutput
+                throw LoopbackWriterError.allocOutput
             }
             let recvR = avcodec_receive_packet(encoderCtx, encodedPacket)
             if recvR == avErrorAgain || recvR == avErrorEOF {
@@ -2158,7 +3728,7 @@ final class DVSegmentWriter {
             }
             if recvR < 0 {
                 av_packet_free(&packet)
-                throw DVWriterError.audioTranscodeSetup("audio encoder receive failed rc=\(recvR)")
+                throw LoopbackWriterError.audioTranscodeSetup("audio encoder receive failed rc=\(recvR)")
             }
 
             encodedPacket.pointee.stream_index = Int32(audioOutputStreamIndex)
@@ -2166,7 +3736,7 @@ final class DVSegmentWriter {
             normalizeMuxerTimestampsIfNeeded(pkt: encodedPacket, outStream: outStream)
             let wr = av_interleaved_write_frame(outCtx, encodedPacket)
             do {
-                try evaluateMuxWriteResult(wr, packet: encodedPacket)
+                try evaluateMuxWriteResult(wr)
             } catch {
                 av_packet_free(&packet)
                 throw error
@@ -2182,47 +3752,129 @@ final class DVSegmentWriter {
 
         _ = avcodec_send_packet(decoderCtx, nil)
         let avErrorEOF = -Int32(bitPattern: 0x20464F45)
+        let decodedFrame = try reusableAudioDecodedFrame()
         while true {
-            var frame = av_frame_alloc()
-            guard let decodedFrame = frame else {
-                throw DVWriterError.allocOutput
-            }
             let recvR = avcodec_receive_frame(decoderCtx, decodedFrame)
             if recvR == avErrorAgain || recvR == avErrorEOF {
-                av_frame_free(&frame)
                 break
             }
             if recvR < 0 {
-                av_frame_free(&frame)
-                throw DVWriterError.audioTranscodeSetup("audio decoder flush failed rc=\(recvR)")
+                throw LoopbackWriterError.audioTranscodeSetup("audio decoder flush failed rc=\(recvR)")
             }
             try sendConvertedFrameToEncoder(decodedFrame)
-            av_frame_free(&frame)
+            av_frame_unref(decodedFrame)
         }
 
         try drainAudioSampleFifo(final: true)
         _ = avcodec_send_frame(encoderCtx, nil)
         try drainEncodedPackets()
         if audioDecodedFrameCount == 0 {
-            throw DVWriterError.audioTranscodeSetup("audio decoder produced no frames")
+            throw LoopbackWriterError.audioTranscodeSetup("audio decoder produced no frames")
         }
     }
 
     private func transformVideoPacketIfNeeded(_ pkt: UnsafeMutablePointer<AVPacket>) throws {
         guard videoMode == .convertProfile7To81 else { return }
+        guard pkt.pointee.data != nil, pkt.pointee.size > 0 else { return }
+        // Compact in place instead of rebuilding: BL NALs lead the packet
+        // and stay put, the dropped EL NALs open a gap only behind them,
+        // and the RPU is rewritten where it stands. The old rebuild path
+        // (walk + Data + av_new_packet + memcpy) copied every frame twice
+        // at 60-75 Mbps — a steady mux-thread tax on A12-class devices.
+        let writableR = av_packet_make_writable(pkt)
+        guard writableR >= 0 else { throw LoopbackWriterError.allocOutput }
+        guard let data = pkt.pointee.data else { return }
+        let size = Int(pkt.pointee.size)
+
+        var read = 0
+        var write = 0
+        var changed = false
+        while read + nalLengthSize <= size {
+            var nalSize = 0
+            for i in 0..<nalLengthSize {
+                nalSize = (nalSize << 8) | Int(data[read + i])
+            }
+            let nalStart = read + nalLengthSize
+            guard nalSize >= 2, nalStart + nalSize <= size else {
+                // Malformed tail: mirror the rebuild path — leave the whole
+                // packet verbatim when nothing changed yet, drop the tail
+                // once compaction has started.
+                if !changed { return }
+                break
+            }
+            let byte0 = data[nalStart]
+            let byte1 = data[nalStart + 1]
+            let nalType = Int((byte0 >> 1) & 0x3F)
+            let layerID = Int(((byte0 & 0x01) << 5) | ((byte1 & 0xF8) >> 3))
+            let next = nalStart + nalSize
+
+            if layerID > 0 || nalType == 63 {
+                changed = true
+                read = next
+                continue
+            }
+            if nalType == 62 {
+                let nalData = Data(bytes: data + nalStart, count: nalSize)
+                let payload = try convertRpuNALToProfile81(nalData)
+                let needed = nalLengthSize + payload.count
+                guard write + needed <= next else {
+                    // Converted RPU outgrew the bytes consumed so far. With
+                    // a pristine buffer (no NAL moved or rewritten yet) the
+                    // old rebuild path handles it; after mutation the slack
+                    // equals every dropped EL byte so far, so overrunning it
+                    // means a pathologically grown RPU — surface it.
+                    if !changed && write == read {
+                        try rebuildProfile7Packet(pkt)
+                        return
+                    }
+                    throw LoopbackWriterError.profile81ConversionFailed("rpu_grew_past_compaction_slack")
+                }
+                var length = payload.count
+                for i in stride(from: nalLengthSize - 1, through: 0, by: -1) {
+                    data[write + i] = UInt8(length & 0xFF)
+                    length >>= 8
+                }
+                payload.withUnsafeBytes { raw in
+                    if let base = raw.baseAddress, payload.count > 0 {
+                        memcpy(data + write + nalLengthSize, base, payload.count)
+                    }
+                }
+                write += needed
+                changed = true
+                read = next
+                continue
+            }
+            let span = nalLengthSize + nalSize
+            if write != read {
+                memmove(data + write, data + read, span)
+            }
+            write += span
+            read = next
+        }
+        guard changed else { return }
+        guard write > 0 else {
+            // Everything dropped — mirror the rebuild path's contract of
+            // never emitting an empty packet.
+            return
+        }
+        av_shrink_packet(pkt, Int32(write))
+    }
+
+    /// Rare fallback for the in-place compaction: rebuild the packet into a
+    /// fresh buffer (the pre-compaction transform path).
+    private func rebuildProfile7Packet(_ pkt: UnsafeMutablePointer<AVPacket>) throws {
         guard let dataPtr = pkt.pointee.data else { return }
         let packetBytes = UnsafeBufferPointer(start: dataPtr, count: Int(pkt.pointee.size))
-        guard videoPacketNeedsProfile7Rewrite(packetBytes: packetBytes) else { return }
         let transformed = try transformedVideoPacketData(packetBytes: packetBytes)
 
         var replacement = av_packet_alloc()
         guard let newPacket = replacement else {
-            throw DVWriterError.allocOutput
+            throw LoopbackWriterError.allocOutput
         }
         let allocR = av_new_packet(newPacket, Int32(transformed.count))
         guard allocR >= 0, let newData = newPacket.pointee.data else {
             av_packet_free(&replacement)
-            throw DVWriterError.allocOutput
+            throw LoopbackWriterError.allocOutput
         }
         transformed.withUnsafeBytes { src in
             guard let base = src.baseAddress else { return }
@@ -2273,45 +3925,22 @@ final class DVSegmentWriter {
         return output.isEmpty ? Data(buffer: packetBytes) : output
     }
 
-    private func videoPacketNeedsProfile7Rewrite(
-        packetBytes: UnsafeBufferPointer<UInt8>
-    ) -> Bool {
-        var cursor = 0
-        while cursor + nalLengthSize <= packetBytes.count {
-            var nalSize = 0
-            for i in 0..<nalLengthSize {
-                nalSize = (nalSize << 8) | Int(packetBytes[cursor + i])
-            }
-            let nalStart = cursor + nalLengthSize
-            guard nalSize >= 2, nalStart + nalSize <= packetBytes.count else { return false }
-            let byte0 = packetBytes[nalStart]
-            let byte1 = packetBytes[nalStart + 1]
-            let nalType = Int((byte0 >> 1) & 0x3F)
-            let layerID = Int(((byte0 & 0x01) << 5) | ((byte1 & 0xF8) >> 3))
-            if layerID > 0 || nalType == 62 || nalType == 63 {
-                return true
-            }
-            cursor = nalStart + nalSize
-        }
-        return false
-    }
-
     private func convertRpuNALToProfile81(_ nal: Data) throws -> Data {
         return try nal.withUnsafeBytes { raw -> Data in
             guard let base = raw.bindMemory(to: UInt8.self).baseAddress else {
-                throw DVWriterError.profile81ConversionFailed("empty_rpu_nal")
+                throw LoopbackWriterError.profile81ConversionFailed("empty_rpu_nal")
             }
             guard let parsed = dovi_parse_unspec62_nalu(base, raw.count) else {
-                throw DVWriterError.profile81ConversionFailed("dovi_parse_unspec62_nalu")
+                throw LoopbackWriterError.profile81ConversionFailed("dovi_parse_unspec62_nalu")
             }
             defer { dovi_rpu_free(parsed) }
             let convertR = dovi_convert_rpu_with_mode(parsed, 2)
             if convertR != 0 {
                 let error = dovi_rpu_get_error(parsed).map(String.init(cString:)) ?? "unknown"
-                throw DVWriterError.profile81ConversionFailed("dovi_convert_rpu_with_mode \(error)")
+                throw LoopbackWriterError.profile81ConversionFailed("dovi_convert_rpu_with_mode \(error)")
             }
             guard let written = dovi_write_unspec62_nalu(parsed) else {
-                throw DVWriterError.profile81ConversionFailed("dovi_write_unspec62_nalu")
+                throw LoopbackWriterError.profile81ConversionFailed("dovi_write_unspec62_nalu")
             }
             defer { dovi_data_free(written) }
             return Data(bytes: written.pointee.data, count: written.pointee.len)
@@ -2349,7 +3978,7 @@ final class DVSegmentWriter {
     }
 
     private func writeHeader() throws {
-        guard let outCtx = outputCtx else { throw DVWriterError.allocOutput }
+        guard let outCtx = outputCtx else { throw LoopbackWriterError.allocOutput }
 
         // Fragmented MP4 flags. `delay_moov` (instead of `empty_moov`) defers
         // writing the moov atom until the first fragment is cut, so FFmpeg's
@@ -2367,13 +3996,28 @@ final class DVSegmentWriter {
         // experimental TrueHD-in-MP4 path; without it, write_header rejects
         // the stream.
         var opts: OpaquePointer?
-        av_dict_set(&opts, "movflags", "+frag_keyframe+delay_moov+default_base_moof", 0)
+        if vodActive {
+            // VOD serving mode (plan M3): `frag_custom` hands cut control to
+            // the plan cutter instead of `frag_keyframe`'s implicit cuts;
+            // `frag_discont` with `avoid_negative_ts=disabled` keeps each
+            // fragment's tfdt on the producer's absolute output timestamps,
+            // so a restart-produced segment continues the session timeline
+            // instead of zero-basing; `use_editlist=0` keeps init.mp4
+            // restart-invariant (AVPlayer fetches EXT-X-MAP once per item —
+            // a per-restart elst would drift lipsync). `delay_moov` stays
+            // for the Dolby-family sample-entry parsing described above.
+            av_dict_set(&opts, "movflags", "+empty_moov+default_base_moof+frag_custom+delay_moov+frag_discont", 0)
+            av_dict_set(&opts, "use_editlist", "0", 0)
+            av_dict_set(&opts, "avoid_negative_ts", "disabled", 0)
+        } else {
+            av_dict_set(&opts, "movflags", "+frag_keyframe+delay_moov+default_base_moof", 0)
+        }
         av_dict_set(&opts, "strict", "-2", 0)
 
         let rc = avformat_write_header(outCtx, &opts)
         av_dict_free(&opts)
         if rc < 0 {
-            throw DVWriterError.writeHeader(rc)
+            throw LoopbackWriterError.writeHeader(rc)
         }
         refreshOutputTrackTimeBases()
     }
@@ -2402,20 +4046,56 @@ final class DVSegmentWriter {
               let outStream = outCtx.pointee.streams?[Int(outStreamIndex)]
         else { return }
 
+        // HDR10+ badge scan. This is the single choke point every written
+        // packet passes through — including bootstrap-stashed video packets
+        // replayed outside the main mux-loop video branch — so the SEI on
+        // the very first keyframe is never missed. The nil-callback check
+        // keeps the scan zero-cost for sessions that can never flip.
+        if inputStreamIndex == videoInputStreamIndex,
+           onHDR10PlusMetadataDetected != nil,
+           let packetData = pkt.pointee.data,
+           hdr10PlusSEIDetector.scan(bytes: packetData, count: Int(pkt.pointee.size)) {
+            onHDR10PlusMetadataDetected?()
+        }
+
         let inTB = inStream.pointee.time_base
         let outTB = outStream.pointee.time_base
-        captureOutputTimestampBaseIfNeeded(
-            pkt: pkt,
-            inputStreamIndex: inputStreamIndex,
-            inputTimeBase: inTB
-        )
+        if vodActive {
+            // Plan-anchored shift (M3): the session timeline is the plan's
+            // 0-based playlist axis. The anchor is a plan constant, so a
+            // restarted producer applies the identical shift and its tfdt
+            // continues the session timeline — no per-session zero-basing.
+            applyVODAnchorShift(pkt: pkt, inputTimeBase: inTB)
+        } else {
+            captureOutputTimestampBaseIfNeeded(
+                pkt: pkt,
+                inputStreamIndex: inputStreamIndex,
+                inputTimeBase: inTB
+            )
+        }
         pkt.pointee.stream_index = outStreamIndex
         // `av_packet_rescale_ts` handles AV_NOPTS_VALUE, duration rescaling,
         // and the pos reset in one call — same result as av_rescale_q_rnd
         // triplet but terser and less error-prone.
         av_packet_rescale_ts(pkt, inTB, outTB)
-        normalizeSeekedTimelineIfNeeded(pkt: pkt, outStream: outStream)
+        if !vodActive {
+            normalizeSeekedTimelineIfNeeded(pkt: pkt, outStream: outStream)
+        }
         normalizeMuxerTimestampsIfNeeded(pkt: pkt, outStream: outStream)
+        // Temporary [CMP-SEAM]: audio timeline continuity across producer
+        // restarts. Stored anchor tfdts showed run-to-run audio offsets of
+        // 18-19 ms (sub-EAC3-frame) — a passthrough discontinuity at every
+        // seam and the prime suspect for multi-second eARC dropouts while
+        // the receiver re-locks the bitstream. Log each run's first routed
+        // audio timestamp and keep the running end so consecutive runs can
+        // be diffed from the capture.
+        if vodActive, inputStreamIndex != videoInputStreamIndex, pkt.pointee.pts != Int64.min {
+            if !vodSeamDidLogFirstAudio {
+                vodSeamDidLogFirstAudio = true
+                print("[CMP-SEAM] run first audio outPts=\(pkt.pointee.pts) dur=\(pkt.pointee.duration) tb=\(outTB.num)/\(outTB.den)")
+            }
+            vodSeamLastAudioEnd = pkt.pointee.pts + max(0, pkt.pointee.duration)
+        }
         pkt.pointee.pos = -1
     }
 
@@ -2473,24 +4153,54 @@ final class DVSegmentWriter {
         return Int64((seconds * Double(timeBase.den) / Double(timeBase.num)).rounded())
     }
 
+    /// Input-axis DTS of the last video packet that passed timestamp repair.
+    /// The base for synthesizing a post-seek follower's missing DTS: after a
+    /// matroska seek, libavformat leaves DTS unset on the first
+    /// `has_b_frames` video packets (its pts-reorder buffer is cold), so the
+    /// anchor IDR's immediate followers arrive PTS-only.
+    private var lastRepairedVideoInputDTS: Int64?
+
     private func repairMissingMuxerTimestampsIfNeeded(
         pkt: UnsafeMutablePointer<AVPacket>,
         inputStreamIndex: Int,
         noPTS: Int64
     ) -> Bool {
+        let isVideo = inputStreamIndex == videoInputStreamIndex
         let missingPTS = pkt.pointee.pts == noPTS
         let missingDTS = pkt.pointee.dts == noPTS
-        guard missingPTS || missingDTS else { return true }
-        guard !missingPTS else { return false }
+        guard missingPTS || missingDTS else {
+            if isVideo { lastRepairedVideoInputDTS = pkt.pointee.dts }
+            return true
+        }
+        guard !missingPTS, isVideo else { return false }
 
-        let isVideo = inputStreamIndex == videoInputStreamIndex
         let isKeyframe = (pkt.pointee.flags & AV_PKT_FLAG_KEY) != 0
-        guard isVideo, isKeyframe else { return false }
-
-        pkt.pointee.dts = pkt.pointee.pts
+        if isKeyframe {
+            // For an IRAP, pts == dts in decode order, so pts is the exact
+            // repair — never subtract a reorder guess. A `video_delay` backoff
+            // under-shoots deep-reorder streams (250ms real vs 84ms guessed,
+            // living-room resume seam) and goes NEGATIVE at the stream head,
+            // where tfdt is unsigned and `avoid_negative_ts=disabled` writes it
+            // wrapped (2^64-1344, the living-room mid-play timeline jump).
+            // Followers whose real DTS sits below pts are bumped forward by
+            // normalizeVideoMuxerTimestampsIfNeeded instead of being dropped.
+            pkt.pointee.dts = pkt.pointee.pts
+        } else {
+            // Post-seek follower with PTS but no DTS. These are REFERENCE
+            // frames as often as not — the P right after a resume anchor's
+            // IDR anchors the whole first mini-GOP — and dropping one makes
+            // every dependent frame decode against a missing reference
+            // (resume-time macroblocking until the next IDR). Cram its DTS
+            // one tick above the previous video packet's; PTS is untouched,
+            // and the true DTS cadence resumes once the demuxer's reorder
+            // buffer warms up.
+            guard let base = lastRepairedVideoInputDTS else { return false }
+            pkt.pointee.dts = base + 1
+        }
+        lastRepairedVideoInputDTS = pkt.pointee.dts
         repairedMissingVideoDTSCount += 1
-        if repairedMissingVideoDTSCount <= 3 {
-            print("[CMP-AVP] repaired missing video DTS on keyframe pts=\(pkt.pointee.pts) videoMode=\(videoMode.logToken)")
+        if repairedMissingVideoDTSCount <= 6 {
+            print("[CMP-AVP] repaired missing video DTS pts=\(pkt.pointee.pts) dts=\(pkt.pointee.dts) keyframe=\(isKeyframe) videoMode=\(videoMode.logToken)")
         }
         return true
     }
@@ -2508,6 +4218,12 @@ final class DVSegmentWriter {
         default:
             return
         }
+        // Record the final pre-write timestamps here — the write-side hook
+        // never worked: `av_interleaved_write_frame` takes ownership and
+        // blanks the packet, so reading it back after the write recorded
+        // AV_NOPTS for stream 0 and the monotonicity bumps above never
+        // fired (rc=-22 dropped frames at every restart/repair seam).
+        recordMuxedPacketTimestamps(pkt)
     }
 
     private func normalizeAudioMuxerTimestampsIfNeeded(
@@ -2605,8 +4321,11 @@ final class DVSegmentWriter {
             cursor += total
         }
         // Discard consumed prefix. Left-over tail (partial next box) stays
-        // buffered for the next ingest.
-        if cursor > 0 {
+        // buffered for the next ingest. Keep the capacity on a full drain —
+        // the buffer re-grows to a whole mdat every fragment otherwise.
+        if cursor >= boxBuffer.count {
+            boxBuffer.removeAll(keepingCapacity: true)
+        } else if cursor > 0 {
             boxBuffer.removeSubrange(0..<cursor)
         }
     }
@@ -2629,18 +4348,14 @@ final class DVSegmentWriter {
                 return
             case "sidx":
                 if pendingSegmentBytes.isEmpty {
-                    pendingSegmentBytes = Data(slice)
-                    pendingSegmentHasMoof = false
-                    pendingSegmentHasVideo = false
+                    beginPendingSegment(firstBox: Data(slice), hasMoof: false, hasVideo: false)
                 } else {
                     appendToCurrentSegment(slice)
                 }
                 return
             case "styp":
                 if pendingSegmentBytes.isEmpty {
-                    pendingSegmentBytes = Data(slice)
-                    pendingSegmentHasMoof = false
-                    pendingSegmentHasVideo = false
+                    beginPendingSegment(firstBox: Data(slice), hasMoof: false, hasVideo: false)
                 } else {
                     appendToCurrentSegment(slice)
                 }
@@ -2679,9 +4394,7 @@ final class DVSegmentWriter {
         switch type {
         case "styp", "sidx":
             if pendingSegmentBytes.isEmpty {
-                pendingSegmentBytes = Data(slice)
-                pendingSegmentHasMoof = false
-                pendingSegmentHasVideo = false
+                beginPendingSegment(firstBox: Data(slice), hasMoof: false, hasVideo: false)
             } else {
                 appendToCurrentSegment(slice)
             }
@@ -2689,15 +4402,31 @@ final class DVSegmentWriter {
             let fragmentHasVideo = fragmentHasVideoTrack(in: slice)
             if pendingSegmentBytes.isEmpty {
                 startNewSegment(firstBox: slice, hasMoof: true, hasVideo: fragmentHasVideo)
-            } else if pendingSegmentHasMoof {
+            } else if pendingSegmentHasMoof,
+                      !vodProgressiveAccumulating,
+                      !pendingSegmentIsProgressive {
                 startNewSegment(firstBox: slice, hasMoof: true, hasVideo: fragmentHasVideo)
             } else {
+                // Progressive anchor: interim fragments accumulate into one
+                // multi-fragment segment instead of splitting per moof. The
+                // `pendingSegmentIsProgressive` arm keeps the CLOSING
+                // fragment in its segment — at cut time the accumulation
+                // gate is already off (vodClosingSegmentIndex set), but the
+                // cut flush's moof is the accumulated segment's tail, not
+                // the start of the next one.
                 appendMoofToCurrentSegment(slice, hasVideo: fragmentHasVideo)
             }
         case "mdat":
-            // Completes the current segment (moof+mdat pair).
             appendToCurrentSegment(slice)
-            finalizeCurrentSegment()
+            if vodProgressiveAccumulating {
+                // Anchor still open: stream the new fragment to the store;
+                // the cut (vodClosingSegmentIndex set) finalizes as usual.
+                pendingSegmentIsProgressive = true
+                publishProgressivePartial()
+            } else {
+                // Completes the current segment (moof+mdat pair).
+                finalizeCurrentSegment()
+            }
         default:
             // Any other box mid-segment: append to the current segment if any.
             appendToCurrentSegment(slice)
@@ -2808,6 +4537,23 @@ final class DVSegmentWriter {
                 print("[CMP-AVP] dvvC injection failed — hvcC not found in init tree")
             }
         }
+        if selectedAudioIsAtmosJOC {
+            // complexity_index_type_a = 16 is the standard object count for
+            // streaming DDP-Atmos; FFmpeg 7.1's parser does not expose the
+            // stream's true value (no complexity_index_type_a in its
+            // ac3_parser_internal.h), and the field is a decoder complexity
+            // hint. A vendored FFmpeg ≥ 8 bump writes the parsed value
+            // natively (the surgery then no-ops via its already-extended
+            // guard).
+            if let patched = ISOBoxSurgery.appendDec3JOCExtension(into: bytes, complexityIndex: 16) {
+                bytes = patched
+                print("[CMP-AVP] dec3 JOC extension appended (Atmos signalling, complexity=16)")
+            } else {
+                // print too: OSLog is invisible to devicectl console capture.
+                print("[CMP-AVP] dec3 JOC extension append FAILED — Atmos will present as plain E-AC-3 5.1")
+                Self.logger.error("dec3 JOC extension append failed — Atmos will present as plain E-AC-3 5.1")
+            }
+        }
         do {
             if Self.traceThroughput {
                 let started = CFAbsoluteTimeGetCurrent()
@@ -2830,8 +4576,85 @@ final class DVSegmentWriter {
     }
 
     private var pendingSegmentBytes = Data()
+    /// Size of the last finalized segment — the capacity hint for the next
+    /// one (segment sizes are stable within a title).
+    private var lastFinalizedSegmentBytes = 0
     private var pendingSegmentHasVideo = false
     private var pendingSegmentHasMoof = false
+
+    // MARK: - Progressive anchor serving
+
+    /// While a VOD session's FIRST segment (the seek anchor) is being
+    /// produced, fragments are flushed every ~1.5 s of media and streamed
+    /// to the store, so AVPlayer starts decoding the anchor while its tail
+    /// is still downloading — the dominant share of seek latency on long-GOP
+    /// sources whose anchor segments run 30–60 MB. Kill switch:
+    /// `defaults write <bundle> player.apple.loopback_progressive_anchor_enabled -bool NO`
+    /// Read per-instance (not a process-wide static) so each producer
+    /// session — and the continuity tests — honor the current default.
+    private lazy var progressiveAnchorServingEnabled =
+        UserDefaults.standard.object(
+            forKey: "player.apple.loopback_progressive_anchor_enabled"
+        ) as? Bool ?? true
+    private var vodProgressiveActiveName: String?
+    private var vodProgressivePublishedBytes = 0
+    private var vodLastInterimFlushPts = Int64.min
+    private var vodInterimFlushRequested = false
+    /// True while `pendingSegmentBytes` holds progressively-accumulated
+    /// fragments — the closing cut's flush must append to it, not open a
+    /// new segment.
+    private var pendingSegmentIsProgressive = false
+
+    /// The box sink accumulates fragments (instead of finalizing per
+    /// moof+mdat pair) only while the anchor segment is open: VOD mode, no
+    /// segment finalized yet this session, and no cut in flight.
+    private var vodProgressiveAccumulating: Bool {
+        progressiveAnchorServingEnabled
+            && vodActive
+            && segmentEntries.isEmpty
+            && vodClosingSegmentIndex == nil
+    }
+
+    /// Streams the accumulated prefix of the open anchor segment to the
+    /// store. Runs after each interim fragment lands in
+    /// `pendingSegmentBytes`; deltas mirror that buffer exactly, so the
+    /// streamed prefix is byte-identical to the segment
+    /// `finalizeCurrentSegment` eventually stores. Publication starts only
+    /// once the segment contains video — an audio-only prefix could belong
+    /// to a segment the pre-video gate later discards.
+    private func publishProgressivePartial() {
+        guard let store = segmentStore, pendingSegmentHasVideo else { return }
+        let name = String(format: "seg_%06d.m4s", vodOpenSegmentIndex)
+        if vodProgressiveActiveName != name {
+            vodProgressiveActiveName = name
+            vodProgressivePublishedBytes = 0
+            store.beginProgressiveSegment(named: name)
+        }
+        guard pendingSegmentBytes.count > vodProgressivePublishedBytes else { return }
+        let delta = pendingSegmentBytes.subdata(
+            in: vodProgressivePublishedBytes..<pendingSegmentBytes.count
+        )
+        store.appendProgressiveSegment(named: name, bytes: delta)
+        vodProgressivePublishedBytes = pendingSegmentBytes.count
+    }
+
+    /// Emits the fragment accumulated in the muxer so far WITHOUT closing
+    /// the open segment: the same drain+flush pair the cut uses, but with
+    /// `vodClosingSegmentIndex` still nil, so the box sink appends and
+    /// publishes instead of finalizing. Errors are left for the next real
+    /// write/cut to surface.
+    private func performVODInterimFragmentFlush() {
+        guard vodProgressiveAccumulating, let outCtx = outputCtx else { return }
+        let drainRC = av_interleaved_write_frame(outCtx, nil)
+        guard drainRC >= 0 else { return }
+        _ = av_write_frame(outCtx, nil)
+        if !vodDidFlushFirstFragment {
+            vodDidFlushFirstFragment = true
+            // delay_moov can split ftyp+moov and the fragment across two
+            // flush calls — same second flush the cut path performs.
+            _ = av_write_frame(outCtx, nil)
+        }
+    }
 
     private func startNewSegment(firstBox: Data, hasMoof: Bool, hasVideo: Bool) {
         // If a segment was mid-write (shouldn't happen, but defensive), flush
@@ -2839,7 +4662,16 @@ final class DVSegmentWriter {
         if !pendingSegmentBytes.isEmpty {
             finalizeCurrentSegment()
         }
-        pendingSegmentBytes = Data(firstBox)
+        beginPendingSegment(firstBox: firstBox, hasMoof: hasMoof, hasVideo: hasVideo)
+    }
+
+    /// Start accumulating a new segment with the previous segment's size
+    /// reserved up front — a fresh `Data` otherwise pays the realloc-doubling
+    /// walk to ~35-45 MB on every 4K segment.
+    private func beginPendingSegment(firstBox: Data, hasMoof: Bool, hasVideo: Bool) {
+        var fresh = Data(capacity: max(lastFinalizedSegmentBytes, firstBox.count) + 1024)
+        fresh.append(firstBox)
+        pendingSegmentBytes = fresh
         pendingSegmentHasMoof = hasMoof
         pendingSegmentHasVideo = hasVideo
     }
@@ -2856,6 +4688,14 @@ final class DVSegmentWriter {
 
     private func finalizeCurrentSegment() {
         guard !pendingSegmentBytes.isEmpty else { return }
+        // Whatever happens below consumes the pending buffer — close out the
+        // progressive publication state alongside it. (putSegment replaces
+        // the store's progressive entry with the complete data.)
+        vodProgressiveActiveName = nil
+        vodProgressivePublishedBytes = 0
+        vodLastInterimFlushPts = Int64.min
+        vodInterimFlushRequested = false
+        pendingSegmentIsProgressive = false
         guard !isCancelled else {
             pendingSegmentBytes = Data()
             pendingSegmentHasVideo = false
@@ -2864,6 +4704,7 @@ final class DVSegmentWriter {
         }
         let segmentHasVideo = pendingSegmentHasVideo
         let segSize = pendingSegmentBytes.count
+        lastFinalizedSegmentBytes = segSize
         if !hasWrittenVideoSegment, !segmentHasVideo {
             print("[CMP-AVP] discarded pre-video segment \(currentSegmentIndex) size=\(segSize)")
             pendingSegmentBytes = Data()
@@ -2872,6 +4713,12 @@ final class DVSegmentWriter {
             return
         }
 
+        if vodActive {
+            // Plan-indexed naming: the fragment that just closed belongs to
+            // the segment the cutter was filling when the cut fired (or the
+            // currently open one, for the trailer's final flush).
+            currentSegmentIndex = vodClosingSegmentIndex ?? vodOpenSegmentIndex
+        }
         let name = String(format: "seg_%06d.m4s", currentSegmentIndex)
         let parsedDuration = segmentMediaDuration(in: pendingSegmentBytes)
         let duration = parsedDuration ?? targetSegmentDuration
@@ -2901,11 +4748,36 @@ final class DVSegmentWriter {
             pendingSegmentHasMoof = false
             return
         }
-        segmentEntries.append(SegmentEntry(index: currentSegmentIndex, start: totalMediaDuration, duration: duration))
+        // Session-head ground truth (first 3 segments per session): the tfdt
+        // each fragment carries, for diagnosing render stalls at the seam
+        // where playback crosses producer sessions. Computed while
+        // `pendingSegmentBytes` is still intact.
+        var vodTfdtSummary: String?
+        if vodActive, segmentEntries.count < 3 {
+            var tfdts: [String] = []
+            for moof in childBoxes(in: pendingSegmentBytes, from: 0, to: pendingSegmentBytes.count)
+            where moof.type == "moof" {
+                for timing in trackFragmentTimings(inMoof: pendingSegmentBytes, moof: moof.box) {
+                    tfdts.append("\(timing.trackID):\(timing.baseDecodeTime)")
+                }
+            }
+            vodTfdtSummary = tfdts.joined(separator: ",")
+        }
+
+        // In VOD mode stats live on the plan axis (== the item timeline), so
+        // the playhead watchdog compares like with like after a restart.
+        let entryStart = vodActive
+            ? (vodPlan.map { $0.startSeconds[min(currentSegmentIndex, $0.segmentCount - 1)] } ?? totalMediaDuration)
+            : totalMediaDuration
+        segmentEntries.append(SegmentEntry(index: currentSegmentIndex, start: entryStart, duration: duration))
         totalMediaDuration += duration
         recordGeneratedSegment(bytes: segSize, duration: duration)
         let idx = currentSegmentIndex
-        currentSegmentIndex += 1
+        if vodActive {
+            vodClosingSegmentIndex = nil
+        } else {
+            currentSegmentIndex += 1
+        }
         pendingSegmentBytes = Data()
         pendingSegmentHasVideo = false
         pendingSegmentHasMoof = false
@@ -2916,6 +4788,11 @@ final class DVSegmentWriter {
             print("[CMP-AVP] seg \(idx) written (\(segSize) bytes, video=\(segmentHasVideo ? 1 : 0), dur=\(String(format: "%.3f", duration))s), total dur=\(String(format: "%.1f", totalMediaDuration))s)")
         }
         onSegmentAppended?(idx, totalMediaDuration)
+        if let vodTfdtSummary {
+            print("[CMP-AVP] vod segment stored name=\(name) bytes=\(segSize) dur=\(String(format: "%.3f", duration)) tfdt=[\(vodTfdtSummary)]")
+        } else if segmentEntries.count == 1 {
+            print("[CMP-AVP] first segment stored name=\(name) bytes=\(segSize)")
+        }
         if segmentHasVideo {
             hasWrittenVideoSegment = true
         }
@@ -2938,6 +4815,9 @@ final class DVSegmentWriter {
     }
 
     private func waitForGeneratedAheadIfNeeded() {
+        // VOD mode paces via the store's consumer window instead
+        // (`waitForVODWindowIfNeeded`), on the plan axis.
+        guard !vodActive else { return }
         guard firstSegmentReadyFired else { return }
         let cap = generatedAheadThrottleSeconds
         let waitStarted = CFAbsoluteTimeGetCurrent()
@@ -3010,6 +4890,14 @@ final class DVSegmentWriter {
         let waitDeadline = CFAbsoluteTimeGetCurrent() + Self.maxSegmentStoreCapacityWaitSeconds
         while !isCancelled {
             retireSegmentsBehindPlaybackIfNeeded()
+            if vodActive {
+                // VOD reclamation lives in the store. Prune around the
+                // consumer's target, force-evicting far-from-target
+                // segments if the budget alone can't absorb the append —
+                // a spill-blocked producer starves AVPlayer into a
+                // permanent freeze (living-room spill-exhaustion deadlock).
+                _ = segmentStore.makeRoomForAppend(byteCount: nextSegmentBytes)
+            }
             guard !segmentStore.canAppendSegment(byteCount: nextSegmentBytes) else { return }
             // Defensive escape: capacity only frees as the playhead advances
             // past retired segments. If the position provider is wedged the
@@ -3027,12 +4915,13 @@ final class DVSegmentWriter {
             if now - lastSpillCapacityBackpressureLogWall >= 5 {
                 lastSpillCapacityBackpressureLogWall = now
                 let playbackPosition = playbackPositionProvider?() ?? 0
-                let ahead = playbackPosition.isFinite
-                    ? totalMediaDuration - max(0, playbackPosition)
-                    : 0
                 let stats = segmentStore.stats()
+                // playhead is on the session axis; runGenerated is this
+                // producer run's cumulative output — they are different
+                // axes, so log them separately (the old "generatedAhead"
+                // subtraction printed nonsense like -3196s).
                 cmpLog(
-                    "[CMP-HLS-STORE] spill-capacity backpressure nextBytes=\(nextSegmentBytes) generatedAhead=\(String(format: "%.1f", ahead))s tempSpillBytes=\(stats.tempSpillBytes)"
+                    "[CMP-HLS-STORE] spill-capacity backpressure nextBytes=\(nextSegmentBytes) playhead=\(String(format: "%.1f", playbackPosition))s runGenerated=\(String(format: "%.1f", totalMediaDuration))s tempSpillBytes=\(stats.tempSpillBytes)"
                 )
             }
             Thread.sleep(forTimeInterval: 0.1)
@@ -3040,6 +4929,9 @@ final class DVSegmentWriter {
     }
 
     private func retireSegmentsBehindPlaybackIfNeeded() {
+        // VOD retention is byte-budgeted and target-anchored in the store;
+        // playback-position retirement is EVENT policy.
+        guard !vodActive else { return }
         guard let segmentStore,
               let playbackPosition = playbackPositionProvider?(),
               playbackPosition.isFinite,
@@ -3069,6 +4961,7 @@ final class DVSegmentWriter {
     /// fewer than 2 segments remain (we always keep the head segment so
     /// AVPlayer has at least one playable position).
     private func evictExpiredSegmentsIfNeeded() {
+        guard !vodActive else { return }
         let window = Self.segmentRetentionWindowSeconds
         guard window > 0, segmentEntries.count > 1 else { return }
         var removable = 0
@@ -3240,6 +5133,16 @@ final class DVSegmentWriter {
               initSegmentWritten,
               hasWrittenVideoSegment,
               !segmentEntries.isEmpty else { return }
+        if vodActive {
+            // The static playlist already advertises the whole title and
+            // AVPlayer buffers against it on its own; the EVENT runway
+            // heuristics (segment count + live-start window) don't apply.
+            // The first produced video segment is enough to attach.
+            firstSegmentReadyFired = true
+            print("[CMP-AVP] startup ready (vod plan) startPlaylist=\(startupPlaylistName) producedSegments=\(segmentEntries.count)")
+            onFirstSegmentReady?(startupPlaylistName)
+            return
+        }
         let startupReason = force ? "forced" : "minimum_runway"
         let longestSegmentDuration = segmentEntries.map(\.duration).max() ?? targetSegmentDuration
         let playlistTargetDuration = Double(playlistTargetDurationForEmit())
@@ -3256,14 +5159,15 @@ final class DVSegmentWriter {
         let mediaRate = elapsed > 0
             ? String(format: "%.2fx", totalMediaDuration / elapsed)
             : "unknown"
-        // Start AVPlayer from the media playlist. The multivariant manifest is
-        // still emitted for artifact inspection and DV/HDR validation metadata,
-        // but iOS rejected the current local master surface before fetching the
-        // child playlist. The media playlist path is the proven playback path.
+        // Start AVPlayer from the master playlist (see `masterStartEnabled`):
+        // premium-format claims (Atmos MAT output) are granted at
+        // master-variant level only. The historical iOS rejection of this
+        // surface was the missing RESOLUTION/FRAME-RATE attributes and the
+        // High-tier CODECS declaration, both since fixed.
         print(
-            "[CMP-AVP] startup runway ready startPlaylist=playlist.m3u8 generated=\(String(format: "%.1f", totalMediaDuration))s threshold=\(String(format: "%.1f", minimumPlayableWindow))s segments=\(segmentEntries.count) targetDuration=\(String(format: "%.1f", playlistTargetDuration))s elapsed=\(String(format: "%.2f", elapsed))s mediaRate=\(mediaRate) reason=\(startupReason) note=media_playlist_start_hint"
+            "[CMP-AVP] startup runway ready startPlaylist=\(startupPlaylistName) generated=\(String(format: "%.1f", totalMediaDuration))s threshold=\(String(format: "%.1f", minimumPlayableWindow))s segments=\(segmentEntries.count) targetDuration=\(String(format: "%.1f", playlistTargetDuration))s elapsed=\(String(format: "%.2f", elapsed))s mediaRate=\(mediaRate) reason=\(startupReason) masterStart=\(masterStartEnabled ? 1 : 0)"
         )
-        onFirstSegmentReady?("playlist.m3u8")
+        onFirstSegmentReady?(startupPlaylistName)
     }
 
     // MARK: - Playlist
@@ -3290,6 +5194,10 @@ final class DVSegmentWriter {
     }
 
     private func emitMediaPlaylist(isFinal: Bool) {
+        if vodActive, let plan = vodPlan {
+            emitVODMediaPlaylist(plan: plan)
+            return
+        }
         var lines: [String] = []
         lines.append("#EXTM3U")
         lines.append("#EXT-X-VERSION:7")
@@ -3330,6 +5238,44 @@ final class DVSegmentWriter {
             playlistBodyHash: Self.stablePlaylistHash(body),
             playlistKind: isFinal ? "vod" : "live_sliding",
             targetDuration: targetDuration
+        )
+    }
+
+    /// The whole title, advertised up front: every plan segment with its
+    /// planned EXTINF, `PLAYLIST-TYPE:VOD`, and `ENDLIST`. The body never
+    /// changes across the session (segment *bytes* come and go in the store;
+    /// the manifest does not), so re-emits are idempotent and only refresh
+    /// the generated-media stats the playhead watchdog samples.
+    private func emitVODMediaPlaylist(plan: LoopbackSegmentPlan) {
+        var lines: [String] = []
+        lines.append("#EXTM3U")
+        lines.append("#EXT-X-VERSION:7")
+        lines.append("#EXT-X-INDEPENDENT-SEGMENTS")
+        let longestPlanned = (0..<plan.segmentCount)
+            .map { plan.duration(ofSegment: $0) }
+            .max() ?? targetSegmentDuration
+        let target = max(1, Int(longestPlanned.rounded()))
+        lines.append("#EXT-X-TARGETDURATION:\(target)")
+        lines.append("#EXT-X-MEDIA-SEQUENCE:0")
+        lines.append("#EXT-X-PLAYLIST-TYPE:VOD")
+        lines.append("#EXT-X-MAP:URI=\"init.mp4\"")
+        for index in 0..<plan.segmentCount {
+            lines.append(String(format: "#EXTINF:%.3f,", plan.duration(ofSegment: index)))
+            lines.append(String(format: "seg_%06d.m4s", index))
+        }
+        lines.append("#EXT-X-ENDLIST")
+        let body = lines.joined(separator: "\n") + "\n"
+        do {
+            try writePlaylistArtifact(body, name: "playlist.m3u8")
+        } catch {
+            Self.logger.error("vod playlist write failed: \(String(describing: error), privacy: .public)")
+            fatalIOError = .fileWriteFailed("playlist.m3u8", error)
+        }
+        emitGeneratedMediaStats(
+            playlistBodyBytes: body.utf8.count,
+            playlistBodyHash: Self.stablePlaylistHash(body),
+            playlistKind: "vod_plan",
+            targetDuration: target
         )
     }
 
@@ -3378,6 +5324,18 @@ final class DVSegmentWriter {
         if let supplemental = supplementalCodecString() {
             inf += ",SUPPLEMENTAL-CODECS=\"\(supplemental)\""
         }
+        if masterVideoWidth > 0, masterVideoHeight > 0 {
+            inf += ",RESOLUTION=\(masterVideoWidth)x\(masterVideoHeight)"
+        }
+        // FRAME-RATE is load-bearing for VIDEO-RANGE=PQ variants: AVFoundation
+        // filters out a PQ variant that carries no FRAME-RATE before the media
+        // playlist is fetched (NSURLError -1002 with zero errorLog events).
+        // Always emit it, defaulting to the 23.976 film cadence (the same
+        // default the display-criteria path uses) when the server provides no
+        // parsable frame rate — otherwise DV/PQ files with missing fps
+        // metadata would be dropped by the variant filter.
+        let masterFrameRate = sessionSpec.sourceVideoFrameRate.flatMap { $0 > 0 ? $0 : nil } ?? 23.976
+        inf += ",FRAME-RATE=\(String(format: "%.3f", Double(masterFrameRate)))"
         inf += ",VIDEO-RANGE=\(manifestMetadata.videoRange)"
         if !loggedMasterManifest {
             loggedMasterManifest = true
@@ -3432,6 +5390,10 @@ final class DVSegmentWriter {
             av_packet_free(&free)
         }
         pendingAudioPackets.removeAll()
+        freeSubtitleTapDecoders()
+        if vodSeamLastAudioEnd >= 0 {
+            print("[CMP-SEAM] run last audio end=\(vodSeamLastAudioEnd)")
+        }
         if let ctx = outputCtx {
             // pb is our custom AVIOContext — we free it separately below so
             // avformat_free_context doesn't try to close it.
@@ -3444,7 +5406,24 @@ final class DVSegmentWriter {
             // avio_context_free frees the internal buffer too.
             ioBuffer = nil
         }
-        if inputCtx != nil {
+        cancelLock.lock()
+        didTeardown = true
+        let handoff = outgoingInputHandoff
+        let token = interruptToken
+        outgoingInputHandoff = nil
+        cancelLock.unlock()
+        if let handoff {
+            if let ctx = inputCtx {
+                // The interrupt callback (top-level and the copies FFmpeg
+                // baked into nested I/O contexts) targets the token, which
+                // travels with the context; the successor adopts and resets
+                // it on claim.
+                handoff.publish(ctx, token: token)
+                inputCtx = nil
+            } else {
+                handoff.cancelPublication()
+            }
+        } else if inputCtx != nil {
             avformat_close_input(&inputCtx)
         }
         if audioSwrCtx != nil {
@@ -3459,6 +5438,9 @@ final class DVSegmentWriter {
         }
         if audioDecoderCtx != nil {
             avcodec_free_context(&audioDecoderCtx)
+        }
+        if audioDecodedFrame != nil {
+            av_frame_free(&audioDecodedFrame)
         }
         lastMuxedDTSByStream.removeAll()
         lastMuxedPTSByStream.removeAll()
@@ -3501,7 +5483,7 @@ private func ensureAudioFrameSize(codecpar: UnsafeMutablePointer<AVCodecParamete
     }
 }
 
-enum DVWriterError: Error {
+enum LoopbackWriterError: Error {
     case allocInput
     case allocOutput
     case openInput(Int32)
@@ -3511,6 +5493,12 @@ enum DVWriterError: Error {
     case writeHeader(Int32)
     case unsupportedSelectedAudioCodec(String)
     case audioTranscodeSetup(String)
+    /// The pre-mux bootstrap could not produce a decodable stream head — no
+    /// IRAP keyframe within the scan caps, or no parameter sets anywhere.
+    /// Muxing anyway yields a presentation AVPlayer freezes on; failing the
+    /// session lets the route fall back immediately instead of waiting out
+    /// the startup watchdog.
+    case bootstrapFailed(String)
     case profile81ConversionFailed(String)
     /// `av_interleaved_write_frame` returned a negative code on three or more
     /// consecutive packets. The mux is no longer producing valid output; abort
