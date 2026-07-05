@@ -126,6 +126,68 @@ struct HDR10PlusSEIDetector {
     }
 }
 
+/// Decision core for the bridged-audio drift governor (see
+/// `noteBridgedAudioDriftIfNeeded`): pure sample arithmetic so the
+/// persistence/cooldown policy is unit-testable without FFmpeg.
+///
+/// The bridged clock free-runs on accumulated output samples, so decode
+/// losses slide all later content early against its timestamps and nothing
+/// re-converges until the next producer restart. This governor watches the
+/// per-frame drift observations and emits a content correction once drift
+/// is SUSTAINED: at least `requiredConsecutiveFrames` in a row past the
+/// floor with one sign, sized by the window's minimum magnitude so a
+/// single bogus container timestamp can inflate one observation without
+/// inflating the correction. The floor keeps corrections rare and below
+/// lipsync perceptibility (~45 ms); the cooldown lets one correction fully
+/// flow through the FIFO before drift is trusted again.
+struct LoopbackBridgedDriftGovernor {
+    static let correctionFloorMs: Int64 = 40
+    /// Post-anchor top-up floor: seam priming loss lands within seconds of
+    /// a run anchor (28–59 ms observed on device) and should be corrected
+    /// to ~0 there, not parked just under the steady-state floor. 5 ms is
+    /// ~5× the MKV timestamp-quantization noise.
+    static let postAnchorFloorMs: Int64 = 5
+    static let postAnchorWindowSeconds: Int64 = 15
+    static let requiredConsecutiveFrames = 8
+    static let cooldownSeconds: Int64 = 10
+
+    private var consecutive = 0
+    private var minMagnitudeDrift: Int64 = 0
+    private var cooldownUntil: Int64 = 0
+
+    /// Feed one drift observation (output samples; negative = content
+    /// stamped early). `position` is the projected output-sample position,
+    /// used only for cooldown bookkeeping. Returns 0, or the correction in
+    /// samples: positive = silence to insert, negative = content to trim.
+    mutating func observe(
+        drift: Int64,
+        position: Int64,
+        sampleRate: Int64,
+        floorMs: Int64 = LoopbackBridgedDriftGovernor.correctionFloorMs
+    ) -> Int64 {
+        guard position >= cooldownUntil else {
+            consecutive = 0
+            return 0
+        }
+        let floor = max(1, sampleRate * floorMs / 1000)
+        guard abs(drift) >= floor else {
+            consecutive = 0
+            return 0
+        }
+        if consecutive > 0, (drift < 0) != (minMagnitudeDrift < 0) {
+            consecutive = 0
+        }
+        if consecutive == 0 || abs(drift) < abs(minMagnitudeDrift) {
+            minMagnitudeDrift = drift
+        }
+        consecutive += 1
+        guard consecutive >= Self.requiredConsecutiveFrames else { return 0 }
+        consecutive = 0
+        cooldownUntil = position + sampleRate * Self.cooldownSeconds
+        return -minMagnitudeDrift
+    }
+}
+
 final class LoopbackSegmentWriter {
     // Temporary [CMP-LIFE]: session-pool leak attribution.
     deinit { print("[CMP-LIFE] deinit LoopbackSegmentWriter") }
@@ -542,6 +604,30 @@ final class LoopbackSegmentWriter {
     private static let vodSeamTrimMaxSamples: Int64 = 12_000 // 250 ms @ 48 kHz
     private var audioDecodedFrameCount = 0
     private var audioDecodeErrorCount = 0
+    /// Temporary [CMP-ADRIFT] diagnostics (see noteBridgedAudioDriftIfNeeded).
+    /// Cumulative decode failures for the bridged track — unlike
+    /// `audioDecodeErrorCount` this never resets on a successful frame, so
+    /// it measures total timeline loss, not burst length.
+    private var audioDecodeErrorTotal = 0
+    private var bridgedDriftLastLoggedStep: Int64 = 0
+    private var bridgedDriftNextHeartbeatPTS: Int64 = 0
+    /// Output-sample position of the current run's audio anchor, captured
+    /// at the first drift observation; bounds the post-anchor top-up
+    /// window. -1 = not yet observed this run.
+    private var bridgedDriftRunAnchorPTS: Int64 = -1
+    private var bridgedDriftGovernor = LoopbackBridgedDriftGovernor()
+    /// AetherEngine parity: its AudioBridge re-arms a source-PTS rebase of
+    /// the encoder clock at every segment cut, so decode losses can never
+    /// accumulate beyond one segment. Rebasing raw timestamps would break
+    /// our contiguous-audio-timeline invariant (every segment's tfdt must
+    /// equal the previous end), so our variant realigns the CONTENT through
+    /// the seam stitch primitives instead — silence fill for content that
+    /// slid early, FIFO trim for content that slid late. Kill switch:
+    /// `defaults write <bundle> player.apple.loopback_bridged_drift_correction_enabled -bool NO`
+    private lazy var bridgedDriftCorrectionEnabled =
+        UserDefaults.standard.object(
+            forKey: "player.apple.loopback_bridged_drift_correction_enabled"
+        ) as? Bool ?? true
     private var videoOutputTrackID: UInt32?
 
     /// Captures any fatal IO error seen by `writeInitSegment`,
@@ -3181,6 +3267,11 @@ final class LoopbackSegmentWriter {
             vodSeededBridgedAudioPTS = false
             audioDecodedFrameCount = 0
             audioDecodeErrorCount = 0
+            audioDecodeErrorTotal = 0
+            bridgedDriftLastLoggedStep = 0
+            bridgedDriftNextHeartbeatPTS = 0
+            bridgedDriftRunAnchorPTS = -1
+            bridgedDriftGovernor = LoopbackBridgedDriftGovernor()
             let sourceCodecName = String(cString: avcodec_get_name(codecpar.pointee.codec_id))
             print(
                 "[CMP-AVP] selected audio transcode sourceStream=\(inputStreamIndex) sourceCodec=\(sourceCodecName) outputCodec=\(candidate.codecToken) sourceChannels=\(sourceChannels) outputChannels=\(targetChannels) preservesAtmos=\(sessionSpec.selectedAudio.preservesAtmos ? 1 : 0) mode=\(sessionSpec.selectedAudio.outputMode.preferredCodecToken)"
@@ -3503,13 +3594,110 @@ final class LoopbackSegmentWriter {
         ))
     }
 
+    /// Temporary [CMP-ADRIFT] diagnostic: after seeding, the bridged-audio
+    /// clock free-runs on accumulated output samples, so any decode failure
+    /// (zero emitted samples) slides every later sample earlier on the
+    /// session axis with no correction until the next producer restart —
+    /// suspected cause of gradual lipsync drift on multi-hour TrueHD
+    /// watches. Projects where this frame's samples will be stamped
+    /// (counter + pending stitch + swr backlog + FIFO fill) against the
+    /// frame's own source timestamp, using the seeder's exact rescale math.
+    /// Logs when the gap crosses another 100 ms step and heartbeats every
+    /// 30 s of media so a silent probe is distinguishable from a dead one.
+    /// Negative drift = content stamped early (audio leads video).
+    private func noteBridgedAudioDriftIfNeeded(
+        from decodedFrame: UnsafeMutablePointer<AVFrame>,
+        encoderCtx: UnsafeMutablePointer<AVCodecContext>,
+        swr: OpaquePointer
+    ) {
+        guard vodActive, vodSeededBridgedAudioPTS else { return }
+        guard let inCtx = inputCtx,
+              selectedAudioStreamIndex >= 0,
+              selectedAudioStreamIndex < Int(inCtx.pointee.nb_streams),
+              let stream = inCtx.pointee.streams?[selectedAudioStreamIndex] else { return }
+        var framePts = decodedFrame.pointee.best_effort_timestamp
+        if framePts == Int64.min { framePts = decodedFrame.pointee.pts }
+        guard framePts != Int64.min else { return }
+
+        let inTB = stream.pointee.time_base
+        let anchor = vodAnchorPts != 0
+            ? av_rescale_q(vodAnchorPts, vodVideoTimeBase, inTB)
+            : 0
+        var encoderTB = encoderCtx.pointee.time_base
+        if encoderTB.num != 1 || encoderTB.den <= 0 {
+            encoderTB = AVRational(num: 1, den: encoderCtx.pointee.sample_rate)
+        }
+        let expected = av_rescale_q(framePts - anchor, inTB, encoderTB)
+
+        let sampleRate = Int64(max(1, encoderCtx.pointee.sample_rate))
+        var projected = nextEncodedAudioPTS
+            + vodPendingSeamSilenceFillSamples
+            - vodPendingSeamTrimSamples
+        projected += max(0, swr_get_delay(swr, sampleRate))
+        if let fifo = audioSampleFifo {
+            projected += Int64(av_audio_fifo_size(fifo))
+        }
+
+        let drift = projected - expected
+        let ticksToMs = 1000.0 * Double(encoderTB.num) / Double(max(1, encoderTB.den))
+
+        if bridgedDriftCorrectionEnabled {
+            // Post-anchor top-up: the restarted TrueHD/MLP decoder keeps
+            // eating packets for a moment AFTER the seam stitch aligned the
+            // first emitted frame (28–59 ms observed on device), so inside
+            // the first seconds of a run the correction floor drops to
+            // ~noise level and the seam leak is topped up to ~0 instead of
+            // parking just under the perceptibility floor.
+            if bridgedDriftRunAnchorPTS < 0 { bridgedDriftRunAnchorPTS = projected }
+            let inPostAnchorWindow = projected - bridgedDriftRunAnchorPTS
+                < LoopbackBridgedDriftGovernor.postAnchorWindowSeconds * sampleRate
+            let correction = bridgedDriftGovernor.observe(
+                drift: drift,
+                position: projected,
+                sampleRate: sampleRate,
+                floorMs: inPostAnchorWindow
+                    ? LoopbackBridgedDriftGovernor.postAnchorFloorMs
+                    : LoopbackBridgedDriftGovernor.correctionFloorMs
+            )
+            let phase = inPostAnchorWindow ? " postAnchor=1" : ""
+            if correction > 0 {
+                let fill = min(correction, Self.vodSeamFillMaxSamples)
+                vodPendingSeamSilenceFillSamples += fill
+                print(String(
+                    format: "[CMP-ADRIFT] correction fill=%lld samples (drift=%+.1fms) decErrTotal=%d",
+                    fill, Double(drift) * ticksToMs, audioDecodeErrorTotal
+                ) + phase)
+            } else if correction < 0 {
+                let trim = min(-correction, Self.vodSeamTrimMaxSamples)
+                vodPendingSeamTrimSamples += trim
+                print(String(
+                    format: "[CMP-ADRIFT] correction trim=%lld samples (drift=%+.1fms) decErrTotal=%d",
+                    trim, Double(drift) * ticksToMs, audioDecodeErrorTotal
+                ) + phase)
+            }
+        }
+
+        let step = drift / max(1, sampleRate / 10)
+        let heartbeatDue = projected >= bridgedDriftNextHeartbeatPTS
+        guard step != bridgedDriftLastLoggedStep || heartbeatDue else { return }
+        bridgedDriftLastLoggedStep = step
+        bridgedDriftNextHeartbeatPTS = projected + 30 * sampleRate
+        print(String(
+            format: "[CMP-ADRIFT] drift=%+.1fms expected=%.3fs projected=%lld decErrTotal=%d frames=%d",
+            Double(drift) * ticksToMs,
+            Double(expected) * ticksToMs / 1000.0,
+            projected, audioDecodeErrorTotal, audioDecodedFrameCount
+        ))
+    }
+
     private func noteAudioDecodeError(stage: String, rc: Int32) {
         audioDecodeErrorCount += 1
+        audioDecodeErrorTotal += 1
         let shouldLog = audioDecodeErrorCount <= 8 || audioDecodeErrorCount % 64 == 0
         guard shouldLog else { return }
         let level = rc == avErrorInvalidData ? "invaliddata" : "error"
         Self.logger.warning(
-            "[CMP-AVP] audio decoder \(stage, privacy: .public) \(level, privacy: .public) rc=\(rc, privacy: .public) consecutive=\(self.audioDecodeErrorCount, privacy: .public)"
+            "[CMP-AVP] audio decoder \(stage, privacy: .public) \(level, privacy: .public) rc=\(rc, privacy: .public) consecutive=\(self.audioDecodeErrorCount, privacy: .public) total=\(self.audioDecodeErrorTotal, privacy: .public)"
         )
     }
 
@@ -3517,6 +3705,7 @@ final class LoopbackSegmentWriter {
         guard let encoderCtx = audioEncoderCtx,
               let swr = audioSwrCtx else { return }
         seedVODBridgedAudioPTSIfNeeded(from: decodedFrame, encoderCtx: encoderCtx)
+        noteBridgedAudioDriftIfNeeded(from: decodedFrame, encoderCtx: encoderCtx, swr: swr)
 
         let inSamples = decodedFrame.pointee.nb_samples
         let outCapacity = swr_get_out_samples(swr, inSamples) + 32
