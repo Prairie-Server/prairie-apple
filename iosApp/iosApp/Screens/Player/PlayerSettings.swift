@@ -46,6 +46,7 @@ private enum PlayerDeviceSettingKey: String, CaseIterable {
     case nextUpPromptSeconds = "playback.next_up_prompt_seconds"
     case subtitleAppearance = "subtitle_appearance"
     case hdrEnabled = "player.hdr_enabled"
+    case dolbyVisionEnabled = "player.dolby_vision_enabled"
     case dvProfile7HDR10Fallback = "player.dv_profile7_hdr10_fallback"
     case seekCacheEnabled = "player.seek_cache_enabled"
     case playbackSpeed = "player.playback_speed"
@@ -84,8 +85,24 @@ final class PlayerSettings {
         didSet { defaults.set(hdrEnabled, forKey: Self.cacheKey(Keys.hdrEnabled)) }
     }
 
+    /// When off, Dolby Vision sources with a compatible base layer play as
+    /// plain HDR10/HLG instead. Profile 5 has no such base layer and always
+    /// plays in Dolby Vision.
+    var dolbyVisionEnabled: Bool {
+        didSet { defaults.set(dolbyVisionEnabled, forKey: Self.cacheKey(Keys.dolbyVisionEnabled)) }
+    }
+
     var preferProfile7HDR10Fallback: Bool {
         didSet { defaults.set(preferProfile7HDR10Fallback, forKey: Self.cacheKey(Keys.dvProfile7HDR10Fallback)) }
+    }
+
+    /// Plan-time snapshot of the Dolby Vision decision inputs, consumed by
+    /// the route planner and pushed into PlayerCore before each load.
+    var dolbyVisionPolicySnapshot: DolbyVisionPolicy.Snapshot {
+        DolbyVisionPolicy.Snapshot(
+            dolbyVisionEnabled: dolbyVisionEnabled,
+            preferProfile7HDR10Fallback: preferProfile7HDR10Fallback
+        )
     }
 
     /// Spill streamed bytes to temporary disk storage during playback so
@@ -204,6 +221,7 @@ final class PlayerSettings {
             Keys.autoSkipIntro: false,
             Keys.autoSkipCredits: false,
             Keys.hdrEnabled: true,
+            Keys.dolbyVisionEnabled: true,
             Keys.dvProfile7HDR10Fallback: false,
             Keys.seekCacheEnabled: true,
             Keys.subtitleAppearance: SubtitleAppearance.default.jsonString,
@@ -232,6 +250,7 @@ final class PlayerSettings {
         autoSkipIntro = Self.cachedBool(defaults, key: Keys.autoSkipIntro, defaultValue: false)
         autoSkipCredits = Self.cachedBool(defaults, key: Keys.autoSkipCredits, defaultValue: false)
         hdrEnabled = Self.cachedBool(defaults, key: Keys.hdrEnabled, defaultValue: true)
+        dolbyVisionEnabled = Self.cachedBool(defaults, key: Keys.dolbyVisionEnabled, defaultValue: true)
         preferProfile7HDR10Fallback = Self.cachedBool(
             defaults,
             key: Keys.dvProfile7HDR10Fallback,
@@ -381,6 +400,11 @@ final class PlayerSettings {
         enqueueDeviceSetting(.hdrEnabled, operation: .set(boolString(enabled)))
     }
 
+    func setDolbyVisionEnabled(_ enabled: Bool) {
+        dolbyVisionEnabled = enabled
+        enqueueDeviceSetting(.dolbyVisionEnabled, operation: .set(boolString(enabled)))
+    }
+
     func setPreferProfile7HDR10Fallback(_ enabled: Bool) {
         preferProfile7HDR10Fallback = enabled
         enqueueDeviceSetting(.dvProfile7HDR10Fallback, operation: .set(boolString(enabled)))
@@ -519,6 +543,7 @@ final class PlayerSettings {
             effectiveInt(for: .nextUpPromptSeconds, in: effectiveByKey, fallback: 30)
         )
         hdrEnabled = effectiveBool(for: .hdrEnabled, in: effectiveByKey, fallback: true)
+        dolbyVisionEnabled = effectiveBool(for: .dolbyVisionEnabled, in: effectiveByKey, fallback: true)
         preferProfile7HDR10Fallback = effectiveBool(
             for: .dvProfile7HDR10Fallback,
             in: effectiveByKey,
@@ -614,6 +639,7 @@ final class PlayerSettings {
             Self.cachedInt(defaults, key: Keys.nextUpPromptSeconds, defaultValue: 30)
         )
         hdrEnabled = Self.cachedBool(defaults, key: Keys.hdrEnabled, defaultValue: true)
+        dolbyVisionEnabled = Self.cachedBool(defaults, key: Keys.dolbyVisionEnabled, defaultValue: true)
         preferProfile7HDR10Fallback = Self.cachedBool(
             defaults,
             key: Keys.dvProfile7HDR10Fallback,
@@ -690,7 +716,14 @@ final class PlayerSettings {
         in effectiveByKey: [String: EffectiveSettingResponse],
         fallback: Bool
     ) -> Bool {
-        boolValue(effectiveString(for: key, in: effectiveByKey, fallback: boolString(fallback)))
+        let value = effectiveString(for: key, in: effectiveByKey, fallback: boolString(fallback))
+        // Servers return an entry with an empty effectiveValue for keys they
+        // have no registry default or stored override for (source "unset").
+        // An empty string is never a valid bool, so treat it as absent —
+        // otherwise every default-ON toggle flips off on the first refresh
+        // against a server that predates the key.
+        guard !value.isEmpty else { return fallback }
+        return boolValue(value)
     }
 
     private func effectiveInt(
@@ -820,6 +853,7 @@ final class PlayerSettings {
         static let autoSkipIntro = "skipIntros"
         static let autoSkipCredits = "skipCredits"
         static let hdrEnabled = "player.hdrEnabled"
+        static let dolbyVisionEnabled = "player.dolbyVisionEnabled"
         static let dvProfile7HDR10Fallback = "player.dvProfile7HDR10Fallback"
         static let seekCacheEnabled = "player.seekCacheEnabled"
         static let subtitleAppearance = "player.subtitleAppearance"

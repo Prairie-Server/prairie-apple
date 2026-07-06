@@ -61,15 +61,27 @@ struct PlaybackSettingsView: View {
             .pickerStyle(.navigationLink)
             #endif
 
-            Toggle("Profile 7 HDR10 Fallback", isOn: Binding(
-                get: { viewModel.preferProfile7HDR10Fallback },
+            Toggle("Dolby Vision", isOn: Binding(
+                get: { viewModel.dolbyVisionEnabled },
                 set: { enabled in
-                    viewModel.preferProfile7HDR10Fallback = enabled
-                    Task { await viewModel.setPreferProfile7HDR10Fallback(enabled) }
+                    viewModel.dolbyVisionEnabled = enabled
+                    Task { await viewModel.setDolbyVisionEnabled(enabled) }
                 }
             ))
             .foregroundStyle(Color.continuumOnSurface)
             .tint(.continuumAccent)
+
+            if viewModel.dolbyVisionEnabled {
+                Toggle("Profile 7 HDR10 Fallback", isOn: Binding(
+                    get: { viewModel.preferProfile7HDR10Fallback },
+                    set: { enabled in
+                        viewModel.preferProfile7HDR10Fallback = enabled
+                        Task { await viewModel.setPreferProfile7HDR10Fallback(enabled) }
+                    }
+                ))
+                .foregroundStyle(Color.continuumOnSurface)
+                .tint(.continuumAccent)
+            }
 
             Toggle("Seek Cache", isOn: Binding(
                 get: { viewModel.seekCacheEnabled },
@@ -84,10 +96,19 @@ struct PlaybackSettingsView: View {
             Text("Streaming")
                 .foregroundStyle(Color.continuumSecondaryText)
         } footer: {
-            Text("The fallback plays Dolby Vision Profile 7 as HDR10 on this device. Seek Cache keeps recently streamed video in temporary storage during playback so skipping forward and back is instant; it is cleared when playback ends.")
+            Text(streamingFooterText)
                 .foregroundStyle(Color.continuumSecondaryText)
         }
         .listRowBackground(Color.continuumSurfaceElevated)
+    }
+
+    private var streamingFooterText: String {
+        var text = "Turn off Dolby Vision to play Dolby Vision titles as HDR10 instead. Profile 5 titles have no HDR10-compatible layer and always play in Dolby Vision."
+        if viewModel.dolbyVisionEnabled {
+            text += " The fallback plays Dolby Vision Profile 7 as HDR10 on this device."
+        }
+        text += " Seek Cache keeps recently streamed video in temporary storage during playback so skipping forward and back is instant; it is cleared when playback ends."
+        return text
     }
 
     // MARK: - Behavior

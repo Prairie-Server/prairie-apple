@@ -100,6 +100,11 @@ final class PlayerCore: NSObject {
     /// whether `onSigPeakChange` emits a >1.0 peak for the display-layer EDR
     /// flag.
     private(set) var hdrEnabled: Bool = true
+    /// Snapshot of the user's Dolby Vision settings, pushed by the owner at
+    /// construction (alongside the initial `setHDREnabled`) so it is in place
+    /// before `load()` runs Dolby Vision routing. Plan-time snapshot like the
+    /// route planner's — mid-playback changes apply on the next load.
+    var dolbyVisionPolicy: DolbyVisionPolicy.Snapshot = .default
     /// Most recent sig-peak emitted via `onSigPeakChange`. Used by the hosting
     /// view when re-attaching (e.g. on window/screen change) so EDR can be
     /// re-evaluated without replaying the whole stream. Always 0 on tvOS.
@@ -3552,7 +3557,7 @@ final class PlayerCore: NSObject {
         var doviAtom: (key: String, data: Data)?
         if let dovi = DolbyVisionFormat.readConfig(stream: stream, codecpar: codecpar) {
             doviConfig = dovi
-            let routing = DolbyVisionFormat.decideRouting(dovi)
+            let routing = DolbyVisionFormat.decideRouting(dovi, policy: dolbyVisionPolicy)
             switch routing {
             case .native(let boxKey, let dr, let requiresDv):
                 doviAtom = (boxKey, DolbyVisionFormat.serializeBox(dovi))

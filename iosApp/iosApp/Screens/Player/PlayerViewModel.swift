@@ -1083,6 +1083,8 @@ class PlayerViewModel {
         // option is in place before the first sig-peak event lands (iOS) or
         // before AVDisplayManager negotiates HDMI mode (tvOS).
         core.setHDREnabled(settings.hdrEnabled)
+        // Dolby Vision policy must be in place before load() runs DV routing.
+        core.dolbyVisionPolicy = settings.dolbyVisionPolicySnapshot
     }
 
     private func installFreshPrimaryCore() {
@@ -1965,7 +1967,7 @@ class PlayerViewModel {
                 selectedSecondarySubtitleTrackId: selectedSecondarySubtitleId,
                 hlsRouteFeatureEnabled: Self.appleHLSRouteFeatureFlagEnabled(),
                 siloPlayerPrimaryEnabled: LoopbackServingMode.gated == .vodPlan,
-                preferProfile7HDR10Fallback: settings.preferProfile7HDR10Fallback,
+                dolbyVisionPolicy: settings.dolbyVisionPolicySnapshot,
                 displayCapabilities: ApplePlaybackDisplayCapabilities.probe()
             )
         )
@@ -5311,7 +5313,8 @@ class PlayerViewModel {
     private func makeRouteRequirements(prepared: PreparedPlayback) -> PlaybackRouteRequirements {
         ApplePlaybackRoutePlanner.makeRouteRequirements(
             selectedVersion: prepared.selectedVersion,
-            session: prepared.session
+            session: prepared.session,
+            dolbyVisionPolicy: settings.dolbyVisionPolicySnapshot
         )
     }
 
@@ -5801,6 +5804,8 @@ class PlayerViewModel {
             return "Dolby Vision Profile 7 base layer selected for Profile 8.1 SiloPlayer signaling"
         case "dolby_vision_profile7_hdr10_fallback_loopback":
             return "Dolby Vision Profile 7 using HDR10 fallback"
+        case "dolby_vision_disabled_base_layer_loopback":
+            return "Dolby Vision is off in Settings, so the HDR base layer was selected"
         case "dolby_vision_profile5_loopback":
             return "Dolby Vision Profile 5 selected SiloPlayer normalization"
         case "h264_container_loopback", "h264_audio_normalization_loopback",

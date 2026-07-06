@@ -36,12 +36,23 @@ struct TVPlaybackSettingsPane: View {
         ) { activePicker = .audioLanguage }
 
         TVSettingsToggleRow(
-            title: "Profile 7 HDR10 Fallback",
-            isOn: viewModel.preferProfile7HDR10Fallback
+            title: "Dolby Vision",
+            isOn: viewModel.dolbyVisionEnabled
         ) {
-            let value = !viewModel.preferProfile7HDR10Fallback
-            viewModel.preferProfile7HDR10Fallback = value
-            Task { await viewModel.setPreferProfile7HDR10Fallback(value) }
+            let value = !viewModel.dolbyVisionEnabled
+            viewModel.dolbyVisionEnabled = value
+            Task { await viewModel.setDolbyVisionEnabled(value) }
+        }
+
+        if viewModel.dolbyVisionEnabled {
+            TVSettingsToggleRow(
+                title: "Profile 7 HDR10 Fallback",
+                isOn: viewModel.preferProfile7HDR10Fallback
+            ) {
+                let value = !viewModel.preferProfile7HDR10Fallback
+                viewModel.preferProfile7HDR10Fallback = value
+                Task { await viewModel.setPreferProfile7HDR10Fallback(value) }
+            }
         }
 
         TVSettingsToggleRow(
@@ -53,7 +64,16 @@ struct TVPlaybackSettingsPane: View {
             Task { await viewModel.setSeekCacheEnabled(value) }
         }
 
-        TVSettingsFooter("The fallback plays Dolby Vision Profile 7 as HDR10 on this Apple TV. Seek Cache keeps recently streamed video in temporary storage during playback so skipping forward and back is instant.")
+        TVSettingsFooter(streamingFooterText)
+    }
+
+    private var streamingFooterText: String {
+        var text = "Turn off Dolby Vision to play Dolby Vision titles as HDR10 instead. Profile 5 titles have no HDR10-compatible layer and always play in Dolby Vision."
+        if viewModel.dolbyVisionEnabled {
+            text += " The fallback plays Dolby Vision Profile 7 as HDR10 on this Apple TV."
+        }
+        text += " Seek Cache keeps recently streamed video in temporary storage during playback so skipping forward and back is instant."
+        return text
     }
 
     @ViewBuilder

@@ -78,7 +78,8 @@ struct ApplePlaybackPlannerInput {
     /// Stage 2 rollout gate: lifts the loopback startup-unreliable blockers
     /// and serves eligible sources through the VOD plan mode.
     let siloPlayerPrimaryEnabled: Bool
-    let preferProfile7HDR10Fallback: Bool
+    /// Snapshot of the user's Dolby Vision settings, captured at plan time.
+    let dolbyVisionPolicy: DolbyVisionPolicy.Snapshot
     /// Captured at plan-creation time so route choice and degradation
     /// warnings can reflect the actual output, not just source metadata.
     /// Defaults to `.unknown` (conservative no-knowledge state) so older
@@ -97,7 +98,7 @@ struct ApplePlaybackPlannerInput {
         selectedSecondarySubtitleTrackId: Int64?,
         hlsRouteFeatureEnabled: Bool,
         siloPlayerPrimaryEnabled: Bool = false,
-        preferProfile7HDR10Fallback: Bool,
+        dolbyVisionPolicy: DolbyVisionPolicy.Snapshot,
         displayCapabilities: ApplePlaybackDisplayCapabilities = .unknown
     ) {
         self.session = session
@@ -111,7 +112,7 @@ struct ApplePlaybackPlannerInput {
         self.selectedSecondarySubtitleTrackId = selectedSecondarySubtitleTrackId
         self.hlsRouteFeatureEnabled = hlsRouteFeatureEnabled
         self.siloPlayerPrimaryEnabled = siloPlayerPrimaryEnabled
-        self.preferProfile7HDR10Fallback = preferProfile7HDR10Fallback
+        self.dolbyVisionPolicy = dolbyVisionPolicy
         self.displayCapabilities = displayCapabilities
     }
 }
@@ -150,13 +151,20 @@ struct ApplePlaybackRoutePlanner {
         let sourceMetadata = Self.sourceMetadata(for: selectedVersion, session: session)
         let directDolbyVisionProfile = sourceMetadata.dolbyVisionProfile
         let directDvProfile8BaseLayer = Self.dvProfile8BaseLayer(for: selectedVersion, sourceMetadata: sourceMetadata)
+        let directDolbyVisionResolution = directDolbyVisionProfile.map {
+            DolbyVisionPolicy.resolution(forProfile: $0, snapshot: input.dolbyVisionPolicy)
+        }
         var directLoopbackVideoMode: LoopbackSessionSpec.VideoMode? = switch directDolbyVisionProfile {
         case 5:
             .passthroughProfile5
         case 7:
-            input.preferProfile7HDR10Fallback ? .passthroughHEVC : .convertProfile7To81
+            directDolbyVisionResolution == .dolbyVision
+                ? .convertProfile7To81
+                : .passthroughHEVC
         case 8:
-            .passthroughProfile8(directDvProfile8BaseLayer)
+            directDolbyVisionResolution == .dolbyVision
+                ? .passthroughProfile8(directDvProfile8BaseLayer)
+                : .passthroughHEVC
         default:
             nil
         }
@@ -208,25 +216,17 @@ struct ApplePlaybackRoutePlanner {
                     servingMode: input.siloPlayerPrimaryEnabled ? .vodPlan : .event
                 )
             }
-            if directDolbyVisionProfile == 7, directLoopbackSession != nil {
+            if let directDolbyVisionProfile, let directDolbyVisionResolution,
+               [5, 7, 8].contains(directDolbyVisionProfile), directLoopbackSession != nil {
                 engine = .siloPlayerLoopback
                 parityBlockers = []
                 routeCapabilities = .siloPlayerLoopback
-                reason = input.preferProfile7HDR10Fallback
-                    ? "dolby_vision_profile7_hdr10_fallback_loopback"
-                    : "dolby_vision_profile7_to81_base_layer_loopback"
-            } else if directDolbyVisionProfile == 5, directLoopbackSession != nil {
-                engine = .siloPlayerLoopback
-                parityBlockers = []
-                routeCapabilities = .siloPlayerLoopback
-                reason = "dolby_vision_profile5_loopback"
-            } else if directDolbyVisionProfile == 8, directLoopbackSession != nil {
-                engine = .siloPlayerLoopback
-                parityBlockers = []
-                routeCapabilities = .siloPlayerLoopback
-                reason = directDvProfile8BaseLayer == .hlg
-                    ? "dolby_vision_profile84_passthrough_loopback"
-                    : "dolby_vision_profile81_passthrough_loopback"
+                reason = Self.dolbyVisionRouteToken(
+                    profile: directDolbyVisionProfile,
+                    resolution: directDolbyVisionResolution,
+                    profile8BaseLayer: directDvProfile8BaseLayer,
+                    vocabulary: .reason
+                )
             } else if directAssessment.isEligible {
                 engine = .avPlayerNativeDirect
                 parityBlockers = []
@@ -264,20 +264,14 @@ struct ApplePlaybackRoutePlanner {
             if let directDolbyVisionProfile {
                 trace.append("dolby_vision_profile_\(directDolbyVisionProfile)")
             }
-            if directDolbyVisionProfile == 7 {
-                trace.append(
-                    input.preferProfile7HDR10Fallback
-                        ? "profile7_hdr10_fallback_selected"
-                        : "profile7_to81_base_layer_loopback_selected"
-                )
-            } else if directDolbyVisionProfile == 5 {
-                trace.append("profile5_loopback_selected")
-            } else if directDolbyVisionProfile == 8 {
-                trace.append(
-                    directDvProfile8BaseLayer == .hlg
-                        ? "profile84_passthrough_loopback_selected"
-                        : "profile81_passthrough_loopback_selected"
-                )
+            if let directDolbyVisionProfile, let directDolbyVisionResolution,
+               [5, 7, 8].contains(directDolbyVisionProfile) {
+                trace.append(Self.dolbyVisionRouteToken(
+                    profile: directDolbyVisionProfile,
+                    resolution: directDolbyVisionResolution,
+                    profile8BaseLayer: directDvProfile8BaseLayer,
+                    vocabulary: .trace
+                ))
             } else if siloAssessment.isEligible, engine == .siloPlayerLoopback {
                 trace.append("\(siloAssessment.reason)_selected")
             }
@@ -347,12 +341,23 @@ struct ApplePlaybackRoutePlanner {
 
     static func makeRouteRequirements(
         selectedVersion: FileVersion,
-        session: PlaybackSessionResponse
+        session: PlaybackSessionResponse,
+        dolbyVisionPolicy: DolbyVisionPolicy.Snapshot
     ) -> PlaybackRouteRequirements {
         let hasPrimaryAudioSelection = !(selectedVersion.audioTracks ?? []).isEmpty
         let hasEmbeddedSubtitles = (selectedVersion.subtitleTracks ?? []).contains { !($0.external ?? false) }
         let hasSidecarSubtitles = !(session.subtitleUrls ?? []).isEmpty
         let hasChapters = !Self.chapterInfoList(from: selectedVersion).isEmpty
+        // The source's DV claim only needs output-path validation when the
+        // resolved route still presents Dolby Vision — a "Dolby Vision off"
+        // fallback plays plain HDR10 and must not surface DV-claim warnings.
+        let claimsDolbyVision = Self.versionHasDolbyVision(selectedVersion)
+            && DolbyVisionPolicy.claimsDolbyVisionOutput(
+                DolbyVisionPolicy.resolution(
+                    forProfile: Self.dolbyVisionProfile(for: selectedVersion) ?? 0,
+                    snapshot: dolbyVisionPolicy
+                )
+            )
 
         return PlaybackRouteRequirements(
             needsPrimaryAudioSelection: hasPrimaryAudioSelection,
@@ -363,8 +368,8 @@ struct ApplePlaybackRoutePlanner {
             needsNowPlayingIntegration: true,
             keepsPictureInPictureDisabledUntilValidated: true,
             keepsExternalPlaybackDisabledUntilValidated: true,
-            needsValidatedPremiumClaims: Self.versionHasDolbyVision(selectedVersion)
-                || Self.versionHasPotentialAtmos(selectedVersion)
+            needsValidatedDolbyVisionClaim: claimsDolbyVision,
+            needsValidatedAtmosClaim: Self.versionHasPotentialAtmos(selectedVersion)
         )
     }
 
@@ -904,6 +909,52 @@ private extension ApplePlaybackRoutePlanner {
         let mandatory = embedded.filter { ($0.forced ?? false) || ($0.isDefault ?? false) }
         let candidates = selected.isEmpty ? mandatory : selected
         return candidates.map { normalizedSubtitleCodec($0.codec) ?? "unknown" }
+    }
+
+    /// The two token vocabularies the plan carries for a DV loopback route:
+    /// the `reason` string (matched by `humanReadableRouteReason`) and the
+    /// decision-trace entry. Deriving both from one mapping keeps them from
+    /// drifting as profiles or policy resolutions are added.
+    enum DolbyVisionTokenVocabulary {
+        case reason
+        case trace
+    }
+
+    static func dolbyVisionRouteToken(
+        profile: Int,
+        resolution: DolbyVisionPolicy.Resolution,
+        profile8BaseLayer: LoopbackSessionSpec.DVProfile8BaseLayer,
+        vocabulary: DolbyVisionTokenVocabulary
+    ) -> String {
+        // Profile 5 never resolves to `.dolbyVisionDisabled` (no compatible
+        // base layer), so the disabled tokens can lead unconditionally.
+        if resolution == .dolbyVisionDisabled {
+            return vocabulary == .reason
+                ? "dolby_vision_disabled_base_layer_loopback"
+                : "dolby_vision_disabled_base_layer_selected"
+        }
+        switch (profile, vocabulary) {
+        case (5, .reason):
+            return "dolby_vision_profile5_loopback"
+        case (5, .trace):
+            return "profile5_loopback_selected"
+        case (7, .reason):
+            return resolution == .profile7HDR10Fallback
+                ? "dolby_vision_profile7_hdr10_fallback_loopback"
+                : "dolby_vision_profile7_to81_base_layer_loopback"
+        case (7, .trace):
+            return resolution == .profile7HDR10Fallback
+                ? "profile7_hdr10_fallback_selected"
+                : "profile7_to81_base_layer_loopback_selected"
+        case (_, .reason):
+            return profile8BaseLayer == .hlg
+                ? "dolby_vision_profile84_passthrough_loopback"
+                : "dolby_vision_profile81_passthrough_loopback"
+        case (_, .trace):
+            return profile8BaseLayer == .hlg
+                ? "profile84_passthrough_loopback_selected"
+                : "profile81_passthrough_loopback_selected"
+        }
     }
 
     static func versionHasDolbyVision(_ version: FileVersion) -> Bool {

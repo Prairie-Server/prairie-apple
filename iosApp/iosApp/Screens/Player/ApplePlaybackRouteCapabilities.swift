@@ -63,7 +63,14 @@ struct PlaybackRouteRequirements: Equatable {
     let needsNowPlayingIntegration: Bool
     let keepsPictureInPictureDisabledUntilValidated: Bool
     let keepsExternalPlaybackDisabledUntilValidated: Bool
-    let needsValidatedPremiumClaims: Bool
+    /// Split per claim so a route where the user disabled Dolby Vision can
+    /// drop the DV clause from warnings without touching the Atmos one.
+    let needsValidatedDolbyVisionClaim: Bool
+    let needsValidatedAtmosClaim: Bool
+
+    var needsValidatedPremiumClaims: Bool {
+        needsValidatedDolbyVisionClaim || needsValidatedAtmosClaim
+    }
 
     static let baseline = PlaybackRouteRequirements(
         needsPrimaryAudioSelection: false,
@@ -74,7 +81,8 @@ struct PlaybackRouteRequirements: Equatable {
         needsNowPlayingIntegration: false,
         keepsPictureInPictureDisabledUntilValidated: true,
         keepsExternalPlaybackDisabledUntilValidated: true,
-        needsValidatedPremiumClaims: false
+        needsValidatedDolbyVisionClaim: false,
+        needsValidatedAtmosClaim: false
     )
 
     var summaryTokens: [String] {
@@ -168,10 +176,21 @@ struct ApplePlaybackRouteCapabilities: Equatable {
             )
         }
 
-        if requirements.needsValidatedPremiumClaims {
+        switch (requirements.needsValidatedDolbyVisionClaim, requirements.needsValidatedAtmosClaim) {
+        case (true, true):
             notes.append(
                 "Premium Dolby Vision and Atmos claims still require output-path validation on \(routeLabel)."
             )
+        case (true, false):
+            notes.append(
+                "Premium Dolby Vision claims still require output-path validation on \(routeLabel)."
+            )
+        case (false, true):
+            notes.append(
+                "Premium Atmos claims still require output-path validation on \(routeLabel)."
+            )
+        case (false, false):
+            break
         }
 
         if requirements.needsSecondarySubtitles && secondarySubtitles.note.localizedCaseInsensitiveContains("sidecar") {

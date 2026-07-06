@@ -122,8 +122,13 @@ enum DolbyVisionFormat {
     }
 
     /// Route the parsed DOVI config to a VideoToolbox strategy. Profile 10
-    /// (AV1 DV) is gated on the hardware AV1 decoder.
-    static func decideRouting(_ c: Config) -> Routing {
+    /// (AV1 DV) is gated on the hardware AV1 decoder. The policy snapshot
+    /// carries the user's Dolby Vision setting; profiles with a compatible
+    /// base layer strip to it when the setting resolves to
+    /// `.dolbyVisionDisabled` (Profile 5 never does — see
+    /// `DolbyVisionPolicy.resolution`).
+    static func decideRouting(_ c: Config, policy: DolbyVisionPolicy.Snapshot) -> Routing {
+        let resolution = DolbyVisionPolicy.resolution(forProfile: Int(c.profile), snapshot: policy)
         switch c.profile {
         case 4:
             // Dual-layer HEVC + DM; rare. We don't have a FEL fuse path, so
@@ -143,6 +148,9 @@ enum DolbyVisionFormat {
         case 8, 9:
             // 8.x compat: 1=HDR10, 2=SDR, 4=HLG. The base layer is valid in
             // the advertised compat mode, so DV→fallback is always safe.
+            guard resolution != .dolbyVisionDisabled else {
+                return .strippedHdr10
+            }
             return .native(boxKey: "dvcC", dr: .dolbyVision, requiresDvDisplay: false)
         case 10:
             // AV1 DV. Only on A15+ Apple TV 4K hardware.
@@ -150,6 +158,9 @@ enum DolbyVisionFormat {
                 return .refused(
                     reason: "AV1 Dolby Vision not supported on this Apple TV model"
                 )
+            }
+            guard resolution != .dolbyVisionDisabled else {
+                return .strippedHdr10
             }
             return .native(boxKey: "dvvC", dr: .dolbyVision, requiresDvDisplay: false)
         default:

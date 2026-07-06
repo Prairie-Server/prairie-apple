@@ -32,6 +32,7 @@ class SettingsViewModel {
     var nextUpPromptSeconds: Int = PlayerSettings.shared.nextUpPromptSeconds
     var skipIntros: Bool = PlayerSettings.shared.autoSkipIntro
     var skipCredits: Bool = PlayerSettings.shared.autoSkipCredits
+    var dolbyVisionEnabled: Bool = PlayerSettings.shared.dolbyVisionEnabled
     var preferProfile7HDR10Fallback: Bool = PlayerSettings.shared.preferProfile7HDR10Fallback
     var seekCacheEnabled: Bool = PlayerSettings.shared.seekCacheEnabled
 
@@ -85,6 +86,7 @@ class SettingsViewModel {
         nextUpPromptSeconds = PlayerSettings.shared.nextUpPromptSeconds
         skipIntros = PlayerSettings.shared.autoSkipIntro
         skipCredits = PlayerSettings.shared.autoSkipCredits
+        dolbyVisionEnabled = PlayerSettings.shared.dolbyVisionEnabled
         preferProfile7HDR10Fallback = PlayerSettings.shared.preferProfile7HDR10Fallback
         seekCacheEnabled = PlayerSettings.shared.seekCacheEnabled
         subtitleSize = UserDefaults.standard.string(forKey: "subtitleSize") ?? "medium"
@@ -148,6 +150,12 @@ class SettingsViewModel {
     }
 
     @MainActor
+    func setDolbyVisionEnabled(_ enabled: Bool) async {
+        PlayerSettings.shared.setDolbyVisionEnabled(enabled)
+        dolbyVisionEnabled = PlayerSettings.shared.dolbyVisionEnabled
+    }
+
+    @MainActor
     func setPreferProfile7HDR10Fallback(_ enabled: Bool) async {
         PlayerSettings.shared.setPreferProfile7HDR10Fallback(enabled)
         preferProfile7HDR10Fallback = PlayerSettings.shared.preferProfile7HDR10Fallback
@@ -168,6 +176,7 @@ class SettingsViewModel {
         nextUpPromptSeconds = PlayerSettings.shared.nextUpPromptSeconds
         skipIntros = PlayerSettings.shared.autoSkipIntro
         skipCredits = PlayerSettings.shared.autoSkipCredits
+        dolbyVisionEnabled = PlayerSettings.shared.dolbyVisionEnabled
         preferProfile7HDR10Fallback = PlayerSettings.shared.preferProfile7HDR10Fallback
         seekCacheEnabled = PlayerSettings.shared.seekCacheEnabled
         subtitleAppearance = PlayerSettings.shared.subtitleAppearance
