@@ -957,6 +957,12 @@ class PlayerViewModel {
     }
     private var suspendedPlayback: SuspendedPlaybackContext?
     private var nextUpAutoplayCancelled = false
+    /// Set when the user taps Keep Watching; suppresses re-presenting the
+    /// pre-end Next Up prompt while the playhead stays inside the prompt
+    /// window. Cleared when the playhead leaves the window (seek back) or a
+    /// new item loads, so the prompt can appear again naturally. Does not
+    /// apply to the end-of-playback screen.
+    private var nextUpPromptDismissed = false
     private(set) var contentIdsNeedingDetailRefresh: Set<String> = []
     private static let suspendedPlaybackNotice = PlayerNotice(
         title: "Playback paused",
@@ -1376,6 +1382,7 @@ class PlayerViewModel {
         nextUpLookupError = nil
         isLoadingNextUpEpisode = false
         nextUpAutoplayCancelled = false
+        nextUpPromptDismissed = false
         cancelNextUpCountdown()
 
         guard detail.type == "episode",
@@ -1612,7 +1619,11 @@ class PlayerViewModel {
             updateNextUpCountdownForActivePlayback(at: movieTime)
             return
         }
-        guard shouldShowNextUpBeforeEnd(at: movieTime) else { return }
+        guard shouldShowNextUpBeforeEnd(at: movieTime) else {
+            nextUpPromptDismissed = false
+            return
+        }
+        guard !nextUpPromptDismissed else { return }
         beginNextUpPostroll(videoEnded: false)
     }
 
@@ -1727,6 +1738,7 @@ class PlayerViewModel {
 
     func keepWatchingCurrentEpisode() {
         nextUpAutoplayCancelled = true
+        nextUpPromptDismissed = true
         showNextUpScreen = false
         nextUpScreenVideoEnded = false
         cancelNextUpCountdown()
@@ -2682,6 +2694,7 @@ class PlayerViewModel {
         nextUpCountdownTotalSeconds = Self.nextUpCountdownDefaultSeconds
         nextUpScreenVideoEnded = false
         nextUpAutoplayCancelled = false
+        nextUpPromptDismissed = false
         audioTracks = []
         subtitleTracks = []
         chapters = []
