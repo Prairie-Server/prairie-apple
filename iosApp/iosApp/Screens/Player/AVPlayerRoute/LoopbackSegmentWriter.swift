@@ -96,12 +96,64 @@ enum DVTrueHDMajorSyncScanner {
 struct HDR10PlusSEIDetector {
     private static let metadataHeader: [UInt8] = [0xB5, 0x00, 0x3C, 0x00, 0x01, 0x04]
 
+    /// ST 2094-40 metadata rides an SEI on every picture of HDR10+ content,
+    /// so a stream that has shown none after this many video packets never
+    /// will. Without this budget, plain-HDR10 films paid the scan on every
+    /// packet forever — and as a whole-packet byte sweep it cost ~4 ms of
+    /// A12 CPU per 4K packet, capping the loopback producer at ~12 Mbps and
+    /// stalling playback (2026-07-05 device log). The budget plus the
+    /// SEI-only NAL walk in `scanVideoPacket` bound the cost structurally.
+    static let scanBudgetPackets = 600
+
     /// True once any scanned packet has contained the header. Latched for
     /// the detector's lifetime; later scans short-circuit without reading.
     private(set) var detected = false
+    private var scannedPackets = 0
 
-    /// Scans one compressed packet. Returns true only for the FIRST packet
-    /// that carries the header; every later call returns false.
+    /// True while scanning is still worthwhile: no hit yet and the packet
+    /// budget has not been exhausted.
+    var isActive: Bool { !detected && scannedPackets < Self.scanBudgetPackets }
+
+    /// Walks a length-prefixed video packet and scans only SEI NAL payloads
+    /// (HEVC prefix/suffix SEI 39/40, H.264 SEI 6) — SEI units are tiny, so
+    /// this touches a few hundred bytes per packet instead of megabytes. A
+    /// malformed NAL walk falls back to a raw scan of the remainder so a
+    /// quirky container cannot hide the metadata.
+    mutating func scanVideoPacket(
+        bytes: UnsafePointer<UInt8>,
+        count: Int,
+        nalLengthSize: Int,
+        isHEVC: Bool
+    ) -> Bool {
+        guard isActive else { return false }
+        scannedPackets += 1
+        guard (1...4).contains(nalLengthSize) else {
+            return scan(bytes: bytes, count: count)
+        }
+        var cursor = 0
+        while cursor + nalLengthSize < count {
+            var nalLength = 0
+            for index in 0..<nalLengthSize {
+                nalLength = (nalLength << 8) | Int(bytes[cursor + index])
+            }
+            let payloadStart = cursor + nalLengthSize
+            guard nalLength > 0, payloadStart + nalLength <= count else {
+                return scan(bytes: bytes + cursor, count: count - cursor)
+            }
+            let nalType = isHEVC
+                ? Int((bytes[payloadStart] >> 1) & 0x3F)
+                : Int(bytes[payloadStart] & 0x1F)
+            let isSEI = isHEVC ? (nalType == 39 || nalType == 40) : nalType == 6
+            if isSEI, scan(bytes: bytes + payloadStart, count: nalLength) {
+                return true
+            }
+            cursor = payloadStart + nalLength
+        }
+        return false
+    }
+
+    /// Raw scan of one buffer. Returns true only for the FIRST buffer that
+    /// carries the header; every later call returns false.
     mutating func scan(bytes: UnsafePointer<UInt8>, count: Int) -> Bool {
         guard !detected, count >= Self.metadataHeader.count else { return false }
         for offset in 0...(count - Self.metadataHeader.count) {
@@ -198,8 +250,17 @@ final class LoopbackSegmentWriter {
     private static let traceTopLevelBoxes = false
     private static let verboseSegmentLogging =
         ProcessInfo.processInfo.environment["SILO_TRACE_DV_SEGMENTS"] == "1"
+    /// Producer-loop stage timing, logged once per second beside the source
+    /// rate (two clock reads per packet + per io flush while enabled).
+    /// Opt-in: this is an investigation probe, not shipping behavior — it
+    /// named the 2026-07-05 ingest ceiling (HDR10+ SEI whole-packet scan) by
+    /// showing every instrumented stage near zero while the thread burned a
+    /// core. Interpret: `read` includes waiting on the source; `io`
+    /// (box-sink ingest) is nested inside `mux` (av_interleaved_write_frame).
+    /// Enable: `defaults write <bundle> player.apple.loopback_trace_throughput -bool YES`
     private static let traceThroughput =
         ProcessInfo.processInfo.environment["SILO_TRACE_DV_THROUGHPUT"] == "1"
+            || UserDefaults.standard.bool(forKey: "player.apple.loopback_trace_throughput")
     private let avErrorAgain = -Int32(EAGAIN)
     private let avErrorInvalidData = Int32(-1094995529) // AVERROR_INVALIDDATA
 
@@ -311,11 +372,24 @@ final class LoopbackSegmentWriter {
     var onFinished: ((_ error: Error?) -> Void)?
 
     // MARK: - Internal state (muxQueue only)
-    /// `.utility`, deliberately: the producer runs 20-60 s ahead of the
-    /// playhead, so it never needs a performance core. At `.userInitiated`
-    /// its demux/remux bursts (100-160 Mbps during window fill) contend
-    /// with mediaserverd's 4K decode and the UI on A12-class Apple TVs.
-    private let muxQueue = DispatchQueue(label: "com.continuum.dv.mux", qos: .utility)
+    /// `.utility` kept the producer off performance cores because its
+    /// demux/remux bursts (100-160 Mbps during window fill) contend with
+    /// mediaserverd's 4K decode and the UI on A12-class Apple TVs. But a
+    /// 2026-07-05 device log showed the opposite failure on a 16 Mbps-average
+    /// HDR10 source: the mux thread pinned at ~90% of an efficiency core
+    /// while the producer ingested a flat 12-16 Mbps — below the source's
+    /// 20 Mbps peaks — even through locally cached byte ranges, stalling
+    /// playback every segment. Default is now `.userInitiated`; the kill
+    /// switch restores the efficiency-core behavior:
+    /// `defaults write <bundle> player.apple.loopback_mux_qos_boost -bool NO`
+    private static let muxQoSBoostEnabled =
+        UserDefaults.standard.object(
+            forKey: "player.apple.loopback_mux_qos_boost"
+        ) as? Bool ?? true
+    private let muxQueue = DispatchQueue(
+        label: "com.continuum.dv.mux",
+        qos: LoopbackSegmentWriter.muxQoSBoostEnabled ? .userInitiated : .utility
+    )
     /// Cancellation flag. Guarded by `cancelLock` so `stop()` can flip it
     /// from any thread — including while the mux loop is blocked inside
     /// `av_read_frame` waiting on a network read. FFmpeg's
@@ -4238,12 +4312,20 @@ final class LoopbackSegmentWriter {
         // HDR10+ badge scan. This is the single choke point every written
         // packet passes through — including bootstrap-stashed video packets
         // replayed outside the main mux-loop video branch — so the SEI on
-        // the very first keyframe is never missed. The nil-callback check
-        // keeps the scan zero-cost for sessions that can never flip.
+        // the very first keyframe is never missed. Gated on isActive (hit or
+        // budget exhausted disarms it) and NAL-walked to touch only SEI
+        // payloads: the original whole-packet sweep on every video packet of
+        // a plain-HDR10 film was the ~12 Mbps producer ceiling.
         if inputStreamIndex == videoInputStreamIndex,
            onHDR10PlusMetadataDetected != nil,
+           hdr10PlusSEIDetector.isActive,
            let packetData = pkt.pointee.data,
-           hdr10PlusSEIDetector.scan(bytes: packetData, count: Int(pkt.pointee.size)) {
+           hdr10PlusSEIDetector.scanVideoPacket(
+               bytes: packetData,
+               count: Int(pkt.pointee.size),
+               nalLengthSize: nalLengthSize,
+               isHEVC: videoMode != .passthroughH264
+           ) {
             onHDR10PlusMetadataDetected?()
         }
 

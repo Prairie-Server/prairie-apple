@@ -2,145 +2,115 @@ import XCTest
 
 @testable import Silo
 
-final class PlaybackOriginStreamPolicyTests: XCTestCase {
-    private func snapshot(
-        id: UUID = UUID(),
-        start: Int64 = 0,
-        cursor: Int64,
-        order: UInt64,
-        age: TimeInterval = .infinity
-    ) -> PlaybackOriginStreamPolicy.StreamSnapshot {
-        PlaybackOriginStreamPolicy.StreamSnapshot(
-            id: id,
-            startOffset: start,
-            writeCursor: cursor,
-            lastDemandOrder: order,
-            secondsSinceTargeted: age
-        )
-    }
+final class PlaybackOriginRoutingPolicyTests: XCTestCase {
+    private let claim = PlaybackOriginRoutingPolicy.windowClaimBytes
+    private let ride = PlaybackOriginRoutingPolicy.rideThroughBytes
 
-    func testDemandJustAheadOfCursorRidesThrough() {
-        let id = UUID()
-        let streams = [snapshot(id: id, cursor: 10_000_000, order: 1)]
-
+    func testMissJustAheadOfWindowCursorRides() {
         XCTAssertEqual(
-            PlaybackOriginStreamPolicy.action(demandOffset: 10_000_000, streams: streams),
-            .rideThrough(id)
-        )
-        XCTAssertEqual(
-            PlaybackOriginStreamPolicy.action(
-                demandOffset: 10_000_000 + PlaybackOriginStreamPolicy.rideThroughBytes,
-                streams: streams
+            PlaybackOriginRoutingPolicy.route(
+                demandOffset: 10_000_000,
+                windowCursor: 10_000_000,
+                servedSequentialBytes: 0
             ),
-            .rideThrough(id)
+            .rideWindow
+        )
+        XCTAssertEqual(
+            PlaybackOriginRoutingPolicy.route(
+                demandOffset: 10_000_000 + ride,
+                windowCursor: 10_000_000,
+                servedSequentialBytes: 0
+            ),
+            .rideWindow
         )
     }
 
-    func testDemandBehindCursorNeverRidesThrough() {
-        // Bytes behind a cursor will never arrive on that stream; a miss
-        // there means the cache evicted them and a connection must move.
-        let streams = [snapshot(cursor: 50_000_000, order: 1)]
+    func testProbeMissesFetchChunksAndNeverMoveTheWindow() {
+        // Head, tail-cues, and mid-file probe reads consume almost nothing
+        // before missing; regardless of where they land relative to the
+        // window they must go to the chunk path.
+        for offset: Int64 in [0, 5_976, 3_126_797_895, 6_177_217_657] {
+            XCTAssertEqual(
+                PlaybackOriginRoutingPolicy.route(
+                    demandOffset: offset,
+                    windowCursor: 30_000_000,
+                    servedSequentialBytes: 100_000
+                ),
+                .chunk,
+                "offset=\(offset)"
+            )
+        }
+    }
 
+    func testMissBehindWindowCursorIsAChunkNotARetarget() {
+        // Bytes behind the cursor will never arrive on the window; the
+        // cache evicted them. Refetch discretely — moving the window
+        // backward would abandon its forward runway.
         XCTAssertEqual(
-            PlaybackOriginStreamPolicy.action(demandOffset: 10_000_000, streams: streams),
-            .spawn
+            PlaybackOriginRoutingPolicy.route(
+                demandOffset: 10_000_000,
+                windowCursor: 50_000_000,
+                servedSequentialBytes: 0
+            ),
+            .chunk
         )
     }
 
-    func testFarDemandSpawnsSecondStreamThenRetargetsLeastRecent() {
-        let a = UUID()
-        let b = UUID()
-        let one = [snapshot(id: a, cursor: 1_000_000, order: 1)]
+    func testSequentialConsumerClaimsTheWindowOnASeek() {
+        // A connection that has already streamed windowClaimBytes is the
+        // playback reader; its far miss is a seek and re-anchors the window.
         XCTAssertEqual(
-            PlaybackOriginStreamPolicy.action(demandOffset: 900_000_000, streams: one),
-            .spawn
+            PlaybackOriginRoutingPolicy.route(
+                demandOffset: 900_000_000,
+                windowCursor: 30_000_000,
+                servedSequentialBytes: claim
+            ),
+            .claimWindow
         )
-
-        let two = [
-            snapshot(id: a, cursor: 1_000_000, order: 1),
-            snapshot(id: b, start: 900_000_000, cursor: 901_000_000, order: 2),
-        ]
+        // Just below the claim threshold it is still treated as a probe.
         XCTAssertEqual(
-            PlaybackOriginStreamPolicy.action(demandOffset: 500_000_000, streams: two),
-            .retarget(a)
+            PlaybackOriginRoutingPolicy.route(
+                demandOffset: 900_000_000,
+                windowCursor: 30_000_000,
+                servedSequentialBytes: claim - 1
+            ),
+            .chunk
         )
     }
 
-    func testNoStreamsSpawns() {
-        XCTAssertEqual(PlaybackOriginStreamPolicy.action(demandOffset: 0, streams: []), .spawn)
-    }
-
-    func testDemandWaitsWhenEveryStreamIsStillConnecting() {
-        // Neither stream has delivered since its last (re)target and neither
-        // has aged out: retargeting one would kill a connection before its
-        // first byte — with three demand regions and two slots that cycle
-        // livelocks. The demand must wait instead.
-        let fresh = [
-            snapshot(start: 0, cursor: 0, order: 1, age: 0),
-            snapshot(start: 900_000_000, cursor: 900_000_000, order: 2, age: 0),
-        ]
+    func testNoWindowRoutesByClaimThreshold() {
         XCTAssertEqual(
-            PlaybackOriginStreamPolicy.action(demandOffset: 500_000_000, streams: fresh),
-            .wait
+            PlaybackOriginRoutingPolicy.route(
+                demandOffset: 500_000_000,
+                windowCursor: nil,
+                servedSequentialBytes: claim
+            ),
+            .claimWindow
         )
-    }
-
-    func testDeliveredStreamIsTheRetargetVictimOverAFresherOne() {
-        // Only the stream that has delivered since its target is eligible,
-        // even though the still-connecting one is less recently demanded.
-        let connecting = UUID()
-        let delivered = UUID()
-        let streams = [
-            snapshot(id: connecting, start: 0, cursor: 0, order: 1, age: 0),
-            snapshot(id: delivered, start: 900_000_000, cursor: 901_000_000, order: 2, age: 0),
-        ]
         XCTAssertEqual(
-            PlaybackOriginStreamPolicy.action(demandOffset: 500_000_000, streams: streams),
-            .retarget(delivered)
+            PlaybackOriginRoutingPolicy.route(
+                demandOffset: 500_000_000,
+                windowCursor: nil,
+                servedSequentialBytes: 0
+            ),
+            .chunk
         )
     }
 
-    func testGracePeriodMakesAWedgedStreamRetargetable() {
-        // A connection that opens but never produces must not block
-        // retargets forever; after the grace period it becomes a victim.
-        let wedged = UUID()
-        let streams = [
-            snapshot(id: wedged, start: 0, cursor: 0, order: 1, age: PlaybackOriginStreamPolicy.retargetGraceSeconds),
-            snapshot(start: 900_000_000, cursor: 900_000_000, order: 2, age: 0),
-        ]
-        XCTAssertEqual(
-            PlaybackOriginStreamPolicy.action(demandOffset: 500_000_000, streams: streams),
-            .retarget(wedged)
-        )
+    func testRoutingConstantsArePinned() {
+        XCTAssertEqual(PlaybackOriginRoutingPolicy.chunkBytes, 4 * 1024 * 1024)
+        XCTAssertEqual(PlaybackOriginRoutingPolicy.windowClaimBytes, 8 * 1024 * 1024)
+        XCTAssertEqual(PlaybackOriginRoutingPolicy.rideThroughBytes, 8 * 1024 * 1024)
     }
+}
 
-    func testCoveringStreamPrefersNearestRegionStart() {
-        let head = UUID()
-        let tail = UUID()
-        let streams = [
-            snapshot(id: head, start: 0, cursor: 30_000_000, order: 1),
-            snapshot(id: tail, start: 900_000_000, cursor: 910_000_000, order: 2),
-        ]
+final class PlaybackOriginStreamPolicyTests: XCTestCase {
 
-        XCTAssertEqual(
-            PlaybackOriginStreamPolicy.coveringStream(offset: 10_000_000, streams: streams),
-            head
-        )
-        XCTAssertEqual(
-            PlaybackOriginStreamPolicy.coveringStream(offset: 905_000_000, streams: streams),
-            tail
-        )
-        XCTAssertNil(
-            PlaybackOriginStreamPolicy.coveringStream(offset: 500_000_000, streams: streams)
-        )
-    }
-
-    func testPrimaryStreamPausesOnlyOnGlobalBudget() {
+    func testWindowPausesOnlyOnGlobalBudget() {
         XCTAssertFalse(
             PlaybackOriginStreamPolicy.shouldPause(
                 writeCursor: 500_000_000,
                 demandMark: 0,
-                isMostRecentlyDemanded: true,
                 globalBudgetAvailable: true
             )
         )
@@ -148,7 +118,6 @@ final class PlaybackOriginStreamPolicyTests: XCTestCase {
             PlaybackOriginStreamPolicy.shouldPause(
                 writeCursor: 500_000_000,
                 demandMark: 499_000_000,
-                isMostRecentlyDemanded: true,
                 globalBudgetAvailable: false
             )
         )
@@ -162,7 +131,6 @@ final class PlaybackOriginStreamPolicyTests: XCTestCase {
             PlaybackOriginStreamPolicy.shouldPause(
                 writeCursor: 500_000_000,
                 demandMark: 500_000_000,
-                isMostRecentlyDemanded: true,
                 globalBudgetAvailable: false
             )
         )
@@ -170,27 +138,7 @@ final class PlaybackOriginStreamPolicyTests: XCTestCase {
             PlaybackOriginStreamPolicy.shouldPause(
                 writeCursor: 500_000_000,
                 demandMark: 502_000_000,
-                isMostRecentlyDemanded: false,
                 globalBudgetAvailable: false
-            )
-        )
-    }
-
-    func testSecondaryStreamPausesAtForwardCap() {
-        XCTAssertFalse(
-            PlaybackOriginStreamPolicy.shouldPause(
-                writeCursor: 10_000_000,
-                demandMark: 0,
-                isMostRecentlyDemanded: false,
-                globalBudgetAvailable: true
-            )
-        )
-        XCTAssertTrue(
-            PlaybackOriginStreamPolicy.shouldPause(
-                writeCursor: PlaybackOriginStreamPolicy.secondaryForwardCapBytes,
-                demandMark: 0,
-                isMostRecentlyDemanded: false,
-                globalBudgetAvailable: true
             )
         )
     }

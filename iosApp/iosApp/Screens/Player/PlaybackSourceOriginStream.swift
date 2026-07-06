@@ -1,125 +1,83 @@
 import Foundation
 import OSLog
 
-/// Routing decisions for byte demands across the (at most two) live origin
-/// streams. Pure so ride-through/spawn/retarget behavior is testable.
-///
-/// Why streams instead of ranged chunks: a strictly sequential range-chunk
-/// fetcher pays one RTT of dead air plus a fresh TCP slow-start per chunk, so
-/// effective throughput collapses on high-latency links even when raw
-/// bandwidth is plentiful (gigabit fiber at 150 ms RTT delivered ~14 Mbps).
-/// A long-lived open-ended range GET pays slow-start once and then rides the
-/// congestion window at line rate, which is what ordinary direct-play clients
-/// do. Two stream slots exist so the matroska open pattern (head probe ↔ cues
-/// at tail) and demuxer recycling never churn the warm playback connection.
+/// Routing for byte demands, borrowed from AetherEngine's AVIOReader split:
+/// ONE long-lived streaming window connection serves the sequential playback
+/// read (pays TCP slow-start once, then rides the congestion window at line
+/// rate), and every random-access miss — matroska head/tail probes, subtitle
+/// extractor reads, attachment seeks — is served by discrete keep-alive
+/// range chunks that never touch the window. The window moves only when the
+/// consumer itself moves: a serve connection that has already streamed
+/// `windowClaimBytes` sequentially is the playback reader, and its miss
+/// re-anchors the window (a seek); probe connections read far less before
+/// closing and can never steal it. The previous N-slot pool retargeted the
+/// warm playback connection on every probe (2026-07-05 device log: retarget
+/// storm, gen 1→79 in two minutes, ingest pinned ~12 Mbps under a
+/// 20 Mbps-peak source while the same file played fine in AetherEngine).
+enum PlaybackOriginRoutingPolicy {
+    /// A miss this close ahead of the window's cursor waits for the window
+    /// instead of fetching a chunk.
+    static let rideThroughBytes: Int64 = 8 * 1024 * 1024
+    /// Discrete range-fetch size for random-access misses. AetherEngine
+    /// ships 4 MB (8 MB chunks with per-request sessions bled throughput).
+    static let chunkBytes: Int64 = 4 * 1024 * 1024
+    /// Sequential bytes a single serve connection must have consumed before
+    /// its miss may re-anchor the window. Probe reads (mkv head, cues at
+    /// tail, subtitle extractor) stay well below this; the producer's
+    /// open-ended read passes it within seconds.
+    static let windowClaimBytes: Int64 = 8 * 1024 * 1024
+
+    enum Route: Equatable {
+        /// Wait for the window connection to deliver the byte.
+        case rideWindow
+        /// Fetch a discrete chunk; the window is not disturbed.
+        case chunk
+        /// The sequential consumer moved: re-anchor (or spawn) the window at
+        /// the demand offset.
+        case claimWindow
+    }
+
+    static func route(
+        demandOffset: Int64,
+        windowCursor: Int64?,
+        servedSequentialBytes: Int64
+    ) -> Route {
+        if let cursor = windowCursor,
+           demandOffset >= cursor,
+           demandOffset - cursor <= rideThroughBytes {
+            return .rideWindow
+        }
+        if servedSequentialBytes >= windowClaimBytes {
+            return .claimWindow
+        }
+        return .chunk
+    }
+}
+
+/// Pause/backpressure decisions for the window stream plus its snapshot
+/// type. (Routing across multiple streams lived here before the
+/// window+chunk split — see `PlaybackOriginRoutingPolicy`.)
 enum PlaybackOriginStreamPolicy {
+    /// The window's fetch region: where it started and how far it has
+    /// filled. All the state the routing and hint paths need.
     struct StreamSnapshot: Equatable {
-        let id: UUID
         let startOffset: Int64
         let writeCursor: Int64
-        let lastDemandOrder: UInt64
-        /// Seconds since the stream was last pointed at its current region.
-        /// Together with `writeCursor > startOffset` this decides whether the
-        /// stream may be torn down for a new region.
-        let secondsSinceTargeted: TimeInterval
-
-        init(
-            id: UUID,
-            startOffset: Int64,
-            writeCursor: Int64,
-            lastDemandOrder: UInt64,
-            secondsSinceTargeted: TimeInterval = .infinity
-        ) {
-            self.id = id
-            self.startOffset = startOffset
-            self.writeCursor = writeCursor
-            self.lastDemandOrder = lastDemandOrder
-            self.secondsSinceTargeted = secondsSinceTargeted
-        }
     }
 
-    enum Action: Equatable {
-        /// Demand is at or just ahead of this stream's cursor; wait for it.
-        case rideThrough(UUID)
-        case spawn
-        case retarget(UUID)
-        /// Every slot is still connecting (nothing delivered since its last
-        /// (re)target and the grace period has not elapsed). The demand's
-        /// waiter stays registered; it is re-driven when a stream delivers
-        /// its first bytes or leaves the pool.
-        case wait
-    }
-
-    /// A miss this close ahead of a live cursor waits for the stream instead
-    /// of opening a new connection.
-    static let rideThroughBytes: Int64 = 8 * 1024 * 1024
-    static let maxStreams = 2
-    /// A stream that is not the most recently demanded stops filling once it
-    /// is this far past the last offset anything asked it for.
-    static let secondaryForwardCapBytes: Int64 = 16 * 1024 * 1024
-    /// A stream that has not delivered since its last (re)target may still be
-    /// torn down for a new region after this long — the escape hatch for a
-    /// connection that opens but never produces (the stall watchdog and
-    /// reconnect ladder are slower).
-    static let retargetGraceSeconds: TimeInterval = 10
-
-    /// The stream a demand at `offset` can wait on (at or just ahead of a
-    /// live cursor), if any.
-    static func rideThroughTarget(offset: Int64, streams: [StreamSnapshot]) -> UUID? {
-        streams.first(where: {
-            offset >= $0.writeCursor && offset - $0.writeCursor <= rideThroughBytes
-        })?.id
-    }
-
-    /// Whether a stream may be torn down and pointed at a new region: it has
-    /// delivered bytes since its last (re)target, or it has had a full grace
-    /// period to try. Retargeting a still-connecting stream is what livelocks
-    /// with more demand regions than slots — each re-driven waiter kills the
-    /// connection the previous one just opened before its first byte lands.
-    static func isRetargetable(_ stream: StreamSnapshot) -> Bool {
-        stream.writeCursor > stream.startOffset
-            || stream.secondsSinceTargeted >= retargetGraceSeconds
-    }
-
-    static func action(demandOffset: Int64, streams: [StreamSnapshot]) -> Action {
-        if let covered = rideThroughTarget(offset: demandOffset, streams: streams) {
-            return .rideThrough(covered)
-        }
-        if streams.count < maxStreams {
-            return .spawn
-        }
-        guard let victim = streams
-            .filter(isRetargetable)
-            .min(by: { $0.lastDemandOrder < $1.lastDemandOrder }) else {
-            return .wait
-        }
-        return .retarget(victim.id)
-    }
-
-    /// The stream whose fetch region contains `offset`, for demand hints
-    /// from cached reads. Prefers the nearest region start so a tail stream
-    /// never absorbs demand that belongs to the playback stream.
-    static func coveringStream(offset: Int64, streams: [StreamSnapshot]) -> UUID? {
-        streams
-            .filter { offset >= $0.startOffset && offset <= $0.writeCursor + rideThroughBytes }
-            .max(by: { $0.startOffset < $1.startOffset })?
-            .id
-    }
-
+    /// Whether the window should stop filling forward: only when the global
+    /// readahead budget is exhausted AND no demand is blocked at or ahead of
+    /// the cursor. A demand at/ahead of the cursor is blocked on bytes only
+    /// this connection will deliver, and budget pressure must never park it:
+    /// the budget frees through reads, and the read is exactly what is
+    /// blocked — parking here wedges playback permanently.
     static func shouldPause(
         writeCursor: Int64,
         demandMark: Int64,
-        isMostRecentlyDemanded: Bool,
         globalBudgetAvailable: Bool
     ) -> Bool {
-        // A demand at or ahead of the cursor is blocked on bytes only this
-        // connection will deliver. Budget pressure must never park it: the
-        // budget frees through reads, and the read is exactly what is
-        // blocked — parking here wedges playback permanently.
         if demandMark >= writeCursor { return false }
-        if !globalBudgetAvailable { return true }
-        if isMostRecentlyDemanded { return false }
-        return writeCursor - demandMark >= secondaryForwardCapBytes
+        return !globalBudgetAvailable
     }
 }
 
@@ -202,7 +160,12 @@ final class PlaybackOriginStream {
     /// A cached run at least this long is worth a reconnect to jump over
     /// instead of re-downloading through it (a back-scrubbed forward cache
     /// can hold hundreds of megabytes the stream would otherwise re-pull).
-    static let cachedRunSkipBytes: Int64 = 8 * 1024 * 1024
+    /// High deliberately: partial-coverage swiss cheese from earlier
+    /// sessions produced a reconnect every few MB at the old 8 MB
+    /// threshold, and each reconnect restarts TCP slow-start — reading
+    /// through a modest cached run on the warm connection is cheaper
+    /// (AetherEngine's window never skips at all).
+    static let cachedRunSkipBytes: Int64 = 64 * 1024 * 1024
 
     private static let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "com.continuum.app",
@@ -220,7 +183,6 @@ final class PlaybackOriginStream {
     private var writeCursor: Int64
     private var demandMark: Int64
     private var demandOrder: UInt64
-    private var targetedAt = Date()
     private var skipCheckCursor: Int64
     private var parked = false
     private var cancelled = false
@@ -267,11 +229,8 @@ final class PlaybackOriginStream {
         lock.lock()
         defer { lock.unlock() }
         return PlaybackOriginStreamPolicy.StreamSnapshot(
-            id: id,
             startOffset: startOffset,
-            writeCursor: writeCursor,
-            lastDemandOrder: demandOrder,
-            secondsSinceTargeted: Date().timeIntervalSince(targetedAt)
+            writeCursor: writeCursor
         )
     }
 
@@ -333,7 +292,6 @@ final class PlaybackOriginStream {
         writeCursor = offset
         demandMark = offset
         demandOrder = order
-        targetedAt = Date()
         skipCheckCursor = offset + Self.cachedRunCheckStrideBytes
         parked = false
         bytesSinceConnect = 0

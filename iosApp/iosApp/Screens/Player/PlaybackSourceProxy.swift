@@ -628,7 +628,11 @@ private final class PlaybackSourceResource {
     /// A successful origin response has been seen (even if it carried no
     /// total), so total-length waiters need not block on the next one.
     private var sawOriginResponse = false
-    private var streams: [PlaybackOriginStream] = []
+    /// The single streaming window connection (AetherEngine model): serves
+    /// the sequential playback read, re-anchored only when the consumer
+    /// itself moves. Random-access misses go to `chunkFetcher` instead.
+    private var windowStream: PlaybackOriginStream?
+    private var chunkFetcher: PlaybackOriginChunkFetcher?
     private var demandCounter: UInt64 = 0
     private var dataWaiters: [UUID: (offset: Int64, continuation: CheckedContinuation<WaitOutcome, Never>)] = [:]
     private var totalWaiters: [UUID: CheckedContinuation<Int64?, Never>] = [:]
@@ -664,8 +668,10 @@ private final class PlaybackSourceResource {
     func stop() {
         stateLock.lock()
         cancelled = true
-        let streamsToCancel = streams
-        streams.removeAll()
+        let windowToCancel = windowStream
+        windowStream = nil
+        let fetcherToCancel = chunkFetcher
+        chunkFetcher = nil
         let dataResume = dataWaiters.values.map(\.continuation)
         dataWaiters.removeAll()
         let totalResume = Array(totalWaiters.values)
@@ -674,10 +680,11 @@ private final class PlaybackSourceResource {
         serveTasks.removeAll()
         completedServeTaskIDs.removeAll()
         stateLock.unlock()
-        for stream in streamsToCancel {
-            stream.cancel()
+        if let windowToCancel {
+            windowToCancel.cancel()
             cache.endOriginRequest()
         }
+        fetcherToCancel?.cancel()
         for continuation in totalResume {
             continuation.resume(returning: nil)
         }
@@ -709,8 +716,21 @@ private final class PlaybackSourceResource {
         )
     }
 
+    /// Births the streaming window at the initial playback offset. The
+    /// window then belongs to the sequential consumer; probe misses never
+    /// move it (they go to the chunk fetcher).
     func startPrefetch(at offset: Int64 = 0) {
-        ensureStream(for: max(0, offset))
+        var toStart: PlaybackOriginStream?
+        stateLock.lock()
+        if !cancelled, windowStream == nil {
+            demandCounter += 1
+            let stream = makeStream(startOffset: max(0, offset), order: demandCounter)
+            windowStream = stream
+            cache.beginOriginRequest()
+            toStart = stream
+        }
+        stateLock.unlock()
+        toStart?.start()
     }
 
     func setSourceBitrate(_ bps: Double?) {
@@ -842,7 +862,7 @@ private final class PlaybackSourceResource {
                 continue
             }
             cache.recordCacheMiss(byteCount: Int64(max(1, sendLength)))
-            switch await awaitData(at: cursor) {
+            switch await awaitData(at: cursor, servedSequentialBytes: cursor - resolved.start) {
             case .available:
                 continue
             case .eof:
@@ -905,60 +925,123 @@ private final class PlaybackSourceResource {
         return (cancelled, discoveredTotalLength, sawOriginResponse)
     }
 
-    /// Route a byte demand that MISSED the cache onto a stream: ride an
-    /// existing one, spawn a second, or retarget the least-recently-demanded.
-    private func ensureStream(for offset: Int64) {
+    /// Route a byte demand that MISSED the cache: ride the streaming window
+    /// when the miss is just ahead of its cursor, re-anchor the window when
+    /// the sequential consumer itself moved (a seek — the serving connection
+    /// has already streamed enough to prove it is the playback reader), or
+    /// fetch a discrete chunk for everything else so probes never disturb
+    /// the warm window connection.
+    private func routeMiss(for offset: Int64, servedSequentialBytes: Int64) {
         var toStart: PlaybackOriginStream?
         var toNote: PlaybackOriginStream?
         var toRetarget: PlaybackOriginStream?
+        var chunk = false
         var order: UInt64 = 0
+        var total: Int64?
         stateLock.lock()
         guard !cancelled else {
             stateLock.unlock()
             return
         }
-        if let total = discoveredTotalLength, offset >= total {
+        total = discoveredTotalLength
+        if let total, offset >= total {
             stateLock.unlock()
             return
         }
         demandCounter += 1
         order = demandCounter
-        let live = streams
-        let snapshots = live.map { $0.snapshot() }
-        switch PlaybackOriginStreamPolicy.action(demandOffset: offset, streams: snapshots) {
-        case .rideThrough(let id):
-            toNote = live.first(where: { $0.id == id })
-        case .spawn:
-            let stream = makeStream(startOffset: offset, order: order)
-            streams.append(stream)
-            // Pair the gauge while still holding the lock: stop() snapshots
-            // `streams` and ends one request per member, so begin must not
-            // trail publication or a racing stop leaves the count stranded.
-            cache.beginOriginRequest()
-            toStart = stream
-        case .retarget(let id):
-            toRetarget = live.first(where: { $0.id == id })
-        case .wait:
-            // Every slot is still connecting; the caller's waiter stays
-            // registered and is re-driven when a stream delivers its first
-            // bytes (streamDidStore) or leaves the pool (streamEnded).
-            break
+        let cursor = windowStream?.snapshot().writeCursor
+        switch PlaybackOriginRoutingPolicy.route(
+            demandOffset: offset,
+            windowCursor: cursor,
+            servedSequentialBytes: servedSequentialBytes
+        ) {
+        case .rideWindow:
+            toNote = windowStream
+        case .claimWindow:
+            if let window = windowStream {
+                toRetarget = window
+            } else {
+                let stream = makeStream(startOffset: offset, order: order)
+                windowStream = stream
+                // Pair the gauge while still holding the lock: stop()
+                // snapshots the window and ends its request, so begin must
+                // not trail publication or a racing stop leaves the count
+                // stranded.
+                cache.beginOriginRequest()
+                toStart = stream
+            }
+        case .chunk:
+            chunk = true
         }
         stateLock.unlock()
         toNote?.noteDemand(offset: offset, order: order)
         toStart?.start()
+        if chunk {
+            ensureChunkFetcher().ensureFetch(covering: offset, totalLength: total)
+        }
         if let toRetarget {
             if toRetarget.retarget(to: offset, order: order) {
-                // The victim may have carried waiters for its old region;
+                // The window may have carried waiters for its old region;
                 // nothing fills toward them anymore. Re-drive every waiter
-                // so each re-misses and re-routes against the new layout.
+                // so each re-misses and re-routes (to chunks) against the
+                // new layout.
                 redriveAllDataWaiters()
             } else {
-                // The victim finished or gave up between the snapshot and
-                // the retarget; replace it with a fresh stream.
-                replaceDeadStream(toRetarget, spawningAt: offset, order: order)
+                // The window finished or gave up between the snapshot and
+                // the retarget; replace it with a fresh one.
+                replaceDeadWindow(toRetarget, spawningAt: offset, order: order)
             }
         }
+    }
+
+    private func ensureChunkFetcher() -> PlaybackOriginChunkFetcher {
+        stateLock.lock()
+        if let chunkFetcher {
+            stateLock.unlock()
+            return chunkFetcher
+        }
+        let alreadyCancelled = cancelled
+        let fetcher = PlaybackOriginChunkFetcher(
+            originURL: originURL,
+            originHeaders: originHeaders,
+            callbacks: PlaybackOriginChunkFetcher.Callbacks(
+                store: { [weak self] start, data, total in
+                    guard let self else { return }
+                    self.cache.recordOriginTransfer(byteCount: data.count)
+                    self.cache.store(start: start, data: data, totalLength: total)
+                },
+                didStore: { [weak self] range in
+                    self?.streamDidStore(range)
+                },
+                didReceiveResponse: { [weak self] total in
+                    self?.streamReceivedResponse(total: total)
+                },
+                didDetectSessionMissing: { [weak self] in
+                    self?.onPlaybackSessionMissing?()
+                },
+                didFail: { [weak self] range, cause, statusCode in
+                    self?.chunkFailed(range: range, cause: cause, statusCode: statusCode)
+                },
+                beginRequest: { [weak self] in
+                    self?.cache.beginOriginRequest()
+                },
+                endRequest: { [weak self] in
+                    self?.cache.endOriginRequest()
+                }
+            )
+        )
+        if alreadyCancelled {
+            // A stop raced this creation; hand back a pre-cancelled fetcher
+            // whose ensureFetch is a no-op instead of a zombie that stop()
+            // can no longer reach.
+            stateLock.unlock()
+            fetcher.cancel()
+            return fetcher
+        }
+        chunkFetcher = fetcher
+        stateLock.unlock()
+        return fetcher
     }
 
     private func redriveAllDataWaiters() {
@@ -971,7 +1054,7 @@ private final class PlaybackSourceResource {
         }
     }
 
-    private func replaceDeadStream(
+    private func replaceDeadWindow(
         _ dead: PlaybackOriginStream,
         spawningAt offset: Int64,
         order: UInt64
@@ -982,28 +1065,24 @@ private final class PlaybackSourceResource {
             stateLock.unlock()
             return
         }
-        if streams.contains(where: { $0 === dead }) {
-            streams.removeAll { $0 === dead }
+        if windowStream === dead {
+            windowStream = nil
             cache.endOriginRequest()
         }
-        if streams.count < PlaybackOriginStreamPolicy.maxStreams {
+        if windowStream == nil {
             let stream = makeStream(startOffset: offset, order: order)
-            streams.append(stream)
+            windowStream = stream
             cache.beginOriginRequest()
             toStart = stream
         }
         stateLock.unlock()
-        if let toStart {
-            toStart.start()
-        } else {
-            ensureStream(for: offset)
-        }
+        toStart?.start()
     }
 
-    /// Record demand served from cache: refreshes the covering stream's
-    /// demand mark (which keeps it "primary" and unparks it when the budget
-    /// frees) but never spawns or retargets — cached reads must not steer
-    /// connections toward data we already have.
+    /// Record demand served from cache: refreshes the window's demand mark
+    /// (which keeps it filling and unparks it when the budget frees) but
+    /// never spawns or retargets — cached reads must not steer connections
+    /// toward data we already have.
     private func noteDemandHint(at offset: Int64) {
         var toNote: PlaybackOriginStream?
         var order: UInt64 = 0
@@ -1014,17 +1093,23 @@ private final class PlaybackSourceResource {
         }
         demandCounter += 1
         order = demandCounter
-        let snapshots = streams.map { $0.snapshot() }
-        if let covering = PlaybackOriginStreamPolicy.coveringStream(offset: offset, streams: snapshots) {
-            toNote = streams.first(where: { $0.id == covering })
+        if let window = windowStream {
+            let snapshot = window.snapshot()
+            if offset >= snapshot.startOffset,
+               offset <= snapshot.writeCursor + PlaybackOriginRoutingPolicy.rideThroughBytes {
+                toNote = window
+            }
         }
         stateLock.unlock()
         toNote?.noteDemand(offset: offset, order: order)
     }
 
     /// Suspend the serve loop until the byte at `offset` is cached, the file
-    /// ends before it, or the responsible stream gives up.
-    private func awaitData(at offset: Int64) async -> WaitOutcome {
+    /// ends before it, or the responsible fetch gives up.
+    /// `servedSequentialBytes` is how much this serve connection has already
+    /// delivered sequentially — the signal that separates the playback
+    /// reader (which may re-anchor the window) from short-lived probes.
+    private func awaitData(at offset: Int64, servedSequentialBytes: Int64) async -> WaitOutcome {
         let state = currentState()
         if state.cancelled { return .failed }
         if let total = state.total, offset >= total { return .eof }
@@ -1040,9 +1125,9 @@ private final class PlaybackSourceResource {
                 dataWaiters[id] = (offset, continuation)
                 stateLock.unlock()
                 // Route the demand only after the waiter is registered, so a
-                // stream give-up can never drain the pool between routing
-                // and registration and leave this waiter stranded.
-                ensureStream(for: offset)
+                // fetch give-up can never fire between routing and
+                // registration and leave this waiter stranded.
+                routeMiss(for: offset, servedSequentialBytes: servedSequentialBytes)
                 // The bytes may also have landed between the cache miss and
                 // the registration above; re-check so the waiter can't sleep
                 // through its own wake-up.
@@ -1082,10 +1167,10 @@ private final class PlaybackSourceResource {
                 }
                 totalWaiters[id] = continuation
                 stateLock.unlock()
-                // Register first, then route: if the routed stream gives up
+                // Register first, then route: if the routed fetch gives up
                 // instantly, its drain finds this waiter instead of missing
                 // it (the drain resolves total waiters on any give-up).
-                ensureStream(for: max(0, hint))
+                routeMiss(for: max(0, hint), servedSequentialBytes: 0)
             }
         } onCancel: {
             resumeTotalWaiter(id: id)
@@ -1152,27 +1237,6 @@ private final class PlaybackSourceResource {
                 resume.append(waiter.continuation)
             }
         }
-        // Waiters no stream can ride were parked by a `.wait` routing
-        // decision (every slot was still connecting). This delivery may have
-        // made its stream a valid retarget victim, so re-drive them to
-        // re-route; ensureStream retargets on the redriven miss, which makes
-        // the stream ineligible again — at most one re-route per delivery.
-        if !dataWaiters.isEmpty {
-            let snapshots = streams.map { $0.snapshot() }
-            if snapshots.contains(where: { PlaybackOriginStreamPolicy.isRetargetable($0) }) {
-                let stranded = dataWaiters.filter {
-                    PlaybackOriginStreamPolicy.rideThroughTarget(
-                        offset: $0.value.offset,
-                        streams: snapshots
-                    ) == nil
-                }.map(\.key)
-                for id in stranded {
-                    if let waiter = dataWaiters.removeValue(forKey: id) {
-                        resume.append(waiter.continuation)
-                    }
-                }
-            }
-        }
         stateLock.unlock()
         for continuation in resume {
             continuation.resume(returning: .available)
@@ -1196,9 +1260,11 @@ private final class PlaybackSourceResource {
         }
     }
 
-    /// A stream left the pool. Finished streams re-drive their waiters
-    /// (data may satisfy them or a new stream will be ensured); a give-up
-    /// fails them and surfaces the interruption exactly once.
+    /// The window stream ended. A clean finish (EOF, or everything to EOF
+    /// already cached) re-drives waiters — data may satisfy them or their
+    /// re-miss routes to a chunk. A give-up fails the waiters the window was
+    /// responsible for (those an in-flight chunk will not deliver) and
+    /// surfaces the interruption exactly once.
     private func streamEnded(
         _ stream: PlaybackOriginStream,
         gaveUpWith cause: PlaybackOriginReconnectPolicy.EndCause?,
@@ -1208,15 +1274,16 @@ private final class PlaybackSourceResource {
         var failed: [CheckedContinuation<WaitOutcome, Never>] = []
         var totalResume: [CheckedContinuation<Int64?, Never>] = []
         stateLock.lock()
-        let wasTracked = streams.contains(where: { $0 === stream })
-        streams.removeAll { $0 === stream }
-        let survivors = streams.map { $0.snapshot() }
+        let wasTracked = windowStream === stream
+        if wasTracked {
+            windowStream = nil
+        }
+        // Safe lock nesting: the fetcher never calls back into the resource
+        // while holding its own lock, so stateLock → fetcher.lock is the
+        // only order that ever occurs.
+        let fetcher = chunkFetcher
         for (id, waiter) in dataWaiters {
-            // Waiters a surviving stream still covers re-drive and re-ride
-            // it; only waiters this stream was responsible for fail. A
-            // clean finish re-drives everyone.
-            if cause == nil
-                || PlaybackOriginStreamPolicy.coveringStream(offset: waiter.offset, streams: survivors) != nil {
+            if cause == nil || fetcher?.coversInFlight(offset: waiter.offset) == true {
                 redrive.append(waiter.continuation)
             } else {
                 failed.append(waiter.continuation)
@@ -1243,16 +1310,59 @@ private final class PlaybackSourceResource {
         }
         guard let cause else { return }
         // Surface the interruption only when the give-up actually failed a
-        // foreground waiter. A background stream (readahead, tail cues)
-        // dying while playback rides the forward cache must stay silent —
-        // the next cache miss simply routes to a fresh stream, and if that
-        // one also gives up its waiter fails and escalates here.
+        // foreground waiter. The window dying while playback rides the
+        // forward cache must stay silent — the next cache miss routes to a
+        // chunk (or re-claims a fresh window), and if that also gives up its
+        // waiter fails and escalates.
         guard !failed.isEmpty else {
             Self.logger.warning(
-                "[CMP-SOURCE-CACHE] background origin stream gave up cause=\(String(describing: cause), privacy: .public) status=\(statusCode ?? 0, privacy: .public); no foreground waiter affected"
+                "[CMP-SOURCE-CACHE] window origin stream gave up cause=\(String(describing: cause), privacy: .public) status=\(statusCode ?? 0, privacy: .public); no foreground waiter affected"
             )
             return
         }
+        escalateInterruption(cause: cause, statusCode: statusCode, failureOffset: stream.snapshot().writeCursor)
+    }
+
+    /// A chunk fetch failed terminally: fail the waiters inside its range
+    /// (nothing else will deliver those bytes), resolve total waiters, and
+    /// surface the interruption when a foreground waiter was affected.
+    private func chunkFailed(
+        range: Range<Int64>,
+        cause: PlaybackOriginReconnectPolicy.EndCause,
+        statusCode: Int?
+    ) {
+        var failed: [CheckedContinuation<WaitOutcome, Never>] = []
+        var totalResume: [CheckedContinuation<Int64?, Never>] = []
+        stateLock.lock()
+        for (id, waiter) in dataWaiters where range.contains(waiter.offset) {
+            failed.append(waiter.continuation)
+            dataWaiters.removeValue(forKey: id)
+        }
+        totalResume = Array(totalWaiters.values)
+        totalWaiters.removeAll()
+        let total = discoveredTotalLength
+        stateLock.unlock()
+        for continuation in totalResume {
+            continuation.resume(returning: total)
+        }
+        for continuation in failed {
+            continuation.resume(returning: .failed)
+        }
+        guard !failed.isEmpty else {
+            Self.logger.warning(
+                "[CMP-SOURCE-CACHE] chunk gave up cause=\(String(describing: cause), privacy: .public) status=\(statusCode ?? 0, privacy: .public); no foreground waiter affected"
+            )
+            return
+        }
+        escalateInterruption(cause: cause, statusCode: statusCode, failureOffset: range.lowerBound)
+    }
+
+    private func escalateInterruption(
+        cause: PlaybackOriginReconnectPolicy.EndCause,
+        statusCode: Int?,
+        failureOffset: Int64
+    ) {
+        let total = currentTotalLength()
         let reason: PlaybackSourceInterruptionReason?
         switch cause {
         case .network, .stalled:
@@ -1261,7 +1371,7 @@ private final class PlaybackSourceResource {
             reason = .serverUnavailable(statusCode: code)
         case .prematureEOF:
             if let total {
-                reason = .prematureEOF(offset: stream.snapshot().writeCursor, expectedEnd: total - 1)
+                reason = .prematureEOF(offset: failureOffset, expectedEnd: total - 1)
             } else {
                 reason = nil
             }
@@ -1286,13 +1396,10 @@ private final class PlaybackSourceResource {
             stateLock.unlock()
             return false
         }
-        let maxOrder = streams.map { $0.currentDemandOrder }.max() ?? 0
-        let isMostRecent = stream.currentDemandOrder >= maxOrder
         stateLock.unlock()
         return !PlaybackOriginStreamPolicy.shouldPause(
             writeCursor: cursor,
             demandMark: demandMark,
-            isMostRecentlyDemanded: isMostRecent,
             globalBudgetAvailable: cache.shouldPrefetch
         )
     }
