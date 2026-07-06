@@ -106,6 +106,13 @@ struct DownloadOptionsSheet: View {
                 }
             }
             .onAppear(perform: clampQuality)
+            .task {
+                // Permissions and server-side download settings can change at
+                // any time; re-fetch so the quality list reflects them now
+                // rather than after the next app foreground.
+                await manager.refreshCapability()
+                clampQuality()
+            }
         }
         #if os(iOS)
         .presentationDetents([.medium, .large])

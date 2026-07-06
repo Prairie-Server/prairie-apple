@@ -76,6 +76,12 @@ struct DownloadsSettingsView: View {
             }
         }
         .navigationTitle("Downloads")
+        .task {
+            // The quality picker is hidden when the cached capability only
+            // offers one preset; re-fetch so permission changes show up here
+            // without waiting for the next app foreground.
+            await manager.refreshCapability()
+        }
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif

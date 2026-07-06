@@ -36,7 +36,6 @@ final class DownloadManager {
 
     private static let maxConcurrentTransfers = 3
     private static let maxRetries = 4
-    private static let capabilityTTL: TimeInterval = 86_400
 
     /// In-memory persisted blob. `private(set)` so the `@Observable` macro
     /// tracks reads of its derived accessors below.
@@ -388,7 +387,7 @@ final class DownloadManager {
     /// runs subscription + progress sync.
     func onAppActive() async {
         guard await activateScopeIfNeeded() else { return }
-        await refreshCapabilityIfStale()
+        await refreshCapability()
         guard downloadsEnabled else { return }
         await reconcileWithServer(triggerPipeline: true)
         await runMonitoringAndProgressSync()
@@ -449,16 +448,6 @@ final class DownloadManager {
             persist()
         } catch {
             Self.logger.debug("capability refresh failed: \(String(describing: error), privacy: .public)")
-        }
-    }
-
-    func refreshCapabilityIfStale() async {
-        let stale: Bool = {
-            guard let fetchedAt = file.capabilityFetchedAt else { return true }
-            return Date().timeIntervalSince(fetchedAt) > Self.capabilityTTL
-        }()
-        if file.capability == nil || stale {
-            await refreshCapability()
         }
     }
 
