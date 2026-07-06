@@ -266,6 +266,23 @@ enum SiloMediaType {
     static func isSupportedLibrary(_ type: String) -> Bool {
         isMovieLibrary(type) || isSeries(type) || isAudiobookLibrary(type)
     }
+
+    /// Section items are kept only when their type maps to a library type
+    /// the Apple clients support (see ``isSupportedLibrary``). The server
+    /// builds Home sections for every library type, so items from hidden
+    /// libraries (ebook, manga, comics, music, …) must be stripped
+    /// client-side or those libraries leak rows into Home.
+    static func isSupportedSectionItem(_ type: String) -> Bool {
+        if isMovieLibrary(type) || isSeries(type) || isAudiobook(type) {
+            return true
+        }
+        switch normalized(type) {
+        case "episode", "episodes":
+            return true
+        default:
+            return false
+        }
+    }
 }
 
 extension BrowseItem {
@@ -330,12 +347,39 @@ struct SectionsResponse: Codable {
     let sections: [ResolvedSection]
 
     init(sections: [ResolvedSection]) {
-        self.sections = sections
+        self.sections = Self.strippingUnsupportedItems(sections)
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        sections = try c.decodeIfPresent([ResolvedSection].self, forKey: .sections) ?? []
+        let decoded = try c.decodeIfPresent([ResolvedSection].self, forKey: .sections) ?? []
+        sections = Self.strippingUnsupportedItems(decoded)
+    }
+
+    /// Mirror of `LibrariesResponse` gating: unsupported library types are
+    /// hidden from the library list, so their items must not surface through
+    /// server-built sections either. Sections emptied by the strip are kept —
+    /// every consumer already drops empty sections before rendering.
+    private static func strippingUnsupportedItems(
+        _ sections: [ResolvedSection]
+    ) -> [ResolvedSection] {
+        sections.map { section in
+            let kept = section.items.filter {
+                SiloMediaType.isSupportedSectionItem($0.type)
+            }
+            guard kept.count != section.items.count else { return section }
+            return ResolvedSection(
+                id: section.id,
+                sectionType: section.sectionType,
+                title: section.title,
+                featured: section.featured,
+                itemLimit: section.itemLimit,
+                totalCount: section.totalCount,
+                isCustom: section.isCustom,
+                customized: section.customized,
+                items: kept
+            )
+        }
     }
 }
 
