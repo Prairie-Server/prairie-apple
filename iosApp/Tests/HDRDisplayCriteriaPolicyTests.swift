@@ -21,8 +21,8 @@ final class HDRDisplayCriteriaPolicyTests: XCTestCase {
 
     // MARK: - Gate
 
-    func testGateIsOffWhenKeyAbsent() {
-        XCTAssertFalse(HDRDisplayCriteriaPolicy.isEnabled(defaults: defaults))
+    func testGateIsOnWhenKeyAbsent() {
+        XCTAssertTrue(HDRDisplayCriteriaPolicy.isEnabled(defaults: defaults))
     }
 
     func testGateIsOffWhenExplicitlyFalse() {

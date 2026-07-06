@@ -5,18 +5,21 @@ import Foundation
 /// guards so the mode selection and rollout gate stay unit-testable from the
 /// iOS test target.
 ///
-/// Dolby Vision criteria are long-shipped and stay ungated. Extending the
-/// synchronous pre-item write to plain HDR10/HLG sources is new behavior
-/// whose motivating OS account (manifest validation rejecting un-hostable
-/// HDR variants) is unverified by us, so it rides behind a default-OFF
-/// UserDefaults gate until it passes an on-device validation pass.
+/// Dolby Vision criteria are long-shipped and stay ungated. The synchronous
+/// pre-item write for plain HDR10/HLG sources defaults ON: the motivating OS
+/// account (tvOS 26.5 validates the master variant's VIDEO-RANGE against the
+/// panel's current mode before fetching the init segment) was confirmed on
+/// hardware 2026-07-05 — an HDR10 MKV with the write skipped failed item
+/// creation with -11868/-17223 and dropped to the PlayerCore fallback.
 enum HDRDisplayCriteriaPolicy {
-    /// Rollout gate for the non-DV HDR criteria write. Absent = disabled;
-    /// DV behavior is unaffected by this key in either state.
+    /// Kill switch for the non-DV HDR criteria write. Absent = enabled;
+    /// explicit false disables. DV behavior is unaffected by this key in
+    /// either state.
+    /// `defaults write <bundle> player.apple.hdr_display_criteria_enabled -bool NO`
     static let gateKey = "player.apple.hdr_display_criteria_enabled"
 
     static func isEnabled(defaults: UserDefaults = .standard) -> Bool {
-        defaults.bool(forKey: gateKey)
+        defaults.object(forKey: gateKey) as? Bool ?? true
     }
 
     /// Which display criteria the loopback route should request before
