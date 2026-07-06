@@ -12,6 +12,8 @@ struct TVPlayerControls: View {
     let viewModel: PlayerViewModel
     let onDismiss: () -> Void
 
+    @Environment(\.scenePhase) private var scenePhase
+
     /// Remembered so reopening the HUD lands on the last-used tab rather
     /// than always snapping back to Info. Lives at this level because the
     /// HUD view is recreated each time HUD presentation toggles.
@@ -122,6 +124,34 @@ struct TVPlayerControls: View {
         }
         .onChange(of: focusedTransportButton) { _, target in
             if target != nil { rearmAutoHideOnFocusMove() }
+        }
+        // TV sleep discards the app's focus state, and the background-suspend
+        // path keeps `showControls` true — so on wake the idle overlay is
+        // already mounted, its `onAppear` seed never re-fires, and nothing is
+        // focused. With no focused descendant, Menu presses never reach the
+        // shell-level `onExitCommand` in PlayerView, stranding the user until
+        // they d-pad onto the transport row. Re-seed a deterministic focus
+        // target when the scene becomes active again.
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            // Defer one turn so the write lands after the focus engine has
+            // reattached to the foregrounded scene; a same-transaction claim
+            // can get dropped.
+            DispatchQueue.main.async {
+                reseedFocusAfterWake()
+            }
+        }
+    }
+
+    private func reseedFocusAfterWake() {
+        if isHUDPresented {
+            if focusedHUDTab == nil { focusedHUDTab = activeHUDTab }
+        } else if viewModel.showControls {
+            if viewModel.showIntroSkip && focusedIntroAction == nil {
+                focusedIntroAction = .skip
+            } else if focusedTransportButton == nil && !isScrubberFocused {
+                isScrubberFocused = true
+            }
         }
     }
 
