@@ -32,12 +32,7 @@ struct TVCatalogGrid: View {
     @FocusState private var focusedItemId: String?
     @State private var lastAppliedFocusRequest = 0
 
-    private var columns: [GridItem] {
-        Array(
-            repeating: GridItem(.flexible(), spacing: 40, alignment: .top),
-            count: columnCount
-        )
-    }
+    private let columnSpacing: CGFloat = 40
     private let rowSpacing: CGFloat = 60
 
     /// Trigger prefetch/pagination when a cell within this many rows of
@@ -46,27 +41,50 @@ struct TVCatalogGrid: View {
     /// before the user reaches the bottom.
     private let prefetchRowsRemaining: Int = 8
 
+    private var rowStartIndices: [Int] {
+        stride(from: 0, to: items.count, by: columnCount).map { $0 }
+    }
+
     var body: some View {
-        LazyVGrid(columns: columns, spacing: rowSpacing) {
-            ForEach(IndexedItems(items)) { indexed in
-                let item = indexed.element
-                TVMediaCard(
-                    title: item.title,
-                    posterUrl: item.posterUrl ?? "",
-                    year: item.year,
-                    userState: item.userState,
-                    overlayData: OverlayData.from(item),
-                    action: { onItemTap(item.contentId) },
-                    cardWidth: cardWidth,
-                    aspect: item.isAudiobook ? .square : .poster,
-                    prefersDefaultFocus: prefersDefaultFocusOnFirstItem && indexed.index == 0,
-                    defaultFocusNamespace: gridFocusNamespace,
-                    focusBinding: $focusedItemId,
-                    focusContentId: item.contentId,
-                    contentId: item.contentId
-                )
+        // Rows are explicit full-width focus sections so a D-pad move into a
+        // ragged row (fewer cards than columns) still lands: the focus engine
+        // resolves moves geometrically, and a partially filled LazyVGrid row
+        // has no focusable under most columns. The row's full-width section
+        // frame is the catchment; the engine snaps to its nearest card.
+        LazyVStack(alignment: .leading, spacing: rowSpacing) {
+            ForEach(rowStartIndices, id: \.self) { rowStart in
+                HStack(alignment: .top, spacing: columnSpacing) {
+                    ForEach(IndexedItems(rowItems(from: rowStart))) { indexed in
+                        let item = indexed.element
+                        TVMediaCard(
+                            title: item.title,
+                            posterUrl: item.posterUrl ?? "",
+                            year: item.year,
+                            userState: item.userState,
+                            overlayData: OverlayData.from(item),
+                            action: { onItemTap(item.contentId) },
+                            cardWidth: cardWidth,
+                            aspect: item.isAudiobook ? .square : .poster,
+                            prefersDefaultFocus: prefersDefaultFocusOnFirstItem
+                                && rowStart == 0 && indexed.index == 0,
+                            defaultFocusNamespace: gridFocusNamespace,
+                            focusBinding: $focusedItemId,
+                            focusContentId: item.contentId,
+                            contentId: item.contentId
+                        )
+                        .frame(maxWidth: .infinity)
+                        .onAppear { onCellAppear(index: rowStart + indexed.index) }
+                    }
+                    // Keep ragged-row cards in their column positions by
+                    // filling the empty slots with equally flexible spacers.
+                    ForEach(0..<emptySlotCount(from: rowStart), id: \.self) { _ in
+                        Color.clear
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 1)
+                    }
+                }
                 .frame(maxWidth: .infinity)
-                .onAppear { onCellAppear(index: indexed.index) }
+                .focusSection()
             }
         }
         .focusScope(gridFocusNamespace)
@@ -84,6 +102,14 @@ struct TVCatalogGrid: View {
                 Spacer()
             }
         }
+    }
+
+    private func rowItems(from rowStart: Int) -> [BrowseItem] {
+        Array(items[rowStart..<min(rowStart + columnCount, items.count)])
+    }
+
+    private func emptySlotCount(from rowStart: Int) -> Int {
+        columnCount - rowItems(from: rowStart).count
     }
 
     private func onCellAppear(index: Int) {
