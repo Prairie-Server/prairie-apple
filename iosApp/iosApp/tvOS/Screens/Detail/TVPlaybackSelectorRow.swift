@@ -27,6 +27,14 @@ struct TVPlaybackSelectorRow: View {
     let selectedVersionFileId: Int?
     let selectedAudioTrackIndex: Int?
     let selectedSubtitleTrackIndex: Int?
+    /// Server-resolved subtitle policy for this item, used to preview what
+    /// "Auto" will land on. Defaulted so callers without it keep a bare "Auto".
+    var subtitleMode: String? = nil
+    var subtitleSignature: SubtitleTrackSignature? = nil
+    /// Profile/item "Show Forced Subtitles" preference — feeds the Auto
+    /// preview's forced-track branch so the row doesn't show "Auto - None"
+    /// when playback would actually start with a forced track.
+    var showForcedSubtitles: Bool = false
     let onSelectVersion: (Int?) -> Void
     let onSelectAudioTrack: (Int?) -> Void
     let onSelectSubtitleTrack: (Int?) -> Void
@@ -41,36 +49,64 @@ struct TVPlaybackSelectorRow: View {
 
     var body: some View {
         if hasAnySelector {
-            HStack(spacing: Layout.selectorSpacing) {
-                if shouldShowEditionSelector {
-                    editionSelector
+            selectorRow
+                // Stretch the focus section to the full action-area width even
+                // though the buttons sit on the left. Entering a focus section
+                // is resolved by the section's *bounds* overlapping the move
+                // vector, so a full-width section sits under every top-row
+                // control — including the far-right circle buttons (List /
+                // Watched / More). A Down press from any of them then lands on
+                // the nearest selector instead of skipping the row. Buttons
+                // stay left-aligned.
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .focusScope(selectorFocusScope)
+                .focusSection()
+                .modifier(SelectorDefaultFocus(focus: defaultSelectorFocus, binding: $focusedSelector))
+                .onChange(of: focusedSelector) { _, newValue in
+                    // The restore default (see `restoreFocus`) must only
+                    // outlive the menu dismissal it serves. Once focus leaves
+                    // the row — up to the action row, or into an opening menu
+                    // — repoint it at the leading pill so re-entering the row
+                    // lands like untouched geometry instead of jumping back
+                    // to the last-modified selector. Swap the value rather
+                    // than clearing it: `SelectorDefaultFocus` branches on
+                    // nil, and re-identifying the row subtree would tear down
+                    // an open Menu.
+                    if newValue == nil, defaultSelectorFocus != nil {
+                        defaultSelectorFocus = firstSelector
+                    }
                 }
-                if shouldShowVersionValue {
-                    versionSelector
+                .task {
+                    await ProfilePrefsStore.shared.hydrateIfNeeded()
+                    preferredSubtitleLanguage = ProfilePrefsStore.shared.preferredSubtitleLanguage
                 }
-                if shouldShowAudioValue {
-                    audioSelector
-                }
-                if shouldShowSubtitleValue {
-                    subtitleSelector
-                }
+        }
+    }
+
+    private var selectorRow: some View {
+        HStack(spacing: Layout.selectorSpacing) {
+            if shouldShowEditionSelector {
+                editionSelector
             }
-            // Stretch the focus section to the full action-area width even
-            // though the buttons sit on the left. Entering a focus section is
-            // resolved by the section's *bounds* overlapping the move vector,
-            // so a full-width section sits under every top-row control —
-            // including the far-right circle buttons (List / Watched / More).
-            // A Down press from any of them then lands on the nearest selector
-            // instead of skipping the row. Buttons stay left-aligned.
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .focusScope(selectorFocusScope)
-            .focusSection()
-            .modifier(SelectorDefaultFocus(focus: defaultSelectorFocus, binding: $focusedSelector))
-            .task {
-                await ProfilePrefsStore.shared.hydrateIfNeeded()
-                preferredSubtitleLanguage = ProfilePrefsStore.shared.preferredSubtitleLanguage
+            if shouldShowVersionValue {
+                versionSelector
+            }
+            if shouldShowAudioValue {
+                audioSelector
+            }
+            if shouldShowSubtitleValue {
+                subtitleSelector
             }
         }
+    }
+
+    /// Leading visible pill — where entry into the row should land once the
+    /// post-menu restore default has served its purpose.
+    private var firstSelector: SelectorFocus {
+        if shouldShowEditionSelector { return .edition }
+        if shouldShowVersionValue { return .version }
+        if shouldShowAudioValue { return .audio }
+        return .subtitles
     }
 
     private var hasAnySelector: Bool {
@@ -192,7 +228,8 @@ struct TVPlaybackSelectorRow: View {
     private var audioSelector: some View {
         let value = DetailPlaybackFormatting.audioValueLabel(
             version: currentVersion,
-            selectedAudioTrackIndex: selectedAudioTrackIndex
+            selectedAudioTrackIndex: selectedAudioTrackIndex,
+            annotateAuto: true
         )
         if shouldEnableAudioSelector {
             TVSelectorButton(
@@ -229,11 +266,25 @@ struct TVPlaybackSelectorRow: View {
 
     // MARK: - Subtitles
 
+    private var subtitleAutoContext: DetailPlaybackFormatting.SubtitleAutoContext {
+        DetailPlaybackFormatting.SubtitleAutoContext(
+            preferredLanguage: preferredSubtitleLanguage,
+            mode: subtitleMode,
+            signature: subtitleSignature,
+            audioLanguage: DetailPlaybackFormatting.resolvedAudioLanguage(
+                version: currentVersion,
+                selectedAudioTrackIndex: selectedAudioTrackIndex
+            ),
+            showForced: showForcedSubtitles
+        )
+    }
+
     @ViewBuilder
     private var subtitleSelector: some View {
         let value = DetailPlaybackFormatting.subtitleValueLabel(
             version: currentVersion,
-            selectedSubtitleTrackIndex: selectedSubtitleTrackIndex
+            selectedSubtitleTrackIndex: selectedSubtitleTrackIndex,
+            autoContext: subtitleAutoContext
         )
         if shouldEnableSubtitleSelector {
             TVSelectorButton(
@@ -349,33 +400,27 @@ private struct TVSelectorButton<MenuContent: View>: View {
     }
 }
 
-/// Static version of the selector pill for single-choice playback metadata.
+/// Single-choice version of the selector pill. Still focusable so the box can
+/// be highlighted ("hovered") on tvOS even when there is only one option;
+/// pressing Select is a no-op since there is nothing to choose. Shares the
+/// interactive pill's styling and focus treatment so the row reads uniformly.
 private struct TVSelectorValue: View {
     let icon: String
     let label: String
     let value: String
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon).font(.system(size: 22, weight: .semibold))
-            Text(label.uppercased())
-                .font(.system(size: 18, weight: .bold))
-                .tracking(1.0)
-                .opacity(0.6)
-            Text(value).font(.system(size: 22, weight: .semibold)).lineLimit(1)
+        Button { } label: {
+            HStack(spacing: 12) {
+                Image(systemName: icon).font(.system(size: 22, weight: .semibold))
+                Text(label.uppercased())
+                    .font(.system(size: 18, weight: .bold))
+                    .tracking(1.0)
+                    .opacity(0.6)
+                Text(value).font(.system(size: 22, weight: .semibold)).lineLimit(1)
+            }
         }
-        .foregroundColor(.white)
-        .padding(.horizontal, 40)
-        .padding(.vertical, 22)
-        .overlay(
-            RoundedRectangle(cornerRadius: ContinuumTheme.smallCornerRadius, style: .continuous)
-                .stroke(Color.white.opacity(0.24), lineWidth: 1.2)
-        )
-        .background(
-            RoundedRectangle(cornerRadius: ContinuumTheme.smallCornerRadius, style: .continuous)
-                .fill(Color.black.opacity(0.52))
-        )
-        .shadow(color: .black.opacity(0.14), radius: 4, y: 2)
+        .buttonStyle(TVPillButtonStyle(kind: .secondary, focusTreatment: .compact))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(label), \(value)")
     }

@@ -15,6 +15,12 @@ struct TVPlayerScrubber: View {
     let onMoveToTransport: () -> Void
     let onExitWhenIdle: () -> Void
 
+    /// Explicit timeline-scrub mode (Select on the puck). Owned by the shell
+    /// so it can drop the transport row out of the focus graph while the
+    /// scrub is modal — otherwise a Down press/swipe moves focus there
+    /// natively, before `onMoveCommand` ever fires.
+    @Binding var isTimelineScrubbing: Bool
+
     /// When true, blurring the scrubber cancels the in-progress scrub rather
     /// than committing it. The shell flips this on before opening a sheet so
     /// the focus-lost path doesn't turn into an accidental seek.
@@ -27,9 +33,21 @@ struct TVPlayerScrubber: View {
     private static let timelineAutoSeekTickNanos: UInt64 = 100_000_000
     private static let timelineAutoSeekBaseStep: Double = 2
     private static let timelineAutoSeekRates = [-32, -16, -8, -4, -2, -1, 1, 2, 4, 8, 16, 32]
-    @State private var isTimelineScrubbing = false
     @State private var timelineAutoSeekRate = 0
     @State private var timelineAutoSeekTask: Task<Void, Never>?
+
+    /// Trackpad-drag scrubbing. Translation from one full edge-to-edge swipe
+    /// on the Siri Remote surface is ~1000pt, so this maps a full swipe to
+    /// roughly 8% of the timeline — a light drag lands within seconds of
+    /// where it started instead of jumping minutes.
+    private static let panPointsForFullTimeline: CGFloat = 12000
+    /// Accumulated translation required before a drag starts moving the
+    /// playhead; the finger contact from a d-pad click always jitters a few
+    /// points and must not nudge the preview.
+    private static let panDeadzone: CGFloat = 12
+    @State private var isPanScrubbing = false
+    @State private var panEngaged = false
+    @State private var panAccumulated: CGFloat = 0
 
     // Visual metrics pulled out as compile-time constants so layout doesn't
     // re-evaluate them each pass. Chapter ticks rely on `trackHeight` so the
@@ -84,11 +102,27 @@ struct TVPlayerScrubber: View {
             .focused($isFocused)
             .onTapGesture { commitScrub() }
             .background {
-                TVDirectionalPressGestureView(
-                    isActive: isFocused && !viewModel.isHoldSeeking && timelineAutoSeekRate == 0,
-                    onArrowTap: handleArrowTap,
-                    onArrowHoldBegin: handleArrowHoldBegin
-                )
+                ZStack {
+                    TVDirectionalPressGestureView(
+                        isActive: isFocused && !viewModel.isHoldSeeking && timelineAutoSeekRate == 0,
+                        onArrowTap: handleArrowTap,
+                        onArrowHoldBegin: handleArrowHoldBegin
+                    )
+                    // Continuous trackpad drag while the puck is selected —
+                    // Select enters timeline-scrub mode, then swipes stream
+                    // through here instead of stepping ±10s/30s per move
+                    // command.
+                    TVPanCaptureView(
+                        isActive: isFocused && isTimelineScrubbing && !isTimelineAutoSeeking,
+                        onPanBegan: {
+                            isPanScrubbing = true
+                            panEngaged = false
+                            panAccumulated = 0
+                        },
+                        onPanChanged: handlePanChanged,
+                        onPanEnded: { isPanScrubbing = false }
+                    )
+                }
                 .frame(width: 1, height: 1)
             }
             .onChange(of: isFocused) { _, focused in
@@ -351,25 +385,49 @@ struct TVPlayerScrubber: View {
         }
     }
 
+    /// Continuous trackpad drag: translation maps linearly onto the
+    /// timeline. A deadzone filters out the contact jitter from clicks; once
+    /// crossed, every subsequent delta moves the preview directly.
+    private func handlePanChanged(_ deltaX: CGFloat) {
+        guard isTimelineScrubbing, viewModel.duration > 0 else { return }
+        if !panEngaged {
+            panAccumulated += deltaX
+            guard abs(panAccumulated) >= Self.panDeadzone else { return }
+            panEngaged = true
+        }
+        let base = viewModel.isScrubbing ? viewModel.scrubPreviewTime : viewModel.currentTime
+        let deltaSeconds = Double(deltaX / Self.panPointsForFullTimeline) * viewModel.duration
+        let target = min(max(base + deltaSeconds, 0), viewModel.duration)
+        viewModel.updateScrub(fraction: target / viewModel.duration)
+    }
+
     private func handleMove(_ direction: MoveCommandDirection) {
+        // While a trackpad drag is in flight the same swipe also surfaces
+        // here as discrete left/right move commands — the pan owns the
+        // playhead, so the fixed-step path must stay quiet.
+        let panOwnsTimeline = isPanScrubbing && isTimelineScrubbing && !isTimelineAutoSeeking
         switch direction {
         case .left:
             guard viewModel.duration > 0 else { return }
             if isTimelineAutoSeeking {
                 adjustTimelineAutoSeekRate(delta: -1)
-            } else if isTimelineScrubbing {
+            } else if isTimelineScrubbing, !panOwnsTimeline {
                 stepTimeline(by: -Self.scrubBackwardStep)
             }
         case .right:
             guard viewModel.duration > 0 else { return }
             if isTimelineAutoSeeking {
                 adjustTimelineAutoSeekRate(delta: 1)
-            } else if isTimelineScrubbing {
+            } else if isTimelineScrubbing, !panOwnsTimeline {
                 stepTimeline(by: Self.scrubForwardStep)
             }
         case .up:
             break
         case .down:
+            // While a scrub is in flight, a downward swipe is almost always
+            // drag spillover, not an intent to leave — trapping it keeps the
+            // preview alive until the user commits (Select) or cancels (Menu).
+            guard !isTimelineScrubbing, !viewModel.isScrubbing else { return }
             onMoveToTransport()
         @unknown default:
             break

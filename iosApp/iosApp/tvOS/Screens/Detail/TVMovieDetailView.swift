@@ -14,6 +14,11 @@ struct TVMovieDetailView<BelowSynopsis: View>: View {
     let selectedVersionFileId: Int?
     let selectedAudioTrackIndex: Int?
     let selectedSubtitleTrackIndex: Int?
+    /// True once the user explicitly resets subtitles to "Auto" this visit.
+    /// The server override was just cleared, but `detail.effectiveSubtitle*`
+    /// still describes the old manual pick until the next refetch — suppress
+    /// it so the "Auto - …" preview doesn't echo the cleared selection.
+    var subtitleOverrideCleared: Bool = false
     let seasons: [Season]
     let selectedSeason: Season?
     let seasonEpisodes: [EpisodeListItem]
@@ -35,45 +40,67 @@ struct TVMovieDetailView<BelowSynopsis: View>: View {
 
     @Namespace private var detailFocusNamespace
     @FocusState private var playFocused: Bool
+    /// True while focus sits anywhere inside the season chip row — drives the
+    /// episode-section re-center in `detailFocusScroll`.
+    @FocusState private var seasonRowFocused: Bool
+    /// True while focus sits anywhere in the hero's primary action row —
+    /// drives the scroll back to the page-entry (hero at top) framing.
+    @FocusState private var actionRowFocused: Bool
+
+    // Plain constants (not `static`) — the generic BelowSynopsis parameter
+    // forbids static stored properties on this type.
+    private let episodeSectionScrollId = "detail-episode-section"
+    private let heroScrollId = "detail-hero"
 
     var body: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 48) {
-                TVDetailHero(
-                    title: detail.title,
-                    seriesTitle: detail.type == "episode" ? detail.seriesTitle : nil,
-                    logoUrl: detail.logoUrl,
-                    backdropUrl: detail.backdropUrl,
-                    eyebrow: detail.type == "episode" ? nil : TVHeroMetadata.eyebrow(from: detail),
-                    sourceTokens: TVHeroMetadata.movieSourceTokens(from: detail),
-                    ratingChip: TVHeroMetadata.contentRatingChip(from: detail),
-                    overview: detail.overview,
-                    tagline: detail.tagline,
-                    factsLine: TVHeroMetadata.movieFactsLine(from: detail, version: currentVersion),
-                    starringText: TVHeroMetadata.starringText(from: detail),
-                    actions: { actionColumn },
-                    belowSynopsis: belowSynopsis
-                )
+        ScrollViewReader { scrollProxy in
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 48) {
+                    TVDetailHero(
+                        title: detail.title,
+                        seriesTitle: detail.type == "episode" ? detail.seriesTitle : nil,
+                        logoUrl: detail.logoUrl,
+                        backdropUrl: detail.backdropUrl,
+                        eyebrow: detail.type == "episode" ? nil : TVHeroMetadata.eyebrow(from: detail),
+                        sourceTokens: TVHeroMetadata.movieSourceTokens(from: detail),
+                        ratingChip: TVHeroMetadata.contentRatingChip(from: detail),
+                        overview: detail.overview,
+                        tagline: detail.tagline,
+                        factsLine: TVHeroMetadata.movieFactsLine(from: detail, version: currentVersion),
+                        starringText: TVHeroMetadata.starringText(from: detail),
+                        actions: { actionColumn },
+                        belowSynopsis: belowSynopsis
+                    )
+                    .id(heroScrollId)
 
-                VStack(alignment: .leading, spacing: 72) {
-                    if showsEpisodeRail {
-                        episodesSection
+                    VStack(alignment: .leading, spacing: 72) {
+                        if showsEpisodeRail {
+                            episodesSection
+                                .id(episodeSectionScrollId)
+                        }
+                        if let cast = detail.cast, !cast.isEmpty {
+                            castSection(cast: cast)
+                        }
+                        detailsSection
+                        if showsSimilarRail {
+                            similarSection
+                        }
                     }
-                    if let cast = detail.cast, !cast.isEmpty {
-                        castSection(cast: cast)
-                    }
-                    detailsSection
-                    if showsSimilarRail {
-                        similarSection
-                    }
+                    .padding(.horizontal, ContinuumTheme.safePadding)
+                    .padding(.bottom, 160)
                 }
-                .padding(.horizontal, ContinuumTheme.safePadding)
-                .padding(.bottom, 160)
             }
+            .ignoresSafeArea()
+            .focusScope(detailFocusNamespace)
+            .defaultFocus($playFocused, true, priority: .userInitiated)
+            .detailFocusScroll(
+                proxy: scrollProxy,
+                seasonRowFocused: seasonRowFocused,
+                actionRowFocused: actionRowFocused,
+                episodeSectionId: episodeSectionScrollId,
+                heroId: heroScrollId
+            )
         }
-        .ignoresSafeArea()
-        .focusScope(detailFocusNamespace)
-        .defaultFocus($playFocused, true, priority: .userInitiated)
     }
 
     // MARK: - Hero actions
@@ -88,6 +115,9 @@ struct TVMovieDetailView<BelowSynopsis: View>: View {
                 selectedVersionFileId: selectedVersionFileId,
                 selectedAudioTrackIndex: selectedAudioTrackIndex,
                 selectedSubtitleTrackIndex: selectedSubtitleTrackIndex,
+                subtitleMode: subtitleOverrideCleared ? nil : detail.effectiveSubtitleMode,
+                subtitleSignature: subtitleOverrideCleared ? nil : detail.effectiveSubtitleTrackSignature,
+                showForcedSubtitles: detail.effectiveShowForcedSubtitles ?? false,
                 onSelectVersion: onSelectVersion,
                 onSelectAudioTrack: onSelectAudioTrack,
                 onSelectSubtitleTrack: onSelectSubtitleTrack
@@ -140,6 +170,16 @@ struct TVMovieDetailView<BelowSynopsis: View>: View {
                 moreMenu
             }
         }
+        // Container binding — flips true when any button in the row has
+        // focus, driving the scroll-to-top in `detailFocusScroll`.
+        .focused($actionRowFocused)
+        // Mirror of the selector row's full-width focus section: the subtitle
+        // pill below can extend past the last circle button, and an Up press
+        // from that overhang would otherwise skip this row for the synopsis.
+        // Full-width bounds put the row under every selector pill so Up lands
+        // on the nearest action button. Buttons stay left-aligned.
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .focusSection()
     }
 
     // MARK: - More menu
@@ -213,6 +253,9 @@ struct TVMovieDetailView<BelowSynopsis: View>: View {
                     selectedSeasonId: selectedSeason?.id,
                     onSelect: onSelectSeason
                 )
+                // Container binding — true while any chip has focus, driving
+                // the episode-section re-center in `detailFocusScroll`.
+                .focused($seasonRowFocused)
             }
             if isLoadingEpisodes {
                 HStack {
@@ -231,6 +274,13 @@ struct TVMovieDetailView<BelowSynopsis: View>: View {
     }
 
     private var episodeRailEyebrow: String {
+        // Track the chip selection — the rail can show a different season
+        // than the episode's own once the viewer switches in place.
+        if let season = selectedSeason {
+            return season.seasonNumber > 0
+                ? "Season \(season.seasonNumber)"
+                : (season.title ?? "Specials")
+        }
         if let seasonNumber = detail.seasonNumber, seasonNumber > 0 {
             return "Season \(seasonNumber)"
         }
@@ -247,13 +297,12 @@ struct TVMovieDetailView<BelowSynopsis: View>: View {
     }
 
     private var similarSection: some View {
-        VStack(alignment: .leading, spacing: 28) {
-            TVSectionHeader(title: "More Like This")
-            TVSimilarRail(
-                contentId: detail.contentId,
-                onSelect: onNavigateToItem
-            )
-        }
+        // Header lives inside the rail so it disappears with the cards when
+        // recommendations are disabled or empty.
+        TVSimilarRail(
+            contentId: detail.contentId,
+            onSelect: onNavigateToItem
+        )
     }
 
     // MARK: - Cast

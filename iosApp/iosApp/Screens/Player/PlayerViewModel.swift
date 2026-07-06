@@ -1187,7 +1187,19 @@ class PlayerViewModel {
         }
         cb.onPauseChange = { [weak self] paused in
             guard let self, !self.isDisposed else { return }
+            let wasPlaying = self.isPlaying
             self.isPlaying = !paused
+            // A pause from any source (remote button, transport button,
+            // Siri, interruption) surfaces the transport overlay and pins
+            // it — no auto-hide runs while paused, so it stays up until
+            // the user acts. Resuming re-arms the auto-hide so a resume
+            // from an external source (Now Playing, Siri) doesn't leave
+            // the overlay stuck on-screen.
+            if paused, wasPlaying, !self.isLoading, !self.hasReachedEndOfFile {
+                self.pinControlsVisible()
+            } else if !paused, self.showControls, !self.isHUDPresented {
+                self.scheduleHideControls()
+            }
             self.nowPlaying.update(
                 title: self.title,
                 duration: self.duration,
@@ -6374,12 +6386,46 @@ class PlayerViewModel {
         showControls = true
         guard !isBackgroundSuspended else { return }
         hideControlsTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: Self.autoHideSeconds * 1_000_000_000)
-            guard !Task.isCancelled else { return }
+            while true {
+                try? await Task.sleep(nanoseconds: Self.autoHideSeconds * 1_000_000_000)
+                guard !Task.isCancelled else { return }
+                #if os(iOS)
+                // A native Menu offers no isPresented hook, so the hide
+                // deadline checks for a live menu platter instead of the
+                // menus pinning the overlay: wait out an open menu, then
+                // give the overlay a fresh full window before hiding.
+                if Self.isSystemMenuPresented() {
+                    while Self.isSystemMenuPresented() {
+                        try? await Task.sleep(nanoseconds: 500_000_000)
+                        guard !Task.isCancelled else { return }
+                    }
+                    continue
+                }
+                #endif
+                break
+            }
             guard let self, self.isPlaying else { return }
             withAnimation { self.showControls = false }
         }
     }
+
+    #if os(iOS)
+    /// True while a UIKit menu platter is on screen. SwiftUI `Menu`s are
+    /// UIContextMenuInteraction-backed, and the presented platter lives in
+    /// a window (or a window's immediate subview) whose class name carries
+    /// "ContextMenu" — there is no public presentation hook to observe.
+    private static func isSystemMenuPresented() -> Bool {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .contains { window in
+                NSStringFromClass(type(of: window)).contains("ContextMenu")
+                    || window.subviews.contains {
+                        NSStringFromClass(type(of: $0)).contains("ContextMenu")
+                    }
+            }
+    }
+    #endif
 
     private func pauseForForegroundInterruptionIfNeeded() {
         guard !isBackgroundSuspended else { return }

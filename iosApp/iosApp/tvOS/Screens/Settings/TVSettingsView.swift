@@ -16,6 +16,9 @@ import SwiftUI
 struct TVSettingsView: View {
     @State private var viewModel = TVSettingsViewModel()
     @State private var showSignOutConfirm = false
+    #if DEBUG
+    @State private var debugSettings = TVDebugSettings.shared
+    #endif
     @State private var selectedCategory: TVSettingsCategory = .general
     @FocusState private var railFocus: RailItem?
     @Environment(AppRouter.self) private var router
@@ -253,6 +256,23 @@ struct TVSettingsView: View {
             TVSettingsSectionHeader("ABOUT")
 
             TVSettingsInfoRow(title: "App Version", value: Self.appVersion)
+
+            #if DEBUG
+            TVSettingsSectionHeader("DEBUGGING")
+
+            TVSettingsToggleRow(
+                title: "Show Focus Targets",
+                isOn: debugSettings.showFocusTargets
+            ) {
+                debugSettings.setShowFocusTargets(!debugSettings.showFocusTargets)
+            }
+
+            TVSettingsFooter(
+                "Overlays the predicted d-pad destination in each direction "
+                    + "from the focused control. Stored on this Apple TV. "
+                    + "Debug builds only."
+            )
+            #endif
         }
     }
 
