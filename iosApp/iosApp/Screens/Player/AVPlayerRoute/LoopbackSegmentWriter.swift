@@ -1655,9 +1655,10 @@ final class LoopbackSegmentWriter {
                     break
                 }
                 if rc < 0 {
-                    // AVERROR_EOF or any other negative code — treat as
-                    // end-of-input. Fine-grained error handling isn't
-                    // worth the noise for a v1 spike.
+                    // Genuine end-of-content finalizes below; a source that
+                    // died clearly short of the known bytes/plan throws so
+                    // the truncation is never published as a complete VOD.
+                    try throwIfPrematureSourceEnd(readRC: rc)
                     break
                 }
                 emitSourceDownloadStatsIfNeeded()
@@ -1787,6 +1788,48 @@ final class LoopbackSegmentWriter {
             teardown()
             onFinished?(error)
         }
+    }
+
+    /// Classifies a negative `av_read_frame` result and throws when the
+    /// source clearly ended short of the known content. Both completeness
+    /// signals ride state that is valid whether this producer started at
+    /// byte 0 or was restarted mid-plan: the input IO position is measured
+    /// against the transport's known size, and the plan-axis position uses
+    /// the segment index (plan-absolute) rather than this instance's
+    /// appended-duration counter.
+    private func throwIfPrematureSourceEnd(readRC rc: Int32) throws {
+        var bytePosition: Int64?
+        var fileSizeBytes: Int64?
+        if let pb = inputCtx?.pointee.pb {
+            let position = avio_seek(pb, 0, SEEK_CUR)
+            if position >= 0 { bytePosition = position }
+            let size = avio_size(pb)
+            if size > 0 { fileSizeBytes = size }
+        }
+        var reachedPlanSeconds: Double?
+        var plannedTotalSeconds: Double?
+        if vodActive, let plan = vodPlan, plan.segmentCount > 0 {
+            plannedTotalSeconds = plan.totalDurationSeconds
+            reachedPlanSeconds = plan.startSeconds[min(currentSegmentIndex, plan.segmentCount - 1)]
+        }
+        let verdict = LoopbackIngestEndPolicy.classify(
+            readResult: rc,
+            bytePosition: bytePosition,
+            fileSizeBytes: fileSizeBytes,
+            reachedPlanSeconds: reachedPlanSeconds,
+            plannedTotalSeconds: plannedTotalSeconds
+        )
+        guard case let .prematureSourceEnd(shortfallBytes, shortfallSeconds) = verdict else {
+            return
+        }
+        Self.logger.error(
+            "[CMP-AVP] premature source end rc=\(rc) (\(Self.ffmpegError(rc), privacy: .public)) pos=\(bytePosition ?? -1) size=\(fileSizeBytes ?? -1) reached=\(reachedPlanSeconds ?? -1, format: .fixed(precision: 1))s planned=\(plannedTotalSeconds ?? -1, format: .fixed(precision: 1))s"
+        )
+        throw LoopbackWriterError.prematureSourceEnd(
+            readRC: rc,
+            shortfallBytes: shortfallBytes,
+            shortfallSeconds: shortfallSeconds
+        )
     }
 
     /// Throws any fatal disk-write error captured by the AVIO write callback
@@ -6044,4 +6087,10 @@ enum LoopbackWriterError: Error {
     /// fetched a single media segment — nothing can ever advance the target,
     /// so the park would deadlock the session silently.
     case vodStartupConsumerWedge(parkedSeconds: Int, segment: Int)
+    /// `av_read_frame` ended clearly short of the known content (origin
+    /// outage truncating the proxied body, `rw_timeout` expiry). Finalizing
+    /// would publish a truncated movie as a complete VOD; failing routes the
+    /// session into server-outage recovery instead. The name is matched by
+    /// PlayerViewModel's error routing — keep it stable.
+    case prematureSourceEnd(readRC: Int32, shortfallBytes: Int64?, shortfallSeconds: Double?)
 }

@@ -1354,6 +1354,19 @@ class PlayerViewModel {
            attemptStaleSessionRenewal(reason: "player_error", observedPosition: currentTime) {
             return
         }
+        if isPrematureSourceEndMessage(message) {
+            Self.logger.warning(
+                "Routing premature source end into server outage recovery: \(message, privacy: .public)"
+            )
+            Task { @MainActor [weak self] in
+                guard let self, !self.isDisposed else { return }
+                _ = self.attemptServerOutageRecovery(
+                    reason: .networkUnavailable,
+                    observedPosition: self.currentTime
+                )
+            }
+            return
+        }
         progressTask?.cancel()
         if shouldAutoRecoverFromInterruption() {
             triggerAutomaticInterruptionRecovery()
@@ -3409,6 +3422,15 @@ class PlayerViewModel {
         let lowered = message.lowercased()
         return lowered.contains("playback_session_not_found")
             || lowered.contains("playback session not found")
+    }
+
+    /// The loopback writer's ingest ended clearly short of the known content
+    /// (`LoopbackWriterError.prematureSourceEnd`) — an origin outage, not an
+    /// engine defect. It must route into server-outage recovery, not the
+    /// engine-fallback ladder: degrading to PlayerCore against a dead origin
+    /// trades a recoverable stream for a second failure.
+    private func isPrematureSourceEndMessage(_ message: String) -> Bool {
+        message.contains("prematureSourceEnd")
     }
 
     /// The PlayerCore direct route talks to the origin without the source
