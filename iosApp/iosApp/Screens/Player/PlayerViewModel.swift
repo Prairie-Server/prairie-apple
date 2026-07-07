@@ -2041,6 +2041,7 @@ class PlayerViewModel {
         let loadGeneration = streamLoadGeneration
         activePlayer.dispose()
         activePlayer = .none
+        stashSourceCacheHandoff()
         sourceProxy?.stop()
         sourceProxy = nil
 
@@ -2063,6 +2064,7 @@ class PlayerViewModel {
             return
         }
         sourceProxy = prepared.proxy
+        sourceProxyFileId = prepared.proxy != nil ? currentSelectedVersion?.fileId : nil
         let loadPlan = prepared.plan
         activeExecutionPlan = loadPlan
         installPlayer(for: loadPlan.engine)
@@ -2091,6 +2093,71 @@ class PlayerViewModel {
         let proxy: PlaybackSourceProxy?
     }
 
+    /// A torn-down proxy's cache, retained across the teardown so a
+    /// same-file replacement proxy can adopt it (spans stay in memory, spill
+    /// stays on disk) instead of re-downloading. One slot: stashed at every
+    /// proxy stop that might be followed by a same-file reload, resolved
+    /// (adopted or released) by the next `prepareSourceProxy`, and released
+    /// on terminal teardown. Releasing the last reference cleans the disk
+    /// directory via the cache's deinit.
+    private struct SourceCacheHandoff {
+        let fileId: Int
+        let cache: PlaybackSourceCache
+    }
+
+    private var sourceCacheHandoff: SourceCacheHandoff?
+    /// File id the live `sourceProxy` was built for — the stash metadata.
+    /// (`currentSelectedVersion` is already reset by the time some teardown
+    /// paths stop the proxy, so the association must be recorded at install.)
+    private var sourceProxyFileId: Int?
+
+    /// Retain the outgoing proxy's cache for possible adoption by the next
+    /// same-file proxy. Called immediately before `sourceProxy.stop()` on
+    /// non-terminal teardown paths.
+    private func stashSourceCacheHandoff() {
+        guard let proxy = sourceProxy, let fileId = sourceProxyFileId else { return }
+        let cache = proxy.handoffCache
+        sourceCacheHandoff = SourceCacheHandoff(fileId: fileId, cache: cache)
+        Self.logger.info(
+            "[CMP-SOURCE-CACHE] handoff stashed fileId=\(fileId, privacy: .public) cachedBytes=\(cache.stats().cachedBytes, privacy: .public) diskBytes=\(cache.stats().diskSpillBytes, privacy: .public)"
+        )
+    }
+
+    private func discardSourceCacheHandoff() {
+        if sourceCacheHandoff != nil {
+            Self.logger.info("[CMP-SOURCE-CACHE] handoff released")
+        }
+        sourceCacheHandoff = nil
+    }
+
+    /// Resolve the handoff slot against the incoming plan: adopt the cache
+    /// when the adoption policy allows, release it otherwise. Either way the
+    /// slot is emptied — a handoff lives for exactly one load attempt.
+    private func takeAdoptableSourceCache(budgetBytes: Int, diskSpillRequested: Bool) -> PlaybackSourceCache? {
+        guard let handoff = sourceCacheHandoff else { return nil }
+        sourceCacheHandoff = nil
+        let adopt = SourceCacheAdoptionPolicy.shouldAdopt(
+            handoffFileId: handoff.fileId,
+            planFileId: currentSelectedVersion?.fileId,
+            handoffBudgetBytes: handoff.cache.maxBytes,
+            planBudgetBytes: budgetBytes,
+            handoffDiskSpill: handoff.cache.diskSpillActive,
+            planDiskSpill: PlaybackSourceCache.resolveDiskSpillEnabled(diskSpillRequested),
+            cachedTotalLength: handoff.cache.knownTotalLength,
+            expectedFileSize: currentSelectedVersion?.fileSize
+        )
+        guard adopt else {
+            Self.logger.info(
+                "[CMP-SOURCE-CACHE] handoff rejected fileId=\(handoff.fileId, privacy: .public) planFileId=\(self.currentSelectedVersion?.fileId ?? -1, privacy: .public)"
+            )
+            return nil
+        }
+        Self.logger.info(
+            "[CMP-SOURCE-CACHE] handoff adopted fileId=\(handoff.fileId, privacy: .public) cachedBytes=\(handoff.cache.stats().cachedBytes, privacy: .public)"
+        )
+        return handoff.cache
+    }
+
     private enum SourceProxyPreparationError: LocalizedError {
         case missingLocalURL
         case missingLoopbackSession
@@ -2115,19 +2182,28 @@ class PlayerViewModel {
               plan.engine != .avPlayerHLS,
               plan.engine != .playerCoreDirect,
               ["http", "https"].contains(plan.sourceStreamRequest.url.scheme?.lowercased()) else {
+            // This load runs without a proxy, so any stashed cache has no
+            // adopter — release it rather than hold its disk spans for the
+            // rest of playback.
+            discardSourceCacheHandoff()
             if plan.engine == .siloPlayerLoopback {
                 throw SourceProxyPreparationError.unsupportedSourceURL
             }
             return SourceProxyPreparation(plan: plan, proxy: nil)
         }
         let cacheBudget = sourceCacheBudget(for: plan)
+        let diskSpillRequested = PlayerSettings.shared.seekCacheEnabled
+        let cache = takeAdoptableSourceCache(
+            budgetBytes: cacheBudget,
+            diskSpillRequested: diskSpillRequested
+        ) ?? PlaybackSourceCache(
+            maxBytes: cacheBudget,
+            diskSpillEnabled: diskSpillRequested
+        )
         let proxy = PlaybackSourceProxy(
             originURL: plan.sourceStreamRequest.url,
             originHeaders: plan.sourceStreamRequest.headers,
-            cache: PlaybackSourceCache(
-                maxBytes: cacheBudget,
-                diskSpillEnabled: PlayerSettings.shared.seekCacheEnabled
-            ),
+            cache: cache,
             onPlaybackSessionMissing: { [weak self] in
                 Task { @MainActor [weak self] in
                     guard let self else { return }
@@ -2748,6 +2824,7 @@ class PlayerViewModel {
         selectedSubtitleId = nil
         selectedSecondarySubtitleId = nil
         bufferedAheadSeconds = 0
+        stashSourceCacheHandoff()
         sourceProxy?.stop()
         sourceProxy = nil
         subtitleLoadStatus = [.primary: .idle, .secondary: .idle]
@@ -3242,6 +3319,7 @@ class PlayerViewModel {
         clearForegroundInterruptionState()
         clearSuspendedPlaybackState()
         clearServerOutageRecoveryState()
+        discardSourceCacheHandoff()
         activePlayer.dispose()
         sourceProxy?.stop()
         sourceProxy = nil
@@ -3471,6 +3549,7 @@ class PlayerViewModel {
 
         progressTask?.cancel()
         progressTask = nil
+        stashSourceCacheHandoff()
         sourceProxy?.stop()
         sourceProxy = nil
         activePlayer.dispose()
@@ -5183,6 +5262,7 @@ class PlayerViewModel {
         // no-op (the `.none` case) rather than relying on each backend's
         // `isDisposed` guard. `finalPosition` is captured above, before this.
         activePlayer = .none
+        discardSourceCacheHandoff()
         sourceProxy?.stop()
         sourceProxy = nil
 

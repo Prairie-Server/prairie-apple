@@ -165,9 +165,25 @@ final class PlaybackSourceCache {
     private let diskBudgetBytes: Int64
     private let diskDirectory: URL?
 
+    /// The known total file length, once any origin response reported one.
+    /// Used by the cache-handoff adoption check (a changed total under the
+    /// same file id means the file was replaced and the cached bytes are
+    /// stale).
+    var knownTotalLength: Int64? {
+        lock.lock()
+        defer { lock.unlock() }
+        return totalLength
+    }
+
+    /// Effective disk-spill state after env overrides — the handoff adoption
+    /// check compares it against what a freshly built cache would resolve.
+    var diskSpillActive: Bool { diskSpillEnabled }
+
     /// Env vars remain as dev overrides in both directions; the shipped
     /// default comes from the caller (user "Seek Cache" setting, default on).
-    private static func resolveDiskSpillEnabled(_ requested: Bool) -> Bool {
+    /// Internal (not private) so handoff adoption can resolve the effective
+    /// state a replacement cache would get.
+    static func resolveDiskSpillEnabled(_ requested: Bool) -> Bool {
         let env = ProcessInfo.processInfo.environment
         if env["SILO_DISABLE_SOURCE_DISK_SPILL"] == "1" { return false }
         if env["SILO_ENABLE_SOURCE_DISK_SPILL"] == "1" { return true }
@@ -1601,6 +1617,12 @@ final class PlaybackSourceProxy {
     func retargetOrigin(url: URL, headers: [String: String]) {
         resource.retargetOrigin(url: url, headers: headers)
     }
+
+    /// The cache, exposed for handoff across proxy generations: holding it
+    /// past `stop()` keeps its spans (memory and disk) alive so a
+    /// same-file replacement proxy can adopt them instead of re-downloading.
+    /// Dropping the last reference cleans the disk directory via deinit.
+    var handoffCache: PlaybackSourceCache { resource.cache }
 
     func setSourceBitrate(_ bps: Double?) {
         resource.setSourceBitrate(bps)
