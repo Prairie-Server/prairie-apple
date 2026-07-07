@@ -46,14 +46,19 @@ enum LoopbackIngestEndPolicy {
     ///   - reachedPlanSeconds: plan-axis position reached by the mux (start
     ///     fence of the segment currently being cut), nil without a VOD plan.
     ///   - plannedTotalSeconds: the plan's end fence, nil without a VOD plan.
+    ///   - deadlineAborted: the interrupt token aborted this read on its span
+    ///     deadline (wedged read or exhausted outage park). The resulting
+    ///     AVERROR_EXIT is a source failure, not a cancellation, so it must
+    ///     go through the completeness checks like any other error.
     static func classify(
         readResult: Int32,
         bytePosition: Int64?,
         fileSizeBytes: Int64?,
         reachedPlanSeconds: Double?,
-        plannedTotalSeconds: Double?
+        plannedTotalSeconds: Double?,
+        deadlineAborted: Bool = false
     ) -> Verdict {
-        if readResult == avErrorExit {
+        if readResult == avErrorExit, !deadlineAborted {
             return .finished
         }
 

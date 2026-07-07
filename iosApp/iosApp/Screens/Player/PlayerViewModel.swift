@@ -729,6 +729,15 @@ class PlayerViewModel {
     private var backgroundRenewalSessionId: String?
     private var backgroundRenewalTransientFailures = 0
     private static let backgroundRenewalTransientFailureLimit = 3
+    /// Origin-outage ride-through (workstream B): while the source proxy is
+    /// parked in an outage, playback rides its buffered runway with no UI
+    /// change; this task polls server health (nudging an immediate re-probe
+    /// when it returns) and escalates to the visible outage recovery only
+    /// when the budget expires. A "Reconnecting" notice appears only if the
+    /// player actually starts buffering during the outage.
+    private var sourceOutageRideThroughTask: Task<Void, Never>?
+    private var sourceOutageActive = false
+    private var sourceOutageNoticeShown = false
     private var serverOutageRecoveryTask: Task<Void, Never>?
     private var serverOutageRecoveryGeneration: UInt64 = 0
     private var activeServerOutageRecoverySessionId: String?
@@ -1243,6 +1252,11 @@ class PlayerViewModel {
         cb.onBufferingChange = { [weak self] buffering in
             guard let self, !self.isDisposed else { return }
             self.isBuffering = buffering
+            if buffering {
+                Task { @MainActor [weak self] in
+                    self?.noteBufferingDuringSourceOutage()
+                }
+            }
             if !buffering {
                 self.bufferingProgress = nil
             }
@@ -2079,6 +2093,9 @@ class PlayerViewModel {
         activePlayer.avBackend?.proxyStatsProvider = { [weak self] in
             self?.sourceProxy?.stats()
         }
+        activePlayer.avBackend?.sourceOutageStateProvider = { [weak self] in
+            self?.sourceProxy?.isOriginOutageActive ?? false
+        }
         do {
             try playbackCoordinator.load(plan: loadPlan)
             activePlayer = ActivePlayer(renderTarget: playbackCoordinator.renderTarget)
@@ -2226,6 +2243,11 @@ class PlayerViewModel {
                         reason: reason,
                         observedPosition: self.currentTime
                     )
+                }
+            },
+            onOriginOutageChanged: { [weak self] active in
+                Task { @MainActor [weak self] in
+                    self?.handleOriginOutageChanged(active)
                 }
             }
         )
@@ -3505,6 +3527,107 @@ class PlayerViewModel {
         return true
     }
 
+    /// Origin-outage ride-through entry/exit, driven by the source proxy's
+    /// `onOriginOutageChanged`. Entry keeps playback untouched (the player
+    /// rides its buffered runway), suppresses the loopback watchdog
+    /// escalations that would misread the quiet park as a route wedge, and
+    /// starts a server-health poll whose success nudges an immediate origin
+    /// re-probe. Exit restores everything. The visible outage recovery runs
+    /// only when the budget expires.
+    @MainActor
+    private func handleOriginOutageChanged(_ active: Bool) {
+        guard !isDisposed else { return }
+        if active {
+            // A full visible recovery already owns this outage.
+            guard activeServerOutageRecoverySessionId == nil else { return }
+            guard !sourceOutageActive else { return }
+            sourceOutageActive = true
+            sourceOutageNoticeShown = false
+            activePlayer.avBackend?.setExternalStallSuppression(true)
+            Self.logger.warning("[CMP-OUTAGE] ride-through started")
+            sourceOutageRideThroughTask?.cancel()
+            sourceOutageRideThroughTask = Task { @MainActor [weak self] in
+                guard let self else { return }
+                let deadline = Date().addingTimeInterval(Self.serverOutageRecoveryTimeout)
+                var delay = Self.serverOutageRecoveryInitialDelay
+                while !Task.isCancelled,
+                      !self.isDisposed,
+                      self.sourceOutageActive,
+                      Date() < deadline {
+                    if await self.probeServerHealthOnce() {
+                        Self.logger.info("[CMP-OUTAGE] server healthy; nudging origin re-probe")
+                        self.sourceProxy?.reprobeOrigin()
+                    }
+                    try? await Task.sleep(for: .seconds(delay))
+                    delay = min(delay * 2, Self.serverOutageRecoveryMaxDelay)
+                }
+                guard !Task.isCancelled, !self.isDisposed, self.sourceOutageActive else { return }
+                Self.logger.error("[CMP-OUTAGE] ride-through budget exhausted; escalating to visible recovery")
+                self.sourceOutageActive = false
+                self.sourceOutageNoticeShown = false
+                self.activePlayer.avBackend?.setExternalStallSuppression(false)
+                self.sourceOutageRideThroughTask = nil
+                _ = self.attemptServerOutageRecovery(
+                    reason: .networkUnavailable,
+                    observedPosition: self.currentTime
+                )
+            }
+        } else {
+            guard sourceOutageActive else { return }
+            Self.logger.info("[CMP-OUTAGE] ride-through ended; origin recovered")
+            let showReconnected = sourceOutageNoticeShown
+            clearSourceOutageRideThroughState()
+            if showReconnected {
+                showNotice(
+                    title: "Reconnected",
+                    message: "Connection to the server was restored.",
+                    tone: .info,
+                    duration: 3
+                )
+            }
+        }
+    }
+
+    private func clearSourceOutageRideThroughState() {
+        sourceOutageActive = false
+        sourceOutageNoticeShown = false
+        activePlayer.avBackend?.setExternalStallSuppression(false)
+        sourceOutageRideThroughTask?.cancel()
+        sourceOutageRideThroughTask = nil
+    }
+
+    /// One server health probe (auth statuses count as reachable — the
+    /// server is up even if this credential can't read /health).
+    private func probeServerHealthOnce() async -> Bool {
+        do {
+            let _: HealthStatus = try await HTTPClient.shared.get("/api/v1/health")
+            return true
+        } catch {
+            if let httpError = error as? HTTPError,
+               let statusCode = httpError.statusCode,
+               statusCode == 401 || statusCode == 403 {
+                return true
+            }
+            return false
+        }
+    }
+
+    /// Show the "Reconnecting" notice the first time the player actually
+    /// runs out of runway during an origin outage — the runway gate that
+    /// keeps short outages entirely invisible.
+    @MainActor
+    private func noteBufferingDuringSourceOutage() {
+        guard sourceOutageActive, !sourceOutageNoticeShown else { return }
+        sourceOutageNoticeShown = true
+        Self.logger.warning("[CMP-OUTAGE] runway exhausted; showing reconnecting notice")
+        showNotice(
+            title: "Reconnecting",
+            message: "Connection to the server was lost. Trying to reconnect…",
+            tone: .warning,
+            duration: Self.serverOutageRecoveryTimeout
+        )
+    }
+
     @discardableResult
     @MainActor
     private func attemptServerOutageRecovery(
@@ -3526,10 +3649,12 @@ class PlayerViewModel {
         let generation = serverOutageRecoveryGeneration
         activeServerOutageRecoverySessionId = interruptedSessionId
         // Outage recovery tears the proxy down; cancel any in-flight silent
-        // renewal so its retarget can't land mid-teardown.
+        // renewal so its retarget can't land mid-teardown, and end the
+        // ride-through (its watchdog suppression must not outlive the proxy).
         backgroundRenewalTask?.cancel()
         backgroundRenewalTask = nil
         backgroundRenewalSessionId = nil
+        clearSourceOutageRideThroughState()
 
         let resumePosition = observedPosition.isFinite
             ? max(0, observedPosition)
@@ -5210,6 +5335,7 @@ class PlayerViewModel {
         backgroundRenewalTask?.cancel()
         backgroundRenewalTask = nil
         backgroundRenewalSessionId = nil
+        clearSourceOutageRideThroughState()
         clearServerOutageRecoveryState()
         settingsRefreshTask?.cancel()
         settingsRefreshTask = nil

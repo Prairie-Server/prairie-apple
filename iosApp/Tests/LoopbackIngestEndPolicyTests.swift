@@ -10,14 +10,16 @@ final class LoopbackIngestEndPolicyTests: XCTestCase {
         bytePosition: Int64? = nil,
         fileSizeBytes: Int64? = nil,
         reachedPlanSeconds: Double? = nil,
-        plannedTotalSeconds: Double? = nil
+        plannedTotalSeconds: Double? = nil,
+        deadlineAborted: Bool = false
     ) -> LoopbackIngestEndPolicy.Verdict {
         LoopbackIngestEndPolicy.classify(
             readResult: readResult ?? avErrorEOF,
             bytePosition: bytePosition,
             fileSizeBytes: fileSizeBytes,
             reachedPlanSeconds: reachedPlanSeconds,
-            plannedTotalSeconds: plannedTotalSeconds
+            plannedTotalSeconds: plannedTotalSeconds,
+            deadlineAborted: deadlineAborted
         )
     }
 
@@ -130,6 +132,33 @@ final class LoopbackIngestEndPolicyTests: XCTestCase {
         XCTAssertEqual(
             classify(reachedPlanSeconds: 1_200, plannedTotalSeconds: 7_200),
             .prematureSourceEnd(shortfallBytes: nil, shortfallSeconds: 6_000)
+        )
+    }
+
+    func testDeadlineAbortedExitMidFileIsPremature() {
+        // The interrupt token aborted a wedged/outage-exhausted read: the
+        // AVERROR_EXIT is a source failure and must classify like any error.
+        let verdict = classify(
+            readResult: LoopbackIngestEndPolicy.avErrorExit,
+            bytePosition: 1_600_000_000,
+            fileSizeBytes: 4_000_000_000,
+            deadlineAborted: true
+        )
+        XCTAssertEqual(
+            verdict,
+            .prematureSourceEnd(shortfallBytes: 2_400_000_000, shortfallSeconds: nil)
+        )
+    }
+
+    func testDeadlineAbortedExitAtFileEndIsFinished() {
+        XCTAssertEqual(
+            classify(
+                readResult: LoopbackIngestEndPolicy.avErrorExit,
+                bytePosition: 4_000_000_000,
+                fileSizeBytes: 4_000_000_000,
+                deadlineAborted: true
+            ),
+            .finished
         )
     }
 
