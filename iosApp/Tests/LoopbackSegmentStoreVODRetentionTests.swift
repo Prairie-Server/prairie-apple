@@ -414,6 +414,34 @@ final class LoopbackSegmentStoreVODRetentionTests: XCTestCase {
         XCTAssertLessThan(store.stats().tempSpillBytes, 64)
     }
 
+    // MARK: - Consumer-fetch wedge signal (start-over deadlock, 2026-07-06)
+
+    // The producer's park-wedge escape distinguishes "consumer is slow"
+    // (park is healthy backpressure) from "consumer never attached" (park
+    // would deadlock: only consumer fetches advance the target). The signal
+    // must latch on the first declared fetch and never before.
+    func testConsumerFetchSignalLatchesOnFirstDeclaredTarget() {
+        let store = makeVODStore(budget: 1 << 20)
+        XCTAssertFalse(store.vodConsumerHasFetchedSegment(),
+                       "no fetch declared yet — producer park must be escapable")
+        // Producing segments does NOT count as consumption.
+        _ = store.putSegment(name: segName(0), data: Data(repeating: 1, count: 8), duration: 4)
+        XCTAssertFalse(store.vodConsumerHasFetchedSegment())
+        store.declareVODTarget(0)
+        XCTAssertTrue(store.vodConsumerHasFetchedSegment(),
+                      "a segment-0 fetch is still a fetch — target index 0 must latch the signal")
+    }
+
+    func testProducerWindowBlocksAheadOfUnfetchedConsumer() {
+        // Matches the field wedge: target stays at 0 (never fetched),
+        // forwardWindow 3 → segment 4 must park while segment 3 may append.
+        let store = makeVODStore(budget: 1 << 20)
+        XCTAssertTrue(store.vodProducerMayAppend(segmentIndex: 3))
+        XCTAssertFalse(store.vodProducerMayAppend(segmentIndex: 4))
+        XCTAssertFalse(store.vodConsumerHasFetchedSegment(),
+                       "the blocked state with no fetch is exactly the wedge the escape must detect")
+    }
+
     // MARK: - Retention budget resolution (AVPlayerBackend)
 
     func testRetentionBudgetClampNeverZero() {

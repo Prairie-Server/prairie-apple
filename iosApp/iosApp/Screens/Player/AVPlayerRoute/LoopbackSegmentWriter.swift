@@ -964,6 +964,33 @@ final class LoopbackSegmentWriter {
     private var vodPrerollDroppedVideo = 0
     private var vodPrerollDroppedAudio = 0
 
+    /// FFmpeg's mp4 muxer can only build the AC-3/E-AC-3/TrueHD sample-entry
+    /// box (dac3/dec3/dmlp) after it has PARSED an audio packet, so under
+    /// `+delay_moov` a flush that runs before any audio packet reaches the
+    /// muxer fails moov emission with "Cannot write moov atom before EAC3
+    /// packets parsed" — and `mov_write_packet(NULL)` swallows that error, so
+    /// the writer never sees it. AAC (and every other codec) needs no parsed
+    /// packet and must keep the stock code path.
+    private var vodAudioNeedsParsedPacketForMoov = false
+    /// Latched when the first selected-audio packet is routed to the muxer's
+    /// interleaver this run (set in `rewritePacketForOutput`).
+    private var vodAudioPacketRouted = false
+    /// Late-start audio prefeed: input-axis DTS of the packet fed ahead of
+    /// the mux loop so moov can be written. The mux loop drops the duplicate
+    /// when the demuxer naturally reaches it, then clears the latch.
+    private var vodPrefedAudioMaxDts: Int64?
+    /// Bounded retry for the moov priming flush (a flush that keeps failing
+    /// to emit moov must not be retried per audio packet).
+    private var vodMoovPrimeAttempts = 0
+
+    /// Codecs whose mp4 sample entry requires a parsed packet before moov
+    /// can be written (see `vodAudioNeedsParsedPacketForMoov`).
+    static func audioCodecNeedsParsedPacketForMoov(_ codecID: AVCodecID) -> Bool {
+        codecID == AV_CODEC_ID_AC3
+            || codecID == AV_CODEC_ID_EAC3
+            || codecID == AV_CODEC_ID_TRUEHD
+    }
+
     private func applyVODAnchorShift(
         pkt: UnsafeMutablePointer<AVPacket>,
         inputTimeBase: AVRational
@@ -1119,6 +1146,99 @@ final class LoopbackSegmentWriter {
         )
         print("[CMP-AVP] vod plan resolved segments=\(plan.segmentCount) keyframes=\(keyframePts.count) trusted=\(plan.usedKeyframeIndex) duration=\(String(format: "%.1f", plan.totalDurationSeconds))s")
         return plan
+    }
+
+    /// How far past the anchor the late-audio prefeed scan reads before
+    /// giving up. A miss is not fatal — the first cut's moov check escalates
+    /// to route fallback (the Compatibility engine plays such files) — so
+    /// this bounds startup latency, not correctness.
+    private static let vodLateAudioScanCapSeconds = 30.0
+    /// Audio arriving within this window of the anchor reaches the muxer's
+    /// interleaver before the first flush can attempt moov (interim flushes
+    /// start at 1.5 s and are additionally gated on the audio latch), so no
+    /// prefeed is needed and the scan stops at the first audio packet.
+    private static let vodLateAudioPrefeedThresholdSeconds = 2.0
+
+    /// Late-start audio prefeed (start-over deadlock, 2026-07-06). Some
+    /// sources carry a selected audio track whose first packet sits seconds
+    /// past the plan anchor — dub tracks that skip an undubbed recap are the
+    /// common case. Under `+delay_moov` the muxer cannot emit moov (and so
+    /// cannot emit init.mp4 or ANY media segment) until it has parsed one
+    /// AC-3/E-AC-3/TrueHD packet; a start-over session on such a file would
+    /// produce nothing, AVPlayer would never attach, and the producer would
+    /// park against the consumer window forever. Scan the demuxer (bounded)
+    /// for the track's first packet, stash it into `pendingAudioPackets`
+    /// (the existing replay path routes it with full drop/rewrite/major-sync
+    /// handling), and re-seek to the anchor — the same warm-cue seek
+    /// contract the restart path relies on. The mux loop later drops the
+    /// duplicate via `vodPrefedAudioMaxDts`; mp4 fragments carry per-track
+    /// timestamps, so the early-delivered sample still presents at its real
+    /// time.
+    private func prefeedVODLateStartAudioIfNeeded() throws {
+        guard vodActive,
+              vodEffectiveBaseIndex == 0,
+              vodAudioNeedsParsedPacketForMoov,
+              shouldIncludeAudio,
+              selectedAudioOutputMode == .copy,
+              selectedAudioStreamIndex >= 0,
+              videoInputStreamIndex >= 0,
+              let inCtx = inputCtx,
+              let plan = vodPlan else { return }
+        let anchorSeconds = plan.sourceStartSeconds(ofSegment: 0)
+        var packet = av_packet_alloc()
+        defer { av_packet_free(&packet) }
+        var scannedPackets = 0
+        var consumedAny = false
+        var stashed: UnsafeMutablePointer<AVPacket>?
+        var firstAudioSeconds: Double?
+        while !isCancelled, scannedPackets < 50_000, stashed == nil {
+            guard let pkt = packet else { break }
+            guard av_read_frame(inCtx, pkt) >= 0 else { break }
+            consumedAny = true
+            scannedPackets += 1
+            defer { av_packet_unref(pkt) }
+            let idx = Int(pkt.pointee.stream_index)
+            guard let stream = inCtx.pointee.streams?[idx] else { continue }
+            let tb = stream.pointee.time_base
+            let ts = pkt.pointee.pts != Int64.min ? pkt.pointee.pts : pkt.pointee.dts
+            let seconds: Double? = (ts != Int64.min && tb.den > 0)
+                ? Double(ts) * Double(tb.num) / Double(tb.den)
+                : nil
+            if idx == selectedAudioStreamIndex {
+                if outputAudioCodecID == AV_CODEC_ID_TRUEHD {
+                    // The replay path trims TrueHD to the first major sync;
+                    // a prefed non-sync packet would be trimmed right back
+                    // out, so keep scanning for a sync frame.
+                    let size = Int(pkt.pointee.size)
+                    guard size >= 4, let data = pkt.pointee.data,
+                          DVTrueHDMajorSyncScanner.containsMajorSync(bytes: data, count: size)
+                    else { continue }
+                }
+                firstAudioSeconds = seconds
+                guard let seconds,
+                      seconds - anchorSeconds > Self.vodLateAudioPrefeedThresholdSeconds else {
+                    break
+                }
+                stashed = av_packet_clone(pkt)
+            } else if idx == videoInputStreamIndex, let seconds,
+                      seconds - anchorSeconds > Self.vodLateAudioScanCapSeconds {
+                break
+            }
+        }
+        guard consumedAny else { return }
+        // The scan moved the cursor; production must start at the anchor
+        // keyframe or the plan misanchors (living-room bug 2 class). A
+        // failed seek here is fatal for the session, not ignorable.
+        try seekInput(inCtx, toSeconds: anchorSeconds)
+        if let stashed {
+            let dts = stashed.pointee.dts != Int64.min ? stashed.pointee.dts : stashed.pointee.pts
+            vodPrefedAudioMaxDts = dts
+            pendingAudioPackets.append(stashed)
+            let gap = (firstAudioSeconds ?? anchorSeconds) - anchorSeconds
+            print("[CMP-AVP] vod late-audio prefeed: first audio +\(String(format: "%.2f", gap))s after anchor — prefed one packet for moov (scanned \(scannedPackets) packets)")
+        } else if firstAudioSeconds == nil {
+            print("[CMP-AVP] vod late-audio prefeed: no \(outputAudioCodecToken ?? "audio") packet within \(Int(Self.vodLateAudioScanCapSeconds))s of anchor (scanned \(scannedPackets) packets); first cut escalates if moov stays blocked")
+        }
     }
 
     /// Cap on how many plan boundaries the resume-anchor validation walks
@@ -1324,20 +1444,51 @@ final class LoopbackSegmentWriter {
         guard target != vodOpenSegmentIndex else { return }
         try performVODFragmentCut(closingSegment: vodOpenSegmentIndex)
         vodOpenSegmentIndex = target
-        waitForVODWindowIfNeeded(nextSegmentIndex: target)
+        try waitForVODWindowIfNeeded(nextSegmentIndex: target)
     }
+
+    /// How long the producer may park against the consumer window while the
+    /// consumer has NEVER fetched a media segment before the park is treated
+    /// as a startup wedge. A healthy attach fetches within ~2 s of the
+    /// startup gate firing (the target latches on the GET request itself,
+    /// not the transfer), so 20 s is generous even for high-RTT remotes.
+    private static let vodStartupParkWedgeSeconds: Double = 20.0
 
     /// Producer pacing for the VOD mode: block before filling a segment past
     /// the consumer's window (`target + forwardWindow`). Replaces the EVENT
     /// generated-ahead throttle — and inherently parks when the playhead
     /// wedges, since a frozen consumer stops advancing the target.
-    private func waitForVODWindowIfNeeded(nextSegmentIndex: Int) {
+    ///
+    /// Wedge escape (AE #65/#93-parity): a park is healthy backpressure only
+    /// if the consumer is fetching — its GETs are the sole thing that ever
+    /// advances the target. If the consumer has never fetched a segment
+    /// (AVPlayer never attached: startup gate never fired, init.mp4 missing,
+    /// route misconfigured…), nothing can unpark the producer and the old
+    /// unbounded loop hung the session silently. Fail the session instead so
+    /// the route ladder falls back. Consumers that HAVE fetched keep the
+    /// unbounded park (a paused player legitimately freezes the target for
+    /// hours), but the periodic re-log keeps a genuine steady-state wedge
+    /// diagnosable from device logs.
+    private func waitForVODWindowIfNeeded(nextSegmentIndex: Int) throws {
         guard vodActive, let store = segmentStore else { return }
-        var logged = false
+        var parkedSince: CFAbsoluteTime?
+        var nextLogAtSeconds: Double = 0
         while !isCancelled, !store.vodProducerMayAppend(segmentIndex: nextSegmentIndex) {
-            if !logged {
-                logged = true
-                print("[CMP-AVP] vod window backpressure parked segment=\(nextSegmentIndex)")
+            let now = CFAbsoluteTimeGetCurrent()
+            let since = parkedSince ?? now
+            parkedSince = since
+            let parked = now - since
+            let consumerFetched = store.vodConsumerHasFetchedSegment()
+            if parked >= nextLogAtSeconds {
+                nextLogAtSeconds = parked + 10
+                print("[CMP-AVP] vod window backpressure parked segment=\(nextSegmentIndex) parked=\(Int(parked))s consumerFetched=\(consumerFetched ? 1 : 0)")
+            }
+            if !consumerFetched, parked >= Self.vodStartupParkWedgeSeconds {
+                print("[CMP-AVP] vod window backpressure WEDGE: parked \(Int(parked))s at segment=\(nextSegmentIndex) with no consumer fetch ever — failing session for route fallback")
+                throw LoopbackWriterError.vodStartupConsumerWedge(
+                    parkedSeconds: Int(parked),
+                    segment: nextSegmentIndex
+                )
             }
             // A parked producer reads no packets, so a bitmap subtitle
             // enabled while parked would otherwise wait for the next
@@ -1372,6 +1523,21 @@ final class LoopbackSegmentWriter {
             }
         }
         try throwIfFatalIOError()
+        // Moov-wedge escalation (start-over deadlock, 2026-07-06): a cut
+        // flush for a parse-needing audio codec MUST have emitted moov —
+        // the muxer writes it lazily on the first successful flush, and
+        // `mov_write_packet(NULL)` swallows the failure code, so a missing
+        // init segment here is the only reliable signal. Without it AVPlayer
+        // can never attach and the producer eventually parks forever; fail
+        // the session instead so the route ladder falls back to an engine
+        // that can play the file.
+        if vodAudioNeedsParsedPacketForMoov, !initSegmentWritten {
+            print("[CMP-AVP] vod cut segment=\(closingSegment) could not emit moov (audioRouted=\(vodAudioPacketRouted ? 1 : 0), primeAttempts=\(vodMoovPrimeAttempts)) — failing session for route fallback")
+            throw LoopbackWriterError.vodMoovBlocked(
+                closingSegment: closingSegment,
+                audioRouted: vodAudioPacketRouted
+            )
+        }
     }
 
     private static func defaultMinimumStartupMediaDuration(
@@ -1442,6 +1608,7 @@ final class LoopbackSegmentWriter {
             try openInput()
             try resolveVODPlanIfNeeded()
             try openOutput()
+            try prefeedVODLateStartAudioIfNeeded()
             // Prefetch + filter until we have a complete hvcC in extradata.
             // Filtered packets are stashed in pendingVideoPackets and replayed
             // below.
@@ -1528,6 +1695,17 @@ final class LoopbackSegmentWriter {
                     continue
                 }
 
+                // Late-audio prefeed duplicate: the packet fed ahead of the
+                // loop comes around again when the demuxer reaches its file
+                // position; drop everything at-or-before it once.
+                if let prefedMax = vodPrefedAudioMaxDts, inputIdx == selectedAudioStreamIndex {
+                    let dts = pkt.pointee.dts != Int64.min ? pkt.pointee.dts : pkt.pointee.pts
+                    if dts != Int64.min, dts <= prefedMax {
+                        continue
+                    }
+                    vodPrefedAudioMaxDts = nil
+                }
+
                 if inputIdx == selectedAudioStreamIndex, selectedAudioOutputMode != .copy {
                     if Self.traceThroughput {
                         let started = CFAbsoluteTimeGetCurrent()
@@ -1570,6 +1748,9 @@ final class LoopbackSegmentWriter {
                     wr = av_interleaved_write_frame(outputCtx, pkt)
                 }
                 try evaluateMuxWriteResult(wr)
+                if vodActive, !initSegmentWritten {
+                    try primeVODMoovAfterFirstAudioIfNeeded()
+                }
                 if vodInterimFlushRequested {
                     vodInterimFlushRequested = false
                     performVODInterimFragmentFlush()
@@ -2572,6 +2753,8 @@ final class LoopbackSegmentWriter {
                 ensureAudioFrameSize(codecpar: outStream.pointee.codecpar)
                 outputAudioCodecID = codecpar.pointee.codec_id
                 outputAudioCodecToken = codecToken(for: codecpar.pointee.codec_id)
+                vodAudioNeedsParsedPacketForMoov =
+                    Self.audioCodecNeedsParsedPacketForMoov(codecpar.pointee.codec_id)
                 // AV_PROFILE_EAC3_DDP_ATMOS (= 30): the eac3 decoder sets it
                 // during probing when the E-AC-3 bitstream carries a JOC
                 // (Atmos) extension. The vendored FFmpeg 7.1 muxer writes no
@@ -2682,6 +2865,9 @@ final class LoopbackSegmentWriter {
             } catch {
                 Self.logger.error("pending \(label, privacy: .public) write failed")
                 throw error
+            }
+            if vodActive, !initSegmentWritten {
+                try primeVODMoovAfterFirstAudioIfNeeded()
             }
         }
     }
@@ -4361,6 +4547,7 @@ final class LoopbackSegmentWriter {
         // audio timestamp and keep the running end so consecutive runs can
         // be diffed from the capture.
         if vodActive, inputStreamIndex != videoInputStreamIndex, pkt.pointee.pts != Int64.min {
+            vodAudioPacketRouted = true
             if !vodSeamDidLogFirstAudio {
                 vodSeamDidLogFirstAudio = true
                 print("[CMP-SEAM] run first audio outPts=\(pkt.pointee.pts) dur=\(pkt.pointee.duration) tb=\(outTB.num)/\(outTB.den)")
@@ -4914,8 +5101,47 @@ final class LoopbackSegmentWriter {
     /// `vodClosingSegmentIndex` still nil, so the box sink appends and
     /// publishes instead of finalizing. Errors are left for the next real
     /// write/cut to surface.
+    /// Moov-priming flush (AetherEngine #92-parity): once the first
+    /// parse-needing audio packet is in the interleaver and video has opened
+    /// the anchor segment, flush proactively so moov — and with it init.mp4 —
+    /// is emitted NOW instead of waiting for the first cut. Gated on the
+    /// progressive-anchor window so the emitted fragment appends to the open
+    /// segment rather than splitting it, and attempt-capped so a flush that
+    /// cannot produce moov (unparseable audio) is not retried per packet —
+    /// the first cut's post-flush check escalates that case.
+    private func primeVODMoovAfterFirstAudioIfNeeded() throws {
+        guard vodActive,
+              vodAudioNeedsParsedPacketForMoov,
+              !initSegmentWritten,
+              vodAudioPacketRouted,
+              vodHasRoutedVideo,
+              vodProgressiveAccumulating,
+              vodMoovPrimeAttempts < 3,
+              let outCtx = outputCtx else { return }
+        vodMoovPrimeAttempts += 1
+        let drainRC = av_interleaved_write_frame(outCtx, nil)
+        guard drainRC >= 0 else { return }
+        _ = av_write_frame(outCtx, nil)
+        if !vodDidFlushFirstFragment {
+            vodDidFlushFirstFragment = true
+            // delay_moov can split ftyp+moov and the fragment across two
+            // flush calls — same second flush the cut path performs.
+            _ = av_write_frame(outCtx, nil)
+        }
+        try throwIfFatalIOError()
+        if initSegmentWritten {
+            print("[CMP-AVP] vod moov primed by first audio packet (attempt \(vodMoovPrimeAttempts))")
+        }
+    }
+
     private func performVODInterimFragmentFlush() {
         guard vodProgressiveAccumulating, let outCtx = outputCtx else { return }
+        // Moov-wedge guard (AE #92-parity): before the first parse-needing
+        // audio packet no flush can emit moov — FFmpeg fails moov emission
+        // and keeps buffering, so the flush is a wasted error. Skipping is
+        // harmless: the interleaver window just grows until audio arrives
+        // (prefeed/priming) or the first cut escalates.
+        if vodAudioNeedsParsedPacketForMoov, !initSegmentWritten, !vodAudioPacketRouted { return }
         let drainRC = av_interleaved_write_frame(outCtx, nil)
         guard drainRC >= 0 else { return }
         _ = av_write_frame(outCtx, nil)
@@ -5026,10 +5252,32 @@ final class LoopbackSegmentWriter {
         var vodTfdtSummary: String?
         if vodActive, segmentEntries.count < 3 {
             var tfdts: [String] = []
+            var firstVideoTfdt: UInt64?
             for moof in childBoxes(in: pendingSegmentBytes, from: 0, to: pendingSegmentBytes.count)
             where moof.type == "moof" {
                 for timing in trackFragmentTimings(inMoof: pendingSegmentBytes, moof: moof.box) {
                     tfdts.append("\(timing.trackID):\(timing.baseDecodeTime)")
+                    if firstVideoTfdt == nil, timing.trackID == videoOutputTrackID {
+                        firstVideoTfdt = timing.baseDecodeTime
+                    }
+                }
+            }
+            // Naming-drift check (diagnostic only): the video tfdt is on the
+            // session/plan axis, so the first fragment of segment N must sit
+            // at N's plan start. Drift means fragments were attributed to
+            // the wrong segment index (e.g. a deferred-moov backlog dumped
+            // several segments' media through one cut).
+            if let firstVideoTfdt,
+               let videoID = videoOutputTrackID,
+               let tb = trackTimeBasesByID[videoID], tb.den > 0,
+               let plan = vodPlan, currentSegmentIndex < plan.segmentCount {
+                let tfdtSeconds = Double(firstVideoTfdt) * Double(tb.num) / Double(tb.den)
+                let expected = plan.startSeconds[currentSegmentIndex]
+                if abs(tfdtSeconds - expected) > 0.5 {
+                    tfdts.append(String(
+                        format: "NAMING-DRIFT tfdt=%.2fs expectedStart=%.2fs",
+                        tfdtSeconds, expected
+                    ))
                 }
             }
             vodTfdtSummary = tfdts.joined(separator: ",")
@@ -5787,4 +6035,13 @@ enum LoopbackWriterError: Error {
     /// These are catastrophic for HLS playback and are propagated rather than
     /// silently logged.
     case fileWriteFailed(String, Error)
+    /// A VOD cut flush completed without the muxer ever emitting moov — the
+    /// AC-3/E-AC-3/TrueHD sample entry needs a parsed audio packet and none
+    /// was available (or parsing keeps failing). No init segment means
+    /// AVPlayer can never attach; fail fast so the route ladder falls back.
+    case vodMoovBlocked(closingSegment: Int, audioRouted: Bool)
+    /// The producer parked against the consumer window but the consumer never
+    /// fetched a single media segment — nothing can ever advance the target,
+    /// so the park would deadlock the session silently.
+    case vodStartupConsumerWedge(parkedSeconds: Int, segment: Int)
 }

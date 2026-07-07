@@ -318,6 +318,17 @@ final class LoopbackSegmentStore {
         }
     }
 
+    /// Whether any consumer segment GET has declared a fetch target this
+    /// session. The producer's park-wedge escape uses this to distinguish
+    /// "consumer is slow/paused" (park is healthy backpressure) from
+    /// "consumer never attached" (park would deadlock: only consumer fetches
+    /// ever advance the target).
+    func vodConsumerHasFetchedSegment() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return vodTargetDeclarationCount > 0
+    }
+
     /// Producer window backpressure: appends past `target + forwardWindow`
     /// wait, so the producer paces on consumption instead of racing to EOF.
     /// The byte budget bounds backward history; this bounds the forward span
