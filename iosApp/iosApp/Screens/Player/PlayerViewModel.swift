@@ -720,6 +720,15 @@ class PlayerViewModel {
     private var remoteDismissTask: Task<Void, Never>?
     private var progressTask: Task<Void, Never>?
     private var staleSessionRecoveryTask: Task<Void, Never>?
+    /// In-flight silent renewal of a lost direct-play session (same file,
+    /// same plan, new session id — player and cache untouched). Keyed by the
+    /// stale session id for single-flight; transient failures retry on the
+    /// next trigger up to `backgroundRenewalTransientFailureLimit` before
+    /// escalating to the visible stale-session renewal.
+    private var backgroundRenewalTask: Task<Void, Never>?
+    private var backgroundRenewalSessionId: String?
+    private var backgroundRenewalTransientFailures = 0
+    private static let backgroundRenewalTransientFailureLimit = 3
     private var serverOutageRecoveryTask: Task<Void, Never>?
     private var serverOutageRecoveryGeneration: UInt64 = 0
     private var activeServerOutageRecoverySessionId: String?
@@ -1350,9 +1359,13 @@ class PlayerViewModel {
             handleEndOfFile()
             return
         }
-        if isPlaybackSessionMissingMessage(message) || isLikelyExpiredSessionHTTP404(message),
-           attemptStaleSessionRenewal(reason: "player_error", observedPosition: currentTime) {
-            return
+        if isPlaybackSessionMissingMessage(message) || isLikelyExpiredSessionHTTP404(message) {
+            if attemptBackgroundSessionRenewal(reason: "player_error", observedPosition: currentTime) {
+                return
+            }
+            if attemptStaleSessionRenewal(reason: "player_error", observedPosition: currentTime) {
+                return
+            }
         }
         if isPrematureSourceEndMessage(message) {
             Self.logger.warning(
@@ -2118,6 +2131,12 @@ class PlayerViewModel {
             onPlaybackSessionMissing: { [weak self] in
                 Task { @MainActor [weak self] in
                     guard let self else { return }
+                    if self.attemptBackgroundSessionRenewal(
+                        reason: "source_404",
+                        observedPosition: self.currentTime
+                    ) {
+                        return
+                    }
                     _ = self.attemptStaleSessionRenewal(
                         reason: "source_404",
                         observedPosition: self.currentTime
@@ -2930,6 +2949,10 @@ class PlayerViewModel {
                 self.autoSkipIntroCancelledKey = nil
                 self.cancelPendingIntroAutoSkip()
                 self.staleSessionRecoverySessionId = nil
+                self.backgroundRenewalTask?.cancel()
+                self.backgroundRenewalTask = nil
+                self.backgroundRenewalSessionId = nil
+                self.backgroundRenewalTransientFailures = 0
 
                 // Snapshot the preferred language for track-list ordering
                 // unconditionally (even with an explicit choice) so the
@@ -3228,6 +3251,120 @@ class PlayerViewModel {
         isPlaying = false
     }
 
+    /// Silently renews a lost server session in place: the bridge re-POSTs
+    /// the captured start request (same file, same plan), the source proxy
+    /// is retargeted at the renewed stream URL, and the player, remuxer, and
+    /// cache are never touched — zero user-visible effect. Returns false
+    /// when this playback cannot be renewed in place (offline, non-direct
+    /// delivery, no proxy); the caller falls back to the visible renewal.
+    /// A renewal that fails with a re-plan escalates to the visible renewal
+    /// itself; transient failures retry on the next trigger (the 10 s
+    /// progress heartbeat) up to a small cap.
+    @discardableResult
+    private func attemptBackgroundSessionRenewal(reason: String, observedPosition: Double) -> Bool {
+        guard !isDisposed,
+              offlinePlaybackContext == nil,
+              currentDeliveryStrategy == .direct,
+              sourceProxy != nil else {
+            return false
+        }
+        let staleSessionId = activePlaybackSessionId ?? "unknown"
+        if backgroundRenewalSessionId == staleSessionId {
+            return true
+        }
+        backgroundRenewalSessionId = staleSessionId
+        let resumePosition = observedPosition.isFinite
+            ? max(0, observedPosition)
+            : max(0, currentTime)
+
+        Self.logger.warning(
+            "[CMP-RECOVERY] background session renewal started session=\(staleSessionId, privacy: .public) reason=\(reason, privacy: .public) position=\(resumePosition, privacy: .public)"
+        )
+
+        backgroundRenewalTask?.cancel()
+        backgroundRenewalTask = Task { @MainActor [weak self] in
+            guard let self, !self.isDisposed else { return }
+            do {
+                let renewed = try await self.sessionBridge.renewDirectSession(
+                    position: resumePosition,
+                    audioTrackIndex: self.resolvedAudioTrackIndexForResume()
+                )
+                guard !Task.isCancelled, !self.isDisposed else { return }
+                // A fresh load may have replaced this playback while the
+                // renewal was in flight; adopting the new session into it
+                // would cross-wire two generations.
+                guard self.activePlaybackSessionId == staleSessionId,
+                      let proxy = self.sourceProxy else {
+                    Self.logger.info(
+                        "[CMP-RECOVERY] background renewal superseded session=\(staleSessionId, privacy: .public)"
+                    )
+                    return
+                }
+                guard let streamRequest = await self.makeStreamRequest(session: renewed) else {
+                    self.failBackgroundRenewal(
+                        reason: reason,
+                        observedPosition: resumePosition,
+                        detail: "invalid renewed stream URL"
+                    )
+                    return
+                }
+                proxy.retargetOrigin(url: streamRequest.url, headers: streamRequest.headers)
+                self.activePlaybackSessionId = renewed.sessionId
+                self.staleSessionRecoverySessionId = nil
+                self.backgroundRenewalSessionId = nil
+                self.backgroundRenewalTransientFailures = 0
+                await self.realtimeClient.unbind()
+                guard !Task.isCancelled, !self.isDisposed else { return }
+                await self.realtimeClient.bind(sessionId: renewed.sessionId)
+                Self.logger.info(
+                    "[CMP-RECOVERY] background session renewal succeeded old=\(staleSessionId, privacy: .public) new=\(renewed.sessionId, privacy: .public) reason=\(reason, privacy: .public)"
+                )
+            } catch let error as PlaybackSessionBridge.DirectSessionRenewalError {
+                guard !Task.isCancelled, !self.isDisposed else { return }
+                // The server re-planned (or nothing is renewable): only a
+                // full visible renewal can pick up the new plan.
+                self.failBackgroundRenewal(
+                    reason: reason,
+                    observedPosition: resumePosition,
+                    detail: String(describing: error)
+                )
+            } catch {
+                guard !Task.isCancelled, !self.isDisposed else { return }
+                self.backgroundRenewalSessionId = nil
+                self.backgroundRenewalTransientFailures += 1
+                if self.backgroundRenewalTransientFailures >= Self.backgroundRenewalTransientFailureLimit {
+                    self.failBackgroundRenewal(
+                        reason: reason,
+                        observedPosition: resumePosition,
+                        detail: "transient failures exhausted: \(error)"
+                    )
+                } else {
+                    // Leave the flag clear so the next trigger (progress
+                    // heartbeat or stream 404) retries; a genuinely dead
+                    // server escalates through the source-interruption path
+                    // independently of this renewal.
+                    Self.logger.warning(
+                        "[CMP-RECOVERY] background renewal transient failure #\(self.backgroundRenewalTransientFailures) session=\(staleSessionId, privacy: .public): \(String(describing: error), privacy: .public)"
+                    )
+                }
+            }
+        }
+        return true
+    }
+
+    @MainActor
+    private func failBackgroundRenewal(reason: String, observedPosition: Double, detail: String) {
+        Self.logger.warning(
+            "[CMP-RECOVERY] background renewal escalating to visible renewal reason=\(reason, privacy: .public): \(detail, privacy: .public)"
+        )
+        backgroundRenewalSessionId = nil
+        backgroundRenewalTransientFailures = 0
+        _ = attemptStaleSessionRenewal(
+            reason: "\(reason)_bg_renewal_failed",
+            observedPosition: observedPosition
+        )
+    }
+
     @discardableResult
     private func attemptStaleSessionRenewal(reason: String, observedPosition: Double) -> Bool {
         guard !isDisposed,
@@ -3240,6 +3377,11 @@ class PlayerViewModel {
             return true
         }
         staleSessionRecoverySessionId = staleSessionId
+        // A visible renewal supersedes any in-flight silent one; a late
+        // retarget landing mid-teardown would cross-wire the generations.
+        backgroundRenewalTask?.cancel()
+        backgroundRenewalTask = nil
+        backgroundRenewalSessionId = nil
 
         let resumePosition = observedPosition.isFinite
             ? max(0, observedPosition)
@@ -3305,6 +3447,11 @@ class PlayerViewModel {
         serverOutageRecoveryGeneration &+= 1
         let generation = serverOutageRecoveryGeneration
         activeServerOutageRecoverySessionId = interruptedSessionId
+        // Outage recovery tears the proxy down; cancel any in-flight silent
+        // renewal so its retarget can't land mid-teardown.
+        backgroundRenewalTask?.cancel()
+        backgroundRenewalTask = nil
+        backgroundRenewalSessionId = nil
 
         let resumePosition = observedPosition.isFinite
             ? max(0, observedPosition)
@@ -4981,6 +5128,9 @@ class PlayerViewModel {
         progressTask?.cancel()
         staleSessionRecoveryTask?.cancel()
         staleSessionRecoveryTask = nil
+        backgroundRenewalTask?.cancel()
+        backgroundRenewalTask = nil
+        backgroundRenewalSessionId = nil
         clearServerOutageRecoveryState()
         settingsRefreshTask?.cancel()
         settingsRefreshTask = nil
@@ -6384,6 +6534,12 @@ class PlayerViewModel {
                     isPaused: !self.isPlaying
                 )
                 if result == .missingSession {
+                    if self.attemptBackgroundSessionRenewal(
+                        reason: "progress",
+                        observedPosition: self.currentTime
+                    ) {
+                        continue
+                    }
                     _ = self.attemptStaleSessionRenewal(
                         reason: "progress",
                         observedPosition: self.currentTime

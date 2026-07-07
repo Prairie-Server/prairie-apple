@@ -617,8 +617,14 @@ private final class PlaybackSourceResource {
     }
 
     let token: String
-    let originURL: URL
-    let originHeaders: [String: String]
+    /// Origin endpoint for window/chunk fetches. Mutable for in-place session
+    /// renewal (`retargetOrigin`): a renewed direct-play session serves the
+    /// identical bytes under a new session URL, so the transport swaps
+    /// endpoints while the cache, waiters, and local server stay put. Guarded
+    /// by `stateLock`; every reader (stream/fetcher construction) already
+    /// runs under it.
+    private var originURL: URL
+    private var originHeaders: [String: String]
     let cache: PlaybackSourceCache
     private let onPlaybackSessionMissing: (() -> Void)?
     private let onPlaybackSourceInterrupted: ((PlaybackSourceInterruptionReason) -> Void)?
@@ -694,6 +700,36 @@ private final class PlaybackSourceResource {
         for (_, serveTask) in serving {
             serveTask.cancel()
         }
+    }
+
+    /// Swap the origin endpoint in place (silent session renewal): the
+    /// current window and chunk fetcher hold the dead session's URL and are
+    /// cancelled; parked data waiters are re-driven so each re-misses and
+    /// re-routes through the normal machinery (window claim or chunk)
+    /// against the new origin. The cache, serve connections, and local URL
+    /// are untouched — the renewed session must serve the identical bytes.
+    func retargetOrigin(url: URL, headers: [String: String]) {
+        var windowToCancel: PlaybackOriginStream?
+        var fetcherToCancel: PlaybackOriginChunkFetcher?
+        stateLock.lock()
+        guard !cancelled else {
+            stateLock.unlock()
+            return
+        }
+        originURL = url
+        originHeaders = headers
+        windowToCancel = windowStream
+        windowStream = nil
+        fetcherToCancel = chunkFetcher
+        chunkFetcher = nil
+        stateLock.unlock()
+        if let windowToCancel {
+            windowToCancel.cancel()
+            cache.endOriginRequest()
+        }
+        fetcherToCancel?.cancel()
+        redriveAllDataWaiters()
+        Self.logger.info("[CMP-SOURCE-CACHE] origin retargeted for renewed session")
     }
 
     func stats() -> PlaybackSourceProxyStats {
@@ -1558,6 +1594,12 @@ final class PlaybackSourceProxy {
 
     func startPrefetch(at offset: Int64 = 0) {
         resource.startPrefetch(at: offset)
+    }
+
+    /// Swap the origin endpoint in place after a silent session renewal.
+    /// See `PlaybackSourceResource.retargetOrigin`.
+    func retargetOrigin(url: URL, headers: [String: String]) {
+        resource.retargetOrigin(url: url, headers: headers)
     }
 
     func setSourceBitrate(_ bps: Double?) {
