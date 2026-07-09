@@ -274,3 +274,68 @@ final class PlaybackSourceProxyOutageTests: XCTestCase {
         XCTAssertEqual(failedCheck, .timedOut, "the parked reader must never see a failed connection")
     }
 }
+
+/// The interrupt-token span deadline around outage transitions: the exact
+/// failure sim-validated on 2026-07-07 was a read parked through a ~25 s
+/// outage being aborted the instant the outage flag cleared (25 s > the
+/// 10 s base allowance measured from span start), racing the redriven bytes
+/// and forcing a visible reload.
+final class LoopbackInterruptTokenDeadlineTests: XCTestCase {
+    private func makeToken(outage: @escaping () -> Bool) -> LoopbackInterruptToken {
+        let token = LoopbackInterruptToken()
+        token.setSourceOutageProvider(outage)
+        return token
+    }
+
+    func testNormalReadAbortsAtBaseAllowance() {
+        let token = makeToken(outage: { false })
+        token.beginBlockingSpan(allowanceSeconds: 10)
+        XCTAssertFalse(token.shouldInterrupt(now: CFAbsoluteTimeGetCurrent() + 9))
+        XCTAssertTrue(token.shouldInterrupt(now: CFAbsoluteTimeGetCurrent() + 11))
+        XCTAssertTrue(token.didAbortOnDeadline)
+    }
+
+    func testOutageParksWellPastBaseAllowance() {
+        let token = makeToken(outage: { true })
+        token.beginBlockingSpan(allowanceSeconds: 10)
+        XCTAssertFalse(token.shouldInterrupt(now: CFAbsoluteTimeGetCurrent() + 120))
+        XCTAssertFalse(token.didAbortOnDeadline)
+    }
+
+    func testOutageParkHitsAbsoluteBackstop() {
+        let token = makeToken(outage: { true })
+        token.beginBlockingSpan(allowanceSeconds: 10)
+        XCTAssertTrue(token.shouldInterrupt(
+            now: CFAbsoluteTimeGetCurrent() + LoopbackInterruptToken.outageParkAllowanceSeconds + 1
+        ))
+        XCTAssertTrue(token.didAbortOnDeadline)
+    }
+
+    func testOutageClearGrantsFreshAllowanceFromClearInstant() {
+        var outageActive = true
+        let token = makeToken(outage: { outageActive })
+        let start = CFAbsoluteTimeGetCurrent()
+        token.beginBlockingSpan(allowanceSeconds: 10)
+        // Parked 25 s into the outage; the callback observes the outage.
+        XCTAssertFalse(token.shouldInterrupt(now: start + 25))
+        outageActive = false
+        // The moment the outage clears the elapsed span is 25 s > 10 s base,
+        // but the fresh allowance runs from the last outage observation —
+        // the read must survive to receive its redriven bytes.
+        XCTAssertFalse(token.shouldInterrupt(now: start + 26))
+        XCTAssertFalse(token.shouldInterrupt(now: start + 34))
+        XCTAssertFalse(token.didAbortOnDeadline)
+        // ...but a source that stays silent past the fresh allowance is a
+        // genuine wedge again.
+        XCTAssertTrue(token.shouldInterrupt(now: start + 36))
+        XCTAssertTrue(token.didAbortOnDeadline)
+    }
+
+    func testCancellationWinsAndIsNotADeadlineAbort() {
+        let token = makeToken(outage: { true })
+        token.beginBlockingSpan(allowanceSeconds: 10)
+        token.cancel()
+        XCTAssertTrue(token.shouldInterrupt(now: CFAbsoluteTimeGetCurrent()))
+        XCTAssertFalse(token.didAbortOnDeadline)
+    }
+}

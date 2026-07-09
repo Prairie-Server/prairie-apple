@@ -3545,6 +3545,12 @@ class PlayerViewModel {
             sourceOutageNoticeShown = false
             activePlayer.avBackend?.setExternalStallSuppression(true)
             Self.logger.warning("[CMP-OUTAGE] ride-through started")
+            if isBuffering {
+                // Already out of runway when the outage was detected (e.g. a
+                // seek beyond the cache raced the outage) — the notice's
+                // buffering-edge trigger won't fire again.
+                noteBufferingDuringSourceOutage()
+            }
             sourceOutageRideThroughTask?.cancel()
             sourceOutageRideThroughTask = Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -3577,6 +3583,10 @@ class PlayerViewModel {
             Self.logger.info("[CMP-OUTAGE] ride-through ended; origin recovered")
             let showReconnected = sourceOutageNoticeShown
             clearSourceOutageRideThroughState()
+            // An item whose segment fetches died during the outage won't
+            // retry them on its own — kick the stall recovery immediately
+            // rather than waiting for a watchdog to misread the wedge.
+            activePlayer.avBackend?.kickPlaybackAfterExternalStallCleared()
             if showReconnected {
                 showNotice(
                     title: "Reconnected",

@@ -212,6 +212,30 @@ final class AVPlayerBackend {
         cmpLog("[CMP-OUTAGE] watchdog suppression \(active ? "on" : "off")")
     }
 
+    /// Proactive recovery when the view model reports an origin outage has
+    /// ended. An item whose segment requests died during the outage does not
+    /// retry them on its own: the transport and producer recover, but the
+    /// playhead sits waiting on an empty buffer until the (no longer
+    /// suppressed) starvation watchdog degrades the route — even though
+    /// nothing is broken anymore (sim-validated 2026-07-07). Run the same
+    /// stall recovery the playhead watchdog would, immediately.
+    @MainActor
+    func kickPlaybackAfterExternalStallCleared() {
+        guard !isDisposed,
+              let item = currentItem,
+              case .some(.siloLoopback(let spec)) = currentSourceStrategy,
+              !isUserPaused,
+              avPlayer.timeControlStatus == .waitingToPlayAtSpecifiedRate else { return }
+        let bufferedAhead = bufferedAheadSeconds(for: item, referenceTime: currentTime()) ?? 0
+        guard bufferedAhead < 2.0 else { return }
+        cmpLog("[CMP-OUTAGE] post-outage playback kick pos=\(currentTime()) bufAhead=\(bufferedAhead)")
+        if spec.servingMode == .vodPlan {
+            performVODStallRecovery(attempt: 1, frozenPosition: currentTime())
+        } else {
+            recoverLocalLoopbackStallIfNeeded(item: item, requireBufferedEdge: false, reason: "post_outage_kick")
+        }
+    }
+
     let avPlayer = AVPlayer()
     weak var subtitleOverlay: SubtitleOverlayView?
     var subtitleRendererForOverlay: SubtitleRenderer? {

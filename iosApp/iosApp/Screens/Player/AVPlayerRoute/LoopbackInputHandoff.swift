@@ -25,6 +25,13 @@ final class LoopbackInterruptToken {
     private var spanStartedAt: CFAbsoluteTime = 0
     private var spanAllowanceSeconds: Double = 0
     private var deadlineAborted = false
+    /// Last wall time the outage provider reported an active outage. A span
+    /// that parked through an outage gets a *fresh* base allowance from the
+    /// moment the outage clears — the redriven bytes need time to flow, and
+    /// judging the park by its total blocked time aborted the read in the
+    /// exact instant it was about to resume (sim-validated failure,
+    /// 2026-07-07: recovery raced the deadline and forced a visible reload).
+    private var lastOutageObservedAt: CFAbsoluteTime = 0
     /// Live query into the source proxy's outage state; when true, a
     /// blocking read is allowed to park up to `outageParkAllowanceSeconds`
     /// instead of its normal allowance. Called from FFmpeg's IO thread
@@ -53,6 +60,7 @@ final class LoopbackInterruptToken {
         spanStartedAt = 0
         deadlineAborted = false
         sourceOutageActive = nil
+        lastOutageObservedAt = 0
         lock.unlock()
     }
 
@@ -92,6 +100,16 @@ final class LoopbackInterruptToken {
     /// The interrupt callback body. Kept on the token so the C callback
     /// stays a one-liner over the opaque pointer.
     func shouldInterrupt() -> Bool {
+        shouldInterrupt(now: CFAbsoluteTimeGetCurrent())
+    }
+
+    /// Deadline decision with an injectable clock (tests). While the outage
+    /// provider reports active, the span may park up to the outage allowance
+    /// (measured from span start — the absolute backstop). Once the outage
+    /// clears, the span gets a fresh base allowance measured from the last
+    /// moment the outage was observed, so a read parked through the whole
+    /// outage isn't aborted in the same beat its redriven bytes arrive.
+    func shouldInterrupt(now: CFAbsoluteTime) -> Bool {
         lock.lock()
         if cancelled {
             lock.unlock()
@@ -102,10 +120,18 @@ final class LoopbackInterruptToken {
         let provider = sourceOutageActive
         lock.unlock()
         guard started > 0 else { return false }
-        let allowance = provider?() == true
-            ? max(base, Self.outageParkAllowanceSeconds)
-            : base
-        guard CFAbsoluteTimeGetCurrent() - started > allowance else { return false }
+        if provider?() == true {
+            lock.lock()
+            lastOutageObservedAt = now
+            lock.unlock()
+            guard now - started > max(base, Self.outageParkAllowanceSeconds) else { return false }
+        } else {
+            lock.lock()
+            let outageSeen = lastOutageObservedAt
+            lock.unlock()
+            let effectiveStart = max(started, min(outageSeen, now))
+            guard now - effectiveStart > base else { return false }
+        }
         lock.lock()
         deadlineAborted = true
         lock.unlock()
