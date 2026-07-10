@@ -313,17 +313,22 @@ final class AVPlayerBackend {
         )
     }
 
-    /// Adaptive forward-buffer target for the local DV loopback. Aims for
-    /// a fixed resident-memory target while clamping the duration into a
-    /// sensible window so very high-bitrate sources don't blow tvOS RAM and
-    /// very low-bitrate sources still keep enough cushion for transient WAN
-    /// dips.
+    /// Adaptive forward-buffer target for the local DV loopback. EVENT
+    /// playlists need a live-edge cushion, while a static VOD playlist must
+    /// keep AVPlayer's target below the bounded producer window. Otherwise a
+    /// high-bitrate source can deadlock with the producer parked at its byte
+    /// cap just below AVPlayer's requested duration.
     static func loopbackSteadyStateForwardBufferTarget(
         forBitsPerSecond bitrateBps: Double?,
         targetDuration: Double? = nil,
         longestSegmentDuration: Double? = nil,
+        servingMode: LoopbackServingMode = .event,
         constrainedMemoryDevice: Bool? = nil
     ) -> Double {
+        if servingMode == .vodPlan {
+            return loopbackVODForwardBufferTarget(targetDuration: targetDuration)
+        }
+
         let constrainedMemoryDevice = constrainedMemoryDevice ?? Self.isConstrainedMemoryDevice
         let liveEdgeFloor = loopbackLiveEdgeForwardBufferFloor(
             targetDuration: targetDuration,
@@ -342,6 +347,20 @@ final class AVPlayerBackend {
         // Clamp: avoid underrun on jitter while capping memory and seek-back
         // churn. Lower-memory Apple TVs get a tighter window.
         return min(maxSeconds, max(minSeconds, max(computed, liveEdgeFloor)))
+    }
+
+    /// The VOD producer retains at least three forward segments. Asking
+    /// AVPlayer for one nominal segment prevents the consumer from waiting
+    /// for more media after that producer has reached its byte budget. The
+    /// upper bound protects the same invariant if a malformed plan reports
+    /// an unexpectedly large target duration.
+    private static func loopbackVODForwardBufferTarget(targetDuration: Double?) -> Double {
+        guard let targetDuration,
+              targetDuration.isFinite,
+              targetDuration > 0 else {
+            return loopbackStartupForwardBuffer
+        }
+        return min(8, max(loopbackStartupForwardBuffer, targetDuration))
     }
 
     private static func loopbackLiveEdgeForwardBufferFloor(
@@ -3408,14 +3427,10 @@ final class AVPlayerBackend {
         Self.logger.info("[CMP-AVP] initial video display gate released reason=\(reason, privacy: .public)")
     }
 
-    /// Once the first frame is on screen, expand AVPlayer's forward
-    /// buffer target so the loopback path can ride out brief network
-    /// dips. Until now the buffer was capped at
-    /// `loopbackStartupForwardBuffer` to keep readyToPlay snappy; that
-    /// cushion is too thin for sustained playback when the source
-    /// bitrate is close to the user's WAN throughput. Re-enable
-    /// `automaticallyWaitsToMinimizeStalling` so AVPlayer pauses cleanly
-    /// to rebuffer on actual underrun instead of presenting a stutter.
+    /// Once the first frame is on screen, apply the serving mode's steady-
+    /// state target and re-enable automatic waiting. EVENT playlists expand
+    /// their live-edge cushion; static VOD playlists stay near one segment so
+    /// AVPlayer cannot outrun the bounded producer window.
     private func rampLoopbackBufferToSteadyStateIfNeeded(for item: AVPlayerItem) {
         guard case .siloLoopback(let spec) = currentSourceStrategy else { return }
         guard canRampLoopbackBufferToSteadyState else { return }
@@ -3424,13 +3439,18 @@ final class AVPlayerBackend {
         let target = Self.loopbackSteadyStateForwardBufferTarget(
             forBitsPerSecond: mediaBitrate,
             targetDuration: generatedStats.map { Double($0.targetDuration) },
-            longestSegmentDuration: generatedStats?.longestSegmentDuration
+            longestSegmentDuration: generatedStats?.longestSegmentDuration,
+            servingMode: spec.servingMode
         )
-        guard item.preferredForwardBufferDuration < target else { return }
-        item.preferredForwardBufferDuration = target
+        let shouldRaiseForwardBuffer = item.preferredForwardBufferDuration < target
+        let shouldEnableAutomaticWaiting = !avPlayer.automaticallyWaitsToMinimizeStalling
+        guard shouldRaiseForwardBuffer || shouldEnableAutomaticWaiting else { return }
+        if shouldRaiseForwardBuffer {
+            item.preferredForwardBufferDuration = target
+        }
         avPlayer.automaticallyWaitsToMinimizeStalling = true
         Self.logger.info(
-            "[CMP-AVP] loopback buffer ramp forwardBuffer=\(target, privacy: .public)s automaticallyWaits=1 mediaBitrate=\(mediaBitrate ?? 0, privacy: .public)bps generatedBitrate=\(generatedStats?.rollingBitrateBps ?? 0, privacy: .public)bps declaredBitrate=\(spec.sourceBitrateBps ?? 0, privacy: .public)bps sourceReadBitrate=\(self.loopbackSourceDownloadBitrateBps ?? 0, privacy: .public)bps targetDuration=\(generatedStats?.targetDuration ?? 0, privacy: .public) longestSegment=\(generatedStats?.longestSegmentDuration ?? 0, privacy: .public)"
+            "[CMP-AVP] loopback buffer ramp servingMode=\(String(describing: spec.servingMode), privacy: .public) forwardBuffer=\(target, privacy: .public)s automaticallyWaits=1 mediaBitrate=\(mediaBitrate ?? 0, privacy: .public)bps generatedBitrate=\(generatedStats?.rollingBitrateBps ?? 0, privacy: .public)bps declaredBitrate=\(spec.sourceBitrateBps ?? 0, privacy: .public)bps sourceReadBitrate=\(self.loopbackSourceDownloadBitrateBps ?? 0, privacy: .public)bps targetDuration=\(generatedStats?.targetDuration ?? 0, privacy: .public) longestSegment=\(generatedStats?.longestSegmentDuration ?? 0, privacy: .public)"
         )
     }
 
