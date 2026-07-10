@@ -54,6 +54,62 @@ final class LoopbackSegmentCutterTests: XCTestCase {
         )
     }
 
+    func testLengthPrefixedHEVCValidatorRejectsMalformedAccessUnits() {
+        let validIRAP: [UInt8] = [0, 0, 0, 2, 0x26, 0x01]
+        XCTAssertTrue(
+            LoopbackLengthPrefixedHEVCValidator.isValid(
+                bytes: validIRAP,
+                nalLengthSize: 4
+            )
+        )
+        XCTAssertFalse(
+            LoopbackLengthPrefixedHEVCValidator.isValid(
+                bytes: [0, 0, 0, 0],
+                nalLengthSize: 4
+            )
+        )
+        XCTAssertFalse(
+            LoopbackLengthPrefixedHEVCValidator.isValid(
+                bytes: [0, 0, 0, 4, 0x02, 0x01],
+                nalLengthSize: 4
+            )
+        )
+        XCTAssertFalse(
+            LoopbackLengthPrefixedHEVCValidator.isValid(
+                bytes: [0, 0, 0, 2, 0x82, 0x01],
+                nalLengthSize: 4
+            )
+        )
+    }
+
+    func testCorruptVideoRecoveryDropsUntilValidRandomAccessPoint() {
+        var state = LoopbackCorruptVideoRecoveryState()
+        XCTAssertEqual(
+            state.evaluate(structurallyValid: true, isRandomAccess: false),
+            .keep
+        )
+        XCTAssertEqual(
+            state.evaluate(structurallyValid: false, isRandomAccess: false),
+            .drop(startedRecovery: true)
+        )
+        XCTAssertEqual(
+            state.evaluate(structurallyValid: true, isRandomAccess: false),
+            .drop(startedRecovery: false)
+        )
+        XCTAssertEqual(
+            state.evaluate(structurallyValid: false, isRandomAccess: true),
+            .drop(startedRecovery: false)
+        )
+        XCTAssertEqual(
+            state.evaluate(structurallyValid: true, isRandomAccess: true),
+            .resumeAtRandomAccess
+        )
+        XCTAssertEqual(
+            state.evaluate(structurallyValid: true, isRandomAccess: false),
+            .keep
+        )
+    }
+
     func testFirstKeyframeOpensSegmentZero() {
         var cutter = LoopbackSegmentCutter(boundaries: boundaries)
         XCTAssertEqual(cutter.index(pts: 0, isKeyframe: true), 0)

@@ -55,11 +55,18 @@ final class LoopbackSegmentServer {
     /// to distinguish a slow-but-fetching AVPlayer from one whose loader
     /// pipeline died and stopped requesting entirely.
     private var totalRequestCount: UInt64 = 0
+    private var vodSegmentCount: Int?
 
     var servedRequestCount: UInt64 {
         lock.lock()
         defer { lock.unlock() }
         return totalRequestCount
+    }
+
+    func setVODSegmentCount(_ count: Int) {
+        lock.lock()
+        vodSegmentCount = max(0, count)
+        lock.unlock()
     }
 
     /// Port the OS assigned us. Only valid once `start()` has returned
@@ -406,14 +413,31 @@ final class LoopbackSegmentServer {
                             on: connection
                         )
                     case .missing, .gone:
-                        self.logRequest(method: method, path: path, status: 404, bytes: 0, range: rangeHeader, started: started)
-                        self.respondError(404, "Not Found", on: connection)
+                        self.respondToMissingVODSegment(
+                            index: index,
+                            path: path,
+                            method: method,
+                            range: rangeHeader,
+                            started: started,
+                            on: connection
+                        )
                     }
                 }
                 return
             }
-            logRequest(method: method, path: path, status: 404, bytes: 0, range: rangeHeader, started: started)
-            respondError(404, "Not Found", on: connection)
+            if let index = LoopbackSegmentStore.segmentIndex(fromName: path) {
+                respondToMissingVODSegment(
+                    index: index,
+                    path: path,
+                    method: method,
+                    range: rangeHeader,
+                    started: started,
+                    on: connection
+                )
+            } else {
+                logRequest(method: method, path: path, status: 404, bytes: 0, range: rangeHeader, started: started)
+                respondError(404, "Not Found", on: connection)
+            }
         case .found(let resource):
             respondWithResource(
                 resource,
@@ -423,6 +447,42 @@ final class LoopbackSegmentServer {
                 started: started,
                 on: connection
             )
+        }
+    }
+
+    enum VODMissingResponseKind: Equatable {
+        case retryLater
+        case notFound
+    }
+
+    static func vodMissingResponseKind(index: Int, segmentCount: Int?) -> VODMissingResponseKind {
+        guard index >= 0,
+              let segmentCount,
+              segmentCount > 0,
+              index < segmentCount else {
+            return .notFound
+        }
+        return .retryLater
+    }
+
+    private func respondToMissingVODSegment(
+        index: Int,
+        path: String,
+        method: HTTPMethod,
+        range: String?,
+        started: CFAbsoluteTime,
+        on connection: NWConnection
+    ) {
+        lock.lock()
+        let segmentCount = vodSegmentCount
+        lock.unlock()
+        switch Self.vodMissingResponseKind(index: index, segmentCount: segmentCount) {
+        case .retryLater:
+            logRequest(method: method, path: path, status: 503, bytes: 0, range: range, started: started)
+            respondRetryLater(on: connection)
+        case .notFound:
+            logRequest(method: method, path: path, status: 404, bytes: 0, range: range, started: started)
+            respondError(404, "Not Found", on: connection)
         }
     }
 
@@ -645,8 +705,10 @@ final class LoopbackSegmentServer {
         on connection: NWConnection
     ) {
         guard totalLength > 0 else {
-            logRequest(method: method, path: requestPath, status: 404, bytes: 0, range: rangeHeader, started: started)
-            respondError(404, "Not Found", on: connection)
+            respondToMissingDiskResource(
+                path: requestPath, method: method, range: rangeHeader,
+                started: started, on: connection
+            )
             return
         }
 
@@ -687,16 +749,20 @@ final class LoopbackSegmentServer {
         }
 
         guard let handle = try? FileHandle(forReadingFrom: url) else {
-            logRequest(method: method, path: requestPath, status: 404, bytes: 0, range: rangeHeader, started: started)
-            respondError(404, "Not Found", on: connection)
+            respondToMissingDiskResource(
+                path: requestPath, method: method, range: rangeHeader,
+                started: started, on: connection
+            )
             return
         }
         do {
             try handle.seek(toOffset: UInt64(lower))
         } catch {
             handle.closeFile()
-            logRequest(method: method, path: requestPath, status: 404, bytes: 0, range: rangeHeader, started: started)
-            respondError(404, "Not Found", on: connection)
+            respondToMissingDiskResource(
+                path: requestPath, method: method, range: rangeHeader,
+                started: started, on: connection
+            )
             return
         }
 
@@ -713,6 +779,24 @@ final class LoopbackSegmentServer {
         logRequest(method: method, path: requestPath, status: status, bytes: bodyBytes, range: rangeHeader, started: started)
         send(Data(header.utf8), on: connection, andClose: false) { [weak self] in
             self?.sendFileChunks(handle: handle, remaining: bodyBytes, on: connection)
+        }
+    }
+
+    private func respondToMissingDiskResource(
+        path: String,
+        method: HTTPMethod,
+        range: String?,
+        started: CFAbsoluteTime,
+        on connection: NWConnection
+    ) {
+        if let index = LoopbackSegmentStore.segmentIndex(fromName: path) {
+            respondToMissingVODSegment(
+                index: index, path: path, method: method, range: range,
+                started: started, on: connection
+            )
+        } else {
+            logRequest(method: method, path: path, status: 404, bytes: 0, range: range, started: started)
+            respondError(404, "Not Found", on: connection)
         }
     }
 
@@ -810,6 +894,19 @@ final class LoopbackSegmentServer {
         var data = Data(header.utf8)
         data.append(body.data(using: .utf8) ?? Data())
         send(data, on: connection, andClose: true)
+    }
+
+    /// AVPlayer treats a missing static-VOD segment as terminal when it gets
+    /// a 404. An advertised but not-yet-produced segment is transient, so
+    /// mirror AetherEngine's contract: 503 + Retry-After keeps the item alive
+    /// while the coalesced producer restart fills the cache.
+    private func respondRetryLater(on connection: NWConnection) {
+        var header = "HTTP/1.1 503 Service Unavailable\r\n"
+        header += "Content-Length: 0\r\n"
+        header += "Retry-After: 1\r\n"
+        header += "Cache-Control: no-store\r\n"
+        header += "Connection: close\r\n\r\n"
+        send(Data(header.utf8), on: connection, andClose: true)
     }
 
     private func sendHeaderAndBody(_ header: String, body: Data, on connection: NWConnection) {

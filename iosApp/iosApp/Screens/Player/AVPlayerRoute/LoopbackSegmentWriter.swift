@@ -84,6 +84,65 @@ enum LoopbackVideoSampleDurationPolicy {
     }
 }
 
+enum LoopbackLengthPrefixedHEVCValidator {
+    static func isValid(bytes: [UInt8], nalLengthSize: Int) -> Bool {
+        bytes.withUnsafeBufferPointer {
+            isValid(packetBytes: $0, nalLengthSize: nalLengthSize)
+        }
+    }
+
+    static func isValid(
+        packetBytes: UnsafeBufferPointer<UInt8>,
+        nalLengthSize: Int
+    ) -> Bool {
+        guard (1...4).contains(nalLengthSize), !packetBytes.isEmpty else { return false }
+        var cursor = 0
+        var nalCount = 0
+        while cursor < packetBytes.count {
+            guard cursor + nalLengthSize <= packetBytes.count else { return false }
+            var nalSize = 0
+            for index in 0..<nalLengthSize {
+                nalSize = (nalSize << 8) | Int(packetBytes[cursor + index])
+            }
+            let nalStart = cursor + nalLengthSize
+            guard nalSize >= 2, nalStart + nalSize <= packetBytes.count else { return false }
+
+            // HEVC forbidden_zero_bit must be zero and nuh_temporal_id_plus1
+            // must never be zero. Checking both catches damaged access units
+            // whose length prefixes happen to remain in range.
+            let byte0 = packetBytes[nalStart]
+            let byte1 = packetBytes[nalStart + 1]
+            guard byte0 & 0x80 == 0, byte1 & 0x07 != 0 else { return false }
+
+            nalCount += 1
+            cursor = nalStart + nalSize
+        }
+        return nalCount > 0 && cursor == packetBytes.count
+    }
+}
+
+struct LoopbackCorruptVideoRecoveryState {
+    enum Action: Equatable {
+        case keep
+        case drop(startedRecovery: Bool)
+        case resumeAtRandomAccess
+    }
+
+    private var waitingForRandomAccess = false
+
+    mutating func evaluate(structurallyValid: Bool, isRandomAccess: Bool) -> Action {
+        guard structurallyValid else {
+            let startedRecovery = !waitingForRandomAccess
+            waitingForRandomAccess = true
+            return .drop(startedRecovery: startedRecovery)
+        }
+        guard waitingForRandomAccess else { return .keep }
+        guard isRandomAccess else { return .drop(startedRecovery: false) }
+        waitingForRandomAccess = false
+        return .resumeAtRandomAccess
+    }
+}
+
 enum LoopbackVODPreGateAudioBufferPolicy {
     static let maxPackets = 512
     static let maxBytes = 8 * 1024 * 1024
@@ -692,6 +751,12 @@ final class LoopbackSegmentWriter {
     /// Length prefix size for HEVC NAL units (from HVCC header byte 21's low
     /// 2 bits, +1). Typically 4; defensively handled.
     private var nalLengthSize: Int = 4
+    /// A malformed Matroska block can leave libavformat returning a damaged
+    /// HEVC access unit followed by pictures whose references were lost.
+    /// AVPlayer treats that sequence as terminal; keep it out of the fMP4 and
+    /// resume only at the next self-contained random-access picture.
+    private var corruptVideoRecoveryState = LoopbackCorruptVideoRecoveryState()
+    private var corruptVideoPacketsDropped = 0
     /// Raw bytes of the input's H.264 avcC record. Used for the HLS CODECS
     /// string when the loopback path remuxes AVC without touching the video.
     private var inputAvccHeader: Data?
@@ -1862,6 +1927,11 @@ final class LoopbackSegmentWriter {
                 }
 
                 if vodActive, vodShouldDropPacket(pkt: pkt, inputIdx: inputIdx) {
+                    continue
+                }
+
+                if inputIdx == videoInputStreamIndex,
+                   shouldDropCorruptHEVCVideoPacket(pkt) {
                     continue
                 }
 
@@ -3350,6 +3420,13 @@ final class LoopbackSegmentWriter {
                 continue
             }
 
+            if shouldDropCorruptHEVCVideoPacket(pkt) {
+                var free = readPkt
+                av_packet_free(&free)
+                droppedPreVideoPackets += 1
+                continue
+            }
+
             videoPacketsRead += 1
             if videoPacketsRead == 1, let dataPtr = pkt.pointee.data {
                 firstVideoPacketNALSummary = ISOBoxSurgery.nalSummary(
@@ -4670,6 +4747,63 @@ final class LoopbackSegmentWriter {
         av_shrink_packet(pkt, Int32(write))
     }
 
+    /// Structural corruption concealment for length-prefixed HEVC. FFmpeg's
+    /// Matroska demuxer can recover after a damaged EBML block without marking
+    /// the returned packet `AV_PKT_FLAG_CORRUPT`; the first recovered packet
+    /// may nevertheless contain an impossible NAL length and the dependent
+    /// pictures after it reference frames that were lost in the block. Passing
+    /// those samples into fMP4 makes AVPlayer park the item permanently.
+    ///
+    /// Drop the malformed access unit and every dependent picture until a
+    /// structurally valid IRAP arrives. Audio continues on its source clock,
+    /// while the last good video picture naturally holds across the damaged
+    /// span. This is the same decoder-resynchronization boundary used by the
+    /// Compatibility path, but it keeps playback in SiloPlayer.
+    private func shouldDropCorruptHEVCVideoPacket(
+        _ pkt: UnsafeMutablePointer<AVPacket>
+    ) -> Bool {
+        guard videoMode != .passthroughH264,
+              let data = pkt.pointee.data,
+              pkt.pointee.size > 0 else { return false }
+        let packetBytes = UnsafeBufferPointer(
+            start: data,
+            count: Int(pkt.pointee.size)
+        )
+        let structurallyValid = LoopbackLengthPrefixedHEVCValidator.isValid(
+            packetBytes: packetBytes,
+            nalLengthSize: nalLengthSize
+        )
+        let irapType = structurallyValid
+            ? ISOBoxSurgery.firstIRAPNALType(
+                packetBytes: packetBytes,
+                nalLengthSize: nalLengthSize
+            )
+            : nil
+        let action = corruptVideoRecoveryState.evaluate(
+            structurallyValid: structurallyValid,
+            isRandomAccess: irapType != nil
+        )
+        switch action {
+        case .keep:
+            return false
+        case .drop(let startedRecovery):
+            corruptVideoPacketsDropped += 1
+            if startedRecovery {
+                cmpLog(
+                    "[CMP-AVP] malformed HEVC access unit dropped; suppressing dependent video until IRAP pts=\(pkt.pointee.pts) dts=\(pkt.pointee.dts) bytes=\(pkt.pointee.size)"
+                )
+            }
+            return true
+        case .resumeAtRandomAccess:
+            pkt.pointee.flags |= AV_PKT_FLAG_KEY
+            cmpLog(
+                "[CMP-AVP] HEVC corruption recovery resumed at IRAP type=\(irapType ?? -1) pts=\(pkt.pointee.pts) dts=\(pkt.pointee.dts) dropped=\(corruptVideoPacketsDropped)"
+            )
+            corruptVideoPacketsDropped = 0
+            return false
+        }
+    }
+
     /// Rare fallback for the in-place compaction: rebuild the packet into a
     /// fresh buffer (the pre-compaction transform path).
     private func rebuildProfile7Packet(_ pkt: UnsafeMutablePointer<AVPacket>) throws {
@@ -5771,11 +5905,9 @@ final class LoopbackSegmentWriter {
         while !isCancelled {
             retireSegmentsBehindPlaybackIfNeeded()
             if vodActive {
-                // VOD reclamation lives in the store. Prune around the
-                // consumer's target, force-evicting far-from-target
-                // segments if the budget alone can't absorb the append —
-                // a spill-blocked producer starves AVPlayer into a
-                // permanent freeze (living-room spill-exhaustion deadlock).
+                // VOD reclamation lives in the disk-first store. The coupled
+                // segment-count window bounds production; byte retention may
+                // prune history but never blocks the active forward window.
                 _ = segmentStore.makeRoomForAppend(byteCount: nextSegmentBytes)
             }
             guard !segmentStore.canAppendSegment(byteCount: nextSegmentBytes) else { return }

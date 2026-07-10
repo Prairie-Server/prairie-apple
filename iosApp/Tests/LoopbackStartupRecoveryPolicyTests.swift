@@ -57,14 +57,18 @@ final class LoopbackStartupRecoveryPolicyTests: XCTestCase {
         )
         XCTAssertEqual(
             state.record(position: 100.5, evidenceWeight: 2, userPaused: false),
-            .reload(attempt: 2)
+            .escalate
+        )
+    }
+
+    func testConfirmedItemDeathReloadsOnceThenEscalatesAtSamePosition() {
+        var state = LoopbackItemDeathRecoveryState()
+        XCTAssertEqual(
+            state.confirm(position: 75.74, userPaused: false),
+            .reload(attempt: 1)
         )
         XCTAssertEqual(
-            state.record(position: 100.5, evidenceWeight: 2, userPaused: false),
-            .reload(attempt: 3)
-        )
-        XCTAssertEqual(
-            state.record(position: 100.5, evidenceWeight: 2, userPaused: false),
+            state.confirm(position: 75.74, userPaused: false),
             .escalate
         )
     }
@@ -107,6 +111,167 @@ final class LoopbackStartupRecoveryPolicyTests: XCTestCase {
                 statusCode: -12888,
                 errorDescription: "Playlist File unchanged"
             )
+        )
+    }
+
+    func testUnexpectedPauseReassertsPlayThenConfirmsAfterGracePeriod() {
+        var state = LoopbackItemDeathConfirmationState()
+        XCTAssertEqual(
+            state.evaluate(
+                now: 10,
+                position: 75.74,
+                playbackEstablished: true,
+                userPaused: false,
+                transportState: .paused,
+                recoverySuppressed: false,
+                mediaAvailableAhead: true
+            ),
+            .reassertPlay
+        )
+        XCTAssertEqual(
+            state.evaluate(
+                now: 12.9,
+                position: 75.74,
+                playbackEstablished: true,
+                userPaused: false,
+                transportState: .paused,
+                recoverySuppressed: false,
+                mediaAvailableAhead: true
+            ),
+            .none
+        )
+        XCTAssertEqual(
+            state.evaluate(
+                now: 13,
+                position: 75.74,
+                playbackEstablished: true,
+                userPaused: false,
+                transportState: .paused,
+                recoverySuppressed: false,
+                mediaAvailableAhead: true
+            ),
+            .confirmed(trigger: .unexpectedPause)
+        )
+    }
+
+    func testUnexpectedPauseCandidateClearsWhenPlayResumes() {
+        var state = LoopbackItemDeathConfirmationState()
+        _ = state.evaluate(
+            now: 10,
+            position: 75.74,
+            playbackEstablished: true,
+            userPaused: false,
+            transportState: .paused,
+            recoverySuppressed: false,
+            mediaAvailableAhead: true
+        )
+        XCTAssertEqual(
+            state.evaluate(
+                now: 11,
+                position: 75.9,
+                playbackEstablished: true,
+                userPaused: false,
+                transportState: .playing,
+                recoverySuppressed: false,
+                mediaAvailableAhead: true
+            ),
+            .none
+        )
+        XCTAssertEqual(
+            state.evaluate(
+                now: 15,
+                position: 80,
+                playbackEstablished: true,
+                userPaused: false,
+                transportState: .playing,
+                recoverySuppressed: false,
+                mediaAvailableAhead: true
+            ),
+            .none
+        )
+    }
+
+    func testFailedToEndConfirmsOnlyWhenTransportRemainsDead() {
+        var state = LoopbackItemDeathConfirmationState()
+        state.noteExplicitFailure(
+            position: 75.74,
+            now: 10,
+            playbackEstablished: true,
+            userPaused: false
+        )
+        XCTAssertEqual(
+            state.evaluate(
+                now: 12.9,
+                position: 75.74,
+                playbackEstablished: true,
+                userPaused: false,
+                transportState: .waiting,
+                recoverySuppressed: false,
+                mediaAvailableAhead: false
+            ),
+            .none
+        )
+        XCTAssertEqual(
+            state.evaluate(
+                now: 13,
+                position: 75.74,
+                playbackEstablished: true,
+                userPaused: false,
+                transportState: .waiting,
+                recoverySuppressed: false,
+                mediaAvailableAhead: false
+            ),
+            .confirmed(trigger: .failedToEnd)
+        )
+    }
+
+    func testFailedToEndCandidateClearsOnProgress() {
+        var state = LoopbackItemDeathConfirmationState()
+        state.noteExplicitFailure(
+            position: 75.74,
+            now: 10,
+            playbackEstablished: true,
+            userPaused: false
+        )
+        XCTAssertEqual(
+            state.evaluate(
+                now: 13,
+                position: 76.3,
+                playbackEstablished: true,
+                userPaused: false,
+                transportState: .paused,
+                recoverySuppressed: false,
+                mediaAvailableAhead: true
+            ),
+            .none
+        )
+    }
+
+    func testUserPauseAndUnavailableMediaDoNotStartRecovery() {
+        var state = LoopbackItemDeathConfirmationState()
+        XCTAssertEqual(
+            state.evaluate(
+                now: 10,
+                position: 75.74,
+                playbackEstablished: true,
+                userPaused: true,
+                transportState: .paused,
+                recoverySuppressed: false,
+                mediaAvailableAhead: true
+            ),
+            .none
+        )
+        XCTAssertEqual(
+            state.evaluate(
+                now: 11,
+                position: 75.74,
+                playbackEstablished: true,
+                userPaused: false,
+                transportState: .paused,
+                recoverySuppressed: false,
+                mediaAvailableAhead: false
+            ),
+            .none
         )
     }
 

@@ -2,6 +2,21 @@ import XCTest
 @testable import Silo
 
 final class LoopbackSegmentServerRangeTests: XCTestCase {
+    func testAdvertisedVODSegmentMissRetriesInsteadOf404() {
+        XCTAssertEqual(
+            LoopbackSegmentServer.vodMissingResponseKind(index: 5, segmentCount: 10),
+            .retryLater
+        )
+        XCTAssertEqual(
+            LoopbackSegmentServer.vodMissingResponseKind(index: 10, segmentCount: 10),
+            .notFound
+        )
+        XCTAssertEqual(
+            LoopbackSegmentServer.vodMissingResponseKind(index: 5, segmentCount: nil),
+            .notFound
+        )
+    }
+
     func testVODMissSendsHeadersBeforeSlowSegmentFinishes() async throws {
         let store = LoopbackSegmentStore(generation: 909)
         let server = LoopbackSegmentServer(segmentStore: store)

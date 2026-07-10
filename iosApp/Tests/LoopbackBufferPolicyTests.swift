@@ -27,7 +27,7 @@ final class LoopbackBufferPolicyTests: XCTestCase {
         XCTAssertEqual(target, 28)
     }
 
-    func testStaticVODStaysBelowBoundedProducerWindow() {
+    func testStaticVODKeepsOneSegmentExplicitTarget() {
         let target = AVPlayerBackend.loopbackSteadyStateForwardBufferTarget(
             forBitsPerSecond: 69_000_000,
             targetDuration: 4,
@@ -49,6 +49,18 @@ final class LoopbackBufferPolicyTests: XCTestCase {
             constrainedMemoryDevice: true
         )
 
-        XCTAssertEqual(target, 6)
+        XCTAssertEqual(target, 4)
+    }
+
+    func testStaticVODIgnoresUnexpectedlyLongTargetDuration() {
+        let target = AVPlayerBackend.loopbackSteadyStateForwardBufferTarget(
+            forBitsPerSecond: nil,
+            targetDuration: 30,
+            longestSegmentDuration: 30,
+            servingMode: .vodPlan,
+            constrainedMemoryDevice: true
+        )
+
+        XCTAssertEqual(target, 4)
     }
 }
