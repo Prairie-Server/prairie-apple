@@ -17,7 +17,7 @@ struct TVMovieDetailView<BelowSynopsis: View>: View {
     /// True once the user explicitly resets subtitles to "Auto" this visit.
     /// The server override was just cleared, but `detail.effectiveSubtitle*`
     /// still describes the old manual pick until the next refetch — suppress
-    /// it so the "Auto - …" preview doesn't echo the cleared selection.
+    /// it so the "Auto: …" preview doesn't echo the cleared selection.
     var subtitleOverrideCleared: Bool = false
     let seasons: [Season]
     let selectedSeason: Season?
@@ -51,6 +51,7 @@ struct TVMovieDetailView<BelowSynopsis: View>: View {
     // forbids static stored properties on this type.
     private let episodeSectionScrollId = "detail-episode-section"
     private let heroScrollId = "detail-hero"
+    @State private var focusedEpisodeContentId: String?
 
     var body: some View {
         ScrollViewReader { scrollProxy in
@@ -100,6 +101,7 @@ struct TVMovieDetailView<BelowSynopsis: View>: View {
                 episodeSectionId: episodeSectionScrollId,
                 heroId: heroScrollId
             )
+            .onPlayPauseCommand(perform: playFocusedEpisodeOrCurrent)
         }
     }
 
@@ -267,9 +269,23 @@ struct TVMovieDetailView<BelowSynopsis: View>: View {
                 TVEpisodeRail(
                     episodes: seasonEpisodes,
                     onSelect: onEpisodeTap,
+                    onFocusedEpisodeChange: { focusedEpisodeContentId = $0 },
                     currentContentId: detail.contentId
                 )
             }
+        }
+    }
+
+    /// Siri Remote Play/Pause is a page-level shortcut. A different episode
+    /// highlighted in the rail wins; every other focus zone plays the episode
+    /// represented by this detail page and preserves its selector overrides.
+    private func playFocusedEpisodeOrCurrent() {
+        guard detail.type == "episode" else { return }
+        if let focusedEpisodeContentId,
+           focusedEpisodeContentId != detail.contentId {
+            onEpisodeTap(focusedEpisodeContentId)
+        } else {
+            onPlay(false)
         }
     }
 

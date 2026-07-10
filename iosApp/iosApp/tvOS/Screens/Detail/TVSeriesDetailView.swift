@@ -21,7 +21,7 @@ struct TVSeriesDetailView<BelowSynopsis: View>: View {
     /// True once the user explicitly resets subtitles to "Auto" this visit.
     /// The server override was just cleared, but the next-up detail's
     /// `effectiveSubtitle*` still describes the old manual pick until the
-    /// next refetch — suppress it so the "Auto - …" preview doesn't echo the
+    /// next refetch — suppress it so the "Auto: …" preview doesn't echo the
     /// cleared selection.
     var nextUpSubtitleOverrideCleared: Bool = false
     let onSelectSeason: (Season) -> Void
