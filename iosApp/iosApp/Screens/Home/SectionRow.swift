@@ -8,6 +8,8 @@ struct SectionRow: View {
     let section: ResolvedSection
     let onItemTap: (String) -> Void
     var onSeeAll: (() -> Void)? = nil
+    var onRemoveFromContinueWatching: ((SectionItem) -> Void)? = nil
+    var onSetWatched: ((SectionItem, Bool) async -> Bool)? = nil
     var prefersDefaultFocusOnFirstItem: Bool = false
     /// Programmatic focus kick forwarded to the underlying `MediaRow` — used
     /// when an unrelated view (e.g. the tvOS top menu) hands focus down into
@@ -89,8 +91,10 @@ struct SectionRow: View {
             layout: layout,
             prefersDefaultFocusOnFirstItem: prefersDefaultFocusOnFirstItem,
             focusRequest: focusRequest,
-            onRemoveFromContinueWatching: isContinueWatching ? { removeFromContinueWatching($0) } : nil,
-            onSetWatched: { setWatched($0, played: $1) },
+            onRemoveFromContinueWatching: isContinueWatching ? onRemoveFromContinueWatching : nil,
+            onSetWatched: { item, played in
+                await setWatched(item, played: played)
+            },
             onMoveUp: onMoveUp,
             onItemFocus: onItemFocus,
             cardWidth: cardWidth,
@@ -110,30 +114,25 @@ struct SectionRow: View {
         #endif
     }
 
-    private func removeFromContinueWatching(_ item: SectionItem) {
-        guard let progressUpdatedAt = item.progressUpdatedAt else { return }
+    /// Home injects a model-owned mutation so its membership-driven rows and
+    /// cache update immediately. Shared SectionRow callers retain the original
+    /// direct API behavior when no owning model provides an action.
+    private func setWatched(_ item: SectionItem, played: Bool) async -> Bool {
+        if let onSetWatched {
+            return await onSetWatched(item, played)
+        }
 
-        Task {
-            do {
-                try await ContinuumAPI.shared.dismissContinueWatchingItem(
-                    contentId: item.contentId,
-                    progressUpdatedAt: progressUpdatedAt
-                )
-                NotificationCenter.default.post(name: .homeSectionsShouldRefresh, object: nil)
-            } catch {
-                print("[Home] Failed to remove \(item.contentId) from Continue Watching: \(error)")
-            }
+        do {
+            try await ContinuumAPI.shared.setWatched(
+                contentId: item.contentId,
+                played: played
+            )
+            NotificationCenter.default.post(name: .homeSectionsShouldRefresh, object: nil)
+            return true
+        } catch {
+            print("[SectionRow] Failed to update watched state for \(item.contentId): \(error)")
+            return false
         }
     }
 
-    private func setWatched(_ item: SectionItem, played: Bool) {
-        Task {
-            do {
-                try await ContinuumAPI.shared.setWatched(contentId: item.contentId, played: played)
-                NotificationCenter.default.post(name: .homeSectionsShouldRefresh, object: nil)
-            } catch {
-                print("[Home] Failed to update watched state for \(item.contentId): \(error)")
-            }
-        }
-    }
 }
