@@ -997,6 +997,14 @@ class PlayerViewModel {
         let hiddenIds = Set([lastLoadRequest?.contentId, nextUpEpisode?.contentId].compactMap { $0 })
         return nextUpOnDeckItems.filter { !hiddenIds.contains($0.contentId) }
     }
+
+    var canShowNextUpScreen: Bool {
+        nextUpEpisode != nil
+            || !nextUpCarouselItems.isEmpty
+            || isLoadingNextUpEpisode
+            || isLoadingNextUpOnDeck
+    }
+
     private var currentRouteCapabilities: ApplePlaybackRouteCapabilities {
         return activeExecutionPlan?.routeCapabilities ?? activeRouteKind.routeCapabilities
     }
@@ -1655,21 +1663,17 @@ class PlayerViewModel {
     }
 
     private func shouldShowNextUpBeforeEnd(at movieTime: Double) -> Bool {
-        let promptSeconds = settings.nextUpPromptSeconds
-        guard promptSeconds > 0,
-              duration.isFinite,
-              duration > 0,
-              movieTime.isFinite else {
-            return false
-        }
-        let remaining = duration - movieTime
-        guard remaining >= 0, remaining <= Double(promptSeconds) else {
-            return false
-        }
-        return nextUpEpisode != nil
-            || !nextUpCarouselItems.isEmpty
-            || isLoadingNextUpEpisode
-            || isLoadingNextUpOnDeck
+        canShowNextUpScreen
+            && PlayerNextUpCompletionPolicy.isInPromptWindow(
+                currentTime: movieTime,
+                duration: duration,
+                promptSeconds: settings.nextUpPromptSeconds
+            )
+    }
+
+    func showNextUpNow() {
+        guard canShowNextUpScreen else { return }
+        beginNextUpPostroll(videoEnded: false)
     }
 
     private func beginNextUpPostroll(videoEnded: Bool) {
@@ -1816,13 +1820,13 @@ class PlayerViewModel {
     }
 
     private func completionProgressPositionForCurrentItem() -> Double {
-        guard duration.isFinite, duration > 0 else {
-            return currentTime
-        }
-        if showNextUpScreen || hasReachedEndOfFile {
-            return duration
-        }
-        return currentTime
+        PlayerNextUpCompletionPolicy.progressPosition(
+            isNextUpPresented: showNextUpScreen,
+            hasReachedEndOfFile: hasReachedEndOfFile,
+            currentTime: currentTime,
+            duration: duration,
+            promptSeconds: settings.nextUpPromptSeconds
+        )
     }
 
     private func attemptNativeDirectRouteRecovery(after message: String) -> Bool {
@@ -5392,7 +5396,13 @@ class PlayerViewModel {
         let stopServerSessionOnTeardown = offlinePlaybackContext == nil
         if let offline = offlinePlaybackContext {
             let finalOfflinePosition = completionProgressPositionForCurrentItem()
-            let endedNaturally = hasReachedEndOfFile || showNextUpScreen
+            let endedNaturally = PlayerNextUpCompletionPolicy.shouldFinalizeAsCompleted(
+                isNextUpPresented: showNextUpScreen,
+                hasReachedEndOfFile: hasReachedEndOfFile,
+                currentTime: currentTime,
+                duration: duration,
+                promptSeconds: settings.nextUpPromptSeconds
+            )
             // Strong capture on purpose: this is the last write of the
             // resume point and must not be dropped because the VM was
             // released between dismiss and the hop to the MainActor.
