@@ -100,7 +100,6 @@ final class AuthService: @unchecked Sendable {
             id: id,
             url: normalized,
             fetchedName: fetchedName,
-            userOverrideName: nil,
             profileId: nil,
             lastUsedAt: Date()
         )
@@ -286,6 +285,14 @@ final class AuthService: @unchecked Sendable {
     /// full auth boundaries so cached user data cannot cross identities.
     @MainActor
     func clearCachesForTemporaryIdentityChange() {
+        clearAllCaches()
+    }
+
+    /// A server switch is the same hard identity boundary as sign-out for
+    /// process-wide response and prefetch caches, even when both servers are
+    /// already authenticated and the router's auth state does not change.
+    @MainActor
+    func clearCachesForServerChange() {
         clearAllCaches()
     }
 }

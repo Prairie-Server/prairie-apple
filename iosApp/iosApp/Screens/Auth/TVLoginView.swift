@@ -304,12 +304,14 @@ struct TVLoginView: View {
                     AuroraInputField(
                         text: $loginVM.username,
                         placeholder: "yourname",
+                        inputTitle: "Username",
                         focus: $focusedField,
                         equals: .username,
                         contentType: .username
                     )
                     // Advance to the password field once the username is entered.
-                    .onSubmit { focusedField = .password }
+                    .submitLabel(.next)
+                    .onSubmit { moveFocusAfterTextEntry(to: .password) }
                 }
 
                 fieldGroup(label: "Password") {
@@ -317,13 +319,15 @@ struct TVLoginView: View {
                         AuroraInputField(
                             text: $loginVM.password,
                             placeholder: "••••••",
+                            inputTitle: "Password",
                             focus: $focusedField,
                             equals: .password,
                             isSecure: !showPassword,
                             contentType: .password
                         )
                         // Hand focus to the Sign In button once the password is entered.
-                        .onSubmit { focusedField = .signIn }
+                        .submitLabel(.done)
+                        .onSubmit { moveFocusAfterTextEntry(to: .signIn) }
 
                         Button {
                             showPassword.toggle()
@@ -333,6 +337,7 @@ struct TVLoginView: View {
                         }
                         .buttonStyle(TVAuthIconButtonStyle())
                         .focused($focusedField, equals: .togglePassword)
+                        .disabled(!canFocusPasswordToggle)
                         .accessibilityLabel(showPassword ? "Hide password" : "Show password")
                     }
                 }
@@ -427,6 +432,17 @@ struct TVLoginView: View {
         qrVM.cancel()
         Task {
             await qrVM.begin(deviceName: Self.deviceName, devicePlatform: "tvOS")
+        }
+    }
+
+    private var canFocusPasswordToggle: Bool {
+        focusedField == .password || focusedField == .togglePassword
+    }
+
+    private func moveFocusAfterTextEntry(to field: Field) {
+        Task { @MainActor in
+            await Task.yield()
+            focusedField = field
         }
     }
 

@@ -21,6 +21,7 @@ struct TVMainTabView: View {
         return cached.first(where: { $0.id == profileId })
     }()
     @State private var showServerPicker = false
+    @State private var showSignOutConfirm = false
     @State private var registry = ServerRegistry.shared
     /// Local, per-profile tab-visibility prefs (e.g. whether the Audiobooks
     /// tab is opted in). Observed so the bar re-derives `visibleRoots` the
@@ -122,6 +123,22 @@ struct TVMainTabView: View {
         .overlayPreferenceValue(TVTopMenuAnchorKey.self) { anchors in
             panelOverlay(anchors: anchors)
         }
+        .allowsHitTesting(!showSignOutConfirm)
+        .overlay {
+            if showSignOutConfirm {
+                TVSettingsConfirmationOverlay(
+                    title: "Sign Out",
+                    message: "Choose whether to keep or remove this server from this Apple TV.",
+                    confirmTitle: "Sign Out",
+                    additionalDestructiveTitle: "Sign Out & Remove Server",
+                    cancel: dismissSignOutConfirmation,
+                    confirm: router.signOutAndReset,
+                    additionalDestructiveAction: router.signOutRemoveServerAndReset
+                )
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: showSignOutConfirm)
         .ignoresSafeArea(edges: [.top, .horizontal])
         .tint(.continuumOnSurface)
         .fullScreenCover(isPresented: Binding(
@@ -198,6 +215,17 @@ struct TVMainTabView: View {
                         focusTopMenuIfVisible()
                     }
                 }
+            }
+        }
+        .onChange(of: router.requestedTab) { _, requestedTab in
+            guard let requestedTab else { return }
+            router.requestedTab = nil
+
+            // tvOS owns a custom root selector rather than MainTabView's
+            // AppTab binding. Settings uses this one-shot request so its
+            // final Menu/Back exits to Home regardless of the prior root.
+            if requestedTab == .home {
+                selectRoot(.home)
             }
         }
         .onChange(of: navPrefs.showAudiobooks) {
@@ -501,8 +529,16 @@ struct TVMainTabView: View {
             onRequests: { closePanel(then: { navigateFromBar(.requestsHub) }) },
             onSettings: { closePanel(then: { navigateFromBar(.settings) }) },
             onSwitchServer: { closePanel(then: { showServerPicker = true }) },
-            onSignOut: { closePanel(then: { router.signOutAndReset() }) }
+            onSignOut: { closePanel(then: { showSignOutConfirm = true }) }
         )
+    }
+
+    private func dismissSignOutConfirmation() {
+        showSignOutConfirm = false
+        Task { @MainActor in
+            await Task.yield()
+            focusTopMenuIfVisible(focusing: .profile)
+        }
     }
 
     // MARK: - Panel control (§5.3 / §5.8)
