@@ -116,6 +116,7 @@ final class ServerRegistry {
     /// fetched name do not clobber remembered session state.
     @discardableResult
     func addOrUpdate(_ entry: ServerEntry, preservingProfile: Bool = true) -> ServerEntry {
+        registerDiagnosticsSensitiveHosts([entry])
         var merged = entry
         if let existing = self.entries.first(where: { $0.id == entry.id }) {
             if preservingProfile, merged.profileId == nil {
@@ -205,7 +206,21 @@ final class ServerRegistry {
     /// and profile selection; URL + display name remain so the user can
     /// log back in. If `serverId` is the active server, the legacy
     /// `profileId` UserDefaults key is cleared too.
-    func signOut(serverId: String) async {
+    ///
+    /// The registry-wide diagnostics purge always runs: it clears reports and
+    /// consent stored under *older* `server_instance_id`s recorded for this
+    /// registry URL (e.g. after a server restore/reinstall at the same URL),
+    /// which a current-binding-only purge would leave behind. Pass
+    /// `purgeCurrentBinding: false` when the caller already purged the active
+    /// binding while still authenticated (AuthService.signOut does, so the
+    /// binding resolves against a live session) to avoid duplicate current work.
+    func signOut(serverId: String, purgeCurrentBinding: Bool = true) async {
+        #if os(iOS) || os(tvOS)
+        if purgeCurrentBinding, serverId == activeServerId {
+            await DiagnosticsCoordinator.shared.purgeDiagnosticsForCurrentBinding()
+        }
+        await DiagnosticsCoordinator.shared.purgeDiagnosticsForServerRegistryID(serverId)
+        #endif
         await TokenStore.shared.deleteTokens(for: serverId)
         if let idx = entries.firstIndex(where: { $0.id == serverId }) {
             entries[idx].profileId = nil
@@ -221,6 +236,12 @@ final class ServerRegistry {
     /// slot is cleared.
     func remove(serverId: String) async {
         let removesActiveServer = activeServerId == serverId
+        #if os(iOS) || os(tvOS)
+        if removesActiveServer {
+            await DiagnosticsCoordinator.shared.purgeDiagnosticsForCurrentBinding()
+        }
+        await DiagnosticsCoordinator.shared.purgeDiagnosticsForServerRegistryID(serverId)
+        #endif
         if removesActiveServer {
             // Stop old-server responses and clear every process-wide cache
             // before publishing the fallback ID to observing views.
@@ -287,6 +308,7 @@ final class ServerRegistry {
             let state = try JSONDecoder().decode(RegistryState.self, from: data)
             self.entries = state.entries
             self.activeServerId = state.activeServerId
+            registerDiagnosticsSensitiveHosts(state.entries)
         } catch {
             Self.logger.error("Registry decode failed: \(error.localizedDescription, privacy: .public). Starting empty.")
             return
@@ -304,6 +326,19 @@ final class ServerRegistry {
                 }
             }
         }
+    }
+
+    /// Diagnostics log lines replace known server hostnames with hashed
+    /// tokens; every remembered server's host is sensitive, not just the
+    /// active one.
+    private func registerDiagnosticsSensitiveHosts(_ entries: [ServerEntry]) {
+        #if os(iOS) || os(tvOS)
+        for entry in entries {
+            if let host = URL(string: entry.url)?.host {
+                DiagLog.registerSensitiveHost(host)
+            }
+        }
+        #endif
     }
 
     private func persist() {
@@ -359,6 +394,11 @@ final class ServerRegistry {
         )
         self.entries = [entry]
         self.activeServerId = id
+        // load() registers persisted entries for redaction, but migration
+        // installs this entry directly and returns before that path. Register
+        // it here so the legacy host is hashed in diagnostics logs on the very
+        // first post-upgrade launch.
+        registerDiagnosticsSensitiveHosts([entry])
         if normalized != raw {
             defaults.set(normalized, forKey: "serverUrl")
         }

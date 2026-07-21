@@ -171,6 +171,13 @@ final class AuthService: @unchecked Sendable {
         // automatic restoration when the user switches back.
         self.profileId = profileId
         await clearPerProfileCaches()
+        #if os(iOS) || os(tvOS)
+        // A child profile can't manage diagnostics. Re-evaluate breadcrumb
+        // eligibility now that the active profile changed so an adult→child
+        // switch disarms breadcrumb/session capture even though the
+        // server/account binding is unchanged.
+        DiagnosticsCoordinator.activeProfileDidChange()
+        #endif
         // Re-probe AI capabilities for the newly-selected profile. Fire and
         // forget — gating defaults to "unavailable" until the probes land,
         // so nothing blocks on this.
@@ -248,6 +255,16 @@ final class AuthService: @unchecked Sendable {
     /// server. Call `ServerRegistry.shared.remove(serverId:)` to fully
     /// forget a server instead.
     func signOut() async {
+        #if os(iOS) || os(tvOS)
+        // Purge the active binding now, while still authenticated: the /logout
+        // below invalidates the session, after which the binding could only be
+        // resolved from the last-known snapshot. The registry-wide purge always
+        // runs in ServerRegistry.signOut regardless, catching diagnostics under
+        // older server_instance_ids for this URL.
+        let purgedCurrentBinding = await DiagnosticsCoordinator.shared.purgeDiagnosticsForCurrentBinding()
+        #else
+        let purgedCurrentBinding = false
+        #endif
         // Best-effort server-side logout; never block sign-out on a
         // server-side error, since the client wants to end the session
         // regardless.
@@ -257,7 +274,12 @@ final class AuthService: @unchecked Sendable {
             // Swallow; state will still be cleared locally.
         }
         if let activeId = ServerRegistry.shared.activeServerId {
-            await ServerRegistry.shared.signOut(serverId: activeId)
+            // Only skip the redundant current-binding purge if it already
+            // succeeded above; the registry-wide purge runs either way.
+            await ServerRegistry.shared.signOut(
+                serverId: activeId,
+                purgeCurrentBinding: !purgedCurrentBinding
+            )
         } else {
             await TokenStore.shared.clearTokens()
         }
