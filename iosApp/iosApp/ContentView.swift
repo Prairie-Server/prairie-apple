@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(tvOS)
+import UIKit
+#endif
 
 struct ContentView: View {
     @State private var router = AppRouter()
@@ -12,6 +15,9 @@ struct ContentView: View {
     @State private var didStartInitialStateCheck = false
     @State private var didFinishStartupSplash = false
     @State private var pendingInitialAuthState: AppRouter.AuthState?
+    #if os(iOS) || os(tvOS)
+    @State private var diagnosticsModel = DiagnosticsViewModel()
+    #endif
     /// Deep link URL received before the auth state was ready. Drained
     /// on the next `.authenticated` transition so Top Shelf taps during
     /// a cold launch still route to the correct screen.
@@ -53,6 +59,12 @@ struct ContentView: View {
             contentId: debugPlayContentId,
             isPresented: debugPlayerPresentation
         ))
+        #if os(iOS) || os(tvOS)
+        .modifier(DiagnosticsPromptPresentationModifier(
+            model: diagnosticsModel,
+            isEnabled: router.authState == .authenticated
+        ))
+        #endif
         .onReceive(NotificationCenter.default.publisher(for: .continuumDeepLink)) { notification in
             guard let url = notification.userInfo?["url"] as? URL else { return }
             #if os(iOS)
@@ -61,6 +73,9 @@ struct ContentView: View {
             handleDeepLink(url)
         }
         .onAppear {
+            #if os(tvOS)
+            ExitSentinel.shared.appDidEnterForeground()
+            #endif
             #if os(iOS)
             if let url = ApplePushDeepLinkCoordinator.shared.consumePendingDeepLink() {
                 handleDeepLink(url)
@@ -75,9 +90,18 @@ struct ContentView: View {
             #endif
             router.expiredSession()
         }
+        #if os(iOS) || os(tvOS)
+        .onReceive(NotificationCenter.default.publisher(for: .diagnosticsPendingReportCreated)) { _ in
+            guard router.authState == .authenticated else { return }
+            Task { await diagnosticsModel.handleForeground() }
+        }
+        #endif
         #if os(tvOS)
         .onReceive(NotificationCenter.default.publisher(for: .temporaryRemoteAuthExpired)) { _ in
             TVControlReceiver.shared.temporaryAuthExpired()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)) { _ in
+            ExitSentinel.shared.appWillTerminate()
         }
         #endif
         .task {
@@ -89,13 +113,30 @@ struct ContentView: View {
                 debugPlayContentId = contentId
             }
         }
+        #if DEBUG
+        .task {
+            await maybeDebugAutoLogin()
+        }
+        #endif
         .task(id: router.authState) {
+            #if os(iOS) || os(tvOS)
+            if router.authState != .authenticated {
+                DiagnosticsCoordinator.activeProfileWillChange()
+                diagnosticsModel.reset()
+            }
+            #endif
             await maybeAutoPlayForDebug()
             if router.authState == .authenticated {
                 if let pending = pendingDeepLink {
                     pendingDeepLink = nil
                     handleDeepLink(pending)
                 }
+                #if os(tvOS)
+                await ExitSentinel.shared.captureLeftoverIfNeeded()
+                #endif
+                #if os(iOS) || os(tvOS)
+                await diagnosticsModel.handleForeground()
+                #endif
                 await overlayPrefs.hydrateIfNeeded()
                 // Hydrate AI capabilities on a cold relaunch into a restored
                 // session — `selectProfile` only refreshes on a fresh sign-in,
@@ -113,6 +154,9 @@ struct ContentView: View {
             }
         }
         .task(id: serverRegistry.activeServerId) {
+            #if os(iOS) || os(tvOS)
+            diagnosticsModel.reset()
+            #endif
             // `activeServerId` changes before ServerRegistry finishes its
             // async token retarget. Complete that boundary here before any
             // server-scoped overlay request, then clear and rehydrate even
@@ -123,9 +167,28 @@ struct ContentView: View {
             overlayPrefs.clear()
             if router.authState == .authenticated {
                 await overlayPrefs.hydrateIfNeeded()
+                #if os(iOS) || os(tvOS)
+                await diagnosticsModel.handleForeground()
+                #endif
             }
         }
+        #if os(iOS) || os(tvOS)
+        .task(id: serverRegistry.activeProfileId) {
+            diagnosticsModel.reset()
+            if router.authState == .authenticated {
+                await diagnosticsModel.handleForeground()
+            }
+        }
+        #endif
         .onChange(of: scenePhase) { _, newPhase in
+            #if os(iOS) || os(tvOS)
+            DiagnosticsCoordinator.recordBreadcrumb(
+                category: .lifecycle,
+                tag: "Scene",
+                message: "scene phase changed",
+                attrs: ["state": .string(Self.diagnosticsScenePhase(newPhase))]
+            )
+            #endif
             #if os(iOS)
             switch newPhase {
             case .active:
@@ -137,6 +200,16 @@ struct ContentView: View {
                 if DownloadManager.shared.downloadsEnabled {
                     DownloadBackgroundRefresh.schedule()
                 }
+            default:
+                break
+            }
+            #endif
+            #if os(tvOS)
+            switch newPhase {
+            case .active:
+                ExitSentinel.shared.appDidEnterForeground()
+            case .background:
+                ExitSentinel.shared.appDidEnterBackground()
             default:
                 break
             }
@@ -153,6 +226,14 @@ struct ContentView: View {
             // the happy path.
             guard newPhase == .active,
                   router.authState == .authenticated else { return }
+            #if os(tvOS)
+            Task {
+                await ExitSentinel.shared.captureLeftoverIfNeeded()
+                await diagnosticsModel.handleForeground()
+            }
+            #elseif os(iOS)
+            Task { await diagnosticsModel.handleForeground() }
+            #endif
             Task { await overlayPrefs.hydrateIfNeeded() }
             // Same rationale as overlay hydration above: a transiently-failed
             // capability probe (or one skipped on a cold restore) gets a
@@ -174,6 +255,21 @@ struct ContentView: View {
             #endif
         }
     }
+
+    #if os(iOS) || os(tvOS)
+    private static func diagnosticsScenePhase(_ phase: ScenePhase) -> String {
+        switch phase {
+        case .active:
+            return "active"
+        case .inactive:
+            return "inactive"
+        case .background:
+            return "background"
+        @unknown default:
+            return "unknown"
+        }
+    }
+    #endif
 
     @ViewBuilder
     private var authContent: some View {
@@ -409,6 +505,46 @@ struct ContentView: View {
         }
         return CommandLine.arguments[index + 1].trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
+    #if DEBUG
+    private func debugLaunchArgValue(_ name: String) -> String? {
+        guard let index = CommandLine.arguments.firstIndex(of: name),
+              index + 1 < CommandLine.arguments.count else {
+            return nil
+        }
+        return CommandLine.arguments[index + 1].trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Debug: sign in from launch arguments
+    /// `-debugServer <url> -debugUsername <user> -debugPassword <pass>`,
+    /// selecting the primary (or only) PIN-less profile. Simulator-driven
+    /// end-to-end runs use this to reach `.authenticated` without UI input.
+    private func maybeDebugAutoLogin() async {
+        guard router.authState != .authenticated,
+              let server = debugLaunchArgValue("-debugServer"),
+              let username = debugLaunchArgValue("-debugUsername"),
+              let password = debugLaunchArgValue("-debugPassword") else {
+            return
+        }
+        do {
+            _ = try await AuthService.shared.checkServer(url: server)
+            try await AuthService.shared.login(username: username, password: password)
+            let profiles = try await StartupContentPrefetcher.fetchProfiles()
+            guard let profile = profiles.first(where: \.isPrimary)
+                ?? (profiles.count == 1 ? profiles.first : nil) else {
+                print("[DebugAutoLogin] no selectable profile for \(username)")
+                return
+            }
+            try await AuthService.shared.selectProfile(profileId: profile.id)
+            StartupContentPrefetcher.prefetchAuthenticatedContent()
+            await PlayerSettings.shared.refreshFromServer()
+            router.resetToHome()
+            print("[DebugAutoLogin] signed in as \(username), profile \(profile.name)")
+        } catch {
+            print("[DebugAutoLogin] failed: \(error)")
+        }
+    }
+    #endif
 
     private func resolveDebugSearchContentId(query: String) async throws -> String {
         let response = try await ContinuumAPI.shared.catalog(query: [

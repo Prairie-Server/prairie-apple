@@ -224,7 +224,8 @@ enum ApplePlaybackV3PlanAdapter {
             videoCodec: plan.source.videoCodec,
             audioCodec: plan.source.audioCodec,
             subtitleCodecs: basePlan.sourceMetadata.subtitleCodecs,
-            dolbyVisionProfile: plan.source.dolbyVisionProfile
+            dolbyVisionProfile: plan.source.dolbyVisionProfile,
+            colorRange: basePlan.sourceMetadata.colorRange
         )
         let transformationTokens = plan.transformations.map {
             "v3_transform_\($0.executor)_\($0.name)_\($0.recipeVersion)"

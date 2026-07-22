@@ -538,6 +538,8 @@ final class PlayerCore: NSObject {
 
     private var refreshRate: Float = 24.0
     private var dynamicRange: SpikeDynamicRange = .sdr
+    private var sourceColorRangeHint: String?
+    private var resolvedVideoColorRange: String?
     /// Parsed Dolby Vision config record from the stream's `AV_PKT_DATA_DOVI_CONF`
     /// side data. `nil` when the source is not DV. Set during
     /// `buildVideoFormatDescription`.
@@ -934,11 +936,22 @@ final class PlayerCore: NSObject {
               let reason = AVAudioSession.RouteChangeReason(rawValue: reasonRaw)
         else { return }
         let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
-            .map { "\($0.portName)/\($0.portType.rawValue)" }
+            .map(\.portType.rawValue)
             .joined(separator: ",")
         Self.logger.info(
             "AVAudioSession route changed: reason=\(reason.rawValue) outputs=\(outputs, privacy: .public)"
         )
+        #if os(iOS) || os(tvOS)
+        DiagnosticsCoordinator.recordBreadcrumb(
+            category: .playback,
+            tag: "AudioRoute",
+            message: "audio route changed",
+            attrs: [
+                "reason": .string(String(reason.rawValue)),
+                "sink": .string(outputs.isEmpty ? "none" : outputs),
+            ]
+        )
+        #endif
         // For reasons that change downstream channel layout (new device,
         // category change, override), drop any pending audio chunks so the
         // engine reprepares against the new route's preferred format on the
@@ -1383,7 +1396,12 @@ final class PlayerCore: NSObject {
         return true
     }
 
-    func load(url: URL, headers: [String: String], startTime: Double) {
+    func load(
+        url: URL,
+        headers: [String: String],
+        startTime: Double,
+        colorRangeHint: String? = nil
+    ) {
         guard !isDisposed else { return }
 
         // Stash the load args so the rejection signal (fired from deep inside
@@ -1392,6 +1410,8 @@ final class PlayerCore: NSObject {
         lastLoadURL = url
         lastLoadHeaders = headers
         lastLoadStartTime = startTime
+        sourceColorRangeHint = VideoColorMetadata.normalizedColorRangeName(colorRangeHint)
+        resolvedVideoColorRange = nil
         pendingRejection = nil
         ttffLoadAnchor = CFAbsoluteTimeGetCurrent()
 
@@ -2681,9 +2701,8 @@ final class PlayerCore: NSObject {
 
     /// Start a 1Hz diagnostics timer that emits a single-line snapshot
     /// covering sync time vs wall time, audio clock, queue depths, and
-    /// display-link / audio-renderer readiness. Uses `print()` so the line
-    /// reaches `devicectl ... --console`. Remove once the slow-motion bug
-    /// is pinned down.
+    /// display-link / audio-renderer readiness. Uses `cmpLog` so the line
+    /// reaches `devicectl ... --console` and the diagnostics ring.
     private func startDiagnostics() {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -2694,7 +2713,7 @@ final class PlayerCore: NSObject {
             self.lastDiagAudioEnqueueCount = 0
             self.vSyncHolds = 0
             self.vSyncDrops = 0
-            print(String(format:
+            cmpLog(String(format:
                 "[CMP] startDiagnostics wallStart=%.3f syncStart=%.3f rate=%.2f videoFPS=%.2f refreshRate=%.2f",
                 self.diagStartWall, self.diagStartSyncTime,
                 Double(self.playbackClock.rate), self.videoFPS, Double(self.refreshRate)))
@@ -2761,13 +2780,13 @@ final class PlayerCore: NSObject {
         let audioStatus = audioOutput.statusCode
         if audioStatus != lastAudioRendererStatus {
             let err = audioOutput.lastErrorDescription ?? "nil"
-            print("[CMP] audioOutput.status \(lastAudioRendererStatus) -> \(audioStatus) error=\(err)")
+            cmpLog("[CMP] audioOutput.status \(lastAudioRendererStatus) -> \(audioStatus) error=\(err)")
             lastAudioRendererStatus = audioStatus
         }
         let demuxIdle = now - demuxLastProgressWall
         let health = playbackHealthStats()
         let bufferedAhead = bufferedSecondsEstimate() ?? -1
-        print(String(format:
+        cmpLog(String(format:
             "[CMP-DIAG] wall=%.2f sync=%.3f adv=%.3f ratio=%.3f rate=%.2f ac.pts=%.3f ac.cur=%.3f vidEnq=+%llu aEnq=+%llu holds=%llu drops=%llu vDec=%d vtIn=%d vPkts=%d aPkts=%d layerRdy=%d layerSt=%d audRdy=%d audSt=%d audFeed=%llu rd=%llu rt=%llu idle=%.2f bufS=%.2f rebuf=%d seeks=%llu coal=%llu ladder=%llu/%llu/%llu",
             wall, syncTime, syncAdvance, ratio, Double(syncRate),
             audioPts, audioCurrent,
@@ -2778,7 +2797,8 @@ final class PlayerCore: NSObject {
             demuxReadCount, demuxReturnCount, demuxIdle,
             bufferedAhead, health.rebufferCount, health.seekCount,
             health.coalescedSeekCount, health.avsyncFlushCount,
-            health.avsyncGopDropCount, health.avsyncReseekCount))
+            health.avsyncGopDropCount, health.avsyncReseekCount),
+            verbose: true)
         emitPlaybackStatsSnapshot(
             syncRate: Double(syncRate),
             videoFramesEnqueued: displayLinkEnqueueCount,
@@ -2811,7 +2831,7 @@ final class PlayerCore: NSObject {
                 didRecover = true
             }
             if syncRate == 0 {
-                print(String(format:
+                cmpLog(String(format:
                     "[CMP] stall-recover: playbackRate=0 (userPaused=false); restoring rate=%.2f",
                     Double(currentRate)))
                 let resumeTime = currentPlaybackTime()
@@ -2826,7 +2846,7 @@ final class PlayerCore: NSObject {
                aPkts > 0,
                audioEnqDelta == 0,
                demuxIdle > 2.0 {
-                print(String(format:
+                cmpLog(String(format:
                     "[CMP] stall-recover: audio feed idle while ready (aPkts=%d idle=%.2f); nudging feed",
                     aPkts, demuxIdle))
                 audioOutput.nudgeRequestMediaDataWhenReady()
@@ -3510,6 +3530,8 @@ final class PlayerCore: NSObject {
               let codecparPtr = stream.pointee.codecpar
         else { return false }
         let codecpar = codecparPtr.pointee
+        resolvedVideoColorRange = VideoColorMetadata.colorRangeName(codecpar.color_range)
+            ?? sourceColorRangeHint
         videoDecodeOutputDimensions = nil
         useUntimedCompressedVideoSamples = false
 
@@ -3694,7 +3716,10 @@ final class PlayerCore: NSObject {
         // work because their BL is HDR10/SDR/HLG-compatible and VT decodes the
         // BL with 'hvc1' while the dvcC atom + RPU-carrying NALs pass through
         // for the display to apply DV dynamic metadata.
-        let fullRange = codecpar.color_range == AVCOL_RANGE_JPEG
+        let fullRange = VideoColorMetadata.isFullRange(
+            codecpar.color_range,
+            fallbackName: resolvedVideoColorRange
+        )
         // Pick a CVPixelBuffer format that matches the advertised fullRange.
         // Mismatches (e.g. `FullRangeVideo=true` + video-range pixel format)
         // leave VT with no registered decoder → unimpErr (-4). This is what
@@ -4530,7 +4555,10 @@ final class PlayerCore: NSObject {
         height: Int
     ) -> CVPixelBuffer? {
         let outputFormat = VideoColorMetadata.highBitDepthOutputPixelFormat(
-            fullRange: frame.pointee.color_range == AVCOL_RANGE_JPEG)
+            fullRange: VideoColorMetadata.isFullRange(
+                frame.pointee.color_range,
+                fallbackName: resolvedVideoColorRange
+            ))
         let attrs: CFDictionary = [
             kCVPixelBufferIOSurfacePropertiesKey: [:],
             kCVPixelBufferMetalCompatibilityKey: true,
@@ -4631,7 +4659,10 @@ final class PlayerCore: NSObject {
             return nil
         }
 
-        let pixelFormat = frame.pointee.color_range == AVCOL_RANGE_JPEG
+        let pixelFormat = VideoColorMetadata.isFullRange(
+            frame.pointee.color_range,
+            fallbackName: resolvedVideoColorRange
+        )
             ? kCVPixelFormatType_420YpCbCr8PlanarFullRange
             : kCVPixelFormatType_420YpCbCr8Planar
         let attrs: CFDictionary = [
@@ -5107,7 +5138,7 @@ final class PlayerCore: NSObject {
             hasLoggedFirstDecodedVideoBuffer = true
             let width = CVPixelBufferGetWidth(imageBuffer)
             let height = CVPixelBufferGetHeight(imageBuffer)
-            print(String(format:
+            cmpLog(String(format:
                 "[CMP] firstDecodedBuffer %dx%d pts=%.3f",
                 width, height, ptsSeconds))
         }
@@ -5130,7 +5161,7 @@ final class PlayerCore: NSObject {
             }
             let ttffMs = Int((CFAbsoluteTimeGetCurrent() - ttffLoadAnchor) * 1000)
             Self.logger.info("[CMP-TTFF] route=playerCoreDirect first_frame_ms=\(ttffMs)")
-            print("[CMP-TTFF] route=playerCoreDirect first_frame_ms=\(ttffMs)")
+            cmpLog("[CMP-TTFF] route=playerCoreDirect first_frame_ms=\(ttffMs)")
         }
     }
 

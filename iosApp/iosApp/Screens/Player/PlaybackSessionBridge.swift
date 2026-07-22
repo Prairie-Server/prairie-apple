@@ -163,6 +163,15 @@ enum PlaybackDeliveryStrategy {
             return "transcode"
         }
     }
+
+    var preservesSourceVideoMetadata: Bool {
+        switch self {
+        case .direct, .remux:
+            return true
+        case .transcode:
+            return false
+        }
+    }
 }
 
 /// Manages the lifecycle of a playback session with the Continuum API.
@@ -202,6 +211,32 @@ actor PlaybackSessionBridge {
 
     private var activeProtocolV3: ActiveProtocolV3?
     private var protocolV3FirstFramePlanIds: Set<String> = []
+
+    private func adoptSession(_ session: PlaybackSessionResponse) {
+        sessionId = session.sessionId
+        currentSession = session
+        #if os(iOS) || os(tvOS)
+        // Only record the session id for later diagnostics bundling when
+        // diagnostics is actually collecting for the active binding. Recording
+        // unconditionally would accumulate playback identifiers from periods
+        // where capture is off (Crash Reports = Never, or a disabled/
+        // storage-unavailable status) that could then surface in a later manual
+        // report or after diagnostics is re-enabled. The breadcrumb below is
+        // already gated by the same signal inside the journal.
+        if DiagnosticsCoordinator.isDiagnosticsCaptureEnabled {
+            RecentSessionTracker.shared.record(sessionID: session.sessionId)
+        }
+        DiagnosticsCoordinator.recordBreadcrumb(
+            category: .playback,
+            tag: "PlaybackSession",
+            message: "playback session adopted",
+            attrs: [
+                "session_id": .string(session.sessionId),
+                "play_method": .string(session.playMethod),
+            ]
+        )
+        #endif
+    }
 
     private struct ClientPlaybackPlan {
         let selectedVersion: FileVersion
@@ -370,9 +405,8 @@ actor PlaybackSessionBridge {
             session.position = effectiveStartPosition
         }
 
-        sessionId = session.sessionId
-        currentSession = session
         activeProtocolV3 = nil
+        adoptSession(session)
         return PreparedPlayback(
             watchDetail: watchDetail,
             selectedVersion: selectedVersion,
@@ -938,8 +972,7 @@ actor PlaybackSessionBridge {
         // timeline elsewhere.
         renewed.position = normalizedPosition
         lastStartRequest = request
-        sessionId = renewed.sessionId
-        currentSession = renewed
+        adoptSession(renewed)
         consecutiveProgressFailures = 0
         emittedOrphanedSessionWarning = false
         logger.info("Direct session renewed: \(renewed.sessionId, privacy: .public)")
@@ -1014,8 +1047,7 @@ actor PlaybackSessionBridge {
             subtitleUrls: currentSession.subtitleUrls,
             playbackInfo: currentSession.playbackInfo
         )
-        sessionId = restartedSession.sessionId
-        self.currentSession = restartedSession
+        adoptSession(restartedSession)
         return restartedSession
     }
 
@@ -1146,6 +1178,17 @@ actor PlaybackSessionBridge {
 
     func stopSession(position: Double, isPaused: Bool) async {
         guard let sid = sessionId else { return }
+        #if os(iOS) || os(tvOS)
+        DiagnosticsCoordinator.recordBreadcrumb(
+            category: .playback,
+            tag: "PlaybackSession",
+            message: "playback session stopped",
+            attrs: [
+                "session_id": .string(sid),
+                "position_seconds": .double(position.isFinite ? max(0, position) : 0),
+            ]
+        )
+        #endif
 
         if let active = activeProtocolV3 {
             await emitProtocolV3Event(
