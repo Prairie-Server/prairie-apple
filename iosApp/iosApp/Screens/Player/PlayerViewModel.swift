@@ -422,6 +422,11 @@ class PlayerViewModel {
     var nextUpCountdownSeconds: Int?
     var nextUpCountdownTotalSeconds: Int = 10
     var nextUpScreenVideoEnded = false
+    private enum NextUpPresentationSource {
+        case automatic
+        case hud
+    }
+    private var nextUpPresentationSource: NextUpPresentationSource = .automatic
     private var serverProvidedChapters: [PlayerChapterInfo] = []
 
     /// Secondary metadata surfaced to the player overlay. Populated from
@@ -967,6 +972,7 @@ class PlayerViewModel {
     private static let serverOutageRecoveryMaxDelay: TimeInterval = 8
     private static let serverOutageRecoveryTimeout: TimeInterval = 90
     private static let nextUpCountdownDefaultSeconds = 10
+    private static let nextUpHUDCountdownThresholdSeconds: Double = 100
     private static let introAutoSkipCountdownDefaultSeconds = 5
     static var nextUpCountdownTotal: Int { nextUpCountdownDefaultSeconds }
     private static let nearEndPlaybackErrorThresholdSeconds: Double = 8
@@ -1659,7 +1665,7 @@ class PlayerViewModel {
             return
         }
         guard !nextUpPromptDismissed else { return }
-        beginNextUpPostroll(videoEnded: false)
+        beginNextUpPostroll(videoEnded: false, source: .automatic)
     }
 
     private func shouldShowNextUpBeforeEnd(at movieTime: Double) -> Bool {
@@ -1673,11 +1679,18 @@ class PlayerViewModel {
 
     func showNextUpNow() {
         guard canShowNextUpScreen else { return }
-        beginNextUpPostroll(videoEnded: false)
+        beginNextUpPostroll(videoEnded: false, source: .hud)
     }
 
-    private func beginNextUpPostroll(videoEnded: Bool) {
+    private func beginNextUpPostroll(
+        videoEnded: Bool,
+        source: NextUpPresentationSource = .automatic
+    ) {
+        let wasAlreadyShowing = showNextUpScreen
         let wasShowingBeforeEnd = showNextUpScreen && !nextUpScreenVideoEnded
+        if !wasAlreadyShowing {
+            nextUpPresentationSource = source
+        }
         showNextUpScreen = true
         nextUpScreenVideoEnded = videoEnded
         showControls = false
@@ -1740,7 +1753,15 @@ class PlayerViewModel {
         }
 
         let remaining = max(0, duration - movieTime)
-        nextUpCountdownTotalSeconds = max(1, settings.nextUpPromptSeconds)
+        if nextUpPresentationSource == .hud,
+           remaining >= Self.nextUpHUDCountdownThresholdSeconds {
+            nextUpCountdownSeconds = nil
+            nextUpCountdownTotalSeconds = Int(Self.nextUpHUDCountdownThresholdSeconds)
+            return
+        }
+        nextUpCountdownTotalSeconds = nextUpPresentationSource == .hud
+            ? Int(Self.nextUpHUDCountdownThresholdSeconds)
+            : max(1, settings.nextUpPromptSeconds)
         nextUpCountdownSeconds = max(0, Int(ceil(remaining)))
         if remaining <= 0.35 {
             playNextEpisodeNow()
@@ -1767,12 +1788,38 @@ class PlayerViewModel {
         cancelNextUpCountdown()
     }
 
-    func keepWatchingCurrentEpisode() {
+    @discardableResult
+    func keepWatchingCurrentEpisode() -> Bool {
+        // An autoplay load failure may restore the postroll after disposing
+        // the old playback pipeline. There is no current episode to resume in
+        // that state, so let the shell fall back to closing the player.
+        guard !activePlayer.isNone else { return false }
+
+        let shouldResumeAfterEnd = nextUpScreenVideoEnded || hasReachedEndOfFile
         nextUpAutoplayCancelled = true
         nextUpPromptDismissed = true
         showNextUpScreen = false
         nextUpScreenVideoEnded = false
         cancelNextUpCountdown()
+
+        if shouldResumeAfterEnd,
+           duration.isFinite,
+           duration > 0,
+           !activePlayer.isNone {
+            // Returning from the terminal postroll needs a real playable
+            // position; resuming at exact EOF would immediately present the
+            // postroll again. Replay a short tail of the current episode.
+            hasReachedEndOfFile = false
+            let target = max(0, duration - 10)
+            let reloadsPlaybackPipeline = commitSeek(to: target, source: "nextUpBack")
+            if !reloadsPlaybackPipeline {
+                activePlayer.play()
+            }
+        } else if !isPlaying {
+            activePlayer.play()
+        }
+        scheduleHideControls()
+        return true
     }
 
     func setNextUpAutoPlayEnabled(_ enabled: Bool) {
@@ -2823,6 +2870,7 @@ class PlayerViewModel {
         nextUpCountdownSeconds = nil
         nextUpCountdownTotalSeconds = Self.nextUpCountdownDefaultSeconds
         nextUpScreenVideoEnded = false
+        nextUpPresentationSource = .automatic
         nextUpAutoplayCancelled = false
         nextUpPromptDismissed = false
         audioTracks = []
@@ -3861,6 +3909,20 @@ class PlayerViewModel {
         scheduleHideControls()
     }
 
+    #if os(tvOS)
+    /// Native-player Select behavior for timeline entry: pause immediately
+    /// and keep the full transport mounted. When controls were hidden,
+    /// `TVPlayerControls` consumes a separate request token to focus and
+    /// activate its timeline scrubber.
+    func pauseForTimelineSelection() {
+        guard !isBackgroundSuspended, !isLoading, !hasReachedEndOfFile else { return }
+        if isPlaying {
+            activePlayer.pause()
+        }
+        pinControlsVisible()
+    }
+    #endif
+
     func switchQuality(_ qualityId: String) {
         guard !isBackgroundSuspended else { return }
         guard let plan = activeExecutionPlan else { return }
@@ -4181,12 +4243,13 @@ class PlayerViewModel {
     /// prior optimistic target) — the midpoint between that and the new
     /// target still correctly rejects drainage from either the current or
     /// the prior seek.
-    private func commitSeek(to target: Double, source: String = "unspecified") {
+    @discardableResult
+    private func commitSeek(to target: Double, source: String = "unspecified") -> Bool {
         Self.logger.info(
             "[CMP-SEEK] commit requested source=\(source, privacy: .public) target=\(target, privacy: .public) current=\(self.currentTime, privacy: .public) preview=\(self.scrubPreviewTime, privacy: .public) isScrubbing=\(self.isScrubbing, privacy: .public) route=\(self.activeRouteKind.label, privacy: .public) offset=\(self.playbackTimelineOffset, privacy: .public)"
         )
         if reloadServerBackedHLSForSeek(to: target) {
-            return
+            return true
         }
 
         hasReachedEndOfFile = false
@@ -4212,6 +4275,7 @@ class PlayerViewModel {
             self.seekTargetTime = nil
             self.seekFilterTimeoutTask = nil
         }
+        return false
     }
 
     private func reloadServerBackedHLSForSeek(to target: Double) -> Bool {
@@ -4655,16 +4719,33 @@ class PlayerViewModel {
         scrubPreviewTime = max(0, min(fraction, 1)) * duration
     }
 
-    func endScrub() {
+    func endScrub(resumePlayback: Bool = false, shouldSeek: Bool = true) {
         guard !isBackgroundSuspended else { return }
         guard !hasReachedEndOfFile else { return }
         guard isScrubbing else { return }
         skipDebounceTask?.cancel()
         skipDebounceTask = nil
-        Self.logger.info(
-            "[CMP-SEEK] scrub ended target=\(self.scrubPreviewTime, privacy: .public) current=\(self.currentTime, privacy: .public)"
-        )
-        commitSeek(to: scrubPreviewTime, source: "scrub")
+        let reloadsPlaybackPipeline: Bool
+        if shouldSeek {
+            Self.logger.info(
+                "[CMP-SEEK] scrub ended target=\(self.scrubPreviewTime, privacy: .public) current=\(self.currentTime, privacy: .public)"
+            )
+            reloadsPlaybackPipeline = commitSeek(to: scrubPreviewTime, source: "scrub")
+        } else {
+            // Select entered and exited timeline mode without moving the
+            // playhead. Keep the backend parked at its exact paused position
+            // instead of issuing a redundant seek that can snap to a nearby
+            // keyframe and briefly rebuffer.
+            isScrubbing = false
+            scrubPreviewTime = currentTime
+            reloadsPlaybackPipeline = false
+            Self.logger.info(
+                "[CMP-SEEK] scrub ended without movement; resuming without seek at current=\(self.currentTime, privacy: .public)"
+            )
+        }
+        if resumePlayback, !reloadsPlaybackPipeline {
+            activePlayer.play()
+        }
         scheduleHideControls()
     }
 
