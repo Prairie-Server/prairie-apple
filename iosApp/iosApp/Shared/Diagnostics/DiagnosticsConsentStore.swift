@@ -67,7 +67,19 @@ final class DiagnosticsConsentStore {
         defaults: SharedDefaults = .shared,
         onNeverSelected: @escaping (DiagnosticsBinding) -> Void = { binding in
             PendingReportStore.shared.purge(binding: binding)
+            RecentSessionTracker.shared.purge(binding: binding)
             DiagnosticsCoordinator.purgeBreadcrumbJournal()
+            DiagLog.ring.clear()
+            #if os(tvOS)
+            // Turning Crash Reports to Never must also disarm the exit sentinel.
+            // The armed marker is otherwise only cleared on a normal
+            // background/terminate, so a crash in this same foreground would
+            // leave it as a leftover that could still surface as an
+            // abnormal-exit report if the user later switches back to
+            // Ask/Always — reporting a run that happened after collection was
+            // turned off.
+            ExitSentinel.shared.purge()
+            #endif
         }
     ) {
         self.defaults = defaults

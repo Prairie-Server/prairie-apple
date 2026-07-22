@@ -181,9 +181,21 @@ final class ServerRegistry {
         } else {
             defaults.removeObject(forKey: "profileId")
         }
+        #if os(iOS) || os(tvOS)
+        // Activating a server restores its saved profile via the mirror above,
+        // bypassing AuthService's profileId setter. Fail diagnostics closed
+        // synchronously, but do not start `/profiles` while URL routing and the
+        // active token slot still refer to different servers.
+        DiagnosticsCoordinator.activeProfileWillChange()
+        #endif
         activeServerId = serverId
         touchLastUsed(serverId)
         await TokenStore.shared.switchActiveServer(serverId: serverId)
+        #if os(iOS) || os(tvOS)
+        // URL, active id, and credential slot now agree; it is safe to resolve
+        // the restored profile against the newly selected server.
+        DiagnosticsCoordinator.activeProfileDidChange()
+        #endif
 
         // Switching between already-added servers is a per-server boundary too:
         // drop the previous server's AI capability/quota probes after the URL,
@@ -238,6 +250,9 @@ final class ServerRegistry {
         let removesActiveServer = activeServerId == serverId
         #if os(iOS) || os(tvOS)
         if removesActiveServer {
+            // Close the synchronous capture gate before any await or before
+            // publishing a fallback server/profile combination.
+            DiagnosticsCoordinator.activeProfileWillChange()
             await DiagnosticsCoordinator.shared.purgeDiagnosticsForCurrentBinding()
         }
         await DiagnosticsCoordinator.shared.purgeDiagnosticsForServerRegistryID(serverId)
@@ -266,6 +281,13 @@ final class ServerRegistry {
                 defaults.removeObject(forKey: "profileId")
                 await TokenStore.shared.switchActiveServer(serverId: "")
             }
+            #if os(iOS) || os(tvOS)
+            // Removing the active server restores a different profile (the
+            // fallback's, or none) via the mirror above without AuthService's
+            // setter. Fail the diagnostics gate closed until the new active
+            // profile is confirmed, same as `switchTo`.
+            DiagnosticsCoordinator.activeProfileDidChange()
+            #endif
             await MainActor.run {
                 AICapabilities.shared.reset()
                 RequestsFeatureStore.shared.reset()
