@@ -89,6 +89,34 @@ final class DiagnosticsReviewFixesTests: XCTestCase {
         XCTAssertEqual(tracker.recentSessionIDs(for: retained), ["keep-me"])
     }
 
+    func testRecentSessionsExpire() {
+        let suite = UserDefaults(suiteName: "diag-tests-\(UUID().uuidString)")!
+        let tracker = RecentSessionTracker(defaults: SharedDefaults(suite: suite, standard: suite))
+        let binding = DiagnosticsBinding(serverInstanceID: "server-a", accountUserID: "account-a")
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+
+        tracker.record(
+            sessionID: "expired",
+            binding: binding,
+            now: now.addingTimeInterval(-RecentSessionTracker.retentionInterval - 1)
+        )
+        tracker.record(sessionID: "current", binding: binding, now: now)
+
+        XCTAssertEqual(tracker.recentSessionIDs(for: binding, now: now), ["current"])
+    }
+
+    func testTransientAuthenticationGatePreservesFailedRunSessionEvidence() {
+        let tracker = RecentSessionTracker.shared
+        let binding = DiagnosticsBinding(serverInstanceID: "server-a", accountUserID: "account-a")
+        tracker.resetForTests()
+        defer { tracker.resetForTests() }
+
+        tracker.record(sessionID: "failed-run-session", binding: binding)
+        DiagnosticsCoordinator.authenticationStateBecameUnavailable()
+
+        XCTAssertEqual(tracker.recentSessionIDs(for: binding), ["failed-run-session"])
+    }
+
     func testCMPLogCaptureRequiresDiagnosticsGateAndVerboseOptIn() {
         XCTAssertFalse(shouldCaptureCMPLog(
             verbose: false,
@@ -451,6 +479,17 @@ final class DiagnosticsReviewFixesTests: XCTestCase {
             atPath: report.directoryURL.appendingPathComponent("breadcrumbs.jsonl").path
         ))
         XCTAssertTrue(report.manifest.playbackSessionIds.isEmpty)
+    }
+
+    func testEmptyFailedRunLogSnapshotStillFreezesLogsArtifact() async {
+        DiagLog.ring.clear()
+        let artifact = await DiagnosticsCoordinator().logSnapshotArtifact(
+            since: Date(timeIntervalSince1970: 1),
+            runID: "failed-run"
+        )
+
+        XCTAssertEqual(artifact.relativePath, "logs.jsonl")
+        XCTAssertEqual(artifact.data, Data())
     }
 
     func testProfileLookupDistinguishesMissingProfileFromUnavailableRequest() {
