@@ -35,6 +35,7 @@ struct PlayerCallbacks {
     var onDurationChange: ((Double) -> Void)?
     var onPauseChange: ((Bool) -> Void)?
     var onFileLoaded: (() -> Void)?
+    var onFirstFrame: ((Int) -> Void)?
     var onError: ((String) -> Void)?
     var onEndOfFile: (() -> Void)?
     var onBufferingChange: ((Bool) -> Void)?
@@ -748,6 +749,7 @@ class PlayerViewModel {
     private var settingsRefreshTask: Task<Void, Never>?
     private var freshLoadTask: Task<Void, Never>?
     private var freshLoadGeneration: UInt64 = 0
+    private var protocolV3ReplanTask: Task<Void, Never>?
     private var nextUpLookupTask: Task<Void, Never>?
     private var nextUpOnDeckTask: Task<Void, Never>?
     private var nextUpCountdownTask: Task<Void, Never>?
@@ -906,6 +908,7 @@ class PlayerViewModel {
     private var currentDeliveryStrategy: PlaybackDeliveryStrategy = .direct
     private var currentWatchDetail: WatchDetail?
     private var currentSelectedVersion: FileVersion?
+    private var activePreparedProtocolV3: PreparedPlaybackV3?
     private var activePlaybackSessionId: String?
     private var autoSkippedIntroKey: String?
     private var autoSkipIntroCancelledKey: String?
@@ -1012,6 +1015,7 @@ class PlayerViewModel {
     /// Re-applies subtitle styling when the user edits the system's
     /// Subtitles & Captioning preferences mid-playback.
     private var systemCaptionObserverToken: NSObjectProtocol?
+    private var audioRouteObserverToken: NSObjectProtocol?
 
     init() {
         activePlayer = .none
@@ -1090,6 +1094,23 @@ class PlayerViewModel {
             self.settings.refreshSubtitleSystemAppearance()
             self.applySubtitleAppearanceToPlayer()
         }
+        #if !os(macOS)
+        audioRouteObserverToken = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self,
+                  self.activePreparedProtocolV3 != nil,
+                  !self.isDisposed,
+                  !self.isLoading else { return }
+            self.attemptProtocolV3Replan(
+                position: self.currentTime,
+                classification: "output_route_changed",
+                message: "The Apple audio output route changed."
+            )
+        }
+        #endif
         settingsRefreshTask = Task { @MainActor [weak self] in
             await self?.refreshSettingsFromServer()
         }
@@ -1246,6 +1267,10 @@ class PlayerViewModel {
             guard let self, !self.isDisposed else { return }
             self.handleFileLoaded()
         }
+        cb.onFirstFrame = { [weak self] milliseconds in
+            guard let self, !self.isDisposed else { return }
+            Task { await self.sessionBridge.reportProtocolV3FirstFrame(milliseconds: milliseconds) }
+        }
         cb.onError = { [weak self] message in
             guard let self, !self.isDisposed else { return }
             self.handlePlaybackError(message)
@@ -1298,6 +1323,7 @@ class PlayerViewModel {
         core.onDurationChange  = cb.onDurationChange
         core.onPauseChange     = cb.onPauseChange
         core.onFileLoaded      = cb.onFileLoaded
+        core.onFirstFrame      = cb.onFirstFrame
         core.onError           = cb.onError
         core.onTracksChange    = cb.onTracksChange
         core.onChaptersChange  = cb.onChaptersChange
@@ -1312,6 +1338,7 @@ class PlayerViewModel {
         backend.onDurationChange      = cb.onDurationChange
         backend.onPauseChange         = cb.onPauseChange
         backend.onFileLoaded          = cb.onFileLoaded
+        backend.onFirstFrame          = cb.onFirstFrame
         backend.onError               = cb.onError
         backend.onTracksChange        = cb.onTracksChange
         backend.onChaptersChange      = cb.onChaptersChange
@@ -1366,6 +1393,10 @@ class PlayerViewModel {
             handleEndOfFile()
             return
         }
+        if activePreparedProtocolV3 != nil {
+            attemptProtocolV3Recovery(after: message)
+            return
+        }
         if isPlaybackSessionMissingMessage(message) || isLikelyExpiredSessionHTTP404(message) {
             if attemptBackgroundSessionRenewal(reason: "player_error", observedPosition: currentTime) {
                 return
@@ -1399,6 +1430,107 @@ class PlayerViewModel {
             return
         }
         finalizeTerminalPlaybackError(message)
+    }
+
+    private func attemptProtocolV3Recovery(after message: String) {
+        attemptProtocolV3Replan(
+            position: currentTime,
+            classification: protocolV3FailureClassification(message),
+            message: message
+        )
+    }
+
+    private func attemptProtocolV3Replan(
+        position: Double,
+        classification: String,
+        message: String,
+        operation: String = "failure_recovery",
+        qualityPreference: String? = nil,
+        completesQualitySwitch: Bool = false
+    ) {
+        guard protocolV3ReplanTask == nil,
+              let watchDetail = currentWatchDetail else {
+            if completesQualitySwitch { isQualitySwitching = false }
+            return
+        }
+        progressTask?.cancel()
+        isLoading = true
+        isBuffering = false
+        bufferingProgress = nil
+        protocolV3ReplanTask = Task { @MainActor [weak self] in
+            guard let self, !self.isDisposed else { return }
+            defer {
+                self.protocolV3ReplanTask = nil
+                if completesQualitySwitch { self.isQualitySwitching = false }
+            }
+            do {
+                guard let prepared = try await self.sessionBridge.replanProtocolV3(
+                    watchDetail: watchDetail,
+                    position: position,
+                    classification: classification,
+                    message: message,
+                    operation: operation,
+                    qualityPreference: qualityPreference,
+                    audioTrackIndex: self.resolvedAudioTrackIndexForResume(),
+                    subtitleTrackIndex: self.resolvedProtocolV3SubtitleIndexForResume()
+                ) else {
+                    self.finalizeTerminalPlaybackError(message)
+                    return
+                }
+                guard !Task.isCancelled, !self.isDisposed else { return }
+
+                let previousSessionId = self.activePlaybackSessionId
+                self.activePlaybackSessionId = prepared.session.sessionId
+                self.currentWatchDetail = prepared.watchDetail
+                self.currentSelectedVersion = prepared.selectedVersion
+                self.activePreparedProtocolV3 = prepared.protocolV3
+                self.pendingExternalSubtitles = prepared.session.subtitleUrls ?? []
+                self.knownExternalSubtitles = self.pendingExternalSubtitles
+                self.duration = prepared.session.durationSeconds ?? prepared.selectedVersion.duration ?? self.duration
+                self.currentTime = self.movieTime(for: prepared.session)
+                self.activeQualityId = prepared.activeQualityId
+
+                if previousSessionId != prepared.session.sessionId {
+                    await self.realtimeClient.unbind()
+                    await self.realtimeClient.bind(sessionId: prepared.session.sessionId)
+                }
+                guard let streamRequest = await self.makeStreamRequest(
+                    session: prepared.session,
+                    additionalHeaders: prepared.protocolV3?.plan.stream.headers ?? [:]
+                ) else {
+                    self.finalizeTerminalPlaybackError("The replacement V3 plan returned an invalid stream URL.")
+                    return
+                }
+                self.resolvedServerUrl = streamRequest.serverUrl
+                let plan = try self.makeExecutionPlan(prepared: prepared, streamRequest: streamRequest)
+                self.currentDeliveryStrategy = plan.delivery
+                self.playbackTimelineOffset = prepared.session.timelineOffsetSeconds
+                self.logExecutionPlan(plan)
+                await self.sessionBridge.reportProtocolV3PlanExecutionStarted()
+                await self.loadStream(plan: plan)
+            } catch {
+                guard !Task.isCancelled, !self.isDisposed else { return }
+                Self.logger.error("Protocol V3 replan failed: \(String(describing: error), privacy: .public)")
+                self.finalizeTerminalPlaybackError(error.localizedDescription)
+            }
+        }
+    }
+
+    private func protocolV3FailureClassification(_ message: String) -> String {
+        let value = message.lowercased()
+        if value.contains("decoder") || value.contains("videotoolbox") || value.contains("-129") {
+            return "decoder_error"
+        }
+        if value.contains("unsupported") || value.contains("cannot decode") {
+            return "unsupported_stream"
+        }
+        if value.contains("network") || value.contains("timed out") || value.contains("connection") {
+            return "network_degraded"
+        }
+        if value.contains("http 404") || value.contains("not found") || value.contains("source ended") {
+            return "source_unavailable"
+        }
+        return "playback_error"
     }
 
     private func shouldTreatPlaybackErrorAsNaturalEnd() -> Bool {
@@ -1982,13 +2114,14 @@ class PlayerViewModel {
     private func makeExecutionPlan(
         prepared: PreparedPlayback,
         streamRequest: StreamRequest
-    ) -> PlaybackExecutionPlan {
-        ApplePlaybackRoutePlanner().makeExecutionPlan(
+    ) throws -> PlaybackExecutionPlan {
+        let routeRequirements = makeRouteRequirements(prepared: prepared)
+        let basePlan = ApplePlaybackRoutePlanner().makeExecutionPlan(
             input: ApplePlaybackPlannerInput(
                 session: prepared.session,
                 selectedVersion: prepared.selectedVersion,
                 streamRequest: streamRequest,
-                routeRequirements: makeRouteRequirements(prepared: prepared),
+                routeRequirements: routeRequirements,
                 selectedAudioTrackId: selectedAudioId,
                 pendingAudioFfIndex: pendingAudioFfIndex,
                 preferredAudioTrackIndex: resolvedAudioTrackIndexForResume(),
@@ -1999,6 +2132,13 @@ class PlayerViewModel {
                 dolbyVisionPolicy: settings.dolbyVisionPolicySnapshot,
                 displayCapabilities: ApplePlaybackDisplayCapabilities.probe()
             )
+        )
+        guard let protocolV3 = prepared.protocolV3 else { return basePlan }
+        return try ApplePlaybackV3PlanAdapter.makeExecutionPlan(
+            v3: protocolV3,
+            basePlan: basePlan,
+            streamRequest: streamRequest,
+            routeRequirements: routeRequirements
         )
     }
 
@@ -2838,6 +2978,7 @@ class PlayerViewModel {
         serverProvidedChapters = []
         currentWatchDetail = nil
         currentSelectedVersion = nil
+        activePreparedProtocolV3 = nil
         autoSkippedIntroKey = nil
         autoSkipIntroCancelledKey = nil
         selectedAudioId = nil
@@ -2892,6 +3033,19 @@ class PlayerViewModel {
             return -1
         }
         return lastLoadRequest?.preferredSubtitleTrackIndex
+    }
+
+    private func resolvedProtocolV3SubtitleIndexForResume() -> Int? {
+        guard let selectedSubtitleId,
+              !SubtitleTrackIdSpace.isAILive(selectedSubtitleId),
+              let selected = subtitleTracks.first(where: { $0.trackId == selectedSubtitleId }),
+              let version = currentSelectedVersion else {
+            return nil
+        }
+        return ApplePlaybackV3PlanAdapter.serverCombinedSubtitleIndex(
+            for: selected,
+            in: version
+        )
     }
 
     private func resolvedSidecarSubtitleTrackIdForResume() -> Int64? {
@@ -2962,6 +3116,8 @@ class PlayerViewModel {
         )
 
         freshLoadTask?.cancel()
+        protocolV3ReplanTask?.cancel()
+        protocolV3ReplanTask = nil
         freshLoadGeneration &+= 1
         let currentFreshLoadGeneration = freshLoadGeneration
         let snapshotPosition = progressPosition
@@ -3077,6 +3233,7 @@ class PlayerViewModel {
                 self.knownExternalSubtitles = self.pendingExternalSubtitles
                 self.currentWatchDetail = prepared.watchDetail
                 self.currentSelectedVersion = prepared.selectedVersion
+                self.activePreparedProtocolV3 = prepared.protocolV3
                 // Artwork and Next Up are catalog fetches; the offline path
                 // already published its cached poster above and has no
                 // server to resolve a next episode against.
@@ -3104,13 +3261,16 @@ class PlayerViewModel {
                     guard !Task.isCancelled, !self.isDisposed else { return }
                 }
 
-                guard let streamRequest = await self.makeStreamRequest(session: session) else {
+                guard let streamRequest = await self.makeStreamRequest(
+                    session: session,
+                    additionalHeaders: prepared.protocolV3?.plan.stream.headers ?? [:]
+                ) else {
                     self.finalizeTerminalPlaybackError("Invalid stream URL")
                     return
                 }
                 self.resolvedServerUrl = streamRequest.serverUrl
 
-                let plan = self.makeExecutionPlan(prepared: prepared, streamRequest: streamRequest)
+                let plan = try self.makeExecutionPlan(prepared: prepared, streamRequest: streamRequest)
                 self.currentDeliveryStrategy = plan.delivery
                 self.playbackTimelineOffset = self.timelineOffset(
                     for: plan,
@@ -3127,6 +3287,7 @@ class PlayerViewModel {
                 // request with curl to isolate client vs server.
                 print("[CMP] streamURL=\(streamRequest.url.absoluteString) playMethod=\(session.playMethod) startTime=\(plan.startMode.seconds)")
 
+                await self.sessionBridge.reportProtocolV3PlanExecutionStarted()
                 await self.loadStream(plan: plan)
             } catch let error {
                 guard !Task.isCancelled, !self.isDisposed else { return }
@@ -3868,6 +4029,21 @@ class PlayerViewModel {
         let resolvedQualityId = normalized
 
         guard resolvedQualityId != activeQualityId || qualitySwitchError != nil else { return }
+        if activePreparedProtocolV3 != nil {
+            let target = currentTime.isFinite ? max(0, currentTime) : 0
+            isQualitySwitching = true
+            qualitySwitchError = nil
+            showControls = true
+            hideControlsTask?.cancel()
+            attemptProtocolV3Replan(
+                position: target,
+                classification: "quality_changed",
+                message: "User selected playback quality \(resolvedQualityId).",
+                qualityPreference: resolvedQualityId,
+                completesQualitySwitch: true
+            )
+            return
+        }
         let qualityRequiresTranscode = currentSelectedVersion.map {
             ApplePlaybackQuality.shouldForceTranscode(
                 preferredQualityId: resolvedQualityId,
@@ -4238,6 +4414,30 @@ class PlayerViewModel {
             return false
         }
 
+        if let protocolV3 = activePreparedProtocolV3,
+           protocolV3.serverFeatures.contains(PlaybackProtocolV3.seekReanchorFeature) {
+            hasReachedEndOfFile = false
+            seekOriginTime = origin
+            seekTargetTime = clampedTarget
+            seekFilterTimeoutTask?.cancel()
+            seekFilterTimeoutTask = nil
+            currentTime = clampedTarget
+            scrubPreviewTime = clampedTarget
+            isScrubbing = false
+            isLoading = true
+            isBuffering = false
+            bufferingProgress = nil
+            showControls = true
+            hideControlsTask?.cancel()
+            attemptProtocolV3Replan(
+                position: clampedTarget,
+                classification: "seek_reanchor",
+                message: "Reanchor the active stream at the requested source position.",
+                operation: "seek_reanchor"
+            )
+            return true
+        }
+
         hasReachedEndOfFile = false
         seekOriginTime = origin
         seekTargetTime = clampedTarget
@@ -4463,7 +4663,7 @@ class PlayerViewModel {
                 }
                 self.resolvedServerUrl = streamRequest.serverUrl
 
-                let restartedPlan = self.makeExecutionPlan(
+                let restartedPlan = try self.makeExecutionPlan(
                     prepared: prepared,
                     streamRequest: streamRequest
                 )
@@ -4691,8 +4891,17 @@ class PlayerViewModel {
         guard !isBackgroundSuspended else { return }
         pendingAudioFfIndex = nil
         selectedAudioId = track.trackId
-        applyAudioTrackSelection(track.trackId)
         persistAudioSelection(track)
+        if activePreparedProtocolV3 != nil {
+            attemptProtocolV3Replan(
+                position: currentTime,
+                classification: "audio_track_changed",
+                message: "User selected audio track \(track.title ?? String(track.trackId))."
+            )
+            scheduleHideControls()
+            return
+        }
+        applyAudioTrackSelection(track.trackId)
         scheduleHideControls()
     }
 
@@ -4707,8 +4916,18 @@ class PlayerViewModel {
         Self.logger.info(
             "[CMP-SUB] select primary trackId=\(track.trackId, privacy: .public) title=\(track.title ?? "nil", privacy: .public) external=\(track.isExternal, privacy: .public) codec=\(track.codec ?? "nil", privacy: .public)"
         )
-        applySubtitleTrackSelection(track.trackId)
         persistSubtitleSelection(track)
+        if activePreparedProtocolV3 != nil,
+           !SubtitleTrackIdSpace.isAILive(track.trackId) {
+            attemptProtocolV3Replan(
+                position: currentTime,
+                classification: "subtitle_track_changed",
+                message: "User selected subtitle track \(track.title ?? String(track.trackId))."
+            )
+            scheduleHideControls()
+            return
+        }
+        applySubtitleTrackSelection(track.trackId)
         scheduleHideControls()
     }
 
@@ -4721,8 +4940,17 @@ class PlayerViewModel {
         }
         selectedSubtitleId = nil
         Self.logger.info("[CMP-SUB] disable primary subtitles")
-        applySubtitleTrackSelection(nil)
         persistSubtitleSelection(nil)
+        if activePreparedProtocolV3 != nil {
+            attemptProtocolV3Replan(
+                position: currentTime,
+                classification: "subtitle_track_changed",
+                message: "User disabled subtitles."
+            )
+            scheduleHideControls()
+            return
+        }
+        applySubtitleTrackSelection(nil)
         scheduleHideControls()
     }
 
@@ -5367,6 +5595,12 @@ class PlayerViewModel {
         settingsRefreshTask?.cancel()
         settingsRefreshTask = nil
         freshLoadTask?.cancel()
+        protocolV3ReplanTask?.cancel()
+        protocolV3ReplanTask = nil
+        if let audioRouteObserverToken {
+            NotificationCenter.default.removeObserver(audioRouteObserverToken)
+            self.audioRouteObserverToken = nil
+        }
         nextUpLookupTask?.cancel()
         nextUpOnDeckTask?.cancel()
         nextUpCountdownTask?.cancel()
@@ -5467,7 +5701,11 @@ class PlayerViewModel {
         if let systemCaptionObserverToken {
             NotificationCenter.default.removeObserver(systemCaptionObserverToken)
         }
+        if let audioRouteObserverToken {
+            NotificationCenter.default.removeObserver(audioRouteObserverToken)
+        }
         freshLoadTask?.cancel()
+        protocolV3ReplanTask?.cancel()
         staleSessionRecoveryTask?.cancel()
         serverOutageRecoveryTask?.cancel()
         interruptionRecoveryTask?.cancel()
@@ -5697,7 +5935,10 @@ class PlayerViewModel {
     }
 
 
-    private func makeStreamRequest(session: PlaybackSessionResponse) async -> StreamRequest? {
+    private func makeStreamRequest(
+        session: PlaybackSessionResponse,
+        additionalHeaders: [String: String] = [:]
+    ) async -> StreamRequest? {
         let serverUrl = await ContinuumAPI.shared.currentServerUrl()
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
@@ -5707,7 +5948,7 @@ class PlayerViewModel {
             return nil
         }
 
-        var headers: [String: String] = [:]
+        var headers = additionalHeaders
         if let token, !token.isEmpty, !url.isFileURL {
             headers["Authorization"] = "Bearer \(token)"
         }
