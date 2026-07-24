@@ -521,6 +521,7 @@ actor PlaybackSessionBridge {
             )
             let planAttemptId = "apple-plan:\(UUID().uuidString.lowercased())"
             let planAttemptKey = plan.attemptKey(outputRouteGeneration: snapshot.outputRouteGeneration)
+            let serverFeatures = response.serverFeatures
             activeProtocolV3 = ActiveProtocolV3(
                 playbackAttemptId: playbackAttemptId,
                 planAttemptId: planAttemptId,
@@ -529,7 +530,7 @@ actor PlaybackSessionBridge {
                 attemptCount: 1,
                 clientQualityId: ApplePlaybackQuality.normalizeStoredId(qualityPreference),
                 snapshot: snapshot,
-                serverFeatures: response.serverFeatures,
+                serverFeatures: serverFeatures,
                 plan: plan
             )
             protocolV3FirstFramePlanIds.removeAll()
@@ -541,7 +542,7 @@ actor PlaybackSessionBridge {
                 planAttemptId: planAttemptId,
                 planAttemptKey: planAttemptKey,
                 outputRouteGeneration: snapshot.outputRouteGeneration,
-                serverFeatures: response.serverFeatures,
+                serverFeatures: serverFeatures,
                 plan: plan
             )
             logger.info(

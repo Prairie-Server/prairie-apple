@@ -18,6 +18,8 @@ struct PlaybackSourceProxyStats: Equatable {
     let diskSpillBytes: Int64
     let diskBudgetBytes: Int64
     let diskBytesWritten: Int64
+    let resumeCapable: Bool
+    let serverAdvertisesDirectStreamResume: Bool
 }
 
 enum PlaybackSourceInterruptionReason: Equatable {
@@ -28,6 +30,9 @@ enum PlaybackSourceInterruptionReason: Equatable {
     /// proxy could not serve; `expectedEnd` is the last byte the response
     /// promised.
     case prematureEOF(offset: Int64, expectedEnd: Int64)
+    /// A validator-protected range reopen returned a full response, proving
+    /// the cached prefix belongs to a replaced source entity.
+    case sourceEntityChanged
 }
 
 /// How a proxied GET response loop ended. Pure decision so tests can pin the
@@ -64,6 +69,11 @@ enum PlaybackSourceResponseEnd: Equatable {
 }
 
 final class PlaybackSourceCache {
+    private static let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "com.continuum.app",
+        category: "PlaybackSourceCache"
+    )
+
     static var defaultMemoryBudgetBytes: Int {
         isConstrainedMemoryDevice ? 96 * 1024 * 1024 : 128 * 1024 * 1024
     }
@@ -153,6 +163,7 @@ final class PlaybackSourceCache {
     private var diskSpillBytes: Int64 = 0
     private var diskBytesWritten: Int64 = 0
     private var loggedWriteBudgetExhausted = false
+    private var prefetchArmed = true
     private var recentTransfers: [(time: Date, bytes: Int)] = []
     private var lastReadEnd: Int64?
     /// Most recent read position (not a high-water mark). `lastReadEnd` is
@@ -226,15 +237,31 @@ final class PlaybackSourceCache {
     var downstreamHighWaterBytes: Int { highWaterBytes }
     var downstreamLowWaterBytes: Int { lowWaterBytes }
     var shouldPrefetch: Bool {
+        var didRearm = false
         lock.lock()
-        let value: Bool
-        if lastReadEnd == nil {
-            value = cachedBytes < highWaterBytes
-        } else {
-            value = forwardCachedBytesLocked() < highWaterBytes
+        let cachedAhead = lastReadEnd == nil
+            ? Int64(cachedBytes)
+            : forwardCachedBytesLocked()
+        if prefetchArmed, cachedAhead >= Int64(highWaterBytes) {
+            prefetchArmed = false
+        } else if !prefetchArmed, cachedAhead <= Int64(lowWaterBytes) {
+            prefetchArmed = true
+            didRearm = true
         }
+        let value = prefetchArmed
         lock.unlock()
+        if didRearm {
+            Self.logger.info(
+                "[CMP-SOURCE-CACHE] hysteresis re-arm cachedAheadBytes=\(cachedAhead, privacy: .public) lowWaterBytes=\(self.lowWaterBytes, privacy: .public)"
+            )
+        }
         return value
+    }
+
+    func forwardCachedByteCount() -> Int64 {
+        lock.lock()
+        defer { lock.unlock() }
+        return lastReadEnd == nil ? Int64(cachedBytes) : forwardCachedBytesLocked()
     }
 
     func setTotalLength(_ length: Int64?) {
@@ -650,8 +677,19 @@ private final class PlaybackSourceResource {
     /// player rides its buffered runway.
     private let onOriginOutageChanged: ((Bool) -> Void)?
     private let outageRideThroughEnabled: Bool
+    private let resumeCapable: Bool
+    private let serverAdvertisesDirectStreamResume: Bool
+    private let originStreamClock: PlaybackOriginStreamClock
     private let stateLock = NSLock()
     private var cancelled = false
+    /// A validator proved that the origin now refers to a different entity.
+    /// Once set, this resource must neither fetch nor serve another byte from
+    /// the cache while the view model tears down and replans playback.
+    private var sourceEntityInvalidated = false
+    /// Strong validator captured from the window's first accepted response.
+    /// Resume-capable chunk requests use the same validator so random-access
+    /// reads cannot race replacement detection and contaminate the cache.
+    private var sourceEntityETag: String?
     /// Origin outage ride-through state (all under `stateLock`): parked
     /// demands stay registered in `dataWaiters`, `outageProbeTask` drives the
     /// slow re-probe cadence, and `sessionMissingObserved` widens parking to
@@ -688,7 +726,10 @@ private final class PlaybackSourceResource {
         onPlaybackSessionMissing: (() -> Void)?,
         onPlaybackSourceInterrupted: ((PlaybackSourceInterruptionReason) -> Void)?,
         onOriginOutageChanged: ((Bool) -> Void)? = nil,
-        outageRideThroughEnabled: Bool = PlaybackOriginOutagePolicy.rideThroughEnabled()
+        outageRideThroughEnabled: Bool = PlaybackOriginOutagePolicy.rideThroughEnabled(),
+        resumeCapable: Bool,
+        serverAdvertisesDirectStreamResume: Bool,
+        originStreamClock: PlaybackOriginStreamClock
     ) {
         self.token = Self.makeToken()
         self.originURL = originURL
@@ -698,6 +739,9 @@ private final class PlaybackSourceResource {
         self.onPlaybackSourceInterrupted = onPlaybackSourceInterrupted
         self.onOriginOutageChanged = onOriginOutageChanged
         self.outageRideThroughEnabled = outageRideThroughEnabled
+        self.resumeCapable = resumeCapable
+        self.serverAdvertisesDirectStreamResume = serverAdvertisesDirectStreamResume
+        self.originStreamClock = originStreamClock
     }
 
     deinit {
@@ -750,7 +794,7 @@ private final class PlaybackSourceResource {
         var windowToCancel: PlaybackOriginStream?
         var fetcherToCancel: PlaybackOriginChunkFetcher?
         stateLock.lock()
-        guard !cancelled else {
+        guard !cancelled, !sourceEntityInvalidated else {
             stateLock.unlock()
             return
         }
@@ -797,7 +841,10 @@ private final class PlaybackSourceResource {
         var toStart: PlaybackOriginStream?
         var probeToCancel: Task<Void, Never>?
         stateLock.lock()
-        guard !cancelled, originOutage, windowStream == nil else {
+        guard !cancelled,
+              !sourceEntityInvalidated,
+              originOutage,
+              windowStream == nil else {
             stateLock.unlock()
             return
         }
@@ -822,7 +869,7 @@ private final class PlaybackSourceResource {
     private func enterOutageAndScheduleProbe(failureOffset: Int64) -> Bool {
         var entered = false
         stateLock.lock()
-        guard !cancelled else {
+        guard !cancelled, !sourceEntityInvalidated else {
             stateLock.unlock()
             return false
         }
@@ -845,7 +892,7 @@ private final class PlaybackSourceResource {
     /// demand through the normal re-miss routing.
     private func clearOutageAfterOriginResponse() {
         stateLock.lock()
-        guard originOutage else {
+        guard originOutage, !sourceEntityInvalidated else {
             stateLock.unlock()
             return
         }
@@ -862,7 +909,9 @@ private final class PlaybackSourceResource {
 
     private func noteSessionMissingObserved() {
         stateLock.lock()
-        sessionMissingObserved = true
+        if !sourceEntityInvalidated {
+            sessionMissingObserved = true
+        }
         stateLock.unlock()
     }
 
@@ -882,8 +931,17 @@ private final class PlaybackSourceResource {
             activeOriginRequestCount: snapshot.activeOriginRequestCount,
             diskSpillBytes: snapshot.diskSpillBytes,
             diskBudgetBytes: snapshot.diskBudgetBytes,
-            diskBytesWritten: snapshot.diskBytesWritten
+            diskBytesWritten: snapshot.diskBytesWritten,
+            resumeCapable: resumeCapable,
+            serverAdvertisesDirectStreamResume: serverAdvertisesDirectStreamResume
         )
+    }
+
+    func originStreamDiagnostics() -> PlaybackOriginStream.DiagnosticsSnapshot? {
+        stateLock.lock()
+        let stream = windowStream
+        stateLock.unlock()
+        return stream?.diagnosticsSnapshot()
     }
 
     /// Births the streaming window at the initial playback offset. The
@@ -892,7 +950,7 @@ private final class PlaybackSourceResource {
     func startPrefetch(at offset: Int64 = 0) {
         var toStart: PlaybackOriginStream?
         stateLock.lock()
-        if !cancelled, windowStream == nil {
+        if !cancelled, !sourceEntityInvalidated, windowStream == nil {
             demandCounter += 1
             let stream = makeStream(startOffset: max(0, offset), order: demandCounter)
             windowStream = stream
@@ -910,7 +968,7 @@ private final class PlaybackSourceResource {
 
     func handle(method: String, rangeHeader: String?, on connection: NWConnection) {
         stateLock.lock()
-        let alreadyStopped = cancelled
+        let alreadyStopped = cancelled || sourceEntityInvalidated
         stateLock.unlock()
         guard !alreadyStopped else {
             connection.cancel()
@@ -938,7 +996,7 @@ private final class PlaybackSourceResource {
         stateLock.lock()
         if completedServeTaskIDs.remove(id) != nil {
             // Finished before registration — nothing to track.
-        } else if cancelled {
+        } else if cancelled || sourceEntityInvalidated {
             cancelNow = true
         } else {
             serveTasks[id] = task
@@ -951,7 +1009,9 @@ private final class PlaybackSourceResource {
 
     private func serveTaskFinished(_ id: UUID) {
         stateLock.lock()
-        if serveTasks.removeValue(forKey: id) == nil, !cancelled {
+        if serveTasks.removeValue(forKey: id) == nil,
+           !cancelled,
+           !sourceEntityInvalidated {
             completedServeTaskIDs.insert(id)
         }
         stateLock.unlock()
@@ -1089,10 +1149,20 @@ private final class PlaybackSourceResource {
         return discoveredTotalLength
     }
 
-    private func currentState() -> (cancelled: Bool, total: Int64?, sawResponse: Bool) {
+    private func currentState() -> (
+        cancelled: Bool,
+        sourceEntityInvalidated: Bool,
+        total: Int64?,
+        sawResponse: Bool
+    ) {
         stateLock.lock()
         defer { stateLock.unlock() }
-        return (cancelled, discoveredTotalLength, sawOriginResponse)
+        return (
+            cancelled: cancelled,
+            sourceEntityInvalidated: sourceEntityInvalidated,
+            total: discoveredTotalLength,
+            sawResponse: sawOriginResponse
+        )
     }
 
     /// Route a byte demand that MISSED the cache: ride the streaming window
@@ -1106,10 +1176,11 @@ private final class PlaybackSourceResource {
         var toNote: PlaybackOriginStream?
         var toRetarget: PlaybackOriginStream?
         var chunk = false
+        var deferChunkUntilEntityKnown = false
         var order: UInt64 = 0
         var total: Int64?
         stateLock.lock()
-        guard !cancelled else {
+        guard !cancelled, !sourceEntityInvalidated else {
             stateLock.unlock()
             return
         }
@@ -1143,11 +1214,19 @@ private final class PlaybackSourceResource {
             }
         case .chunk:
             chunk = true
+            // A resume-capable chunk must be bound to the streaming
+            // window's representation. If a startup probe wins the race
+            // with the window response, leave its registered data waiter
+            // parked instead of spending the chunk's short retry budget on
+            // requests that cannot yet carry If-Range. The first window
+            // response with a strong validator re-drives all waiting
+            // demands below.
+            deferChunkUntilEntityKnown = resumeCapable && sourceEntityETag == nil
         }
         stateLock.unlock()
         toNote?.noteDemand(offset: offset, order: order)
         toStart?.start()
-        if chunk {
+        if chunk && !deferChunkUntilEntityKnown {
             ensureChunkFetcher().ensureFetch(covering: offset, totalLength: total)
         }
         if let toRetarget {
@@ -1171,15 +1250,23 @@ private final class PlaybackSourceResource {
             stateLock.unlock()
             return chunkFetcher
         }
-        let alreadyCancelled = cancelled
+        let alreadyStopped = cancelled || sourceEntityInvalidated
         let fetcher = PlaybackOriginChunkFetcher(
             originURL: originURL,
             originHeaders: originHeaders,
+            entityETagProvider: { [weak self] in
+                self?.currentChunkEntityETag()
+            },
+            requiresEntityValidation: resumeCapable,
             callbacks: PlaybackOriginChunkFetcher.Callbacks(
-                store: { [weak self] start, data, total in
-                    guard let self else { return }
-                    self.cache.recordOriginTransfer(byteCount: data.count)
-                    self.cache.store(start: start, data: data, totalLength: total)
+                store: { [weak self] start, data, total, responseETag in
+                    guard let self else { return .network }
+                    return self.storeChunkOriginData(
+                        start: start,
+                        data: data,
+                        total: total,
+                        responseETag: responseETag
+                    )
                 },
                 didStore: { [weak self] range in
                     self?.streamDidStore(range)
@@ -1202,7 +1289,7 @@ private final class PlaybackSourceResource {
                 }
             )
         )
-        if alreadyCancelled {
+        if alreadyStopped {
             // A stop raced this creation; hand back a pre-cancelled fetcher
             // whose ensureFetch is a no-op instead of a zombie that stop()
             // can no longer reach.
@@ -1213,6 +1300,42 @@ private final class PlaybackSourceResource {
         chunkFetcher = fetcher
         stateLock.unlock()
         return fetcher
+    }
+
+    private func currentChunkEntityETag() -> String? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return resumeCapable ? sourceEntityETag : nil
+    }
+
+    /// A chunk and the window can complete on different URLSession queues.
+    /// Bind the chunk to the window's established representation and store
+    /// under one lock so neither can race replacement bytes into the cache.
+    private func storeChunkOriginData(
+        start: Int64,
+        data: Data,
+        total: Int64?,
+        responseETag: String?
+    ) -> PlaybackOriginReconnectPolicy.EndCause? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard !cancelled, !sourceEntityInvalidated else {
+            return .network
+        }
+        if resumeCapable {
+            guard sawOriginResponse else {
+                return .rangeIgnored
+            }
+            guard let sourceEntityETag, let responseETag else {
+                return .rangeIgnored
+            }
+            guard responseETag == sourceEntityETag else {
+                return .entityChanged
+            }
+        }
+        cache.recordOriginTransfer(byteCount: data.count)
+        cache.store(start: start, data: data, totalLength: total)
+        return nil
     }
 
     private func redriveAllDataWaiters() {
@@ -1232,7 +1355,7 @@ private final class PlaybackSourceResource {
     ) {
         var toStart: PlaybackOriginStream?
         stateLock.lock()
-        guard !cancelled else {
+        guard !cancelled, !sourceEntityInvalidated else {
             stateLock.unlock()
             return
         }
@@ -1258,7 +1381,7 @@ private final class PlaybackSourceResource {
         var toNote: PlaybackOriginStream?
         var order: UInt64 = 0
         stateLock.lock()
-        guard !cancelled else {
+        guard !cancelled, !sourceEntityInvalidated else {
             stateLock.unlock()
             return
         }
@@ -1282,13 +1405,13 @@ private final class PlaybackSourceResource {
     /// reader (which may re-anchor the window) from short-lived probes.
     private func awaitData(at offset: Int64, servedSequentialBytes: Int64) async -> WaitOutcome {
         let state = currentState()
-        if state.cancelled { return .failed }
+        if state.cancelled || state.sourceEntityInvalidated { return .failed }
         if let total = state.total, offset >= total { return .eof }
         let id = UUID()
         return await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<WaitOutcome, Never>) in
                 stateLock.lock()
-                if cancelled {
+                if cancelled || sourceEntityInvalidated {
                     stateLock.unlock()
                     continuation.resume(returning: .failed)
                     return
@@ -1325,12 +1448,15 @@ private final class PlaybackSourceResource {
     private func awaitTotalLength(hint: Int64) async -> Int64? {
         let state = currentState()
         if let known = state.total { return known }
-        if state.sawResponse || state.cancelled { return nil }
+        if state.sawResponse || state.cancelled || state.sourceEntityInvalidated { return nil }
         let id = UUID()
         return await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<Int64?, Never>) in
                 stateLock.lock()
-                if cancelled || sawOriginResponse || discoveredTotalLength != nil {
+                if cancelled
+                    || sourceEntityInvalidated
+                    || sawOriginResponse
+                    || discoveredTotalLength != nil {
                     let value = discoveredTotalLength
                     stateLock.unlock()
                     continuation.resume(returning: value)
@@ -1356,6 +1482,21 @@ private final class PlaybackSourceResource {
         waiter?.resume(returning: value)
     }
 
+    /// Serialize cache writes with entity invalidation. A chunk completion can
+    /// race the window's validator failure on a different URLSession queue;
+    /// holding `stateLock` through the cache write guarantees that once the
+    /// invalidation flag is visible, no replacement bytes can be appended.
+    private func storeOriginData(start: Int64, data: Data, total: Int64?) {
+        stateLock.lock()
+        guard !cancelled, !sourceEntityInvalidated else {
+            stateLock.unlock()
+            return
+        }
+        cache.recordOriginTransfer(byteCount: data.count)
+        cache.store(start: start, data: data, totalLength: total)
+        stateLock.unlock()
+    }
+
     private func makeStream(startOffset: Int64, order: UInt64) -> PlaybackOriginStream {
         PlaybackOriginStream(
             originURL: originURL,
@@ -1366,8 +1507,8 @@ private final class PlaybackSourceResource {
                 didStore: { [weak self] _, range in
                     self?.streamDidStore(range)
                 },
-                didReceiveResponse: { [weak self] _, total in
-                    self?.streamReceivedResponse(total: total)
+                didReceiveResponse: { [weak self] _, total, entityETag in
+                    self?.streamReceivedResponse(total: total, entityETag: entityETag)
                 },
                 didDetectSessionMissing: { [weak self] _ in
                     self?.noteSessionMissingObserved()
@@ -1382,22 +1523,27 @@ private final class PlaybackSourceResource {
                 mayContinueFilling: { [weak self] stream, cursor, demandMark in
                     self?.mayContinueFilling(stream, cursor: cursor, demandMark: demandMark) ?? false
                 },
+                cachedAheadBytes: { [weak self] in
+                    self?.cache.forwardCachedByteCount() ?? 0
+                },
                 nextMissingByte: { [weak self] cursor in
                     self?.cache.nextPrefetchStart(after: cursor)
                 },
                 store: { [weak self] start, data, total in
-                    guard let self else { return }
-                    self.cache.recordOriginTransfer(byteCount: data.count)
-                    self.cache.store(start: start, data: data, totalLength: total)
+                    self?.storeOriginData(start: start, data: data, total: total)
                 }
-            )
+            ),
+            resumeCapable: resumeCapable,
+            initialEntityETag: resumeCapable ? sourceEntityETag : nil,
+            initialResponseRequiresEntityValidation: resumeCapable && sawOriginResponse,
+            clock: originStreamClock
         )
     }
 
     private func streamDidStore(_ range: ClosedRange<Int64>) {
         var resume: [CheckedContinuation<WaitOutcome, Never>] = []
         stateLock.lock()
-        guard !dataWaiters.isEmpty else {
+        guard !sourceEntityInvalidated, !dataWaiters.isEmpty else {
             stateLock.unlock()
             return
         }
@@ -1415,10 +1561,21 @@ private final class PlaybackSourceResource {
         }
     }
 
-    private func streamReceivedResponse(total: Int64?) {
+    private func streamReceivedResponse(total: Int64?, entityETag: String? = nil) {
         var resume: [CheckedContinuation<Int64?, Never>] = []
+        var shouldRedriveDataWaiters = false
         stateLock.lock()
+        guard !sourceEntityInvalidated else {
+            stateLock.unlock()
+            return
+        }
+        shouldRedriveDataWaiters = resumeCapable
+            && sourceEntityETag == nil
+            && entityETag != nil
         sawOriginResponse = true
+        if sourceEntityETag == nil {
+            sourceEntityETag = entityETag
+        }
         if let total, total > 0 {
             discoveredTotalLength = max(discoveredTotalLength ?? 0, total)
         }
@@ -1430,7 +1587,72 @@ private final class PlaybackSourceResource {
         for continuation in resume {
             continuation.resume(returning: value)
         }
+        if shouldRedriveDataWaiters {
+            redriveAllDataWaiters()
+        }
         clearOutageAfterOriginResponse()
+    }
+
+    /// Entity identity is global to the resource, not to one transport. Either
+    /// the streaming window or a random-access chunk can detect replacement;
+    /// the first detector atomically closes every fetch/serve path and fails
+    /// all waiters before escalating recovery.
+    private func invalidateSourceEntity(statusCode: Int?, failureOffset: Int64) {
+        var windowToCancel: PlaybackOriginStream?
+        var fetcherToCancel: PlaybackOriginChunkFetcher?
+        var probeToCancel: Task<Void, Never>?
+        var serveTasksToCancel: [Task<Void, Never>] = []
+        var dataResume: [CheckedContinuation<WaitOutcome, Never>] = []
+        var totalResume: [CheckedContinuation<Int64?, Never>] = []
+        var total: Int64?
+        var outageWasActive = false
+
+        stateLock.lock()
+        guard !sourceEntityInvalidated else {
+            stateLock.unlock()
+            return
+        }
+        sourceEntityInvalidated = true
+        outageWasActive = originOutage
+        originOutage = false
+        sessionMissingObserved = false
+        probeToCancel = outageProbeTask
+        outageProbeTask = nil
+        windowToCancel = windowStream
+        windowStream = nil
+        fetcherToCancel = chunkFetcher
+        chunkFetcher = nil
+        serveTasksToCancel = Array(serveTasks.values)
+        dataResume = dataWaiters.values.map(\.continuation)
+        dataWaiters.removeAll()
+        totalResume = Array(totalWaiters.values)
+        totalWaiters.removeAll()
+        total = discoveredTotalLength
+        stateLock.unlock()
+
+        probeToCancel?.cancel()
+        if let windowToCancel {
+            windowToCancel.cancel()
+            cache.endOriginRequest()
+        }
+        fetcherToCancel?.cancel()
+        for task in serveTasksToCancel {
+            task.cancel()
+        }
+        for continuation in totalResume {
+            continuation.resume(returning: total)
+        }
+        for continuation in dataResume {
+            continuation.resume(returning: .failed)
+        }
+        if outageWasActive {
+            onOriginOutageChanged?(false)
+        }
+        escalateInterruption(
+            cause: .entityChanged,
+            statusCode: statusCode,
+            failureOffset: failureOffset
+        )
     }
 
     /// The window stream ended. A clean finish (EOF, or everything to EOF
@@ -1443,6 +1665,13 @@ private final class PlaybackSourceResource {
         gaveUpWith cause: PlaybackOriginReconnectPolicy.EndCause?,
         statusCode: Int?
     ) {
+        if cause == .entityChanged {
+            invalidateSourceEntity(
+                statusCode: statusCode,
+                failureOffset: stream.snapshot().writeCursor
+            )
+            return
+        }
         var redrive: [CheckedContinuation<WaitOutcome, Never>] = []
         var failed: [CheckedContinuation<WaitOutcome, Never>] = []
         var totalResume: [CheckedContinuation<Int64?, Never>] = []
@@ -1526,6 +1755,13 @@ private final class PlaybackSourceResource {
         cause: PlaybackOriginReconnectPolicy.EndCause,
         statusCode: Int?
     ) {
+        if cause == .entityChanged {
+            invalidateSourceEntity(
+                statusCode: statusCode,
+                failureOffset: range.lowerBound
+            )
+            return
+        }
         var failed: [CheckedContinuation<WaitOutcome, Never>] = []
         var totalResume: [CheckedContinuation<Int64?, Never>] = []
         stateLock.lock()
@@ -1587,6 +1823,8 @@ private final class PlaybackSourceResource {
             } else {
                 reason = nil
             }
+        case .entityChanged:
+            reason = .sourceEntityChanged
         case .httpFatal, .rangeIgnored:
             reason = nil
         }
@@ -1604,7 +1842,7 @@ private final class PlaybackSourceResource {
         demandMark: Int64
     ) -> Bool {
         stateLock.lock()
-        guard !cancelled else {
+        guard !cancelled, !sourceEntityInvalidated else {
             stateLock.unlock()
             return false
         }
@@ -1669,7 +1907,10 @@ final class PlaybackSourceProxy {
         onPlaybackSessionMissing: (() -> Void)? = nil,
         onPlaybackSourceInterrupted: ((PlaybackSourceInterruptionReason) -> Void)? = nil,
         onOriginOutageChanged: ((Bool) -> Void)? = nil,
-        outageRideThroughEnabled: Bool = PlaybackOriginOutagePolicy.rideThroughEnabled()
+        outageRideThroughEnabled: Bool = PlaybackOriginOutagePolicy.rideThroughEnabled(),
+        resumeCapable: Bool = false,
+        serverAdvertisesDirectStreamResume: Bool = false,
+        originStreamClock: PlaybackOriginStreamClock = SystemPlaybackOriginStreamClock()
     ) {
         self.resource = PlaybackSourceResource(
             originURL: originURL,
@@ -1678,7 +1919,10 @@ final class PlaybackSourceProxy {
             onPlaybackSessionMissing: onPlaybackSessionMissing,
             onPlaybackSourceInterrupted: onPlaybackSourceInterrupted,
             onOriginOutageChanged: onOriginOutageChanged,
-            outageRideThroughEnabled: outageRideThroughEnabled
+            outageRideThroughEnabled: outageRideThroughEnabled,
+            resumeCapable: resumeCapable,
+            serverAdvertisesDirectStreamResume: serverAdvertisesDirectStreamResume,
+            originStreamClock: originStreamClock
         )
     }
 
@@ -1770,6 +2014,10 @@ final class PlaybackSourceProxy {
 
     func stats() -> PlaybackSourceProxyStats {
         resource.stats()
+    }
+
+    func originStreamDiagnostics() -> PlaybackOriginStream.DiagnosticsSnapshot? {
+        resource.originStreamDiagnostics()
     }
 
     func startPrefetch(at offset: Int64 = 0) {
