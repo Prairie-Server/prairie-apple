@@ -799,6 +799,17 @@ struct MainTabView: View {
             selectedTab = tab
             router.requestedTab = nil
         }
+        // Capability refresh can remove Live TV (or Downloads) while it is
+        // still selected; snap back to Home so TabView isn't left on a
+        // missing tag.
+        .onChange(of: LiveTVFeatureStore.shared.isEnabled) { _, _ in
+            ensureSelectedTabIsVisible()
+        }
+        #if !os(tvOS)
+        .onChange(of: DownloadManager.shared.downloadsEnabled) { _, _ in
+            ensureSelectedTabIsVisible()
+        }
+        #endif
         #if !os(macOS)
         .fullScreenCover(isPresented: Binding(
             get: { audioStore.isShowingFullPlayer },
@@ -870,6 +881,14 @@ struct MainTabView: View {
         }
         #endif
         return tabs
+    }
+
+    /// Capability probes can remove a tab while it is still selected; snap
+    /// back to Home rather than leaving TabView on a missing tag.
+    private func ensureSelectedTabIsVisible() {
+        if !visibleTabs.contains(selectedTab) {
+            selectedTab = .home
+        }
     }
 
     /// iPhone + iPad compact width: bottom tab bar, single navigation stack.

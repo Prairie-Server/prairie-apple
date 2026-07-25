@@ -101,6 +101,11 @@ final class LiveTVChannelListViewModel {
         try await api.startLiveTVSession(channelId: channel.id)
     }
 
+    /// Best-effort tuner release when a started session never reaches the player.
+    func releaseSession(_ sessionId: String) async {
+        try? await api.releaseLiveTVSession(sessionId: sessionId)
+    }
+
     func scheduleRecording(program: LiveTVProgram) async {
         recordingMessage = nil
         do {

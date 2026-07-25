@@ -244,6 +244,11 @@ struct TVMainTabView: View {
             // page with no matching tab in the bar; snap back to Home.
             ensureSelectedRootIsVisible()
         }
+        .onChange(of: LiveTVFeatureStore.shared.isEnabled) {
+            // Same orphan risk when the Live TV probe flips off after a
+            // refresh or profile switch while Live TV is selected.
+            ensureSelectedRootIsVisible()
+        }
         .onDisappear {
             controlReceiver.stop()
         }
@@ -325,7 +330,11 @@ struct TVMainTabView: View {
                 onTopMenuFocusRequest: { focusTopMenuIfVisible() }
             )
         case .liveTV:
-            LiveTVChannelListView(viewModel: LiveTVChannelListViewModel())
+            LiveTVChannelListView(
+                viewModel: LiveTVChannelListViewModel(),
+                focusRequest: contentFocusRequest,
+                onTopMenuFocusRequest: { focusTopMenuIfVisible() }
+            )
         }
     }
 

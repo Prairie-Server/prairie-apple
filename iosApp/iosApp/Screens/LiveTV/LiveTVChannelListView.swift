@@ -7,8 +7,24 @@ struct LiveTVChannelListView: View {
     @State private var startingChannelId: String?
     @Environment(AppRouter.self) private var router
 
-    init(viewModel: LiveTVChannelListViewModel) {
+    /// Active focus hand-down token from `TVMainTabView`. When this changes
+    /// (the Live TV root was selected), focus is pushed onto the first
+    /// channel so the screen never opens with a dead remote.
+    var focusRequest: Int = 0
+    var onTopMenuFocusRequest: (() -> Void)? = nil
+
+    #if os(tvOS)
+    @FocusState private var focusedChannelId: String?
+    #endif
+
+    init(
+        viewModel: LiveTVChannelListViewModel,
+        focusRequest: Int = 0,
+        onTopMenuFocusRequest: (() -> Void)? = nil
+    ) {
         _viewModel = State(initialValue: viewModel)
+        self.focusRequest = focusRequest
+        self.onTopMenuFocusRequest = onTopMenuFocusRequest
     }
 
     var body: some View {
@@ -41,6 +57,16 @@ struct LiveTVChannelListView: View {
                         .accessibilityIdentifier("livetv-recording-message")
                 }
             }
+            #if os(tvOS)
+            .onAppear { applyFocusRequest(focusRequest) }
+            .onChange(of: focusRequest) { _, request in applyFocusRequest(request) }
+            .onChange(of: viewModel.channels.map(\.id)) { _, _ in
+                applyFocusRequest(focusRequest)
+            }
+            .onChange(of: viewModel.loadState) { _, _ in
+                applyFocusRequest(focusRequest)
+            }
+            #endif
     }
 
     @ViewBuilder
@@ -49,12 +75,26 @@ struct LiveTVChannelListView: View {
             LoadingView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .accessibilityIdentifier("livetv-loading")
+                #if os(tvOS)
+                .focusable()
+                .focused($focusedChannelId, equals: Self.placeholderFocusId)
+                .onMoveCommand { direction in
+                    if direction == .up { onTopMenuFocusRequest?() }
+                }
+                #endif
         } else if let error = viewModel.error {
             ErrorView(
                 state: error,
                 onRetry: { Task { await viewModel.load() } }
             )
             .accessibilityIdentifier("livetv-error")
+            #if os(tvOS)
+            .focusable()
+            .focused($focusedChannelId, equals: Self.placeholderFocusId)
+            .onMoveCommand { direction in
+                if direction == .up { onTopMenuFocusRequest?() }
+            }
+            #endif
         } else if viewModel.isEmpty {
             EmptyStateView(
                 icon: "tv",
@@ -62,6 +102,13 @@ struct LiveTVChannelListView: View {
                 subtitle: "Ask your server admin to add an HDHomeRun tuner and scan channels"
             )
             .accessibilityIdentifier("livetv-empty")
+            #if os(tvOS)
+            .focusable()
+            .focused($focusedChannelId, equals: Self.placeholderFocusId)
+            .onMoveCommand { direction in
+                if direction == .up { onTopMenuFocusRequest?() }
+            }
+            #endif
         } else {
             channelList
         }
@@ -117,7 +164,15 @@ struct LiveTVChannelListView: View {
                     }
                 }
                 .disabled(startingChannelId != nil)
-                #if !os(tvOS)
+                #if os(tvOS)
+                .focused($focusedChannelId, equals: channel.id)
+                .onMoveCommand { direction in
+                    if direction == .up,
+                       channel.id == viewModel.channels.first?.id {
+                        onTopMenuFocusRequest?()
+                    }
+                }
+                #else
                 .buttonStyle(.borderedProminent)
                 .tint(Color.continuumAccent)
                 #endif
@@ -175,6 +230,9 @@ struct LiveTVChannelListView: View {
         do {
             let session = try await viewModel.startSession(for: channel)
             guard let url = URL(string: session.hlsUrl), !session.hlsUrl.isEmpty else {
+                // Session was reserved but never handed to the player; free
+                // the tuner so dismissal cleanup isn't required to run.
+                await viewModel.releaseSession(session.sessionId)
                 viewModel.setStatusMessage("Live stream URL missing")
                 return
             }
@@ -187,6 +245,22 @@ struct LiveTVChannelListView: View {
             viewModel.setStatusMessage(error.localizedDescription)
         }
     }
+
+    #if os(tvOS)
+    private static let placeholderFocusId = "__livetv-placeholder__"
+
+    private func applyFocusRequest(_ request: Int) {
+        guard request > 0 else { return }
+        if let first = viewModel.channels.first?.id {
+            focusedChannelId = first
+        } else if viewModel.isLoading
+            || viewModel.loadState == .idle
+            || viewModel.error != nil
+            || viewModel.isEmpty {
+            focusedChannelId = Self.placeholderFocusId
+        }
+    }
+    #endif
 }
 
 /// Identifiable hand-off into the live HLS player.

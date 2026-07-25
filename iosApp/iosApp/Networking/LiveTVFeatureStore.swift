@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 /// Cached holder for Live TV availability, gating the Live TV tab on iOS and
 /// the Live TV root on tvOS.
