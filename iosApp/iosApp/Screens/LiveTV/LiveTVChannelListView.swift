@@ -32,10 +32,10 @@ struct LiveTVChannelListView: View {
                 if let message = viewModel.recordingMessage {
                     Text(message)
                         .font(.continuumCaption)
-                        .foregroundStyle(.continuumOnSurface)
+                        .foregroundStyle(Color.continuumOnSurface)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 10)
-                        .background(.continuumSurfaceElevated)
+                        .background(Color.continuumSurfaceElevated)
                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                         .padding(.bottom, 24)
                         .accessibilityIdentifier("livetv-recording-message")
@@ -94,16 +94,16 @@ struct LiveTVChannelListView: View {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Text(channel.displayNumber)
                     .font(.continuumHeadline)
-                    .foregroundStyle(.continuumOnSurface)
+                    .foregroundStyle(Color.continuumOnSurface)
                     .frame(minWidth: 44, alignment: .leading)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(channel.displayName)
                         .font(.continuumBody)
-                        .foregroundStyle(.continuumOnSurface)
+                        .foregroundStyle(Color.continuumOnSurface)
                     if channel.hd {
                         Text("HD")
                             .font(.continuumCaption)
-                            .foregroundStyle(.continuumSecondaryText)
+                            .foregroundStyle(Color.continuumSecondaryText)
                     }
                 }
                 Spacer(minLength: 8)
@@ -119,7 +119,7 @@ struct LiveTVChannelListView: View {
                 .disabled(startingChannelId != nil)
                 #if !os(tvOS)
                 .buttonStyle(.borderedProminent)
-                .tint(.continuumAccent)
+                .tint(Color.continuumAccent)
                 #endif
             }
 
@@ -128,7 +128,7 @@ struct LiveTVChannelListView: View {
             } else {
                 Text("Now — No guide data")
                     .font(.continuumCaption)
-                    .foregroundStyle(.continuumSecondaryText)
+                    .foregroundStyle(Color.continuumSecondaryText)
             }
             if let next = slot.next {
                 epgLine(label: "Next", program: next, allowRecord: true)
@@ -143,10 +143,10 @@ struct LiveTVChannelListView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("\(label) — \(program.displayTitle)")
                     .font(.continuumCaption)
-                    .foregroundStyle(.continuumOnSurface)
+                    .foregroundStyle(Color.continuumOnSurface)
                 Text(timeRange(program))
                     .font(.continuumCaption)
-                    .foregroundStyle(.continuumSecondaryText)
+                    .foregroundStyle(Color.continuumSecondaryText)
             }
             Spacer(minLength: 8)
             if allowRecord {
