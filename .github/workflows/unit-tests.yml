@@ -53,47 +53,48 @@ jobs:
         id: sim
         run: |
           set -euo pipefail
-          # Prefer iPhone 16 (task default); fall back to common names on the runner image.
-          CANDIDATES=("iPhone 16" "iPhone 16 Pro" "iPhone 17" "iPhone 17 Pro" "iPhone 15")
+          # Prefer newer iPhone sims first (Xcode 26+ often ships 17 without 16).
+          CANDIDATES=("iPhone 17" "iPhone 17 Pro" "iPhone 16" "iPhone 16 Pro" "iPhone 15")
           DEST_LIST="$(xcodebuild -project iosApp/Prairie.xcodeproj -scheme Prairie -showdestinations 2>/dev/null || true)"
           SIM_LIST="$(xcrun simctl list devices available || true)"
+          echo "Available simulators:"
+          echo "$SIM_LIST" | grep -E '^[[:space:]]*iPhone ' || true
 
           pick=""
           for name in "${CANDIDATES[@]}"; do
-            if echo "$DEST_LIST" | grep -Fq "name:${name}"; then
+            # Match exact device name tokens from xcodebuild destinations.
+            if echo "$DEST_LIST" | grep -E "name:${name}(,|\$)" >/dev/null 2>&1; then
               pick="$name"
               break
             fi
-            if echo "$SIM_LIST" | grep -Fq "$name"; then
+            # simctl lines look like: "    iPhone 17 (UUID) (Shutdown)"
+            if echo "$SIM_LIST" | grep -E "^[[:space:]]*${name}[[:space:]]+\(" >/dev/null 2>&1; then
               pick="$name"
               break
             fi
           done
 
           if [[ -z "$pick" ]]; then
-            # Last resort: first available iPhone line from simctl
-            # (format: "    iPhone 16 (UUID) (Shutdown)").
+            # Last resort: first available iPhone line from simctl.
             pick="$(echo "$SIM_LIST" \
               | grep -E '^[[:space:]]*iPhone ' \
               | head -n 1 \
               | sed -E 's/^[[:space:]]*//; s/[[:space:]]*\([^)]*\)[[:space:]]*\([^)]*\)[[:space:]]*$//; s/[[:space:]]+$//')"
           fi
 
-          if [[ -z "$pick" ]]; then
-            echo "error: no iPhone simulator available" >&2
-            echo "$SIM_LIST" >&2
-            echo "$DEST_LIST" >&2
-            exit 1
+          if [[ -n "$pick" ]]; then
+            echo "Using simulator: $pick"
+            echo "destination=platform=iOS Simulator,name=${pick}" >> "$GITHUB_OUTPUT"
+          else
+            echo "No named iPhone simulator found; using generic/platform=iOS Simulator"
+            echo "destination=generic/platform=iOS Simulator" >> "$GITHUB_OUTPUT"
           fi
-
-          echo "Using simulator: $pick"
-          echo "name=$pick" >> "$GITHUB_OUTPUT"
 
       - name: Run PrairieTests with coverage
         working-directory: iosApp
         run: |
           set -euo pipefail
-          DEST="platform=iOS Simulator,name=${{ steps.sim.outputs.name }}"
+          DEST="${{ steps.sim.outputs.destination }}"
           echo "destination=$DEST"
           xcodebuild test \
             -project Prairie.xcodeproj \

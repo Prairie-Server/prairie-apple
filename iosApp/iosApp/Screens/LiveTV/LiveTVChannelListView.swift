@@ -7,8 +7,10 @@ struct LiveTVChannelListView: View {
     @State private var startingChannelId: String?
     @Environment(AppRouter.self) private var router
 
-    init(viewModel: LiveTVChannelListViewModel = LiveTVChannelListViewModel()) {
-        _viewModel = State(initialValue: viewModel)
+    /// Default-arg evaluation is nonisolated, so avoid constructing the
+    /// `@MainActor` view model there; build it in the init body instead.
+    init(viewModel: LiveTVChannelListViewModel? = nil) {
+        _viewModel = State(initialValue: viewModel ?? LiveTVChannelListViewModel())
     }
 
     var body: some View {

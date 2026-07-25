@@ -38,7 +38,9 @@ final class ApplePushDeepLinkCoordinator {
         let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
-        if let url = URL(string: trimmed), url.scheme == "continuum" {
+        // Accept prairie:// (current) and continuum:// (legacy rebrand) deep links.
+        if let url = URL(string: trimmed),
+           url.scheme == "prairie" || url.scheme == "continuum" {
             return url
         }
 
@@ -57,7 +59,7 @@ final class ApplePushDeepLinkCoordinator {
         guard !contentID.isEmpty else { return nil }
 
         var deepLink = URLComponents()
-        deepLink.scheme = "continuum"
+        deepLink.scheme = "prairie"
         deepLink.host = route
         deepLink.path = "/" + contentID
         return deepLink.url
