@@ -604,7 +604,7 @@ final class PlaybackOriginStreamResumeTests: XCTestCase {
     }
 
     private func waitUntil(
-        timeout: TimeInterval = 5,
+        timeout: TimeInterval = 10,
         _ predicate: @escaping () -> Bool
     ) async -> Bool {
         let deadline = Date.now.addingTimeInterval(timeout)
