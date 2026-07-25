@@ -388,17 +388,36 @@ final class ServerRegistry {
     /// fixed-name Keychain entries (`com.continuum.app.{access,refresh,
     /// profile}Token`), creates a ServerEntry for them, re-keys the
     /// Keychain entries under the new per-server scheme, and deletes the
-    /// legacy Keychain accounts. Legacy UserDefaults keys
-    /// (`serverUrl`, `profileId`) are intentionally left in place — they
-    /// act as the active-server mirror read by sync callers.
+    /// legacy Keychain accounts **only after** each new write succeeds.
+    /// Legacy UserDefaults keys (`serverUrl`, `profileId`) are intentionally
+    /// left in place — they act as the active-server mirror read by sync
+    /// callers.
+    ///
+    /// Upgrade contract: this path must never wipe login on an app-version
+    /// bump. There is no CFBundleShortVersionString / build-number gate that
+    /// clears Keychain or the registry; `migratedKey` is a one-shot schema
+    /// flag only, and a failed Keychain re-key leaves legacy accounts in
+    /// place so a later launch can retry.
     private func migrateLegacyIfNeeded() {
         guard !defaults.bool(forKey: Self.migratedKey) else { return }
-        defer { defaults.set(true, forKey: Self.migratedKey) }
-        guard entries.isEmpty else { return }
 
-        guard let raw = defaults.string(forKey: "serverUrl")?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-              !raw.isEmpty else { return }
+        // Resolve the server URL from legacy defaults, or from a registry
+        // entry left by a prior partial migration (entries non-empty but
+        // tokens not yet fully re-keyed / migratedKey not yet set).
+        let rawFromDefaults = defaults.string(forKey: "serverUrl")?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let raw: String
+        if let fromDefaults = rawFromDefaults, !fromDefaults.isEmpty {
+            raw = fromDefaults
+        } else if let active = activeServer {
+            raw = active.url
+        } else if let first = entries.first {
+            raw = first.url
+        } else {
+            // Nothing to migrate — mark done so we don't re-check forever.
+            defaults.set(true, forKey: Self.migratedKey)
+            return
+        }
 
         let normalized = Self.normalize(url: raw)
         let id = Self.serverId(for: normalized)
@@ -408,31 +427,51 @@ final class ServerRegistry {
             ("com.continuum.app.refreshToken", TokenStore.refreshTokenKey(for: id)),
             ("com.continuum.app.profileToken", TokenStore.profileTokenKey(for: id)),
         ]
+        var tokenMigrationFailed = false
         for (legacy, new) in legacyToNew {
-            if let v = keychain.get(legacy) {
-                keychain.set(v, for: new)
+            guard let v = keychain.get(legacy) else { continue }
+            // Already present under the new account (retry after a partial
+            // run) — safe to drop the legacy copy.
+            if keychain.get(new) == v {
+                keychain.delete(legacy)
+                continue
             }
-            keychain.delete(legacy)
+            // Never delete legacy before the new write confirms. A failed
+            // set leaves the old account so login survives and the next
+            // launch can retry.
+            if keychain.set(v, for: new) {
+                keychain.delete(legacy)
+            } else {
+                tokenMigrationFailed = true
+            }
         }
 
-        let entry = ServerEntry(
-            id: id,
-            url: normalized,
-            fetchedName: nil,
-            profileId: defaults.string(forKey: "profileId"),
-            lastUsedAt: Date()
-        )
-        self.entries = [entry]
-        self.activeServerId = id
-        // load() registers persisted entries for redaction, but migration
-        // installs this entry directly and returns before that path. Register
-        // it here so the legacy host is hashed in diagnostics logs on the very
-        // first post-upgrade launch.
-        registerDiagnosticsSensitiveHosts([entry])
-        if normalized != raw {
-            defaults.set(normalized, forKey: "serverUrl")
+        if entries.isEmpty {
+            let entry = ServerEntry(
+                id: id,
+                url: normalized,
+                fetchedName: nil,
+                profileId: defaults.string(forKey: "profileId"),
+                lastUsedAt: Date()
+            )
+            self.entries = [entry]
+            self.activeServerId = id
+            // load() registers persisted entries for redaction, but migration
+            // installs this entry directly and returns before that path. Register
+            // it here so the legacy host is hashed in diagnostics logs on the very
+            // first post-upgrade launch.
+            registerDiagnosticsSensitiveHosts([entry])
+            if normalized != raw {
+                defaults.set(normalized, forKey: "serverUrl")
+            }
+            persist()
+            Self.logger.info("Migrated legacy single-server state to registry id=\(id, privacy: .public)")
         }
-        persist()
-        Self.logger.info("Migrated legacy single-server state to registry id=\(id, privacy: .public)")
+
+        // Only stamp migrated once every legacy token has been re-keyed (or
+        // there were none). A failed SecItem write must not lock out retries.
+        if !tokenMigrationFailed {
+            defaults.set(true, forKey: Self.migratedKey)
+        }
     }
 }

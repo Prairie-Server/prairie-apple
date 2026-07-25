@@ -13,9 +13,20 @@ import Security
 /// server's access token + profile token under stable, server-independent
 /// keys. The extension doesn't know the active server's ID, so it reads
 /// these fixed-name slots instead of reconstructing the registry scheme.
+///
+/// ## Upgrade / identity stability (do not change casually)
+/// `appGroup` (`group.org.prairieserver.prairie`) and `keychainService`
+/// (`com.continuum.app`) are **stable across app upgrades**. Renaming either
+/// orphans every installed user's server list and login tokens. There is
+/// intentionally **no clear-on-version-bump**: neither `SharedDefaults` nor
+/// `SharedKeychain` wipe storage when `CFBundleShortVersionString` changes.
+/// Schema migrations (e.g. `ServerRegistry.migrateLegacyIfNeeded`) must
+/// re-key in place and only delete legacy Keychain accounts after a
+/// successful write to the new account.
 enum SharedStorage {
     /// Must match the `com.apple.security.application-groups` entitlement
     /// on both the main app and the extension.
+    /// **Stable identity — do not rename** (see type comment above).
     static let appGroup = "group.org.prairieserver.prairie"
 
     /// Must match the `keychain-access-groups` entitlement on both sides.
@@ -24,6 +35,7 @@ enum SharedStorage {
     static let keychainAccessGroup = RuntimeConfiguration.sharedKeychainAccessGroup
 
     /// Shared Keychain service name. Same on both sides.
+    /// **Stable identity — do not rename** (see type comment above).
     static let keychainService = "com.continuum.app"
 
     /// Stable account names for the mirrored active-server tokens.
@@ -90,6 +102,10 @@ private enum RuntimeConfiguration {
 /// Reads prefer the suite and fall back to `.standard` so the first
 /// launch after the upgrade transparently uses pre-existing values until
 /// the next write mirrors them forward.
+///
+/// Suite name is ``SharedStorage/appGroup``
+/// (`group.org.prairieserver.prairie`) — keep stable across upgrades; do
+/// not clear the suite on version bumps.
 struct SharedDefaults: @unchecked Sendable {
     static let shared = SharedDefaults()
 
@@ -148,6 +164,11 @@ struct SharedDefaults: @unchecked Sendable {
 /// extension. Items are stored as generic passwords with accessibility
 /// `AfterFirstUnlock` so the extension can read them when tvOS launches
 /// it on the Home Screen (i.e. before any user interaction with the app).
+///
+/// Default `service` is ``SharedStorage/keychainService``
+/// (`com.continuum.app`) — **stable across upgrades**. Do not rename and
+/// do not wipe items on version bumps; legacy→shared-group migration in
+/// `get(_:)` only deletes the legacy copy after `set` returns true.
 struct SharedKeychain {
     private static let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "com.continuum.app",

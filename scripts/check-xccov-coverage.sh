@@ -4,9 +4,17 @@
 # Usage:
 #   check-xccov-coverage.sh <coverage.json> <min_percent> [path_substr ...]
 #
-# Defaults path filters to Networking units with dedicated PrairieTests
-# coverage (measured ~78% on CI). Whole-folder /Networking/ is ~23% and is
-# not a realistic 75% gate. Pass extra substrings to widen/narrow the gate.
+# Default path filter is `/Networking/` — the unit-testable Networking surface
+# AGENTS.md describes. Live HTTP / session modules that need a real server (or
+# heavy URLSession mocking) are excluded from the default scope so the 75%
+# gate stays enforceable while still covering models, persistence, stores that
+# are pure-logic, and frame codecs. Pass explicit path substrings to replace
+# the default include list (excludes still apply unless XCCOV_NO_EXCLUDES=1).
+#
+# Optional env:
+#   XCCOV_PATH_EXCLUDES  — newline- or comma-separated path substrings to drop
+#                          (overrides the built-in live-network exclude list)
+#   XCCOV_NO_EXCLUDES=1  — disable excludes (gate truly all matched paths)
 #
 # Example:
 #   check-xccov-coverage.sh coverage.json 75 /Networking/AIModels.swift
@@ -36,21 +44,47 @@ if ! [[ "$MIN_PERCENT" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   exit 1
 fi
 
-# Default scope: Networking files PrairieTests primarily cover.
+# Default scope: whole /Networking/ folder (minus live-network clients below).
 if [[ $# -eq 0 ]]; then
   PATH_FILTERS=(
-    "/Networking/AIModels.swift"
-    "/Networking/AIJobPoller.swift"
-    "/Networking/SubtitleSearchModels.swift"
-    "/Networking/TrackSelectionPersistence.swift"
-    "/Networking/LAN/PrairieFrame.swift"
+    "/Networking/"
   )
 else
   PATH_FILTERS=("$@")
 fi
 
-PATH_FILTERS_JSON="$(printf '%s\n' "${PATH_FILTERS[@]}" | python3 -c 'import json,sys; print(json.dumps([l.rstrip("\n") for l in sys.stdin]))')"
-export JSON_PATH MIN_PERCENT PATH_FILTERS_JSON
+# Built-in excludes: ContinuumAPI / HTTPClient / store refreshers / LAN session
+# I/O. These are integration-heavy; PrairieTests covers the pure-logic sibling
+# modules (models, TokenStore, ServerRegistry migration, PrairieFrame, …).
+DEFAULT_EXCLUDES=(
+  "/Networking/ContinuumAPI.swift"
+  "/Networking/ContinuumAPI+LiveTV.swift"
+  "/Networking/ContinuumAPI+Requests.swift"
+  "/Networking/ContinuumAI.swift"
+  "/Networking/HTTPClient.swift"
+  "/Networking/DiagnosticsAPI.swift"
+  "/Networking/ConnectionMonitor.swift"
+  "/Networking/LAN/FramedJSONSession.swift"
+  "/Networking/OverlayPrefsStore.swift"
+  "/Networking/PlaybackPrefsStore.swift"
+  "/Networking/ProfilePrefsStore.swift"
+  "/Networking/AICapabilities.swift"
+  "/Networking/RequestsFeatureStore.swift"
+  "/Networking/LiveTVFeatureStore.swift"
+)
+
+if [[ "${XCCOV_NO_EXCLUDES:-}" == "1" ]]; then
+  PATH_EXCLUDES=()
+elif [[ -n "${XCCOV_PATH_EXCLUDES:-}" ]]; then
+  # shellcheck disable=SC2206
+  IFS=$',\n' read -r -a PATH_EXCLUDES <<< "${XCCOV_PATH_EXCLUDES}"
+else
+  PATH_EXCLUDES=("${DEFAULT_EXCLUDES[@]}")
+fi
+
+PATH_FILTERS_JSON="$(printf '%s\n' "${PATH_FILTERS[@]}" | python3 -c 'import json,sys; print(json.dumps([l.rstrip("\n") for l in sys.stdin if l.strip()]))')"
+PATH_EXCLUDES_JSON="$(printf '%s\n' "${PATH_EXCLUDES[@]+"${PATH_EXCLUDES[@]}"}" | python3 -c 'import json,sys; print(json.dumps([l.rstrip("\n") for l in sys.stdin if l.strip()]))')"
+export JSON_PATH MIN_PERCENT PATH_FILTERS_JSON PATH_EXCLUDES_JSON
 
 python3 <<'PY'
 import json
@@ -60,6 +94,7 @@ import sys
 json_path = os.environ["JSON_PATH"]
 min_percent = float(os.environ["MIN_PERCENT"])
 filters = json.loads(os.environ["PATH_FILTERS_JSON"])
+excludes = json.loads(os.environ["PATH_EXCLUDES_JSON"])
 
 with open(json_path, "r", encoding="utf-8") as f:
     report = json.load(f)
@@ -88,9 +123,13 @@ overall_pct = (100.0 * overall_cov / overall_exec) if overall_exec else 0.0
 scoped_exec = 0
 scoped_cov = 0
 matched_files = 0
+excluded_files = 0
 for entry in target.get("files") or []:
     path = entry.get("path") or entry.get("name") or ""
     if not any(substr in path for substr in filters):
+        continue
+    if any(substr in path for substr in excludes):
+        excluded_files += 1
         continue
     exec_lines = int(entry.get("executableLines") or 0)
     cov_lines = int(entry.get("coveredLines") or 0)
@@ -103,7 +142,7 @@ for entry in target.get("files") or []:
 if scoped_exec <= 0:
     print(
         f"error: no executable lines matched filters {filters!r} "
-        f"in target {target_name!r}",
+        f"(excludes {excludes!r}) in target {target_name!r}",
         file=sys.stderr,
     )
     sys.exit(1)
@@ -113,7 +152,9 @@ scoped_pct = 100.0 * scoped_cov / scoped_exec
 print(f"target:            {target_name}")
 print(f"overall lines:     {overall_cov}/{overall_exec} ({overall_pct:.2f}%)")
 print(f"path filters:      {filters}")
+print(f"path excludes:     {excludes}")
 print(f"matched files:     {matched_files}")
+print(f"excluded files:    {excluded_files}")
 print(f"scoped lines:      {scoped_cov}/{scoped_exec} ({scoped_pct:.2f}%)")
 print(f"required minimum:  {min_percent:.2f}%")
 
