@@ -184,6 +184,44 @@ final class ServerRegistryMigrationTests: XCTestCase {
         XCTAssertTrue(defaults.bool(forKey: "continuumServerRegistry.migrated.v1"))
     }
 
+    func testPartialMigrationRetryPinsLegacyOriginNotMutableServerUrl() {
+        // Simulate a failed mid-migration relaunch: legacy tokens remain,
+        // migrated flag is unset, but the user changed the active-server
+        // mirror to a different host before retry.
+        let home = "https://home.example"
+        let evil = "https://evil.example"
+        let homeId = ServerRegistry.serverId(for: home)
+        let evilEntry = ServerEntry(
+            id: ServerRegistry.serverId(for: evil),
+            url: evil,
+            fetchedName: "Evil",
+            profileId: nil,
+            lastUsedAt: Date()
+        )
+        struct Wire: Codable {
+            var activeServerId: String?
+            var entries: [ServerEntry]
+        }
+        let wireData = try! JSONEncoder().encode(Wire(activeServerId: evilEntry.id, entries: [evilEntry]))
+        defaults.set(wireData, forKey: "continuumServerRegistry.v1")
+        defaults.set(evil, forKey: "serverUrl")
+        defaults.set(home, forKey: "continuumServerRegistry.legacySourceUrl.v1")
+        defaults.set(false, forKey: "continuumServerRegistry.migrated.v1")
+        XCTAssertTrue(keychain.set("ACCESS-HOME", for: "com.continuum.app.accessToken"))
+        XCTAssertTrue(keychain.set("REFRESH-HOME", for: "com.continuum.app.refreshToken"))
+        XCTAssertTrue(keychain.set("PROFILE-HOME", for: "com.continuum.app.profileToken"))
+
+        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+
+        XCTAssertEqual(keychain.get(TokenStore.accessTokenKey(for: homeId)), "ACCESS-HOME")
+        XCTAssertEqual(keychain.get(TokenStore.refreshTokenKey(for: homeId)), "REFRESH-HOME")
+        XCTAssertNil(keychain.get(TokenStore.accessTokenKey(for: evilEntry.id)))
+        XCTAssertNil(keychain.get("com.continuum.app.accessToken"))
+        XCTAssertTrue(registry.entries.contains(where: { $0.id == homeId }))
+        XCTAssertTrue(defaults.bool(forKey: "continuumServerRegistry.migrated.v1"))
+        XCTAssertNil(defaults.string(forKey: "continuumServerRegistry.legacySourceUrl.v1"))
+    }
+
     func testSetProfileIdUpdateFetchedNameAndSortedEntries() {
         let registry = ServerRegistry(defaults: defaults, keychain: keychain)
         let older = ServerEntry(
