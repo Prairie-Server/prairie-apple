@@ -12,6 +12,7 @@ enum AppTab: String, CaseIterable, Identifiable {
     case libraries = "Libraries"
     case recommendations = "For You"
     case calendar = "Calendar"
+    case liveTV = "Live TV"
     case downloads = "Downloads"
     case settings = "Settings"
     case switchProfile = "Profile"
@@ -35,9 +36,10 @@ enum AppTab: String, CaseIterable, Identifiable {
         #if os(tvOS)
         return [.home, .libraries, .search, .recommendations, .settings, .switchProfile, .switchServer]
         #else
-        // Downloads is appended dynamically by `MainTabView` only when the
-        // server advertises the capability, so it stays hidden when the
-        // feature is off rather than showing an empty tab.
+        // Downloads and Live TV are appended dynamically by `MainTabView`
+        // only when the server advertises the capability / channel lineup,
+        // so they stay hidden when the feature is off rather than showing
+        // an empty tab.
         return [.home, .libraries, .recommendations, .calendar]
         #endif
     }
@@ -50,6 +52,7 @@ enum AppTab: String, CaseIterable, Identifiable {
         case .search: return "magnifyingglass"
         case .recommendations: return "sparkles"
         case .calendar: return "calendar"
+        case .liveTV: return "tv"
         case .downloads: return "arrow.down.circle"
         case .settings: return "gearshape"
         case .switchProfile: return "person.crop.circle"
@@ -65,6 +68,7 @@ enum AppTab: String, CaseIterable, Identifiable {
         case .search: return "magnifyingglass"
         case .recommendations: return "sparkles"
         case .calendar: return "calendar"
+        case .liveTV: return "tv.fill"
         case .downloads: return "arrow.down.circle.fill"
         case .settings: return "gearshape.fill"
         case .switchProfile: return "person.crop.circle.fill"

@@ -8,7 +8,7 @@
 # actually exercise. Pass extra substrings to widen/narrow the gate.
 #
 # Example:
-#   check-xccov-coverage.sh coverage.json 75 /Networking/
+#   check-xccov-coverage.sh coverage.json 75 /Networking/ /Screens/LiveTV/ BrowseViewModel.swift
 #
 # Exit codes:
 #   0 — coverage meets or exceeds min_percent
@@ -35,11 +35,10 @@ if ! [[ "$MIN_PERCENT" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   exit 1
 fi
 
-# Default scope: Networking (API clients, stores, wire models) under the iOS app.
-# Model types live alongside Networking (*Models.swift, Models.swift), so the
-# /Networking/ filter covers the model surface PrairieTests target.
+# Default scope: Networking (API clients, stores, wire models), Live TV
+# screens/view models, and colocated BrowseViewModel pure logic.
 if [[ $# -eq 0 ]]; then
-  PATH_FILTERS=("/Networking/")
+  PATH_FILTERS=("/Networking/" "/Screens/LiveTV/" "BrowseViewModel.swift")
 else
   PATH_FILTERS=("$@")
 fi

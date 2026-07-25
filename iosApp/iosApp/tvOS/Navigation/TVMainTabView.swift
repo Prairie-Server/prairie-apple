@@ -164,6 +164,17 @@ struct TVMainTabView: View {
                 }
             )
         }
+        .fullScreenCover(item: $router.presentedLivePlayer) { session in
+            LiveTVPlayerView(
+                session: LiveTVPlayerSession(
+                    sessionId: session.sessionId,
+                    hlsURL: session.hlsURL,
+                    title: session.title
+                )
+            ) {
+                router.presentedLivePlayer = nil
+            }
+        }
         .confirmationDialog(
             "Switch Server",
             isPresented: $showServerPicker,
@@ -313,6 +324,8 @@ struct TVMainTabView: View {
                 focusRequest: contentFocusRequest,
                 onTopMenuFocusRequest: { focusTopMenuIfVisible() }
             )
+        case .liveTV:
+            LiveTVChannelListView()
         }
     }
 
@@ -357,7 +370,7 @@ struct TVMainTabView: View {
             switch root {
             case .libraryType, .recommendations:
                 return .root(root)
-            case .home, .calendar:
+            case .home, .calendar, .liveTV:
                 return nil
             }
         }
@@ -478,7 +491,7 @@ struct TVMainTabView: View {
                 cascadePanel(for: type, isActive: isActive)
             case .recommendations:
                 forYouPanel(isActive: isActive)
-            case .home, .calendar:
+            case .home, .calendar, .liveTV:
                 EmptyView()
             }
         case .profile:
@@ -740,6 +753,11 @@ struct TVMainTabView: View {
         }
         roots.append(.recommendations)
         roots.append(.calendar)
+        // Mirror Downloads gating on iOS: only surface Live TV when the
+        // channel probe found at least one enabled channel.
+        if LiveTVFeatureStore.shared.isEnabled {
+            roots.append(.liveTV)
+        }
         return roots
     }
 

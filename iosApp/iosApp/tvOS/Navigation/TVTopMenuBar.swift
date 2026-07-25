@@ -83,6 +83,7 @@ enum TVRootDestination: Hashable {
     case recommendations
     case libraryType(TVLibraryTabType)
     case calendar
+    case liveTV
 
     var title: String {
         switch self {
@@ -90,6 +91,7 @@ enum TVRootDestination: Hashable {
         case .recommendations: return "For You"
         case .libraryType(let type): return type.title
         case .calendar: return "Calendar"
+        case .liveTV: return "Live TV"
         }
     }
 }
@@ -372,7 +374,7 @@ struct TVTopMenuBar: View {
         switch root {
         case .libraryType, .recommendations:
             return .root(root)
-        case .home, .calendar:
+        case .home, .calendar, .liveTV:
             return nil
         }
     }
@@ -383,7 +385,7 @@ struct TVTopMenuBar: View {
             return "Rest to choose a library"
         case .recommendations:
             return "Rest to choose Watchlist, Favorites, or Recommendations"
-        case .home, .calendar:
+        case .home, .calendar, .liveTV:
             return ""
         }
     }

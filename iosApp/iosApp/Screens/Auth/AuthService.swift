@@ -195,6 +195,7 @@ final class AuthService: @unchecked Sendable {
         Task { @MainActor in
             await AICapabilities.shared.refresh()
             await RequestsFeatureStore.shared.refresh()
+            await LiveTVFeatureStore.shared.refresh()
         }
     }
 
@@ -222,6 +223,7 @@ final class AuthService: @unchecked Sendable {
         // profile switch; `selectProfile` re-fetches after the switch lands.
         AICapabilities.shared.reset()
         RequestsFeatureStore.shared.reset()
+        LiveTVFeatureStore.shared.reset()
         RequestsEventBus.shared.reset()
         #if os(tvOS)
         ItemDetailCache.shared.clearAll()
@@ -307,6 +309,7 @@ final class AuthService: @unchecked Sendable {
         ProfilePrefsStore.shared.clear()
         AICapabilities.shared.reset()
         RequestsFeatureStore.shared.reset()
+        LiveTVFeatureStore.shared.reset()
         RequestsEventBus.shared.reset()
         #if os(tvOS)
         ItemDetailCache.shared.clearAll()

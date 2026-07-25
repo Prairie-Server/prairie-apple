@@ -41,6 +41,9 @@ packages:
   Nuke:
     url: https://github.com/kean/Nuke
     from: "12.8.0"
+  ViewInspector:
+    url: https://github.com/nalexn/ViewInspector
+    from: "0.10.3"
 
 targets:
   Prairie:
@@ -290,6 +293,10 @@ targets:
       - package: FFmpeg
         product: FFmpeg
         link: false
+      # SwiftUI view introspection for high-risk screen smoke tests only
+      # (see AGENTS.md). Keep this off the app targets.
+      - package: ViewInspector
+        product: ViewInspector
     settings:
       base:
         PRODUCT_NAME: PrairieTests
