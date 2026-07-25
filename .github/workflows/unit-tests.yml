@@ -1,0 +1,148 @@
+name: Unit Tests
+
+# Runs PrairieTests with code coverage and enforces a 75% line-coverage gate.
+#
+# Coverage gate choice:
+#   Overall Prairie.app and whole-folder /Networking/ coverage are much lower
+#   (~17% / ~23%) because ContinuumAPI, stores, and LAN session code are mostly
+#   exercised via integration rather than PrairieTests. The 75% gate therefore
+#   targets the Networking units with dedicated unit tests:
+#   AIModels, AIJobPoller, SubtitleSearchModels, TrackSelectionPersistence,
+#   and LAN/PrairieFrame. See scripts/check-xccov-coverage.sh.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: unit-tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    runs-on: macos-15
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: |
+          brew install xcodegen
+          xcodegen --version
+
+      - name: Select Xcode (latest)
+        run: |
+          # Prefer the newest installed Xcode; iOS deployment target is 26.0.
+          XCODE_APP="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -n 1 || true)"
+          if [[ -z "${XCODE_APP}" ]]; then
+            echo "error: no Xcode.app found under /Applications" >&2
+            exit 1
+          fi
+          echo "Using ${XCODE_APP}"
+          sudo xcode-select -s "${XCODE_APP}/Contents/Developer"
+          xcodebuild -version
+
+      - name: Generate Xcode project
+        working-directory: iosApp
+        run: xcodegen generate
+
+      - name: Resolve iOS Simulator destination
+        id: sim
+        run: |
+          set -euo pipefail
+          # Prefer newer iPhone sims first (Xcode 26+ often ships 17 without 16).
+          CANDIDATES=("iPhone 17" "iPhone 17 Pro" "iPhone 16" "iPhone 16 Pro" "iPhone 15")
+          DEST_LIST="$(xcodebuild -project iosApp/Prairie.xcodeproj -scheme Prairie -showdestinations 2>/dev/null || true)"
+          SIM_LIST="$(xcrun simctl list devices available || true)"
+          echo "Available simulators:"
+          echo "$SIM_LIST" | grep -E '^[[:space:]]*iPhone ' || true
+
+          pick=""
+          for name in "${CANDIDATES[@]}"; do
+            # Match exact device name tokens from xcodebuild destinations.
+            if echo "$DEST_LIST" | grep -E "name:${name}(,|\$)" >/dev/null 2>&1; then
+              pick="$name"
+              break
+            fi
+            # simctl lines look like: "    iPhone 17 (UUID) (Shutdown)"
+            if echo "$SIM_LIST" | grep -E "^[[:space:]]*${name}[[:space:]]+\(" >/dev/null 2>&1; then
+              pick="$name"
+              break
+            fi
+          done
+
+          if [[ -z "$pick" ]]; then
+            # Last resort: first available iPhone line from simctl.
+            pick="$(echo "$SIM_LIST" \
+              | grep -E '^[[:space:]]*iPhone ' \
+              | head -n 1 \
+              | sed -E 's/^[[:space:]]*//; s/[[:space:]]*\([^)]*\)[[:space:]]*\([^)]*\)[[:space:]]*$//; s/[[:space:]]+$//')"
+          fi
+
+          if [[ -n "$pick" ]]; then
+            echo "Using simulator: $pick"
+            echo "destination=platform=iOS Simulator,name=${pick}" >> "$GITHUB_OUTPUT"
+          else
+            echo "No named iPhone simulator found; using generic/platform=iOS Simulator"
+            echo "destination=generic/platform=iOS Simulator" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run PrairieTests with coverage
+        working-directory: iosApp
+        run: |
+          set -euo pipefail
+          DEST="${{ steps.sim.outputs.destination }}"
+          echo "destination=$DEST"
+          xcodebuild test \
+            -project Prairie.xcodeproj \
+            -scheme Prairie \
+            -destination "$DEST" \
+            -enableCodeCoverage YES \
+            -resultBundlePath TestResults.xcresult \
+            -retry-tests-on-failure \
+            -test-iterations 2 \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Export coverage JSON
+        working-directory: iosApp
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ ! -d TestResults.xcresult ]]; then
+            echo "No TestResults.xcresult bundle; skipping coverage export"
+            exit 0
+          fi
+          xcrun xccov view --report --json TestResults.xcresult > coverage.json
+          # Also emit a human-readable summary for the job log.
+          xcrun xccov view --report TestResults.xcresult | tee coverage-report.txt
+
+      - name: Enforce 75% Networking unit-test coverage gate
+        # Gates dedicated unit-tested Networking files — not whole /Networking/.
+        # See workflow header comment and scripts/check-xccov-coverage.sh.
+        run: |
+          set -euo pipefail
+          if [[ ! -f iosApp/coverage.json ]]; then
+            echo "error: coverage.json missing; cannot enforce 75% gate" >&2
+            exit 1
+          fi
+          scripts/check-xccov-coverage.sh iosApp/coverage.json 75 \
+            /Networking/AIModels.swift \
+            /Networking/AIJobPoller.swift \
+            /Networking/SubtitleSearchModels.swift \
+            /Networking/TrackSelectionPersistence.swift \
+            /Networking/LAN/PrairieFrame.swift
+
+      - name: Upload test results and coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prairie-unit-test-coverage
+          path: |
+            iosApp/TestResults.xcresult
+            iosApp/coverage.json
+            iosApp/coverage-report.txt
+          if-no-files-found: warn
+          retention-days: 14
