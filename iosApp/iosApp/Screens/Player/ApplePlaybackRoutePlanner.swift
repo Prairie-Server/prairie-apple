@@ -366,8 +366,8 @@ struct ApplePlaybackRoutePlanner {
             needsSecondarySubtitles: hasSidecarSubtitles,
             needsChapters: hasChapters,
             needsNowPlayingIntegration: true,
-            keepsPictureInPictureDisabledUntilValidated: true,
-            keepsExternalPlaybackDisabledUntilValidated: true,
+            keepsPictureInPictureDisabledUntilValidated: false,
+            keepsExternalPlaybackDisabledUntilValidated: false,
             needsValidatedDolbyVisionClaim: claimsDolbyVision,
             needsValidatedAtmosClaim: Self.versionHasPotentialAtmos(selectedVersion)
         )

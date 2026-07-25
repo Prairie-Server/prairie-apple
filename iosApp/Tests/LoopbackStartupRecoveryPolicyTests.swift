@@ -1,7 +1,149 @@
+import AVFoundation
 import XCTest
 @testable import Silo
 
 final class LoopbackStartupRecoveryPolicyTests: XCTestCase {
+    private func transportContext(
+        _ status: AVPlayer.TimeControlStatus,
+        isUserPaused: Bool = false,
+        systemControlsAreActive: Bool = true,
+        isInitialObservation: Bool = false,
+        hasStartedPlayback: Bool = true,
+        isSeekInFlight: Bool = false,
+        isBufferStarved: Bool = false,
+        hasReachedEnd: Bool = false
+    ) -> AVPlayerSystemTransportIntent.Context {
+        .init(
+            timeControlStatus: status,
+            isUserPaused: isUserPaused,
+            systemControlsAreActive: systemControlsAreActive,
+            isInitialObservation: isInitialObservation,
+            hasStartedPlayback: hasStartedPlayback,
+            isSeekInFlight: isSeekInFlight,
+            isBufferStarved: isBufferStarved,
+            hasReachedEnd: hasReachedEnd
+        )
+    }
+
+    func testSystemTransportChangesReconcileOnlyWhenIntentDiffers() {
+        XCTAssertEqual(
+            AVPlayerSystemTransportIntent.resolve(transportContext(.paused)),
+            .pause
+        )
+        XCTAssertEqual(
+            AVPlayerSystemTransportIntent.resolve(
+                transportContext(.playing, isUserPaused: true)
+            ),
+            .play
+        )
+        XCTAssertEqual(
+            AVPlayerSystemTransportIntent.resolve(
+                transportContext(.waitingToPlayAtSpecifiedRate, isUserPaused: true)
+            ),
+            .play
+        )
+        XCTAssertNil(
+            AVPlayerSystemTransportIntent.resolve(
+                transportContext(.paused, isUserPaused: true)
+            )
+        )
+        XCTAssertNil(
+            AVPlayerSystemTransportIntent.resolve(
+                transportContext(.waitingToPlayAtSpecifiedRate)
+            )
+        )
+        XCTAssertNil(
+            AVPlayerSystemTransportIntent.resolve(
+                transportContext(.paused, systemControlsAreActive: false)
+            )
+        )
+    }
+
+    /// The player is paused at every one of these moments for reasons that
+    /// have nothing to do with the receiver or the PiP window. Reading any of
+    /// them as a pause command latches `isUserPaused`, and every loopback
+    /// stall-recovery path is gated on `!isUserPaused`.
+    func testPlayerOwnPauseTransitionsAreNotTransportCommands() {
+        // `.initial` KVO delivery on a freshly attached item.
+        XCTAssertNil(
+            AVPlayerSystemTransportIntent.resolve(
+                transportContext(.paused, isInitialObservation: true, hasStartedPlayback: false)
+            )
+        )
+        // Pre-roll: item attached, initial resume seek not issued yet.
+        XCTAssertNil(
+            AVPlayerSystemTransportIntent.resolve(
+                transportContext(.paused, hasStartedPlayback: false)
+            )
+        )
+        // Mid-scrub.
+        XCTAssertNil(
+            AVPlayerSystemTransportIntent.resolve(
+                transportContext(.paused, isSeekInFlight: true)
+            )
+        )
+        // Buffer underrun on the loopback route.
+        XCTAssertNil(
+            AVPlayerSystemTransportIntent.resolve(
+                transportContext(.paused, isBufferStarved: true)
+            )
+        )
+        // End of file.
+        XCTAssertNil(
+            AVPlayerSystemTransportIntent.resolve(
+                transportContext(.paused, hasReachedEnd: true)
+            )
+        )
+    }
+
+    func testExternalPlaybackIsOfferedOnlyForAssetsAReceiverCanFetch() {
+        // Server-hosted stream: authenticated by a header the receiver cannot
+        // send.
+        XCTAssertFalse(
+            AVPlayerBackend.isReceiverFetchableAsset(
+                url: URL(string: "https://silo.example.com/api/v1/stream/abc?st=xyz")!,
+                headers: ["Authorization": "Bearer token"]
+            )
+        )
+        // The same session behind the on-device source proxy: no headers, but
+        // 127.0.0.1 means nothing to an Apple TV.
+        XCTAssertFalse(
+            AVPlayerBackend.isReceiverFetchableAsset(
+                url: URL(string: "http://127.0.0.1:52341/source/abc")!,
+                headers: [:]
+            )
+        )
+        XCTAssertFalse(
+            AVPlayerBackend.isReceiverFetchableAsset(
+                url: URL(string: "http://localhost:52341/source/abc")!,
+                headers: [:]
+            )
+        )
+        // Offline download.
+        XCTAssertTrue(
+            AVPlayerBackend.isReceiverFetchableAsset(
+                url: URL(fileURLWithPath: "/var/mobile/Containers/Data/download.mp4"),
+                headers: [:]
+            )
+        )
+        // Unauthenticated origin URL.
+        XCTAssertTrue(
+            AVPlayerBackend.isReceiverFetchableAsset(
+                url: URL(string: "https://cdn.example.com/clip.mp4")!,
+                headers: [:]
+            )
+        )
+    }
+
+    func testResumeFromTheReceiverStillReconcilesAfterAStall() {
+        XCTAssertEqual(
+            AVPlayerSystemTransportIntent.resolve(
+                transportContext(.playing, isUserPaused: true, isBufferStarved: true)
+            ),
+            .play
+        )
+    }
+
     func testAudioSessionActivationStateRejectsStaleCompletionAndDeactivates() {
         var state = AVPlayerAudioSessionActivationState()
         let first = state.beginActivation()

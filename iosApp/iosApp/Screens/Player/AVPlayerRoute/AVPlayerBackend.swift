@@ -200,6 +200,60 @@ struct LoopbackItemDeathConfirmationState {
     }
 }
 
+/// Transport commands issued outside the app: the AirPlay receiver's remote,
+/// or the PiP window's play/pause button. Both mutate `AVPlayer` directly
+/// instead of calling the backend, so the only evidence is a
+/// `timeControlStatus` transition.
+///
+/// That signal is noisy — the player also stops and starts on its own during
+/// startup, seeks, stalls, and at end of file — so a transition only counts as
+/// a command when nothing else explains it. Reading a stall as a receiver
+/// pause is the expensive mistake: it latches `isUserPaused`, and every
+/// loopback stall-recovery path is gated on `!isUserPaused`, so the session
+/// would wedge with no way back.
+enum AVPlayerSystemTransportIntent: Equatable {
+    case play
+    case pause
+
+    /// Everything the backend knows about why the transport state may have
+    /// moved without us asking.
+    struct Context {
+        let timeControlStatus: AVPlayer.TimeControlStatus
+        let isUserPaused: Bool
+        /// AirPlay handoff or PiP owns the transport UI right now.
+        let systemControlsAreActive: Bool
+        /// The first KVO delivery reports the state the player was already in
+        /// (`.paused`, pre-roll) rather than a transition, so it carries no
+        /// intent.
+        let isInitialObservation: Bool
+        /// False until the initial start/resume seek has been issued; before
+        /// that the player is legitimately parked at rate 0.
+        let hasStartedPlayback: Bool
+        let isSeekInFlight: Bool
+        /// The loopback route runs with `automaticallyWaitsToMinimizeStalling`
+        /// off, so a drained buffer stops the player outright.
+        let isBufferStarved: Bool
+        let hasReachedEnd: Bool
+    }
+
+    static func resolve(_ context: Context) -> Self? {
+        guard context.systemControlsAreActive,
+              !context.isInitialObservation,
+              context.hasStartedPlayback,
+              !context.isSeekInFlight,
+              !context.hasReachedEnd else { return nil }
+        switch context.timeControlStatus {
+        case .paused:
+            guard !context.isBufferStarved else { return nil }
+            return context.isUserPaused ? nil : .pause
+        case .waitingToPlayAtSpecifiedRate, .playing:
+            return context.isUserPaused ? .play : nil
+        default:
+            return nil
+        }
+    }
+}
+
 struct AVPlayerAudioSessionActivationState {
     struct Request: Equatable {
         let id: UInt64
@@ -514,6 +568,22 @@ final class AVPlayerBackend {
     var onTracksChange: (([PlayerTrack]) -> Void)?
     var onChaptersChange: (([PlayerChapterInfo]) -> Void)?
     var onTimelineOffsetChange: ((Double) -> Void)?
+    /// AirPlay video handoff started (`true`) or ended (`false`). Bound for
+    /// the player's whole lifetime rather than per item, because the route can
+    /// change while the app is backgrounded and no item-scoped event reports
+    /// it.
+    var onExternalPlaybackActiveChange: ((Bool) -> Void)?
+    /// Whether the current route can hand video to an AirPlay receiver at all.
+    /// Drives the visibility of the route picker: offering it on a route the
+    /// receiver cannot fetch just produces a dead TV screen.
+    var onExternalPlaybackAllowedChange: ((Bool) -> Void)?
+    /// An AirPlay handoff was attempted but no LAN address the receiver could
+    /// reach exists. Playback stays on this device; the shell tells the user.
+    var onExternalPlaybackUnavailable: (() -> Void)?
+    /// PiP controls mutate `AVPlayer` directly instead of calling this
+    /// backend's `play()` / `pause()` methods. The shell supplies PiP ownership
+    /// here so transport KVO can reconcile those changes into Silo's intent.
+    var isPictureInPictureActiveProvider: (() -> Bool)?
     var onSidecarTracksRegistered: (([SidecarSubtitleDescriptor]) -> Void)?
     var onSubtitleLoadStatusChange: ((SubtitleSlot, SubtitleLoadStatus) -> Void)?
     /// Temporary [CMP-MEM]: source-proxy cache stats for the periodic
@@ -696,6 +766,8 @@ final class AVPlayerBackend {
     private var segmentWriter: LoopbackSegmentWriter?
     private var segmentServer: LoopbackSegmentServer?
     private var segmentStore: LoopbackSegmentStore?
+    private var loopbackPlaylistName: String?
+    private var loopbackPlaybackUsesExternalURL = false
     private var sessionDirectory: URL?
     private var activeLoopbackSessionID: String?
     private var loopbackGeneration: UInt64 = 0
@@ -711,6 +783,12 @@ final class AVPlayerBackend {
     private var watchdogReanchorWindowStartWall: CFTimeInterval = 0
     private var didEscalateLoopbackStall = false
     private var isUserPaused = false
+    /// Guards `reconcileSystemTransportIntent` against the `.initial` KVO
+    /// delivery, which reports pre-roll state rather than a transport command.
+    private var hasObservedTimeControlStatus = false
+    /// True between `AVPlayerItemDidPlayToEndTime` and the next load or seek.
+    /// The player parks at rate 0 there, which is not a receiver pause.
+    private var hasReachedItemEnd = false
     private var preserveSessionDirectory = false
     private var isPreservingTVDisplayCriteriaForReload = false
 
@@ -749,9 +827,33 @@ final class AVPlayerBackend {
     private var durationObs: NSKeyValueObservation?
     private var loadedRangesObs: NSKeyValueObservation?
     private var seekableRangesObs: NSKeyValueObservation?
+    private var externalPlaybackObs: NSKeyValueObservation?
     private var endObserver: NSObjectProtocol?
 
     init() {
+        // Stays off until a route that the receiver can actually fetch is
+        // loaded; `applyExternalPlaybackPolicy(for:)` opens it per strategy.
+        avPlayer.allowsExternalPlayback = false
+        #if !os(macOS)
+        // Mirrored-display handoff is an iOS/tvOS concept; macOS has no
+        // equivalent and the property is unavailable there.
+        avPlayer.usesExternalPlaybackWhileExternalScreenIsActive = false
+        #endif
+        // Player-scoped, not item-scoped: `detachPerItemObservers()` runs on
+        // every reanchor/quality switch and would otherwise blind us to route
+        // changes mid-session. Invalidated in `dispose()`.
+        externalPlaybackObs = avPlayer.observe(
+            \.isExternalPlaybackActive,
+            options: [.new]
+        ) { [weak self] player, _ in
+            let active = player.isExternalPlaybackActive
+            Task { @MainActor [weak self] in
+                guard let self, !self.isDisposed else { return }
+                self.updateLoopbackURLForExternalPlayback(active)
+                self.onExternalPlaybackActiveChange?(active)
+            }
+        }
+
         let session = SubtitleSession()
         session.onSidecarTracksRegistered = { [weak self] descriptors in
             self?.onSidecarTracksRegistered?(descriptors)
@@ -833,8 +935,141 @@ final class AVPlayerBackend {
         avPlayer.pause()
     }
 
+    @discardableResult
+    private func reconcileSystemTransportIntent(
+        from player: AVPlayer,
+        isInitialObservation: Bool
+    ) -> Bool {
+        let systemControlsAreActive = player.isExternalPlaybackActive
+            || isPictureInPictureActiveProvider?() == true
+        guard let intent = AVPlayerSystemTransportIntent.resolve(
+            .init(
+                timeControlStatus: player.timeControlStatus,
+                isUserPaused: isUserPaused,
+                systemControlsAreActive: systemControlsAreActive,
+                isInitialObservation: isInitialObservation,
+                hasStartedPlayback: hasSeekedToStart,
+                isSeekInFlight: isSeekPending || isInitialSeekInFlight,
+                isBufferStarved: currentItem?.isPlaybackBufferEmpty == true,
+                hasReachedEnd: hasReachedItemEnd
+            )
+        ) else { return false }
+
+        switch intent {
+        case .play:
+            Self.logger.info("System transport requested play")
+            play()
+        case .pause:
+            Self.logger.info("System transport requested pause")
+            pause()
+        }
+        return true
+    }
+
     func prepareToBackground() {
         pause()
+    }
+
+    var isExternalPlaybackActive: Bool {
+        avPlayer.isExternalPlaybackActive
+    }
+
+    var isExternalPlaybackAllowed: Bool {
+        avPlayer.allowsExternalPlayback
+    }
+
+    private func applyExternalPlaybackPolicy(for strategy: SourceStrategy) {
+        let allowed: Bool
+        switch strategy {
+        case .siloLoopback:
+            // Only the iOS loopback server is LAN-reachable; elsewhere it
+            // binds to 127.0.0.1 and no receiver could ever fetch it.
+            #if os(iOS)
+            allowed = true
+            #else
+            allowed = false
+            #endif
+        case .remoteHLS(let url, let headers), .remoteDirect(let url, let headers):
+            allowed = Self.isReceiverFetchableAsset(url: url, headers: headers)
+        }
+        setExternalPlaybackAllowed(allowed)
+    }
+
+    /// Can an AirPlay receiver fetch this asset itself? It gets the URL and
+    /// nothing else — none of the asset's HTTP headers, and its own network
+    /// stack. Two disqualifiers, both of which occur on direct-play routes:
+    ///
+    /// - Header authentication. Silo's `/api/v1/...` stream URLs carry a
+    ///   bearer token in `Authorization`, and the receiver's fetch gets a 401.
+    /// - A loopback host. `PlayerViewModel.prepareSourceProxy` rewrites
+    ///   direct-play URLs to the on-device caching proxy at 127.0.0.1 *and
+    ///   drops the headers*, so "no headers" on its own is not evidence that
+    ///   anything off-device can reach it.
+    ///
+    /// Local files pass: AVPlayer streams a `file://` asset to the receiver
+    /// itself instead of handing over a URL that means nothing there.
+    static func isReceiverFetchableAsset(url: URL, headers: [String: String]) -> Bool {
+        if url.isFileURL { return true }
+        guard headers.isEmpty,
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else { return false }
+        return !isLoopbackHost(url.host)
+    }
+
+    static func isLoopbackHost(_ host: String?) -> Bool {
+        guard let host = host?.lowercased() else { return false }
+        if host == "localhost" || host == "::1" || host == "[::1]" { return true }
+        return host.hasPrefix("127.")
+    }
+
+    private func setExternalPlaybackAllowed(_ allowed: Bool) {
+        avPlayer.allowsExternalPlayback = allowed
+        #if !os(macOS)
+        // Mirrored-display handoff is an iOS/tvOS concept; macOS has no
+        // equivalent and the property is unavailable there.
+        avPlayer.usesExternalPlaybackWhileExternalScreenIsActive = allowed
+        #endif
+        onExternalPlaybackAllowedChange?(allowed)
+    }
+
+    @MainActor
+    private func updateLoopbackURLForExternalPlayback(_ active: Bool) {
+        guard active != loopbackPlaybackUsesExternalURL,
+              case .some(.siloLoopback) = currentSourceStrategy,
+              let item = currentItem,
+              let server = segmentServer,
+              let playlistName = loopbackPlaylistName else { return }
+        guard let url = server.resourceURL(
+            for: playlistName,
+            reachableFromExternalDevice: active
+        ) else {
+            // The item is still pointed at 127.0.0.1, which the receiver
+            // cannot fetch: leaving it there would strand the TV on a spinner
+            // with nothing on screen here either.
+            abandonExternalPlaybackHandoff()
+            return
+        }
+
+        let position = currentTime()
+        loopbackPlaybackUsesExternalURL = active
+        server.setAcceptsExternalClients(active)
+        reloadEstablishedLoopbackItem(
+            item,
+            at: position.isFinite ? max(0, position) : 0,
+            reason: active ? "airplay_started" : "airplay_ended",
+            replacementURL: url
+        )
+    }
+
+    /// No LAN address the receiver could reach (Wi-Fi off, cellular-only, an
+    /// isolated guest network). Bring playback back to this device and say so
+    /// — `allowsExternalPlayback = false` makes AVPlayer render locally again,
+    /// and the `isExternalPlaybackActive` KVO that follows leaves the item on
+    /// the loopback URL it already has.
+    private func abandonExternalPlaybackHandoff() {
+        cmpLog("[CMP-AVP] airplay handoff unavailable: no reachable local network address")
+        setExternalPlaybackAllowed(false)
+        onExternalPlaybackUnavailable?()
     }
 
     func videoSurfaceBecameReadyForDisplay() {
@@ -854,6 +1089,7 @@ final class AVPlayerBackend {
     func seek(to seconds: Double) {
         let mediaSeconds = seconds.isFinite ? max(0, seconds) : 0
         let playerSeconds = playerTime(forMediaTime: mediaSeconds)
+        hasReachedItemEnd = false
         if case .some(.siloLoopback(let spec)) = currentSourceStrategy {
             // VOD serving mode: every seek is in-item. The static playlist
             // covers the whole title; a fetch into never-produced content
@@ -1089,6 +1325,10 @@ final class AVPlayerBackend {
         guard !isDisposed else { return }
         isDisposed = true
         Self.logger.info("[CMP-AVP] dispose")
+        externalPlaybackObs?.invalidate()
+        externalPlaybackObs = nil
+        onExternalPlaybackActiveChange = nil
+        isPictureInPictureActiveProvider = nil
         teardownMediaPipeline()
     }
 
@@ -1448,6 +1688,7 @@ final class AVPlayerBackend {
         teardownMediaPipeline(clearDisplayCriteria: !preserveDisplayCriteria)
         isPreservingTVDisplayCriteriaForReload = preserveDisplayCriteria
         currentSourceStrategy = strategy
+        applyExternalPlaybackPolicy(for: strategy)
         currentLoopbackAudioTracks = Self.normalizedLoopbackAudioTracks(for: strategy)
         configureEmbeddedSubtitleExtraction(for: strategy)
         setLoopbackPlaybackClock(0)
@@ -1470,6 +1711,7 @@ final class AVPlayerBackend {
         watchdogLastStateLogWall = 0
         didFireFileLoaded = false
         hasSeekedToStart = false
+        hasReachedItemEnd = false
         pendingStartTime = startTime
         initialSeekRetryCount = 0
         isInitialSeekInFlight = false
@@ -1651,7 +1893,8 @@ final class AVPlayerBackend {
     private func reloadEstablishedLoopbackItem(
         _ oldItem: AVPlayerItem,
         at playerSeconds: Double,
-        reason: String
+        reason: String,
+        replacementURL: URL? = nil
     ) {
         guard oldItem === currentItem,
               let asset = oldItem.asset as? AVURLAsset else { return }
@@ -1659,7 +1902,8 @@ final class AVPlayerBackend {
         oldItem.cancelPendingSeeks()
         detachPerItemObservers()
 
-        let item = AVPlayerItem(asset: AVURLAsset(url: asset.url))
+        let itemURL = replacementURL ?? asset.url
+        let item = AVPlayerItem(asset: AVURLAsset(url: itemURL))
         item.preferredForwardBufferDuration = max(
             oldItem.preferredForwardBufferDuration,
             Self.loopbackStartupForwardBuffer
@@ -1675,7 +1919,7 @@ final class AVPlayerBackend {
             avPlayer.play()
         }
         cmpLog(
-            "[CMP-AVP] established loopback item reloaded reason=\(reason) player=\(playerSeconds) url=\(asset.url.absoluteString)"
+            "[CMP-AVP] established loopback item reloaded reason=\(reason) player=\(playerSeconds) url=\(loggableURLDescription(itemURL))"
         )
     }
 
@@ -1710,7 +1954,11 @@ final class AVPlayerBackend {
             print("[CMP-AVP] preserving local DV artifacts due to SILO_KEEP_DV_HLS=1 dir=\(sessionDir.path)")
         }
 
+        #if os(iOS)
+        let server = LoopbackSegmentServer(segmentStore: store, exposure: .localNetwork)
+        #else
         let server = LoopbackSegmentServer(segmentStore: store)
+        #endif
         if sessionSpec.servingMode == .vodPlan {
             // A miss under the static VOD playlist means "not produced (yet)
             // or pruned": request a coalesced producer restart on main, then
@@ -1962,8 +2210,25 @@ final class AVPlayerBackend {
     private func handleFirstSegmentReady(playlistName: String, sessionID: String) {
         guard activeLoopbackSessionID == sessionID else { return }
         guard !isDisposed, currentItem == nil, let server = segmentServer else { return }
-        let url = URL(string: "http://127.0.0.1:\(server.port)/\(playlistName)")!
-        cmpLog("[CMP-AVP] local playlist ready \(url.absoluteString)")
+        // Starting up with AirPlay already engaged: prefer the LAN address, but
+        // a session that cannot reach one still plays here rather than failing.
+        var useExternalURL = avPlayer.isExternalPlaybackActive
+        var externalURL: URL?
+        if useExternalURL {
+            externalURL = server.resourceURL(for: playlistName, reachableFromExternalDevice: true)
+            if externalURL == nil {
+                useExternalURL = false
+                abandonExternalPlaybackHandoff()
+            }
+        }
+        guard let url = externalURL ?? server.resourceURL(for: playlistName) else {
+            reportError("Local playback server could not produce a playable URL.")
+            return
+        }
+        loopbackPlaylistName = playlistName
+        loopbackPlaybackUsesExternalURL = useExternalURL
+        server.setAcceptsExternalClients(useExternalURL)
+        cmpLog("[CMP-AVP] local playlist ready host=\(url.host ?? "unknown") external=\(useExternalURL ? 1 : 0)")
         if ttffFirstSegmentMs == nil { ttffFirstSegmentMs = ttffElapsedMs() }
         logTVDisplayManagerState(context: "before_prepare_\(playlistName)")
         // The criteria write always happens synchronously before the item is
@@ -2980,9 +3245,18 @@ final class AVPlayerBackend {
             }
         }
 
+        hasObservedTimeControlStatus = false
         timeControlObs = avPlayer.observe(\.timeControlStatus, options: [.new, .initial]) { [weak self] player, _ in
             DispatchQueue.main.async { [weak self] in
                 guard let self, !self.isDisposed else { return }
+                // Deliveries arrive in order on main, so the first one to land
+                // for this observation is `.initial`.
+                let isInitialObservation = !self.hasObservedTimeControlStatus
+                self.hasObservedTimeControlStatus = true
+                if self.reconcileSystemTransportIntent(
+                    from: player,
+                    isInitialObservation: isInitialObservation
+                ) { return }
                 guard case .siloLoopback = self.currentSourceStrategy else { return }
                 let status: String
                 switch player.timeControlStatus {
@@ -3063,6 +3337,7 @@ final class AVPlayerBackend {
             queue: .main
         ) { [weak self] _ in
             guard let self, !self.isDisposed else { return }
+            self.hasReachedItemEnd = true
             self.onEndOfFile?()
         }
 
@@ -3556,7 +3831,7 @@ final class AVPlayerBackend {
             return
         }
         let url = asset.url
-        cmpLog("[CMP-AVP] startup watchdog reloading item in place url=\(url.absoluteString)")
+        cmpLog("[CMP-AVP] startup watchdog reloading item in place url=\(loggableURLDescription(url))")
         detachPerItemObservers()
         let item = AVPlayerItem(asset: AVURLAsset(url: url))
         if case .siloLoopback = currentSourceStrategy {
@@ -4090,6 +4365,8 @@ final class AVPlayerBackend {
         loopbackSubtitleTap?.deactivate()
         embeddedSubtitleExtractor?.teardown()
         activeLoopbackSessionID = nil
+        loopbackPlaylistName = nil
+        loopbackPlaybackUsesExternalURL = false
         isInitialSeekInFlight = false
         initialSeekRetryCount = 0
         isInitialVideoDisplayGatePrepared = false
@@ -4147,6 +4424,17 @@ final class AVPlayerBackend {
                 try? FileManager.default.removeItem(at: dir)
             }
         }
+    }
+
+    /// Loopback URLs carry the segment server's per-session access token as
+    /// their first path component, and the diagnostics redactor keeps URL
+    /// paths — so the raw string would ship the secret in a support bundle.
+    private func loggableURLDescription(_ url: URL) -> String {
+        redactedLogText(url.absoluteString)
+    }
+
+    private func redactedLogText(_ value: String) -> String {
+        segmentServer?.redactingAccessToken(in: value) ?? value
     }
 
     private func reportError(_ message: String) {
@@ -4261,12 +4549,13 @@ final class AVPlayerBackend {
         let domain = nsError?.domain ?? "unknown"
         let code = nsError?.code ?? 0
         let description = nsError?.localizedDescription ?? "AVPlayer item failed"
-        let failingURL = (nsError?.userInfo[NSURLErrorFailingURLErrorKey] as? URL)?.absoluteString
+        let failingURL = (nsError?.userInfo[NSURLErrorFailingURLErrorKey] as? URL)
+            .map(loggableURLDescription)
         let underlying = (nsError?.userInfo[NSUnderlyingErrorKey] as? NSError).map {
             "\($0.domain)(\($0.code)): \($0.localizedDescription)"
         }
         let latestErrorLog = item.errorLog()?.events.last.map { event in
-            let uri = event.uri ?? "nil"
+            let uri = event.uri.map(redactedLogText) ?? "nil"
             let comment = event.errorComment ?? "nil"
             return "uri=\(uri) status=\(event.errorStatusCode) domain=\(event.errorDomain) comment=\(comment)"
         }
