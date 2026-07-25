@@ -119,7 +119,6 @@ jobs:
       - name: Enforce 75% Networking coverage gate
         # Gates iosApp/iosApp/Networking/ (models included) — not overall app UI.
         # See workflow header comment and scripts/check-xccov-coverage.sh.
-        if: always()
         run: |
           set -euo pipefail
           if [[ ! -f iosApp/coverage.json ]]; then
