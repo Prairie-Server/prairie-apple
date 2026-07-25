@@ -74,7 +74,7 @@ final class LiveTVChannelListViewModel {
 
     /// Pure helper: for each channel, pick the program spanning `at` and the
     /// soonest program that starts after it.
-    static func nowNextMap(
+    nonisolated static func nowNextMap(
         programs: [LiveTVProgram],
         at date: Date
     ) -> [String: LiveTVNowNext] {
