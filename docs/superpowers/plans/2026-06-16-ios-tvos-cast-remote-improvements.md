@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make the iOS→tvOS Silo cast remote feel native and stay reliable: smooth scrubbing, instant controls, a persistent now-playing entry point, one-step "cast this item", volume + next-episode controls, and a transport layer that survives drops and reconnects.
+**Goal:** Make the iOS→tvOS Prairie cast remote feel native and stay reliable: smooth scrubbing, instant controls, a persistent now-playing entry point, one-step "cast this item", volume + next-episode controls, and a transport layer that survives drops and reconnects.
 
-**Architecture:** The cast feature is a peer-to-peer LAN link — a shared wire protocol (`SiloCastProtocol`) over a TLS-PSK `SiloCastSession` (actor wrapping `NWConnection`), an `@Observable` `SiloCastController` on the phone and an `@Observable` `TVCastReceiver` singleton on the TV. This plan (a) hardens the transport (ordered sends, heartbeat liveness, takeover, re-advertise on server change), (b) adds phone-side reconnect + a local playback clock for smooth/optimistic UI, (c) adds UX surfaces (mini-bar, cast-from-detail, idle state, volume row, next-episode), and (d) extends the player backends with volume/mute. No server or Android changes — the cast channel is Apple-only and LAN-local.
+**Architecture:** The cast feature is a peer-to-peer LAN link — a shared wire protocol (`PrairieCastProtocol`) over a TLS-PSK `PrairieCastSession` (actor wrapping `NWConnection`), an `@Observable` `PrairieCastController` on the phone and an `@Observable` `TVCastReceiver` singleton on the TV. This plan (a) hardens the transport (ordered sends, heartbeat liveness, takeover, re-advertise on server change), (b) adds phone-side reconnect + a local playback clock for smooth/optimistic UI, (c) adds UX surfaces (mini-bar, cast-from-detail, idle state, volume row, next-episode), and (d) extends the player backends with volume/mute. No server or Android changes — the cast channel is Apple-only and LAN-local.
 
 **Tech Stack:** Swift 6 / SwiftUI, Network.framework (`NWConnection`/`NWListener`/`NWBrowser`), `@Observable`, Swift Concurrency (actors, `AsyncStream`), `AVAudioEngine`/`AVPlayer` for audio gain. XCTest for shared-logic tests.
 
@@ -20,40 +20,40 @@
 
 CLAUDE.md: *"Do not add tests for small changes or UI changes unless requested. For shared logic changes, add focused tests only for critical or high-risk behavior."* So:
 
-- **Unit-tested (shared logic):** new `SiloCastMessage`/`SiloCastControlCommand`/`SiloCastPlaybackState` codec round-trips; the `RemotePlaybackClock` interpolation + optimistic-override math; volume clamping.
+- **Unit-tested (shared logic):** new `PrairieCastMessage`/`PrairieCastControlCommand`/`PrairieCastPlaybackState` codec round-trips; the `RemotePlaybackClock` interpolation + optimistic-override math; volume clamping.
 - **Build + simulator-verified (UI / networking):** everything else. Build commands per platform are below; two-simulator cast verification follows the `companion-pairing-sim-test` memory pattern (two booted sims share the host network so Bonjour + TLS-PSK works sim-to-sim).
 
 **Build commands (run after each phase):**
 ```bash
 cd iosApp && xcodegen generate   # only after adding/removing files
-cd iosApp && xcodebuild build -project Silo.xcodeproj -scheme Silo   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO
-cd iosApp && xcodebuild build -project Silo.xcodeproj -scheme SiloTV -destination 'platform=tvOS Simulator,name=Apple TV 4K (3rd generation)' CODE_SIGNING_ALLOWED=NO
+cd iosApp && xcodebuild build -project Prairie.xcodeproj -scheme Prairie   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO
+cd iosApp && xcodebuild build -project Prairie.xcodeproj -scheme PrairieTV -destination 'platform=tvOS Simulator,name=Apple TV 4K (3rd generation)' CODE_SIGNING_ALLOWED=NO
 ```
 **Test command:**
 ```bash
-cd iosApp && xcodebuild test -project Silo.xcodeproj -scheme Silo   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -only-testing:SiloTests/SiloCastTests CODE_SIGNING_ALLOWED=NO
+cd iosApp && xcodebuild test -project Prairie.xcodeproj -scheme Prairie   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -only-testing:PrairieTests/PrairieCastTests CODE_SIGNING_ALLOWED=NO
 ```
-(If the test target is named differently, mirror the existing target under `iosApp/Tests/`; create `SiloCastTests.swift` there.)
+(If the test target is named differently, mirror the existing target under `iosApp/Tests/`; create `PrairieCastTests.swift` there.)
 
 ---
 
 ## File Structure
 
 **Shared protocol/transport (`iosApp/iosApp/Cast/`):**
-- `SiloCastProtocol.swift` *(modify)* — add `.ping`/`.pong` messages; add `.setVolume`/`.setMuted`/`.playNext` control names + a `volume: Double?` command field; add `volume`/`isMuted`/`hasNextEpisode`/`nextEpisodeTitle` to `SiloCastPlaybackState`.
-- `SiloCastSession.swift` *(modify)* — ordered outbound queue (`AsyncStream` drain) so messages never reorder; `enqueue(_:)` fire-and-forget API.
+- `PrairieCastProtocol.swift` *(modify)* — add `.ping`/`.pong` messages; add `.setVolume`/`.setMuted`/`.playNext` control names + a `volume: Double?` command field; add `volume`/`isMuted`/`hasNextEpisode`/`nextEpisodeTitle` to `PrairieCastPlaybackState`.
+- `PrairieCastSession.swift` *(modify)* — ordered outbound queue (`AsyncStream` drain) so messages never reorder; `enqueue(_:)` fire-and-forget API.
 
 **iOS (`iosApp/iosApp/Cast/iOS/`):**
 - `RemotePlaybackClock.swift` *(create)* — `@Observable` projection: latest authoritative state + monotonic interpolation anchor + optimistic play/pause/seek overrides. Pure, testable `displayTime(asOf:)`.
-- `SiloCastController.swift` *(modify)* — own a `RemotePlaybackClock`; heartbeat send + miss-counter teardown; auto-reconnect with `isReconnecting`; optimistic command echoes; `playNext`, `setVolume`, `setMuted` helpers.
-- `SiloCastRemoteControlView.swift` *(modify)* — drive scrubber/transport from the clock via `TimelineView`; idle/connected state when `contentId == nil`; volume row; next-episode button; restructure secondary controls into a scrollable row; a11y values.
-- `SiloCastMiniBar.swift` *(create)* — persistent now-playing bar shown across tabs; taps reopen the remote.
-- `SiloCastTargetPickerView.swift` *(modify)* — unchanged logic, but now reached with a non-nil `request` from detail (cast-and-play).
+- `PrairieCastController.swift` *(modify)* — own a `RemotePlaybackClock`; heartbeat send + miss-counter teardown; auto-reconnect with `isReconnecting`; optimistic command echoes; `playNext`, `setVolume`, `setMuted` helpers.
+- `PrairieCastRemoteControlView.swift` *(modify)* — drive scrubber/transport from the clock via `TimelineView`; idle/connected state when `contentId == nil`; volume row; next-episode button; restructure secondary controls into a scrollable row; a11y values.
+- `PrairieCastMiniBar.swift` *(create)* — persistent now-playing bar shown across tabs; taps reopen the remote.
+- `PrairieCastTargetPickerView.swift` *(modify)* — unchanged logic, but now reached with a non-nil `request` from detail (cast-and-play).
 
 **iOS integration:**
 - `Screens/Home/HomeView.swift` *(modify)* — unchanged cast button (already present).
 - `Screens/Detail/ItemDetailView.swift` *(modify)* — add a Cast button that casts-this-item (launch if session, else open picker with the request).
-- `ContentView.swift` *(modify)* — mount `SiloCastMiniBar` in `MainTabView` above the tab content.
+- `ContentView.swift` *(modify)* — mount `PrairieCastMiniBar` in `MainTabView` above the tab content.
 
 **tvOS (`iosApp/iosApp/Cast/tvOS/`):**
 - `TVCastReceiver.swift` *(modify)* — ordered sends; heartbeat reply + liveness teardown; **takeover** on new connection; re-advertise on active-server change; gate the state timer on a connected controller; handle `.setVolume`/`.setMuted`/`.playNext`.
@@ -62,13 +62,13 @@ cd iosApp && xcodebuild test -project Silo.xcodeproj -scheme Silo   -destination
 - `tvOS/Navigation/TVMainTabView.swift` *(modify)* — `.onChange(of: ServerRegistry.shared.activeServerId)` re-advertise.
 
 **Player backends (`iosApp/iosApp/Screens/Player/`):**
-- `PlayerViewModel.swift` *(modify)* — `applySiloCastControl` cases for volume/mute/playNext; `makeSiloCastPlaybackState` emits volume/mute/next-episode and uses the *live* content id.
+- `PlayerViewModel.swift` *(modify)* — `applyPrairieCastControl` cases for volume/mute/playNext; `makePrairieCastPlaybackState` emits volume/mute/next-episode and uses the *live* content id.
 - `CoreMedia/PlayerCore.swift` *(modify)* — `setVolume/setMuted/currentVolume/currentMuted` on the `AVAudioEngine` main mixer; re-apply after `reloadAudioOutput()`.
 - `AVPlayerRoute/AVPlayerBackend.swift` *(modify)* — user volume/mute stored + applied via `avPlayer.volume` (never `isMuted`, reserved for the initial-display gate).
 - `PlayerViewModel.swift` `ActivePlayer` enum *(modify)* — `setVolume/setMuted/volume()/isMuted()` forwarding.
 
 **Tests (`iosApp/Tests/`):**
-- `SiloCastTests.swift` *(create)* — codec round-trips, clock interpolation/override, volume clamping.
+- `PrairieCastTests.swift` *(create)* — codec round-trips, clock interpolation/override, volume clamping.
 
 **Docs (`docs/`):**
 - `docs/tvos-player/cast-remote.md` *(create)* — protocol overview, volume route caveats, deferred security follow-up + threat model.
@@ -77,34 +77,34 @@ cd iosApp && xcodebuild test -project Silo.xcodeproj -scheme Silo   -destination
 
 # Phase A — Transport hardening (shared)
 
-## Task A1: Ordered outbound queue in `SiloCastSession`
+## Task A1: Ordered outbound queue in `PrairieCastSession`
 
 Today every caller wraps sends in `Task { try? await session.send(...) }`. Multiple tasks race to enter the actor, so a stale state snapshot can overwrite a fresh one (playhead jumps backward). Fix: a single FIFO drain inside the session.
 
 **Files:**
-- Modify: `iosApp/iosApp/Cast/SiloCastSession.swift`
+- Modify: `iosApp/iosApp/Cast/PrairieCastSession.swift`
 
 - [ ] **Step 1: Add an outbound stream created in `init`.**
 
 Add stored properties and build the stream in both initializers. Replace the property block near the top:
 
 ```swift
-actor SiloCastSession {
+actor PrairieCastSession {
     enum SessionError: Error {
         case closed
     }
 
     private let connection: NWConnection
     private var frameBuffer = PairingFrameBuffer()
-    private var continuation: AsyncThrowingStream<SiloCastMessage, Error>.Continuation?
+    private var continuation: AsyncThrowingStream<PrairieCastMessage, Error>.Continuation?
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
     private var isOpen = false
 
     // Ordered outbound queue: enqueue() is nonisolated + FIFO; a single
     // drain task sends one frame at a time so messages never reorder.
-    private let outbound: AsyncStream<SiloCastMessage>
-    private let outboundContinuation: AsyncStream<SiloCastMessage>.Continuation
+    private let outbound: AsyncStream<PrairieCastMessage>
+    private let outboundContinuation: AsyncStream<PrairieCastMessage>.Continuation
     private var drainTask: Task<Void, Never>?
 
     init(connection: NWConnection) {
@@ -135,7 +135,7 @@ Add these methods. Keep the existing awaitable `send` for the initial hello (it 
 ```swift
     /// Fire-and-forget, ordered. Safe to call from any context; FIFO is
     /// preserved by call order because all call sites are @MainActor.
-    nonisolated func enqueue(_ message: SiloCastMessage) {
+    nonisolated func enqueue(_ message: PrairieCastMessage) {
         outboundContinuation.yield(message)
     }
 
@@ -151,12 +151,12 @@ Add these methods. Keep the existing awaitable `send` for the initial hello (it 
         }
     }
 
-    func send(_ message: SiloCastMessage) async throws {
+    func send(_ message: PrairieCastMessage) async throws {
         guard isOpen else { throw SessionError.closed }
         try await writeRaw(message)
     }
 
-    private func writeRaw(_ message: SiloCastMessage) async throws {
+    private func writeRaw(_ message: PrairieCastMessage) async throws {
         let payload = try encoder.encode(message)
         let framed = try PairingFrame.encode(payload)
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
@@ -203,28 +203,28 @@ Run the iOS + tvOS build commands. Expected: PASS (no behavior change yet at cal
 - [ ] **Step 6: Commit.**
 
 ```bash
-git add iosApp/iosApp/Cast/SiloCastSession.swift
-git commit -m "cast: ordered outbound queue in SiloCastSession to prevent message reorder"
+git add iosApp/iosApp/Cast/PrairieCastSession.swift
+git commit -m "cast: ordered outbound queue in PrairieCastSession to prevent message reorder"
 ```
 
 ## Task A2: Heartbeat messages in the protocol
 
 **Files:**
-- Modify: `iosApp/iosApp/Cast/SiloCastProtocol.swift`
-- Test: `iosApp/Tests/SiloCastTests.swift`
+- Modify: `iosApp/iosApp/Cast/PrairieCastProtocol.swift`
+- Test: `iosApp/Tests/PrairieCastTests.swift`
 
 - [ ] **Step 1: Write the failing codec test.**
 
-Create `iosApp/Tests/SiloCastTests.swift`:
+Create `iosApp/Tests/PrairieCastTests.swift`:
 
 ```swift
 import XCTest
-@testable import Silo
+@testable import Prairie
 
-final class SiloCastTests: XCTestCase {
-    private func roundTrip(_ message: SiloCastMessage) throws -> SiloCastMessage {
+final class PrairieCastTests: XCTestCase {
+    private func roundTrip(_ message: PrairieCastMessage) throws -> PrairieCastMessage {
         let data = try JSONEncoder().encode(message)
-        return try JSONDecoder().decode(SiloCastMessage.self, from: data)
+        return try JSONDecoder().decode(PrairieCastMessage.self, from: data)
     }
 
     func testPingPongRoundTrip() throws {
@@ -236,13 +236,13 @@ final class SiloCastTests: XCTestCase {
 
 - [ ] **Step 2: Run it — expect FAIL.**
 
-Run the test command. Expected: FAIL ("type 'SiloCastMessage' has no member 'ping'").
+Run the test command. Expected: FAIL ("type 'PrairieCastMessage' has no member 'ping'").
 
 - [ ] **Step 3: Add `.ping`/`.pong` to the enum and codec.**
 
-In `SiloCastMessage`, add cases:
+In `PrairieCastMessage`, add cases:
 ```swift
-    case error(SiloCastErrorMessage)
+    case error(PrairieCastErrorMessage)
     case ping
     case pong
     case close
@@ -266,30 +266,30 @@ In `init(from:)` add:
 
 - [ ] **Step 5: Commit.**
 ```bash
-git add iosApp/iosApp/Cast/SiloCastProtocol.swift iosApp/Tests/SiloCastTests.swift
+git add iosApp/iosApp/Cast/PrairieCastProtocol.swift iosApp/Tests/PrairieCastTests.swift
 git commit -m "cast: add ping/pong heartbeat messages to protocol"
 ```
 
 ## Task A3: Add volume/mute/next control + state fields to the protocol
 
 **Files:**
-- Modify: `iosApp/iosApp/Cast/SiloCastProtocol.swift`
-- Test: `iosApp/Tests/SiloCastTests.swift`
+- Modify: `iosApp/iosApp/Cast/PrairieCastProtocol.swift`
+- Test: `iosApp/Tests/PrairieCastTests.swift`
 
 - [ ] **Step 1: Write failing tests for the new fields.**
 
-Append to `SiloCastTests`:
+Append to `PrairieCastTests`:
 ```swift
     func testVolumeAndMuteAndNextCommandsRoundTrip() throws {
-        let setVol = SiloCastControlCommand.setVolume(0.4)
+        let setVol = PrairieCastControlCommand.setVolume(0.4)
         XCTAssertEqual(try roundTrip(.control(setVol)), .control(setVol))
-        let mute = SiloCastControlCommand.setMuted(true)
+        let mute = PrairieCastControlCommand.setMuted(true)
         XCTAssertEqual(try roundTrip(.control(mute)), .control(mute))
         XCTAssertEqual(try roundTrip(.control(.playNext)), .control(.playNext))
     }
 
     func testPlaybackStateCarriesVolumeAndNext() throws {
-        let state = SiloCastPlaybackState.fixture(volume: 0.5, isMuted: true,
+        let state = PrairieCastPlaybackState.fixture(volume: 0.5, isMuted: true,
                                                   hasNextEpisode: true, nextEpisodeTitle: "Ep 5")
         let decoded = try roundTrip(.state(state))
         guard case let .state(s) = decoded else { return XCTFail() }
@@ -300,12 +300,12 @@ Append to `SiloCastTests`:
     }
 ```
 
-Add a `fixture` helper at the bottom of the test file (fill all `SiloCastPlaybackState` fields with defaults; the two relevant ones are parameters):
+Add a `fixture` helper at the bottom of the test file (fill all `PrairieCastPlaybackState` fields with defaults; the two relevant ones are parameters):
 ```swift
-private extension SiloCastPlaybackState {
+private extension PrairieCastPlaybackState {
     static func fixture(volume: Double, isMuted: Bool, hasNextEpisode: Bool,
-                        nextEpisodeTitle: String?) -> SiloCastPlaybackState {
-        SiloCastPlaybackState(
+                        nextEpisodeTitle: String?) -> PrairieCastPlaybackState {
+        PrairieCastPlaybackState(
             contentId: "c", sessionId: nil, title: "T", subtitle: nil,
             isPlaying: true, isLoading: false, isBuffering: false,
             currentTime: 0, duration: 100,
@@ -324,7 +324,7 @@ private extension SiloCastPlaybackState {
 
 - [ ] **Step 2: Run — expect FAIL** (missing members). Run the test command.
 
-- [ ] **Step 3: Extend `SiloCastControlCommand`.**
+- [ ] **Step 3: Extend `PrairieCastControlCommand`.**
 
 Add to `Name`:
 ```swift
@@ -357,18 +357,18 @@ Add a `volume: Double?` stored field and init param (place after `speed`):
 ```
 Add factories:
 ```swift
-    static let playNext = SiloCastControlCommand(name: .playNext)
+    static let playNext = PrairieCastControlCommand(name: .playNext)
 
-    static func setVolume(_ volume: Double) -> SiloCastControlCommand {
-        SiloCastControlCommand(name: .setVolume, volume: volume)
+    static func setVolume(_ volume: Double) -> PrairieCastControlCommand {
+        PrairieCastControlCommand(name: .setVolume, volume: volume)
     }
 
-    static func setMuted(_ muted: Bool) -> SiloCastControlCommand {
-        SiloCastControlCommand(name: .setMuted, enabled: muted)
+    static func setMuted(_ muted: Bool) -> PrairieCastControlCommand {
+        PrairieCastControlCommand(name: .setMuted, enabled: muted)
     }
 ```
 
-- [ ] **Step 4: Extend `SiloCastPlaybackState`.**
+- [ ] **Step 4: Extend `PrairieCastPlaybackState`.**
 
 Add fields right before `error`:
 ```swift
@@ -379,17 +379,17 @@ Add fields right before `error`:
     let error: String?
 ```
 
-> **Type-consistency note:** every `SiloCastPlaybackState(...)` constructor in the codebase must add these args. They are at: `TVCastReceiver.idleState()`, `TVCastReceiver.sendLoadingState(for:)`, `PlayerViewModel.makeSiloCastPlaybackState`, and the DEBUG `previewPlaying()` in `SiloCastRemoteControlView.swift`. Tasks A4, E2, E3, and D-phase tasks update each; for now add `volume: 1.0, isMuted: false, hasNextEpisode: false, nextEpisodeTitle: nil` to make the project compile.
+> **Type-consistency note:** every `PrairieCastPlaybackState(...)` constructor in the codebase must add these args. They are at: `TVCastReceiver.idleState()`, `TVCastReceiver.sendLoadingState(for:)`, `PlayerViewModel.makePrairieCastPlaybackState`, and the DEBUG `previewPlaying()` in `PrairieCastRemoteControlView.swift`. Tasks A4, E2, E3, and D-phase tasks update each; for now add `volume: 1.0, isMuted: false, hasNextEpisode: false, nextEpisodeTitle: nil` to make the project compile.
 
 - [ ] **Step 5: Add the defaults to all existing constructors so the build is green.**
 
-Add `volume: 1.0, isMuted: false, hasNextEpisode: false, nextEpisodeTitle: nil` (before `error:`) to: `TVCastReceiver.idleState()` (`TVCastReceiver.swift:340`), `TVCastReceiver.sendLoadingState` (`:289`), `PlayerViewModel.makeSiloCastPlaybackState` (`PlayerViewModel.swift:~5350`), and `previewPlaying()` (`SiloCastRemoteControlView.swift:387`).
+Add `volume: 1.0, isMuted: false, hasNextEpisode: false, nextEpisodeTitle: nil` (before `error:`) to: `TVCastReceiver.idleState()` (`TVCastReceiver.swift:340`), `TVCastReceiver.sendLoadingState` (`:289`), `PlayerViewModel.makePrairieCastPlaybackState` (`PlayerViewModel.swift:~5350`), and `previewPlaying()` (`PrairieCastRemoteControlView.swift:387`).
 
 - [ ] **Step 6: Run tests + both builds — expect PASS.**
 
 - [ ] **Step 7: Commit.**
 ```bash
-git add iosApp/iosApp/Cast/SiloCastProtocol.swift iosApp/iosApp/Cast/tvOS/TVCastReceiver.swift iosApp/iosApp/Screens/Player/PlayerViewModel.swift iosApp/iosApp/Cast/iOS/SiloCastRemoteControlView.swift iosApp/Tests/SiloCastTests.swift
+git add iosApp/iosApp/Cast/PrairieCastProtocol.swift iosApp/iosApp/Cast/tvOS/TVCastReceiver.swift iosApp/iosApp/Screens/Player/PlayerViewModel.swift iosApp/iosApp/Cast/iOS/PrairieCastRemoteControlView.swift iosApp/Tests/PrairieCastTests.swift
 git commit -m "cast: add volume/mute/next-episode fields to cast protocol"
 ```
 
@@ -422,7 +422,7 @@ Add properties near the top of `TVCastReceiver`:
             closeActiveSession(sendClose: true)
         }
 
-        let session = SiloCastSession(connection: connection)
+        let session = PrairieCastSession(connection: connection)
         // ... rest unchanged (UUID, assign activeSession, refreshStandbyState,
         // open stream, startReadLoop, startStateUpdates if player present) ...
 ```
@@ -448,7 +448,7 @@ Add cases:
 ```
 Add the helper:
 ```swift
-    private func session(for connectionId: UUID) -> SiloCastSession? {
+    private func session(for connectionId: UUID) -> PrairieCastSession? {
         activeConnectionId == connectionId ? activeSession : nil
     }
 ```
@@ -498,9 +498,9 @@ In `sendState`, `sendLoadingState`, `sendError`, and `accept` (the hello+state p
 ```swift
     private func sendState() {
         guard let session = activeSession else { return }
-        let state: SiloCastPlaybackState
+        let state: PrairieCastPlaybackState
         if let playerViewModel {
-            state = playerViewModel.makeSiloCastPlaybackState(contentId: playerContentId)
+            state = playerViewModel.makePrairieCastPlaybackState(contentId: playerContentId)
         } else {
             state = idleState()
         }
@@ -563,17 +563,17 @@ git commit -m "cast(tvOS): re-advertise cast service when active server changes"
 ## Task C1: Heartbeat consumption + auto-reconnect in the controller
 
 **Files:**
-- Modify: `iosApp/iosApp/Cast/iOS/SiloCastController.swift`
+- Modify: `iosApp/iosApp/Cast/iOS/PrairieCastController.swift`
 
 - [ ] **Step 1: Add reconnect/heartbeat state.**
 
-Add to `SiloCastController`:
+Add to `PrairieCastController`:
 ```swift
     private(set) var isReconnecting = false
     private var heartbeatTask: Task<Void, Never>?
     private var missedHeartbeats = 0
     private var reconnectTask: Task<Void, Never>?
-    private var lastTarget: SiloCastTarget?
+    private var lastTarget: PrairieCastTarget?
     private static let heartbeatInterval: Duration = .seconds(3)
     private static let maxMissedHeartbeats = 3
     private static let maxReconnectAttempts = 5
@@ -668,7 +668,7 @@ In `clearSession` also set `isReconnecting = false` and `lastTarget = nil`.
 
 - [ ] **Step 6: Build iOS — expect PASS. Commit.**
 ```bash
-git add iosApp/iosApp/Cast/iOS/SiloCastController.swift
+git add iosApp/iosApp/Cast/iOS/PrairieCastController.swift
 git commit -m "cast(iOS): heartbeat watchdog + auto-reconnect with backoff"
 ```
 
@@ -680,11 +680,11 @@ git commit -m "cast(iOS): heartbeat watchdog + auto-reconnect with backoff"
 
 **Files:**
 - Create: `iosApp/iosApp/Cast/iOS/RemotePlaybackClock.swift`
-- Test: `iosApp/Tests/SiloCastTests.swift`
+- Test: `iosApp/Tests/PrairieCastTests.swift`
 
 - [ ] **Step 1: Write failing tests for the clock.**
 
-Append to `SiloCastTests`:
+Append to `PrairieCastTests`:
 ```swift
     func testClockInterpolatesWhilePlaying() {
         let clock = RemotePlaybackClock()
@@ -706,7 +706,7 @@ Append to `SiloCastTests`:
     func testOptimisticPlayingWinsUntilConfirmed() {
         let clock = RemotePlaybackClock()
         let t0 = Date(timeIntervalSince1970: 1000)
-        var paused = SiloCastPlaybackState.fixture(volume: 1, isMuted: false,
+        var paused = PrairieCastPlaybackState.fixture(volume: 1, isMuted: false,
                                                    hasNextEpisode: false, nextEpisodeTitle: nil)
         paused = paused.with(isPlaying: false)
         clock.ingest(paused, asOf: t0)
@@ -719,8 +719,8 @@ Append to `SiloCastTests`:
 
 Add a small `with(isPlaying:)` test helper to the fixture extension:
 ```swift
-    func with(isPlaying: Bool) -> SiloCastPlaybackState {
-        SiloCastPlaybackState(
+    func with(isPlaying: Bool) -> PrairieCastPlaybackState {
+        PrairieCastPlaybackState(
             contentId: contentId, sessionId: sessionId, title: title, subtitle: subtitle,
             isPlaying: isPlaying, isLoading: isLoading, isBuffering: isBuffering,
             currentTime: currentTime, duration: duration,
@@ -750,7 +750,7 @@ import Observation
 @MainActor
 @Observable
 final class RemotePlaybackClock {
-    private(set) var state: SiloCastPlaybackState?
+    private(set) var state: PrairieCastPlaybackState?
     private var anchorTime: Double = 0
     private var anchorDate = Date(timeIntervalSince1970: 0)
 
@@ -760,7 +760,7 @@ final class RemotePlaybackClock {
     private var optimisticPlayingDate = Date(timeIntervalSince1970: 0)
     private static let optimisticWindow: TimeInterval = 4
 
-    func ingest(_ next: SiloCastPlaybackState, asOf now: Date = Date()) {
+    func ingest(_ next: PrairieCastPlaybackState, asOf now: Date = Date()) {
         state = next
         anchorTime = next.currentTime
         anchorDate = now
@@ -806,14 +806,14 @@ final class RemotePlaybackClock {
 
 - [ ] **Step 5: Commit.**
 ```bash
-git add iosApp/iosApp/Cast/iOS/RemotePlaybackClock.swift iosApp/Tests/SiloCastTests.swift
+git add iosApp/iosApp/Cast/iOS/RemotePlaybackClock.swift iosApp/Tests/PrairieCastTests.swift
 git commit -m "cast(iOS): add RemotePlaybackClock for smooth + optimistic remote UI"
 ```
 
 ## Task D2: Wire the clock into the controller; optimistic command echoes
 
 **Files:**
-- Modify: `iosApp/iosApp/Cast/iOS/SiloCastController.swift`
+- Modify: `iosApp/iosApp/Cast/iOS/PrairieCastController.swift`
 
 - [ ] **Step 1: Own a clock and feed it state.**
 
@@ -839,18 +839,18 @@ Add `let clock = RemotePlaybackClock()`. In `handle(_:connectionId:)` `.state` c
 
 - [ ] **Step 3: Build iOS — expect PASS. Commit.**
 ```bash
-git add iosApp/iosApp/Cast/iOS/SiloCastController.swift
+git add iosApp/iosApp/Cast/iOS/PrairieCastController.swift
 git commit -m "cast(iOS): controller drives RemotePlaybackClock + optimistic transport"
 ```
 
 ## Task D3: Rebuild the remote UI on the clock (smooth scrubber, idle state, volume, next)
 
 **Files:**
-- Modify: `iosApp/iosApp/Cast/iOS/SiloCastRemoteControlView.swift`
+- Modify: `iosApp/iosApp/Cast/iOS/PrairieCastRemoteControlView.swift`
 
 - [ ] **Step 1: Render the connecting/idle/now-playing branches off `contentId` + reconnect.**
 
-Replace `content` in `SiloCastRemoteControlView` with:
+Replace `content` in `PrairieCastRemoteControlView` with:
 ```swift
     @ViewBuilder
     private var content: some View {
@@ -876,12 +876,12 @@ Replace `content` in `SiloCastRemoteControlView` with:
         }
     }
 
-    private func idleConnectedView(state: SiloCastPlaybackState) -> some View {
+    private func idleConnectedView(state: PrairieCastPlaybackState) -> some View {
         VStack(spacing: 18) {
             Image(systemName: "airplayvideo")
                 .font(.system(size: 44, weight: .medium))
                 .foregroundStyle(Color.continuumOnSurface)
-            Text("Connected to \(controller.activeTarget?.name ?? "Silo TV")")
+            Text("Connected to \(controller.activeTarget?.name ?? "Prairie TV")")
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(Color.continuumOnSurface)
             Text("Pick something from your library to start playing.")
@@ -906,11 +906,11 @@ Replace `content` in `SiloCastRemoteControlView` with:
 Update its stored properties:
 ```swift
 private struct RemoteNowPlayingContent: View {
-    let state: SiloCastPlaybackState
+    let state: PrairieCastPlaybackState
     let clock: RemotePlaybackClock
     let targetName: String?
     let posterURL: String?
-    let onCommand: (SiloCastControlCommand) -> Void
+    let onCommand: (PrairieCastControlCommand) -> Void
     let onTogglePlayPause: () -> Void
     let onSeek: (Double) -> Void
     let onPlayNext: () -> Void
@@ -1031,14 +1031,14 @@ Update `#Preview("Now Playing")` to pass `clock: RemotePlaybackClock()` and the 
 
 - [ ] **Step 8: Build iOS — expect PASS. Commit.**
 ```bash
-git add iosApp/iosApp/Cast/iOS/SiloCastRemoteControlView.swift
+git add iosApp/iosApp/Cast/iOS/PrairieCastRemoteControlView.swift
 git commit -m "cast(iOS): smooth interpolated scrubber, idle state, volume row, next-episode"
 ```
 
 ## Task D4: Persistent now-playing mini-bar
 
 **Files:**
-- Create: `iosApp/iosApp/Cast/iOS/SiloCastMiniBar.swift`
+- Create: `iosApp/iosApp/Cast/iOS/PrairieCastMiniBar.swift`
 - Modify: `iosApp/iosApp/ContentView.swift`
 
 - [ ] **Step 1: Build the mini-bar.**
@@ -1049,9 +1049,9 @@ import SwiftUI
 
 /// Persistent "Playing on <TV>" bar shown above the tab content whenever a cast
 /// session is active and the full remote is dismissed. Tapping reopens the remote.
-struct SiloCastMiniBar: View {
-    @Bindable var controller: SiloCastController
-    @State private var artwork = SiloCastArtworkResolver()
+struct PrairieCastMiniBar: View {
+    @Bindable var controller: PrairieCastController
+    @State private var artwork = PrairieCastArtworkResolver()
 
     var body: some View {
         if controller.hasActiveSession && !controller.isShowingRemoteControl {
@@ -1062,7 +1062,7 @@ struct SiloCastMiniBar: View {
                         Text(controller.state?.title ?? "Connected")
                             .font(.subheadline.weight(.semibold))
                             .lineLimit(1)
-                        Text("Playing on \(controller.activeTarget?.name ?? "Silo TV")")
+                        Text("Playing on \(controller.activeTarget?.name ?? "Prairie TV")")
                             .font(.caption)
                             .foregroundStyle(Color.continuumSecondaryText)
                             .lineLimit(1)
@@ -1118,7 +1118,7 @@ In `ContentView.swift`'s `MainTabView` body, place the bar in a bottom `safeArea
 ```swift
         .safeAreaInset(edge: .bottom) {
             #if os(iOS)
-            SiloCastMiniBar(controller: castController)
+            PrairieCastMiniBar(controller: castController)
                 .animation(.snappy, value: castController.hasActiveSession)
                 .animation(.snappy, value: castController.isShowingRemoteControl)
             #endif
@@ -1134,7 +1134,7 @@ Then iOS build. Expected: PASS.
 
 - [ ] **Step 4: Commit.**
 ```bash
-git add iosApp/iosApp/Cast/iOS/SiloCastMiniBar.swift iosApp/iosApp/ContentView.swift iosApp/project.yml iosApp/Silo.xcodeproj
+git add iosApp/iosApp/Cast/iOS/PrairieCastMiniBar.swift iosApp/iosApp/ContentView.swift iosApp/project.yml iosApp/Prairie.xcodeproj
 git commit -m "cast(iOS): persistent now-playing mini-bar reopens the remote"
 ```
 
@@ -1147,21 +1147,21 @@ git commit -m "cast(iOS): persistent now-playing mini-bar reopens the remote"
 
 In `ItemDetailPhoneContent`, add (inside the existing `#if os(iOS)`):
 ```swift
-    @State private var castRequest: SiloCastPlaybackRequest?
+    @State private var castRequest: PrairieCastPlaybackRequest?
 ```
 Add a Cast button to the detail action row (next to Play). Use the same play parameters the screen already resolves — extract the request-building into a helper so it matches `presentPlayerFromDetail`:
 ```swift
     private func castRequest(
         contentId: String, fileId: Int?, audioTrackIndex: Int?,
         subtitleTrackIndex: Int?, startFromBeginning: Bool, resumePosition: Double?
-    ) -> SiloCastPlaybackRequest {
-        SiloCastPlaybackRequest(
+    ) -> PrairieCastPlaybackRequest {
+        PrairieCastPlaybackRequest(
             contentId: contentId, fileId: fileId,
             audioTrackIndex: audioTrackIndex, subtitleTrackIndex: subtitleTrackIndex,
             startFromBeginning: startFromBeginning, resumePosition: resumePosition)
     }
 
-    private func castFromDetail(_ request: SiloCastPlaybackRequest) {
+    private func castFromDetail(_ request: PrairieCastPlaybackRequest) {
         if castController.hasActiveSession {
             Task { await castController.launch(request) }   // already connected ⇒ play now
         } else {
@@ -1173,16 +1173,16 @@ Add a `.sheet(item: $castRequest)` that opens the picker with the request — th
 ```swift
         .sheet(item: Binding(get: { castRequest.map { CastRequestBox($0) } },
                              set: { castRequest = $0?.request })) { box in
-            SiloCastTargetPickerView(request: box.request, controller: castController)
+            PrairieCastTargetPickerView(request: box.request, controller: castController)
         }
 ```
-`SiloCastPlaybackRequest` isn't `Identifiable`; add a tiny boxed wrapper near the top of the file:
+`PrairieCastPlaybackRequest` isn't `Identifiable`; add a tiny boxed wrapper near the top of the file:
 ```swift
 #if os(iOS)
 private struct CastRequestBox: Identifiable {
-    let request: SiloCastPlaybackRequest
+    let request: PrairieCastPlaybackRequest
     var id: String { request.contentId }
-    init(_ request: SiloCastPlaybackRequest) { self.request = request }
+    init(_ request: PrairieCastPlaybackRequest) { self.request = request }
 }
 #endif
 ```
@@ -1313,37 +1313,37 @@ git add iosApp/iosApp/Screens/Player/AVPlayerRoute/AVPlayerBackend.swift iosApp/
 git commit -m "player: per-player volume/mute gain on both backends (cast remote control)"
 ```
 
-## Task E2: `applySiloCastControl` — volume/mute/next; live content id in state
+## Task E2: `applyPrairieCastControl` — volume/mute/next; live content id in state
 
 **Files:**
 - Modify: `iosApp/iosApp/Screens/Player/PlayerViewModel.swift`
 
 - [ ] **Step 1: Handle the new control commands.**
 
-In `applySiloCastControl(_:)`, add cases:
+In `applyPrairieCastControl(_:)`, add cases:
 ```swift
         case .setVolume:
             guard let volume = command.volume, volume.isFinite else {
-                throw SiloCastPlayerControlError.missingValue
+                throw PrairieCastPlayerControlError.missingValue
             }
             activePlayer.setVolume(Float(min(max(volume, 0), 1)))
         case .setMuted:
             guard let enabled = command.enabled else {
-                throw SiloCastPlayerControlError.missingEnabledValue
+                throw PrairieCastPlayerControlError.missingEnabledValue
             }
             activePlayer.setMuted(enabled)
         case .playNext:
             playNextEpisodeNow()
 ```
 
-- [ ] **Step 2: Emit volume/mute/next-episode + live content id from `makeSiloCastPlaybackState`.**
+- [ ] **Step 2: Emit volume/mute/next-episode + live content id from `makePrairieCastPlaybackState`.**
 
 Replace the `volume: 1.0, isMuted: false, hasNextEpisode: false, nextEpisodeTitle: nil` placeholders (added in A3) with live values, and derive the content id from the current load so it stays correct after `playNextEpisodeNow()`:
 ```swift
-    func makeSiloCastPlaybackState(contentId: String?) -> SiloCastPlaybackState {
+    func makePrairieCastPlaybackState(contentId: String?) -> PrairieCastPlaybackState {
         let liveContentId = lastLoadRequest?.contentId ?? contentId
         // ... existing titleText / subtitleText ...
-        return SiloCastPlaybackState(
+        return PrairieCastPlaybackState(
             contentId: liveContentId,
             // ... existing fields unchanged through supportsHDRToggle ...
             volume: Double(activePlayer.volume()),
@@ -1368,7 +1368,7 @@ git commit -m "cast(tvOS): apply volume/mute/next-episode controls; live content
 
 - [ ] **Step 1: Keep `playerContentId` in sync after a next-episode load.**
 
-Since `playNextEpisodeNow()` loads new content into the *same* `PlayerView`/view model (no re-`registerPlayer`), `playerContentId` would go stale. The Phase E2 change already makes `makeSiloCastPlaybackState` derive the live id from `lastLoadRequest`, so the wire state is correct regardless. Confirm `handleControl(.playNext)` simply forwards via `applySiloCastControl` and then `sendState()` (it already does for the default path). No extra change needed beyond confirming the default control branch runs for `.playNext`. Add a brief comment at the `handleControl` default branch noting next-episode flows through here.
+Since `playNextEpisodeNow()` loads new content into the *same* `PlayerView`/view model (no re-`registerPlayer`), `playerContentId` would go stale. The Phase E2 change already makes `makePrairieCastPlaybackState` derive the live id from `lastLoadRequest`, so the wire state is correct regardless. Confirm `handleControl(.playNext)` simply forwards via `applyPrairieCastControl` and then `sendState()` (it already does for the default path). No extra change needed beyond confirming the default control branch runs for `.playNext`. Add a brief comment at the `handleControl` default branch noting next-episode flows through here.
 
 - [ ] **Step 2: Build tvOS — expect PASS. Commit (if changed).**
 ```bash
@@ -1407,10 +1407,10 @@ Follow the `companion-pairing-sim-test` pattern (two booted sims share the host 
 - Create: `docs/tvos-player/cast-remote.md`
 
 - [ ] **Step 1: Write the doc.** Include:
-  - **Protocol overview:** `_silocast._tcp` Bonjour service, TLS-PSK transport, JSON framed messages, message kinds, heartbeat, takeover semantics.
+  - **Protocol overview:** `_prairiecast._tcp` Bonjour service, TLS-PSK transport, JSON framed messages, message kinds, heartbeat, takeover semantics.
   - **Volume route caveat:** tvOS has no system-volume API; the remote controls per-player gain only (0–100% of current TV volume, cannot boost). PlayerCore (AVAudioEngine main mixer) always honors it; AVPlayer route honors it for decoded PCM but is a no-op for bitstream/passthrough/AirPlay audio. The cast state echoes the *set* value, which may not equal audible change on passthrough.
-  - **Security (known limitation):** the TLS-PSK is a single static shared secret compiled into every build, so the channel is encrypted but not authenticated — the only authorization is the `serverId` match in the hello. Any device on the LAN running a Silo build can control any Silo TV bound to the same server.
-  - **Deferred follow-up:** derive a per-pair / per-server secret from the existing companion-pairing (`_silopair`) trust and add it to the cast hello handshake, so only paired devices can control the TV. Reference `companion-pairing-sim-test` and the pairing code as the trust source.
+  - **Security (known limitation):** the TLS-PSK is a single static shared secret compiled into every build, so the channel is encrypted but not authenticated — the only authorization is the `serverId` match in the hello. Any device on the LAN running a Prairie build can control any Prairie TV bound to the same server.
+  - **Deferred follow-up:** derive a per-pair / per-server secret from the existing companion-pairing (`_prairiepair`) trust and add it to the cast hello handshake, so only paired devices can control the TV. Reference `companion-pairing-sim-test` and the pairing code as the trust source.
 
 - [ ] **Step 2: Commit.**
 ```bash
@@ -1437,7 +1437,7 @@ git commit -m "docs: cast remote protocol, volume caveats, deferred per-pair aut
   12. Static PSK → G1 documented + deferred (per locked decision). ✅
   Plus optimistic play/pause (D2), scrubber a11y value + display-menu label + chip crowding (D3).
 - **Placeholder scan:** the two "bind to the actual engine property" notes in E1 and the "use the same expressions as the existing Play site" note in D5 are deliberate pointers to verified-existing code (`AVAudioEngine` graph in PlayerCore; the resolved play params at `ItemDetailView.swift:~480`), not unfinished work — each names exactly what to bind and where. No TBD/TODO logic steps.
-- **Type consistency:** `SiloCastPlaybackState` gains `volume/isMuted/hasNextEpisode/nextEpisodeTitle` in A3 with all five existing constructors updated in the same task; `RemotePlaybackClock` API (`ingest/displayTime/isPlaying/setOptimisticPlaying/setOptimisticTime`) is used identically in tests (D1), controller (D2), and view (D3); `SiloCastControlCommand` gains `volume:` field + `setVolume/setMuted/playNext` used consistently across A3, D2, E2. `enqueue(_:)` (A1) is the call used in B1/B2/C1. Backend methods `setUserVolume/setUserMuted/currentUserVolume/currentUserMuted` (E1) match the `ActivePlayer` forwarders and `makeSiloCastPlaybackState` reads `activePlayer.volume()/isMuted()`.
+- **Type consistency:** `PrairieCastPlaybackState` gains `volume/isMuted/hasNextEpisode/nextEpisodeTitle` in A3 with all five existing constructors updated in the same task; `RemotePlaybackClock` API (`ingest/displayTime/isPlaying/setOptimisticPlaying/setOptimisticTime`) is used identically in tests (D1), controller (D2), and view (D3); `PrairieCastControlCommand` gains `volume:` field + `setVolume/setMuted/playNext` used consistently across A3, D2, E2. `enqueue(_:)` (A1) is the call used in B1/B2/C1. Backend methods `setUserVolume/setUserMuted/currentUserVolume/currentUserMuted` (E1) match the `ActivePlayer` forwarders and `makePrairieCastPlaybackState` reads `activePlayer.volume()/isMuted()`.
 
 ---
 

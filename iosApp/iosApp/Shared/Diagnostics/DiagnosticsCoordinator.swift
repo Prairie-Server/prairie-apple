@@ -683,7 +683,7 @@ actor DiagnosticsCoordinator {
         let occurredAt = lastKnownAliveAt.map(DiagnosticsTimestamp.string(from:))
             ?? DiagnosticsTimestamp.string(from: capturedAt)
         let crash = DiagnosticsCrashInfo(
-            summary: "Silo did not shut down cleanly last time",
+            summary: "Prairie did not shut down cleanly last time",
             stackExcerpt: nil,
             thread: nil,
             foreground: true,
@@ -997,7 +997,7 @@ actor DiagnosticsCoordinator {
         ExitSentinel.shared.setCaptureEnabled {
             DiagnosticsCoordinator.breadcrumbCaptureEnabled()
         }
-        // The tvOS sentinel arms in SiloApp.init, before the first status
+        // The tvOS sentinel arms in PrairieApp.init, before the first status
         // refresh. With no last-known snapshot the current run's marker was
         // written with binding == nil and would otherwise only be back-filled
         // on a later foreground event. Bind it now — the moment the diagnostics

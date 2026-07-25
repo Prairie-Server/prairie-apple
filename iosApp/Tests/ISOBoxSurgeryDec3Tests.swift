@@ -1,5 +1,5 @@
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 /// Pins the dec3 JOC-extension surgery that makes DDP-Atmos signalling
 /// survive the FFmpeg 7.1 muxer (which writes num_dep_sub/chan_loc but not

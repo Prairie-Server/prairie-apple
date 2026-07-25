@@ -1,12 +1,12 @@
 import Foundation
 
 /// Constants for the companion-pairing LAN protocol. Platform-neutral so
-/// silo-android can mirror it (Android NSD + sockets).
+/// prairie-android can mirror it (Android NSD + sockets).
 enum PairingProtocol {
     /// Wire protocol version. Bump on any breaking change to message shapes.
     static let version = 1
     /// Bonjour service type the TV advertises and the phone browses for.
-    static let serviceType = "_silopair._tcp"
+    static let serviceType = "_prairiepair._tcp"
 }
 
 /// The TV's advertised state, carried in the Bonjour TXT record and in `Hello`.

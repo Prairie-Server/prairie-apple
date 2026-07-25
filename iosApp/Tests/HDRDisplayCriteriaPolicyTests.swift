@@ -1,5 +1,5 @@
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 final class HDRDisplayCriteriaPolicyTests: XCTestCase {
     private var suiteName: String!

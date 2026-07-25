@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Let the Silo iOS app discover a waiting Apple TV on the LAN, push the server address(es), and approve the TV's sign-in so the user types no URL or password on the remote.
+**Goal:** Let the Prairie iOS app discover a waiting Apple TV on the LAN, push the server address(es), and approve the TV's sign-in so the user types no URL or password on the remote.
 
-**Architecture:** A new `iosApp/iosApp/Pairing/` module compiled into both the `Silo` (iOS) and `SiloTV` (tvOS) targets, platform-guarded with `#if os(...)`. Shared `PairingProtocol` (wire messages) + `PairingFrame` (length-prefixed JSON codec) + `PairingSession` (NWConnection wrapper). The TV (Receiver) advertises a Bonjour `_silopair._tcp` service via `NWListener`; the phone (Companion) discovers it via `NWBrowser`, opens a TLS `NWConnection`, and runs a per-server handshake. All token minting stays on the Silo server via its existing `device/{start,poll,approve}` + `GET /auth/device` endpoints, reached through a new URLSession-based `PairingDeviceAPI` that targets an explicit server URL (the app's shared `HTTPClient` only ever talks to the single active server, so pairing must not use it). Servers persist on the TV **only after** a successful sign-in.
+**Architecture:** A new `iosApp/iosApp/Pairing/` module compiled into both the `Prairie` (iOS) and `PrairieTV` (tvOS) targets, platform-guarded with `#if os(...)`. Shared `PairingProtocol` (wire messages) + `PairingFrame` (length-prefixed JSON codec) + `PairingSession` (NWConnection wrapper). The TV (Receiver) advertises a Bonjour `_prairiepair._tcp` service via `NWListener`; the phone (Companion) discovers it via `NWBrowser`, opens a TLS `NWConnection`, and runs a per-server handshake. All token minting stays on the Prairie server via its existing `device/{start,poll,approve}` + `GET /auth/device` endpoints, reached through a new URLSession-based `PairingDeviceAPI` that targets an explicit server URL (the app's shared `HTTPClient` only ever talks to the single active server, so pairing must not use it). Servers persist on the TV **only after** a successful sign-in.
 
 **Tech Stack:** Swift 6, SwiftUI, `@Observable`/`@MainActor` view models, the Network framework (`NWListener`/`NWBrowser`/`NWConnection`), `URLSession`, XcodeGen (`project.yml`).
 
@@ -18,7 +18,7 @@
 2. **The phone displays the server-authoritative match code.** After receiving a `userCode` over the channel, the phone calls `GET /auth/device?code=<userCode>` (`PairingDeviceAPI.lookup`) and shows the match code **the server** returns for that code — never the match code from the channel. This is what makes the visual compare resistant to a channel MITM (design spec §6).
 3. **Persist-on-success.** The TV holds a pushed server URL as a *pending candidate* and writes it to `ServerRegistry` / `TokenStore` only after the poll returns tokens. Any cancel/fail/timeout/drop discards it (design spec §5/§6/§7).
 4. **Tests.** The repo has no working XCTest target (the lone `iosApp/Tests/*.swift` file is an orphaned `@main` + `precondition()` script). Per CLAUDE.md ("focused tests only for critical or high-risk behavior") we unit-test only the **pure, dependency-free** logic — `PairingProtocol` and `PairingFrame` — with standalone `swiftc`-compiled `precondition()` programs that mirror the existing pattern. The stateful coordinators are structured against injected protocols and verified by the **manual LAN end-to-end test** (Task 14).
-5. **One server-contract check.** The `GET /auth/device` response field names are not verified field-by-field in this repo. Task 7 includes a step to confirm them against `silo-server/internal/api/handlers/auth_device.go`.
+5. **One server-contract check.** The `GET /auth/device` response field names are not verified field-by-field in this repo. Task 7 includes a step to confirm them against `prairie-server/internal/api/handlers/auth_device.go`.
 6. **tvOS onboarding is in flux.** `Screens/Auth/TVServerSetupView.swift` has uncommitted Aurora-redesign edits. The Receiver UI is built as a self-contained view (Task 9) wired in with a minimal addition, to avoid clobbering that work.
 7. **No biometric gate.** Authorization is the user's confirmation tap on a phone already signed in to the server — there is no Face ID / `LocalAuthentication` step (decision 2026-06-14). The match-code visual compare remains the security anchor.
 8. **Receiver polling is cancellable.** The Receiver coordinator reads the session stream on a loop that never blocks on network work; each server's start+poll is a separate cancellable `Task`, so a peer `Cancel` or a dropped connection aborts the attempt immediately and frees the advertiser (Task 8).
@@ -63,10 +63,10 @@ Open `iosApp/iosApp/Info.plist` and add these keys at the top level of the root 
 
 ```xml
 <key>NSLocalNetworkUsageDescription</key>
-<string>Silo uses your local network to find and set up Silo on your Apple TV.</string>
+<string>Prairie uses your local network to find and set up Prairie on your Apple TV.</string>
 <key>NSBonjourServices</key>
 <array>
-  <string>_silopair._tcp</string>
+  <string>_prairiepair._tcp</string>
 </array>
 ```
 
@@ -104,12 +104,12 @@ Create `iosApp/iosApp/Pairing/PairingProtocol.swift`:
 import Foundation
 
 /// Constants for the companion-pairing LAN protocol. Platform-neutral so
-/// silo-android can mirror it (Android NSD + sockets).
+/// prairie-android can mirror it (Android NSD + sockets).
 enum PairingProtocol {
     /// Wire protocol version. Bump on any breaking change to message shapes.
     static let version = 1
     /// Bonjour service type the TV advertises and the phone browses for.
-    static let serviceType = "_silopair._tcp"
+    static let serviceType = "_prairiepair._tcp"
 }
 
 /// The TV's advertised state, carried in the Bonjour TXT record and in `Hello`.
@@ -606,15 +606,15 @@ actor PairingSession {
 Run:
 ```bash
 cd iosApp && xcodegen generate
-xcodebuild build -project Silo.xcodeproj -scheme Silo -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO 2>&1 | tail -3
-xcodebuild build -project Silo.xcodeproj -scheme SiloTV -destination 'platform=tvOS Simulator,name=Apple TV 4K (3rd generation)' CODE_SIGNING_ALLOWED=NO 2>&1 | tail -3
+xcodebuild build -project Prairie.xcodeproj -scheme Prairie -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO 2>&1 | tail -3
+xcodebuild build -project Prairie.xcodeproj -scheme PrairieTV -destination 'platform=tvOS Simulator,name=Apple TV 4K (3rd generation)' CODE_SIGNING_ALLOWED=NO 2>&1 | tail -3
 ```
 Expected: `** BUILD SUCCEEDED **` for both. (If the tvOS simulator name differs, list with `xcrun simctl list devicetypes | grep TV` and substitute.)
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add iosApp/iosApp/Pairing/PairingSession.swift iosApp/Silo.xcodeproj
+git add iosApp/iosApp/Pairing/PairingSession.swift iosApp/Prairie.xcodeproj
 git commit -m "Add PairingSession NWConnection wrapper"
 ```
 
@@ -629,7 +629,7 @@ git commit -m "Add PairingSession NWConnection wrapper"
 
 - [ ] **Step 1: Confirm the server's lookup response shape**
 
-Read `silo-server/internal/api/handlers/auth_device.go` (the `HandleDeviceLookup` handler) and confirm the JSON field names returned by `GET /auth/device`. Adjust `DeviceLookupResponse` below if they differ from `deviceName` / `matchCode` / `status`. The decoder uses `.convertFromSnakeCase`, so `device_name` maps to `deviceName` automatically.
+Read `prairie-server/internal/api/handlers/auth_device.go` (the `HandleDeviceLookup` handler) and confirm the JSON field names returned by `GET /auth/device`. Adjust `DeviceLookupResponse` below if they differ from `deviceName` / `matchCode` / `status`. The decoder uses `.convertFromSnakeCase`, so `device_name` maps to `deviceName` automatically.
 
 - [ ] **Step 2: Add the approve/lookup models**
 
@@ -643,7 +643,7 @@ struct DeviceApproveRequest: Codable {
 
 /// Response from GET /api/v1/auth/device?code=<userCode>. All optional: we
 /// only need the authoritative match code and a display name. Confirm field
-/// names against silo-server (see Task 7 Step 1).
+/// names against prairie-server (see Task 7 Step 1).
 struct DeviceLookupResponse: Codable {
     let matchCode: String?
     let deviceName: String?
@@ -750,9 +750,9 @@ struct PairingDeviceAPI {
     private func applyHeaders(_ request: inout URLRequest, bearer: String?) {
         if let bearer { request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization") }
         let device = AppleDeviceIdentity.current
-        request.setValue(device.id, forHTTPHeaderField: "X-Silo-Device-Id")
-        request.setValue(device.name, forHTTPHeaderField: "X-Silo-Device-Name")
-        request.setValue(device.platform, forHTTPHeaderField: "X-Silo-Device-Platform")
+        request.setValue(device.id, forHTTPHeaderField: "X-Prairie-Device-Id")
+        request.setValue(device.name, forHTTPHeaderField: "X-Prairie-Device-Name")
+        request.setValue(device.platform, forHTTPHeaderField: "X-Prairie-Device-Platform")
     }
 
     private func send<R: Decodable>(_ request: URLRequest) async throws -> R {
@@ -942,14 +942,14 @@ final class ReceiverPairingCoordinator {
 
 Run:
 ```bash
-cd iosApp && xcodegen generate && xcodebuild build -project Silo.xcodeproj -scheme SiloTV -destination 'platform=tvOS Simulator,name=Apple TV 4K (3rd generation)' CODE_SIGNING_ALLOWED=NO 2>&1 | tail -3
+cd iosApp && xcodegen generate && xcodebuild build -project Prairie.xcodeproj -scheme PrairieTV -destination 'platform=tvOS Simulator,name=Apple TV 4K (3rd generation)' CODE_SIGNING_ALLOWED=NO 2>&1 | tail -3
 ```
 Expected: `** BUILD SUCCEEDED **`
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add iosApp/iosApp/Pairing/Receiver/ReceiverPairingCoordinator.swift iosApp/Silo.xcodeproj
+git add iosApp/iosApp/Pairing/Receiver/ReceiverPairingCoordinator.swift iosApp/Prairie.xcodeproj
 git commit -m "Add ReceiverPairingCoordinator (persist-on-success)"
 ```
 
@@ -972,7 +972,7 @@ import Foundation
 import Network
 import OSLog
 
-/// Advertises `_silopair._tcp` on the LAN and hands the first inbound
+/// Advertises `_prairiepair._tcp` on the LAN and hands the first inbound
 /// connection to a `PairingSession`. One connection at a time; later peers
 /// are rejected as busy.
 @MainActor
@@ -1054,7 +1054,7 @@ struct TVPairingReceiverView: View {
                     .font(.system(size: 64, weight: .semibold))
                 Text("Set up with iPhone")
                     .font(.system(size: 40, weight: .bold))
-                Text("Open Silo on your iPhone on the same Wi-Fi. It will offer to set up this Apple TV.")
+                Text("Open Prairie on your iPhone on the same Wi-Fi. It will offer to set up this Apple TV.")
                     .font(.system(size: 24))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -1110,12 +1110,12 @@ In `iosApp/iosApp/Screens/Auth/TVServerSetupView.swift`, add a way to reach `TVP
 
 - [ ] **Step 4: Build the tvOS target**
 
-Run the SiloTV `xcodebuild build` command from Task 8 Step 2. Expected: `** BUILD SUCCEEDED **`.
+Run the PrairieTV `xcodebuild build` command from Task 8 Step 2. Expected: `** BUILD SUCCEEDED **`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add iosApp/iosApp/Pairing/Receiver/ iosApp/iosApp/Screens/Auth/TVServerSetupView.swift iosApp/Silo.xcodeproj
+git add iosApp/iosApp/Pairing/Receiver/ iosApp/iosApp/Screens/Auth/TVServerSetupView.swift iosApp/Prairie.xcodeproj
 git commit -m "Add tvOS pairing advertiser + receiver UI"
 ```
 
@@ -1182,7 +1182,7 @@ final class CompanionPairingCoordinator {
                 state = .error("No response from the Apple TV."); return
             }
             guard supported.contains(PairingProtocol.version) else {
-                state = .error("Update Silo on one of your devices to continue."); return
+                state = .error("Update Prairie on one of your devices to continue."); return
             }
             tvName = name
             let servers = await serversWithTokens()
@@ -1300,12 +1300,12 @@ final class CompanionPairingCoordinator {
 
 - [ ] **Step 2: Build the iOS target**
 
-Run the Silo `xcodebuild build` command from Task 6 Step 2. Expected: `** BUILD SUCCEEDED **`.
+Run the Prairie `xcodebuild build` command from Task 6 Step 2. Expected: `** BUILD SUCCEEDED **`.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add iosApp/iosApp/Pairing/Companion/CompanionPairingCoordinator.swift iosApp/Silo.xcodeproj
+git add iosApp/iosApp/Pairing/Companion/CompanionPairingCoordinator.swift iosApp/Prairie.xcodeproj
 git commit -m "Add CompanionPairingCoordinator (confirm-once, server-authoritative match code)"
 ```
 
@@ -1334,7 +1334,7 @@ struct DiscoveredTV: Identifiable, Equatable {
     static func == (a: DiscoveredTV, b: DiscoveredTV) -> Bool { a.id == b.id }
 }
 
-/// Browses `_silopair._tcp` and publishes discovered TVs. Drives the
+/// Browses `_prairiepair._tcp` and publishes discovered TVs. Drives the
 /// hands-off banner. Owns the Local Network permission prompt (triggered on
 /// first browse).
 @MainActor
@@ -1374,12 +1374,12 @@ final class TVPairingBrowser {
 
 - [ ] **Step 2: Build the iOS target**
 
-Run the Silo `xcodebuild build` command. Expected: `** BUILD SUCCEEDED **`.
+Run the Prairie `xcodebuild build` command. Expected: `** BUILD SUCCEEDED **`.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add iosApp/iosApp/Pairing/Companion/TVPairingBrowser.swift iosApp/Silo.xcodeproj
+git add iosApp/iosApp/Pairing/Companion/TVPairingBrowser.swift iosApp/Prairie.xcodeproj
 git commit -m "Add TVPairingBrowser LAN discovery"
 ```
 
@@ -1504,7 +1504,7 @@ struct TVPairingView: View {
 - [ ] **Step 3: Commit**
 
 ```bash
-git add iosApp/iosApp/Pairing/Companion/TVPairingView.swift iosApp/Silo.xcodeproj
+git add iosApp/iosApp/Pairing/Companion/TVPairingView.swift iosApp/Prairie.xcodeproj
 git commit -m "Add iOS TVPairingView flow"
 ```
 
@@ -1589,7 +1589,7 @@ In `iosApp/iosApp/ContentView.swift`, on the root `Group` in `body` (the one tha
 - [ ] **Step 4: Commit**
 
 ```bash
-git add iosApp/iosApp/Pairing/Companion/SetUpTVBanner.swift iosApp/iosApp/ContentView.swift iosApp/Silo.xcodeproj
+git add iosApp/iosApp/Pairing/Companion/SetUpTVBanner.swift iosApp/iosApp/ContentView.swift iosApp/Prairie.xcodeproj
 git commit -m "Add iOS Set-Up-TV discovery banner"
 ```
 
@@ -1601,7 +1601,7 @@ There is no automated harness for the stateful flow; verify on real devices/simu
 
 - [ ] **Step 1: Install both apps**
 
-Build & run `Silo` on an iPhone (or iOS simulator) and `SiloTV` on an Apple TV (or tvOS simulator) on the **same Wi-Fi**. Sign the iPhone into at least one Silo server (two, to exercise multi-server).
+Build & run `Prairie` on an iPhone (or iOS simulator) and `PrairieTV` on an Apple TV (or tvOS simulator) on the **same Wi-Fi**. Sign the iPhone into at least one Prairie server (two, to exercise multi-server).
 
 - [ ] **Step 2: Happy path (single server)**
   - On the Apple TV, open onboarding → "Set up with iPhone".
@@ -1635,4 +1635,4 @@ git commit --allow-empty -m "Verify companion pairing end-to-end on LAN"
 
 **Type consistency:** `PairingMessage` cases and field names are identical across T2 (definition), T8/T10 (producers/consumers). `PairingSession.open()` returns `AsyncThrowingStream<PairingMessage, Error>` and is consumed with that exact type in T8–T13. `PairingDeviceAPI` method names (`start/poll/lookup/approve`) match their call sites in T8/T10. `ServerEntry`, `ServerRegistry.{normalize,serverId,addOrUpdate,switchTo,sortedEntries}`, `TokenStore.{getAccessToken(for:),saveTokens,switchActiveServer,setServerUrl}`, `AppRouter.showProfileSelection()`, and `AppleDeviceIdentity.current.{id,name,platform}` all match the verbatim signatures extracted from the codebase.
 
-**Known verification point (not a placeholder):** T7 S1 confirms the `GET /auth/device` response field names against silo-server; `DeviceLookupResponse` fields are decoded leniently (all optional) so a name mismatch degrades to an empty match code rather than a crash, and is caught in T14 S2.
+**Known verification point (not a placeholder):** T7 S1 confirms the `GET /auth/device` response field names against prairie-server; `DeviceLookupResponse` fields are decoded leniently (all optional) so a name mismatch degrades to an empty match code rather than a crash, and is caught in T14 S2.

@@ -21,7 +21,7 @@ struct MacPlayerControls: View {
     private var topBar: some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(viewModel.title.isEmpty ? "Silo" : viewModel.title)
+                Text(viewModel.title.isEmpty ? "Prairie" : viewModel.title)
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.white)
                     .lineLimit(1)

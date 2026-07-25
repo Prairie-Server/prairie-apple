@@ -2,13 +2,13 @@
 
 - **Date:** 2026-06-14
 - **Status:** Ready for engineering review
-- **Primary implementation repo:** `silo-android`
-- **Compatibility sources:** `silo-apple` companion pairing implementation and `silo-server` device-login endpoints
+- **Primary implementation repo:** `prairie-android`
+- **Compatibility sources:** `prairie-apple` companion pairing implementation and `prairie-server` device-login endpoints
 - **Related Apple spec:** `docs/superpowers/specs/2026-06-14-companion-pairing-design.md`
 
 ## 1. Goal
 
-Replicate Silo companion pairing on Android with cross-platform compatibility:
+Replicate Prairie companion pairing on Android with cross-platform compatibility:
 
 - iPhone -> Apple TV already works and remains compatible.
 - iPhone -> Android TV must work.
@@ -17,8 +17,8 @@ Replicate Silo companion pairing on Android with cross-platform compatibility:
 
 The user experience stays the same across platforms: a signed-in phone discovers
 a waiting TV on the same LAN, pushes one or more known server URLs, confirms the
-server-issued match code, and approves the TV's Silo device login. The TV receives
-tokens only from the Silo server over HTTPS.
+server-issued match code, and approves the TV's Prairie device login. The TV receives
+tokens only from the Prairie server over HTTPS.
 
 This is client work. Do not add server endpoints for v1.
 
@@ -133,11 +133,11 @@ that are not in the negotiated supported-version set.
 Service type:
 
 ```
-_silopair._tcp
+_prairiepair._tcp
 ```
 
-Apple currently uses `NWListener.Service(type: "_silopair._tcp")` and
-`NWBrowser(for: .bonjourWithTXTRecord(type: "_silopair._tcp", domain: nil))`.
+Apple currently uses `NWListener.Service(type: "_prairiepair._tcp")` and
+`NWBrowser(for: .bonjourWithTXTRecord(type: "_prairiepair._tcp", domain: nil))`.
 Android must use Android NSD/DNS-SD for the same service type.
 
 TVs advertise. Phones browse.
@@ -174,8 +174,8 @@ Current Apple transport:
 - Local TCP socket.
 - Apple wraps the socket with TLS using `PairingSession.tlsParameters()`.
 - Fixed non-secret PSK:
-  - key bytes: UTF-8 `silo-companion-pairing-v1`
-  - identity bytes: UTF-8 `silo-pairing`
+  - key bytes: UTF-8 `prairie-companion-pairing-v1`
+  - identity bytes: UTF-8 `prairie-pairing`
 - Apple appends cipher suite `AES_128_GCM_SHA256`.
 - This TLS is opportunistic confidentiality, not authentication. The match code
   is the trust anchor.
@@ -314,9 +314,9 @@ Canonical JSON fixtures:
 
 ```json
 {"type":"hello","v":1,"tvName":"Living Room","tvDeviceId":"tv-123","state":"setup","supportedVersions":[1]}
-{"type":"pushServer","v":1,"serverURL":"https://silo.example","serverName":"Home"}
-{"type":"deviceStarted","v":1,"serverURL":"https://silo.example","userCode":"ABCD-1234","matchCode":"river-blue"}
-{"type":"serverResult","v":1,"serverURL":"https://silo.example","status":"signedIn"}
+{"type":"pushServer","v":1,"serverURL":"https://prairie.example","serverName":"Home"}
+{"type":"deviceStarted","v":1,"serverURL":"https://prairie.example","userCode":"ABCD-1234","matchCode":"river-blue"}
+{"type":"serverResult","v":1,"serverURL":"https://prairie.example","status":"signedIn"}
 {"type":"done","v":1}
 {"type":"cancel","v":1,"reason":"user_cancelled"}
 ```
@@ -388,7 +388,7 @@ Implementation behavior:
 ```kotlin
 val serviceInfo = NsdServiceInfo().apply {
     serviceName = deviceName
-    serviceType = "_silopair._tcp."
+    serviceType = "_prairiepair._tcp."
     port = listeningPort
     setAttribute("v", "1")
     setAttribute("name", deviceName)
@@ -403,7 +403,7 @@ val serviceInfo = NsdServiceInfo().apply {
 5. Call `release()` after `ReceiverPairingCoordinator.run` exits so a new phone
    can retry.
 
-Use the same stable device identity that Android already sends in Silo device
+Use the same stable device identity that Android already sends in Prairie device
 headers where possible. If there is no existing stable id helper, add one under
 the shared Android device metadata provider and persist it.
 
@@ -432,7 +432,7 @@ interface PairingBrowser {
 
 Behavior:
 
-1. Discover `_silopair._tcp.`.
+1. Discover `_prairiepair._tcp.`.
 2. Resolve services before surfacing them.
 3. Parse TXT attributes:
    - `id` fallback: `"$host:$port"` if absent.
@@ -539,10 +539,10 @@ Implementation details:
 
 - Use absolute URLs. Do not rely on the Ktor client's active-server base URL.
 - Include `Authorization: Bearer <token>` for `lookup` and `approve`.
-- Include the same Silo device metadata headers used by normal API calls:
-  - `X-Silo-Device-Id`
-  - `X-Silo-Device-Name`
-  - `X-Silo-Device-Platform`
+- Include the same Prairie device metadata headers used by normal API calls:
+  - `X-Prairie-Device-Id`
+  - `X-Prairie-Device-Name`
+  - `X-Prairie-Device-Platform`
 - Use the existing `DeviceLoginModels.kt` DTOs.
 - Use `ApiResult` so coordinator tests can fake failures in the same style as
   `DeviceLoginRepositoryTest`.
@@ -815,7 +815,7 @@ Add a panel alongside QR/manual login:
 
 1. Idle:
    - "Set up with phone"
-   - "Open Silo on your phone on the same Wi-Fi."
+   - "Open Prairie on your phone on the same Wi-Fi."
 2. Awaiting approval:
    - "Confirm on your phone"
    - large match code

@@ -4,7 +4,7 @@ import Observation
 import OSLog
 
 /// Owns the `AVPictureInPictureController` for the AVPlayer-backed routes
-/// (Native Player HLS / Direct and the SiloPlayer loopback route).
+/// (Native Player HLS / Direct and the PrairiePlayer loopback route).
 ///
 /// `AVPictureInPictureController` has to be bound to the live `AVPlayerLayer`,
 /// which SwiftUI creates and tears down with `AVPlayerLayerView`. That view

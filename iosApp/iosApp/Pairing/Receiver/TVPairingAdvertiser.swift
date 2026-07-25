@@ -3,7 +3,7 @@ import Foundation
 import Network
 import OSLog
 
-/// Advertises `_silopair._tcp` on the LAN and hands the first inbound
+/// Advertises `_prairiepair._tcp` on the LAN and hands the first inbound
 /// connection to a `PairingSession`. One connection at a time; later peers
 /// are rejected as busy.
 ///

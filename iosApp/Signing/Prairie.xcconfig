@@ -1,0 +1,16 @@
+// iOS app signing defaults. CI and the paid team use these as-is.
+// Local contributors without access to the paid team can override any of
+// these by dropping a `Local.xcconfig` into this directory — see
+// `Local.xcconfig.sample` for the template.
+//
+// Indirection via `PRAIRIE_IOS_BUNDLE_ID` / `PRAIRIE_IOS_ENTITLEMENTS`
+// lets Local.xcconfig swap values without touching the other targets'
+// xcconfigs.
+
+PRAIRIE_IOS_BUNDLE_ID = org.prairieserver.prairie
+PRAIRIE_IOS_ENTITLEMENTS = Prairie.entitlements
+
+PRODUCT_BUNDLE_IDENTIFIER = $(PRAIRIE_IOS_BUNDLE_ID)
+CODE_SIGN_ENTITLEMENTS = $(PRAIRIE_IOS_ENTITLEMENTS)
+
+#include? "Local.xcconfig"

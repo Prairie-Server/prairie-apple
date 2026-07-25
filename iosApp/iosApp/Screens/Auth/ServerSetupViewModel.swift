@@ -73,7 +73,7 @@ class ServerSetupViewModel {
         Self.logger.error(
             "Server autodiscovery failed candidates=\(attempted.joined(separator: ", "), privacy: .public) lastError=\(String(describing: lastError), privacy: .public)"
         )
-        self.error = "Could not reach a Silo server at that address."
+        self.error = "Could not reach a Prairie server at that address."
     }
 
     func buildCandidateURLs() throws -> [String] {

@@ -1,7 +1,7 @@
 import Foundation
 import UserNotifications
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 final class ApplePushRegistrationTests: XCTestCase {
     func testTokenHexEncodesToLowercasePaddedHex() {
@@ -10,9 +10,9 @@ final class ApplePushRegistrationTests: XCTestCase {
         XCTAssertEqual(ApplePushRegistrationWire.tokenHex(from: data), "00010f10abff")
     }
 
-    func testEmptyBundleIdentifiersFallBackToSiloTopic() {
-        XCTAssertEqual(ApplePushRegistrationWire.topic(bundleIdentifier: nil), "org.siloserver.silo")
-        XCTAssertEqual(ApplePushRegistrationWire.topic(bundleIdentifier: "   "), "org.siloserver.silo")
+    func testEmptyBundleIdentifiersFallBackToPrairieTopic() {
+        XCTAssertEqual(ApplePushRegistrationWire.topic(bundleIdentifier: nil), "org.prairieserver.prairie")
+        XCTAssertEqual(ApplePushRegistrationWire.topic(bundleIdentifier: "   "), "org.prairieserver.prairie")
         XCTAssertEqual(ApplePushRegistrationWire.topic(bundleIdentifier: "org.example.app"), "org.example.app")
     }
 
@@ -88,18 +88,18 @@ final class ApplePushRegistrationTests: XCTestCase {
     }
 
     func testNotificationDisplayDeliveryIDParsesFromAPNsPayload() {
-        XCTAssertEqual(ApplePushDisplayWire.deliveryID(from: ["silo_delivery_id": "  delivery-1  "]), "delivery-1")
-        XCTAssertNil(ApplePushDisplayWire.deliveryID(from: ["silo_delivery_id": "   "]))
+        XCTAssertEqual(ApplePushDisplayWire.deliveryID(from: ["prairie_delivery_id": "  delivery-1  "]), "delivery-1")
+        XCTAssertNil(ApplePushDisplayWire.deliveryID(from: ["prairie_delivery_id": "   "]))
         XCTAssertNil(ApplePushDisplayWire.deliveryID(from: [:]))
     }
 
     func testNotificationDisplayEndpointURLAppendsDeliveryID() throws {
         let url = try XCTUnwrap(ApplePushDisplayWire.displayURL(
-            serverURL: "https://silo.example.test/",
+            serverURL: "https://prairie.example.test/",
             deliveryID: "delivery-1"
         ))
 
-        XCTAssertEqual(url.absoluteString, "https://silo.example.test/api/v1/notifications/push/apple/display/delivery-1")
+        XCTAssertEqual(url.absoluteString, "https://prairie.example.test/api/v1/notifications/push/apple/display/delivery-1")
     }
 
     func testNotificationDisplayResponseDecodesAndMutatesNotificationContent() throws {
@@ -115,9 +115,9 @@ final class ApplePushRegistrationTests: XCTestCase {
         """.data(using: .utf8)!
         let response = try JSONDecoder().decode(ApplePushDisplayResponse.self, from: json)
         let content = UNMutableNotificationContent()
-        content.title = "Silo"
+        content.title = "Prairie"
         content.body = "New notification available"
-        content.userInfo = ["silo_delivery_id": "delivery-1"]
+        content.userInfo = ["prairie_delivery_id": "delivery-1"]
 
         response.apply(to: content)
 
@@ -125,25 +125,25 @@ final class ApplePushRegistrationTests: XCTestCase {
         XCTAssertEqual(content.body, "S1E2 - Pilot")
         XCTAssertEqual(content.threadIdentifier, "series:series-1")
         XCTAssertEqual(content.categoryIdentifier, "episode_available")
-        XCTAssertEqual(content.userInfo["silo_delivery_id"] as? String, "delivery-1")
-        XCTAssertEqual(content.userInfo["silo_url"] as? String, "/item/episode-1")
+        XCTAssertEqual(content.userInfo["prairie_delivery_id"] as? String, "delivery-1")
+        XCTAssertEqual(content.userInfo["prairie_url"] as? String, "/item/episode-1")
     }
 
     func testNotificationDisplayURLMapsToAppDeepLink() throws {
         let itemURL = try XCTUnwrap(ApplePushDeepLinkCoordinator.deepLinkURL(from: [
-            "silo_url": "/item/episode-1"
+            "prairie_url": "/item/episode-1"
         ]))
-        XCTAssertEqual(itemURL.absoluteString, "continuum://item/episode-1")
+        XCTAssertEqual(itemURL.absoluteString, "prairie://item/episode-1")
 
         let absoluteURL = try XCTUnwrap(
-            ApplePushDeepLinkCoordinator.deepLinkURL(fromDisplayURL: "https://silo.example.test/item/movie-123?from=push")
+            ApplePushDeepLinkCoordinator.deepLinkURL(fromDisplayURL: "https://prairie.example.test/item/movie-123?from=push")
         )
-        XCTAssertEqual(absoluteURL.absoluteString, "continuum://item/movie-123")
+        XCTAssertEqual(absoluteURL.absoluteString, "prairie://item/movie-123")
 
         let existingURL = try XCTUnwrap(
-            ApplePushDeepLinkCoordinator.deepLinkURL(fromDisplayURL: "continuum://play/episode-1")
+            ApplePushDeepLinkCoordinator.deepLinkURL(fromDisplayURL: "prairie://play/episode-1")
         )
-        XCTAssertEqual(existingURL.absoluteString, "continuum://play/episode-1")
+        XCTAssertEqual(existingURL.absoluteString, "prairie://play/episode-1")
 
         // Routes are forwarded without an allowlist — ContentView's
         // handleDeepLink owns validity and ignores unknown hosts — so new
@@ -151,7 +151,7 @@ final class ApplePushRegistrationTests: XCTestCase {
         let forwardedURL = try XCTUnwrap(
             ApplePushDeepLinkCoordinator.deepLinkURL(fromDisplayURL: "/settings/notifications")
         )
-        XCTAssertEqual(forwardedURL.absoluteString, "continuum://settings/notifications")
+        XCTAssertEqual(forwardedURL.absoluteString, "prairie://settings/notifications")
 
         XCTAssertNil(ApplePushDeepLinkCoordinator.deepLinkURL(fromDisplayURL: "/item"))
         XCTAssertNil(ApplePushDeepLinkCoordinator.deepLinkURL(fromDisplayURL: "   "))

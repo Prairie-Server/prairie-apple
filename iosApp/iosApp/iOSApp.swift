@@ -4,9 +4,9 @@ import Darwin
 #endif
 
 @main
-struct SiloApp: App {
+struct PrairieApp: App {
     #if os(iOS)
-    @UIApplicationDelegateAdaptor(SiloAppDelegate.self) private var appDelegate
+    @UIApplicationDelegateAdaptor(PrairieAppDelegate.self) private var appDelegate
     #endif
 
     init() {
@@ -60,7 +60,7 @@ struct SiloApp: App {
 }
 
 extension Notification.Name {
-    /// Posted whenever the app receives a `continuum://` deep-link URL
+    /// Posted whenever the app receives a `prairie://` deep-link URL
     /// (debug launches, Top Shelf taps). `ContentView` consumes it and
     /// queues until the auth state machine reaches `.authenticated`.
     static let continuumDeepLink = Notification.Name("continuumDeepLink")
@@ -314,7 +314,7 @@ private enum DVLoopbackFixtureRunner {
 
     private static func defaultOutputDirectory(for inputURL: URL) -> URL {
         let base = FileManager.default.temporaryDirectory
-            .appendingPathComponent("silo-dv-fixtures", isDirectory: true)
+            .appendingPathComponent("prairie-dv-fixtures", isDirectory: true)
         let name = inputURL.deletingPathExtension().lastPathComponent
             .replacingOccurrences(of: "[^A-Za-z0-9._-]+", with: "-", options: .regularExpression)
             .trimmingCharacters(in: CharacterSet(charactersIn: "-"))

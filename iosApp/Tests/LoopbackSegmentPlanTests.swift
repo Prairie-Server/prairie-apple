@@ -1,5 +1,5 @@
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 final class LoopbackSegmentPlanTests: XCTestCase {
     // 90 kHz MPEG time base used throughout: 1 tick = 1/90000 s.

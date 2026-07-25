@@ -1,7 +1,7 @@
 # tvOS Focus Guidance
 
 This note documents the focus rules we want future tvOS navigation work to
-follow in the Silo Apple client. The short version: every interactive zone
+follow in the Prairie Apple client. The short version: every interactive zone
 needs exactly one focus owner. Let the tvOS focus engine own movement through a
 stable graph of focusable controls, or build one custom focusable composite
 control. Do not mix the two models.

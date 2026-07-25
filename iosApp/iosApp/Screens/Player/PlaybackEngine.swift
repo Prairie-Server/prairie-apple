@@ -43,7 +43,7 @@ enum PlaybackEngineLoadError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingLoopbackSession:
-            return "SiloPlayer loopback requires a loopback session."
+            return "PrairiePlayer loopback requires a loopback session."
         case .unsupportedEngine(let expected, let actual):
             return "Playback engine mismatch: expected \(expected.label), got \(actual.label)."
         }
@@ -55,7 +55,7 @@ enum PlaybackEngineFailure: Equatable {
     case unsupportedStream(String)
     case videoToolbox(OSStatus)
     case avPlayerItemFailed(String)
-    case siloStartupTimeout(String)
+    case prairieStartupTimeout(String)
     case sourceProxyFailed(String)
     case featureContractLost(String)
 }
@@ -136,7 +136,7 @@ final class AVFoundationPlayerEngine: PlaybackEngine {
             backend.loadRemoteHLS(url: request.url, headers: request.headers, startTime: startTime)
         case .avPlayerNativeDirect:
             backend.loadDirectFile(url: request.url, headers: request.headers, startTime: startTime)
-        case .siloPlayerLoopback:
+        case .prairiePlayerLoopback:
             guard let loopbackSession = plan.loopbackSession else {
                 throw PlaybackEngineLoadError.missingLoopbackSession
             }

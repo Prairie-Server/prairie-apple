@@ -1,6 +1,6 @@
 //
 //  LiveSubtitleCoordinatorTests.swift
-//  SiloTests
+//  PrairieTests
 //
 //  State-machine tests for `LiveSubtitleCoordinator` driven entirely through
 //  fake `LivePlaybackControls` + `LiveSubtitleSink` seams and a manually-fired
@@ -20,7 +20,7 @@
 
 import XCTest
 import Foundation
-@testable import Silo
+@testable import Prairie
 
 @MainActor
 final class LiveSubtitleCoordinatorTests: XCTestCase {

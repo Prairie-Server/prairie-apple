@@ -14,7 +14,7 @@ struct ServerSetupView: View {
 
     var body: some View {
         AuroraScreen(variant: .server, scrim: .soft) {
-            SiloWordmarkView(width: 112)
+            PrairieWordmarkView(width: 112)
                 .frame(maxWidth: .infinity)
                 .padding(.bottom, 26)
 
@@ -25,11 +25,11 @@ struct ServerSetupView: View {
 
             VStack(spacing: 10) {
                 AuroraEyebrow(text: "Connect", centered: true)
-                Text("Where is your Silo server?")
+                Text("Where is your Prairie server?")
                     .font(.continuumTitle)
                     .foregroundStyle(Color.auroraInk)
                     .multilineTextAlignment(.center)
-                Text("Enter the address you use to open Silo in a browser.")
+                Text("Enter the address you use to open Prairie in a browser.")
                     .font(.continuumBody)
                     .foregroundStyle(Color.auroraInkSecondary)
                     .multilineTextAlignment(.center)
@@ -42,7 +42,7 @@ struct ServerSetupView: View {
                 AuroraTextField(
                     label: "Server address",
                     text: $viewModel.host,
-                    placeholder: "silo.example.com",
+                    placeholder: "prairie.example.com",
                     focus: $focusedField,
                     equals: .host,
                     contentType: .url,
@@ -51,7 +51,7 @@ struct ServerSetupView: View {
                     onSubmit: { connect() }
                 )
 
-                Label("Silo tries secure HTTPS automatically.", systemImage: "lock.shield")
+                Label("Prairie tries secure HTTPS automatically.", systemImage: "lock.shield")
                     .font(.continuumCaption)
                     .foregroundStyle(Color.auroraInkSecondary)
 

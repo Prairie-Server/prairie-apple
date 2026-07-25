@@ -262,7 +262,7 @@ struct MediaRow: View {
 
     private func playAction(for item: SectionItem) -> (() -> Void)? {
         #if os(tvOS)
-        guard SiloMediaType.isDirectlyPlayable(item.type), let onItemPlay else { return nil }
+        guard PrairieMediaType.isDirectlyPlayable(item.type), let onItemPlay else { return nil }
         return { onItemPlay(item) }
         #else
         return nil

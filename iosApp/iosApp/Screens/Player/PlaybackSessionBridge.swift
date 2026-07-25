@@ -1351,7 +1351,7 @@ actor PlaybackSessionBridge {
                     throw APIError.unsupportedMedia(
                         "This iPhone build cannot direct-play this HDR source yet. "
                         + "Add a 1080p/SDR version for this item or enable 4K transcoding "
-                        + "on the Silo server."
+                        + "on the Prairie server."
                     )
                 }
                 #if targetEnvironment(simulator)
@@ -1363,7 +1363,7 @@ actor PlaybackSessionBridge {
                 throw APIError.unsupportedMedia(
                     "This 4K content cannot be played on the iOS simulator. "
                     + "Test on a real Apple TV or iPhone, enable 4K transcoding "
-                    + "on the Silo server, or add a lower-resolution version."
+                    + "on the Prairie server, or add a lower-resolution version."
                 )
                 #else
                 logger.warning("Transcode rejected and no lower server fallback is available")

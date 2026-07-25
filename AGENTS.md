@@ -2,18 +2,18 @@
 
 ## Project Structure & Module Organization
 
-This repository contains only the Silo Apple clients. SwiftUI app code lives under `iosApp/iosApp/`, tests live in `iosApp/Tests/`, Top Shelf code lives in `iosApp/TopShelf/`, resources live in `iosApp/Resources/`, and generated Xcode structure is controlled by `iosApp/project.yml`. Apple TV playback notes live in `docs/tvos-player/`; release automation lives in `fastlane/`.
+This repository contains only the Prairie Apple clients. SwiftUI app code lives under `iosApp/iosApp/`, tests live in `iosApp/Tests/`, Top Shelf code lives in `iosApp/TopShelf/`, resources live in `iosApp/Resources/`, and generated Xcode structure is controlled by `iosApp/project.yml`. Apple TV playback notes live in `docs/tvos-player/`; release automation lives in `fastlane/`.
 
-## Silo Workspace Context
+## Prairie Workspace Context
 
-This repository is part of a broader multi-repo Silo workspace. The sibling
+This repository is part of a broader multi-repo Prairie workspace. The sibling
 repositories are usually checked out alongside this repository.
 
-- `silo-apple` owns iOS, tvOS, and macOS client code only.
-- `silo-server` owns the Go backend, web admin UI, API contracts, auth/session
+- `prairie-apple` owns iOS, tvOS, and macOS client code only.
+- `prairie-server` owns the Go backend, web admin UI, API contracts, auth/session
   behavior, catalog/scanner/playback services, database migrations, Jellyfin
   compatibility, and host-side plugin runtime.
-- `silo-android` owns the Android phone and TV clients. When changing shared
+- `prairie-android` owns the Android phone and TV clients. When changing shared
   client behavior, compare Android so Apple and Android stay aligned.
 
 When a task touches auth, API models, playback/session state, library browsing,
@@ -23,14 +23,14 @@ repo.
 
 ## Build, Test, and Development Commands
 
-- `cd iosApp && xcodegen generate` regenerates `Silo.xcodeproj` from `project.yml`; do this after target or source layout changes.
-- `cd iosApp && xcodebuild build -project Silo.xcodeproj -scheme Silo -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO` builds iOS without local signing.
-- Use scheme `SiloTV` with a tvOS simulator destination for tvOS builds.
-- Use scheme `SiloMac` with `platform=macOS` for macOS builds.
+- `cd iosApp && xcodegen generate` regenerates `Prairie.xcodeproj` from `project.yml`; do this after target or source layout changes.
+- `cd iosApp && xcodebuild build -project Prairie.xcodeproj -scheme Prairie -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO` builds iOS without local signing.
+- Use scheme `PrairieTV` with a tvOS simulator destination for tvOS builds.
+- Use scheme `PrairieMac` with `platform=macOS` for macOS builds.
 
 ## Coding Style & Naming Conventions
 
-Use Swift 5 and SwiftUI naming conventions. Types use `PascalCase`; functions and properties use `camelCase`. Keep platform-specific code under the existing `iOS`, `tvOS`, or `macOS` folders and update `project.yml` instead of hand-editing generated `.xcodeproj` files. Preserve existing Apple bundle IDs and keychain groups during this migration for TestFlight continuity.
+Use Swift 5 and SwiftUI naming conventions. Types use `PascalCase`; functions and properties use `camelCase`. Keep platform-specific code under the existing `iOS`, `tvOS`, or `macOS` folders and update `project.yml` instead of hand-editing generated `.xcodeproj` files. Use the Prairie bundle IDs, App Group, keychain group, and signing variables defined under `iosApp/Signing/`.
 
 For tvOS focus work, read `docs/tvos-focus.md` before editing navigation,
 menus, grids, or custom controls. Prefer a stable native focus graph or a

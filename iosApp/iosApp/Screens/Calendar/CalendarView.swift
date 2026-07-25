@@ -118,7 +118,7 @@ struct CalendarView: View {
                         .buttonStyle(.plain)
                         .padding(.horizontal, 12)
                         .frame(height: 30)
-                        .siloGlass(in: .capsule)
+                        .prairieGlass(in: .capsule)
                         .accessibilityLabel("Jump to today")
                 }
 
@@ -152,7 +152,7 @@ struct CalendarView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        .siloGlass(in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .prairieGlass(in: RoundedRectangle(cornerRadius: 26, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 26, style: .continuous)
                 .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
@@ -297,7 +297,7 @@ struct CalendarView: View {
                 Button("Show Everything") {
                     viewModel.select(filter: .everything)
                 }
-                .siloPrimaryButton()
+                .prairiePrimaryButton()
                 .frame(width: emptyButtonWidth)
                 .padding(.top, ContinuumTheme.smallPadding)
             } else {

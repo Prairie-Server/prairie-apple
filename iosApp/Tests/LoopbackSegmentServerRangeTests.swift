@@ -1,6 +1,6 @@
 import Network
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 final class LoopbackSegmentServerRangeTests: XCTestCase {
     func testLANAccessTokenAuthorizesOnlyItsResourcePrefix() {

@@ -76,7 +76,7 @@ exactly as on tvOS.
 - Keep `AuroraStyle.swift` and `AuroraBackdrop.swift` in
   `iosApp/iosApp/DesignSystem/Aurora/` with no `#if os(tvOS)` gate.
 - Update `iosApp/project.yml` source paths and target membership so the files
-  build into **both** the `Silo` (iOS) and `SiloTV` targets, then rerun
+  build into **both** the `Prairie` (iOS) and `PrairieTV` targets, then rerun
   `xcodegen generate`.
 - **Shared unchanged:** color tokens, `AuroraBackdrop` (+ variants/scrim/
   starfield), `AuroraGlassPanel`, `AuroraEyebrow`, `AuroraPrimaryButtonStyle`,
@@ -185,7 +185,7 @@ that reveals the protocol segments + port (focus-managed for the remote).
   `QRLoginViewModel`).
 - Companion pairing (`Pairing/…`, `CompanionPairingCardModifier`) — only the
   static server-screen footnote is removed; the auto-overlay card is unchanged.
-- macOS: if `SiloMac` reuses the iOS views it inherits Aurora automatically;
+- macOS: if `PrairieMac` reuses the iOS views it inherits Aurora automatically;
   verify separately. Not specifically designed in this spec.
 
 ## 10. Flow / routing change
@@ -202,7 +202,7 @@ that reveals the protocol segments + port (focus-managed for the remote).
 - **Android:** the Advanced-options collapse is a client UX choice worth mirroring
   on the Android clients later for consistency (non-blocking; note for that team).
 - **Build:** moving Aurora files requires `project.yml` edits + `xcodegen
-  generate`; verify both `Silo` and `SiloTV` compile.
+  generate`; verify both `Prairie` and `PrairieTV` compile.
 - **Confirm before building:** removing Create-Admin assumes the web admin is the
   canonical first-account bootstrap and the iOS app is never the *only* way to set
   up a brand-new server.

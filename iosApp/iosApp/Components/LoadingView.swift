@@ -9,7 +9,7 @@ struct LoadingView: View {
             Color.continuumBackground.ignoresSafeArea()
 
             VStack(spacing: 20) {
-                SiloWordmarkView(width: 132)
+                PrairieWordmarkView(width: 132)
 
                 ProgressView()
                     .tint(.continuumOnSurface)

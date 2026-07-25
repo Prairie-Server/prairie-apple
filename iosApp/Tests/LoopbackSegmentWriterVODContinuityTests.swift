@@ -1,5 +1,5 @@
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 /// Pins the VOD serving mode's restart timeline continuity (plan 1d): a
 /// segment produced by a restarted producer must be byte-identical to the

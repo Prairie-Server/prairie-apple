@@ -2,7 +2,7 @@
 //  SubtitleSearchModels.swift
 //  Continuum (iOS + tvOS)
 //
-//  Wire types for silo-server's external subtitle-provider search
+//  Wire types for prairie-server's external subtitle-provider search
 //  (OpenSubtitles / SubDL / Subsource). Both calls are synchronous —
 //  no job, no polling, no websocket (contrast the AI flow in AIModels):
 //    POST /api/v1/subtitles/search    → ranked results + provider warnings

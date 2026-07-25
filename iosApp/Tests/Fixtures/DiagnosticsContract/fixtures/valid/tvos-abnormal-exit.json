@@ -18,7 +18,7 @@
     "notice_version": 1
   },
   "crash": {
-    "summary": "Silo did not shut down cleanly last time",
+    "summary": "Prairie did not shut down cleanly last time",
     "thread": "unknown",
     "foreground": true,
     "source": "exit_sentinel",

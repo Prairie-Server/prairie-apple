@@ -28,7 +28,7 @@ final class DiagnosticsViewModel {
     }
 
     var destinationServerName: String {
-        ServerRegistry.shared.activeServer?.displayName ?? "Current Silo server"
+        ServerRegistry.shared.activeServer?.displayName ?? "Current Prairie server"
     }
 
     private let coordinator: DiagnosticsCoordinator
@@ -331,7 +331,7 @@ final class DiagnosticsViewModel {
         case .uploaded(let response):
             return "Sent as \(response.shortID)."
         case .keptRetryable:
-            return "Report kept; Silo will retry."
+            return "Report kept; Prairie will retry."
         case .keptNeedsServerUpdate:
             return "Report kept; your server needs an update."
         case .keptTooLarge:

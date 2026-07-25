@@ -170,7 +170,7 @@ struct SubtitleSettingsView: View {
         } footer: {
             VStack(alignment: .leading, spacing: 6) {
                 if viewModel.subtitleMatchesSystemAppearance {
-                    Text("Following this device's caption style from Accessibility settings (Subtitles & Captioning). Editing any option below switches back to Silo styling.")
+                    Text("Following this device's caption style from Accessibility settings (Subtitles & Captioning). Editing any option below switches back to Prairie styling.")
                 } else if viewModel.subtitleUsesDeviceAppearanceOverride {
                     Text("Saved on the server for this profile on this device. An admin can reset it.")
                 } else {

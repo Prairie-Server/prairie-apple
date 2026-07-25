@@ -25,7 +25,7 @@ struct HomeView: View {
     private let chromeFadeDistance: CGFloat = 72
     #if os(iOS)
     @State private var isShowingControlPicker = false
-    @Environment(SiloControlClient.self) private var siloControl
+    @Environment(PrairieControlClient.self) private var prairieControl
     /// Breathing room between the status-bar safe area and the floating header,
     /// so the logo + action icons sit comfortably below the Dynamic Island
     /// rather than crowding it (matching Plex's tight-but-relaxed top spacing).
@@ -114,7 +114,7 @@ struct HomeView: View {
             HStack(spacing: 12) {
                 SidebarToggleButton()
 
-                SiloWordmarkView(width: 72)
+                PrairieWordmarkView(width: 72)
 
                 Spacer(minLength: 8)
 
@@ -123,7 +123,7 @@ struct HomeView: View {
                 // (matching Plex's top-right icon row).
                 HStack(spacing: ContinuumTheme.topBarIconSpacing) {
                     #if os(iOS)
-                    SiloControlModeButton(controller: siloControl) {
+                    PrairieControlModeButton(controller: prairieControl) {
                         isShowingControlPicker = true
                     }
                     #endif
@@ -181,7 +181,7 @@ struct HomeView: View {
         }
         #if os(iOS)
         .sheet(isPresented: $isShowingControlPicker) {
-            SiloControlTargetPickerView(request: nil, controller: siloControl)
+            PrairieControlTargetPickerView(request: nil, controller: prairieControl)
         }
         #endif
         #endif
@@ -257,7 +257,7 @@ struct HomeView: View {
         let borderOpacity = 0.06 + (0.04 * headerChromeOpacity)
 
         Color.clear
-            .siloGlass(in: .rect, tint: Color.black.opacity(0.08))
+            .prairieGlass(in: .rect, tint: Color.black.opacity(0.08))
             .overlay(alignment: .bottom) {
                 Rectangle()
                     .fill(Color.white.opacity(borderOpacity))

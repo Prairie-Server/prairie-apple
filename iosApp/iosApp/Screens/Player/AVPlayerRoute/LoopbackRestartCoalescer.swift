@@ -2,7 +2,7 @@ import Foundation
 
 /// Coalesces a burst of producer-restart requests into at most one in-flight
 /// restart plus one settled follow-up target
-/// (docs/tvos-player/2026-07-03-siloplayer-loopback-primary-plan.md, M4).
+/// (docs/tvos-player/2026-07-03-prairieplayer-loopback-primary-plan.md, M4).
 ///
 /// Not thread-safe: callers serialize access under their own lock. The
 /// in-flight signal is exposed so segment fetches can ride a progressing

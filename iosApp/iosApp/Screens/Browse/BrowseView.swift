@@ -207,7 +207,7 @@ struct BrowseView: View {
         .foregroundColor(.continuumOnSurface)
         .padding(.horizontal, 13)
         .padding(.vertical, 8)
-        .siloGlass(in: .capsule)
+        .prairieGlass(in: .capsule)
     }
 
     // MARK: - Active Filters
@@ -240,7 +240,7 @@ struct BrowseView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
-        .siloGlass(in: .capsule)
+        .prairieGlass(in: .capsule)
     }
 }
 

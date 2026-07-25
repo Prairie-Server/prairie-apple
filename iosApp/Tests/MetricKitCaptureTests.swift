@@ -1,5 +1,5 @@
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 final class MetricKitCaptureTests: XCTestCase {
     func testFixtureFingerprintDedupeUsesCanonicalDiagnosticJSON() throws {
@@ -42,7 +42,7 @@ final class MetricKitCaptureTests: XCTestCase {
         XCTAssertEqual(first.manifest.crash?.occurredAtEnd, DiagnosticsTimestamp.string(from: periodEnd))
         XCTAssertNil(first.manifest.crash?.thread)
         XCTAssertNil(first.manifest.crash?.foreground)
-        XCTAssertTrue(first.manifest.crash?.summary.contains("Silo") == true)
+        XCTAssertTrue(first.manifest.crash?.summary.contains("Prairie") == true)
     }
 
     private func makeStore() throws -> PendingReportStore {
@@ -81,7 +81,7 @@ final class MetricKitCaptureTests: XCTestCase {
       "callStackTree": {
         "callStackRootFrames": [
           {
-            "binaryName": "Silo",
+            "binaryName": "Prairie",
             "offsetIntoBinaryTextSegment": 4096,
             "subFrames": [
               { "binaryName": "PlayerCore", "offsetIntoBinaryTextSegment": 8192 }
@@ -107,7 +107,7 @@ final class MetricKitCaptureTests: XCTestCase {
               { "offsetIntoBinaryTextSegment": 8192, "binaryName": "PlayerCore" }
             ],
             "offsetIntoBinaryTextSegment": 4096,
-            "binaryName": "Silo"
+            "binaryName": "Prairie"
           }
         ]
       }

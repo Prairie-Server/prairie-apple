@@ -532,7 +532,7 @@ class PlayerViewModel {
         return currentRouteCapabilities.routeLabel
     }
     /// One-line, user-facing route description for the player HUD:
-    /// engine family plus delivery, e.g. "SiloPlayer · Direct Stream".
+    /// engine family plus delivery, e.g. "PrairiePlayer · Direct Stream".
     var playbackRouteDisplay: String {
         guard let activeExecutionPlan else {
             return currentRouteCapabilities.routeLabel
@@ -936,7 +936,7 @@ class PlayerViewModel {
     private var autoSkipIntroCountdownTask: Task<Void, Never>?
     private var staleSessionRecoverySessionId: String?
     private var hasAttemptedNativeDirectRouteRecovery = false
-    private var hasAttemptedSiloRouteCompatibilityFallback = false
+    private var hasAttemptedPrairieRouteCompatibilityFallback = false
     private struct LoadRequest {
         let contentId: String
         let preferredFileId: Int?
@@ -1478,7 +1478,7 @@ class PlayerViewModel {
         if attemptNativeDirectRouteRecovery(after: message) {
             return
         }
-        if attemptSiloRouteCompatibilityFallback(after: message) {
+        if attemptPrairieRouteCompatibilityFallback(after: message) {
             return
         }
         finalizeTerminalPlaybackError(message)
@@ -2125,14 +2125,14 @@ class PlayerViewModel {
         return true
     }
 
-    private func attemptSiloRouteCompatibilityFallback(after message: String) -> Bool {
+    private func attemptPrairieRouteCompatibilityFallback(after message: String) -> Bool {
         guard !isDisposed,
               let activeExecutionPlan,
-              activeExecutionPlan.engine == .siloPlayerLoopback,
-              !hasAttemptedSiloRouteCompatibilityFallback else {
+              activeExecutionPlan.engine == .prairiePlayerLoopback,
+              !hasAttemptedPrairieRouteCompatibilityFallback else {
             return false
         }
-        hasAttemptedSiloRouteCompatibilityFallback = true
+        hasAttemptedPrairieRouteCompatibilityFallback = true
 
         let startTime = currentTime.isFinite && currentTime > 0
             ? currentTime
@@ -2141,11 +2141,11 @@ class PlayerViewModel {
             from: activeExecutionPlan,
             requirements: activeExecutionPlan.requirements,
             startTime: startTime,
-            traceToken: "fallback_playercore_after_silo",
-            reason: "silo_fallback_failed_playercore_fallback"
+            traceToken: "fallback_playercore_after_prairie",
+            reason: "prairie_fallback_failed_playercore_fallback"
         )
         Self.logger.warning(
-            "[CMP-ROUTE] SiloPlayer fallback failed; retrying route=\(fallbackPlan.implementationRoute, privacy: .public) failureToken=\(self.stablePlaybackFailureToken(for: message), privacy: .public)"
+            "[CMP-ROUTE] PrairiePlayer fallback failed; retrying route=\(fallbackPlan.implementationRoute, privacy: .public) failureToken=\(self.stablePlaybackFailureToken(for: message), privacy: .public)"
         )
         logExecutionPlan(fallbackPlan)
         Task { @MainActor [weak self] in
@@ -2223,7 +2223,7 @@ class PlayerViewModel {
                 selectedPrimarySubtitleTrackId: selectedSubtitleId,
                 selectedSecondarySubtitleTrackId: selectedSecondarySubtitleId,
                 hlsRouteFeatureEnabled: Self.appleHLSRouteFeatureFlagEnabled(),
-                siloPlayerPrimaryEnabled: LoopbackServingMode.gated == .vodPlan,
+                prairiePlayerPrimaryEnabled: LoopbackServingMode.gated == .vodPlan,
                 dolbyVisionPolicy: settings.dolbyVisionPolicySnapshot,
                 displayCapabilities: ApplePlaybackDisplayCapabilities.probe()
             )
@@ -2293,7 +2293,7 @@ class PlayerViewModel {
                   !isDisposed else {
                 return
             }
-            finalizeTerminalPlaybackError("SiloPlayer local source proxy failed to start: \(error.localizedDescription)")
+            finalizeTerminalPlaybackError("PrairiePlayer local source proxy failed to start: \(error.localizedDescription)")
             return
         }
         guard loadGeneration == streamLoadGeneration,
@@ -2309,7 +2309,7 @@ class PlayerViewModel {
         installPlayer(for: loadPlan.engine)
         let startTime = loadPlan.startMode.seconds
         let backendTimelineOffset = avPlayerTimelineOffset(for: loadPlan, startTime: startTime)
-        if loadPlan.engine == .siloPlayerLoopback {
+        if loadPlan.engine == .prairiePlayerLoopback {
             playbackTimelineOffset = backendTimelineOffset
         }
         activePlayer.avBackend?.setMediaTimelineOffset(backendTimelineOffset)
@@ -2428,7 +2428,7 @@ class PlayerViewModel {
             // adopter — release it rather than hold its disk spans for the
             // rest of playback.
             discardSourceCacheHandoff()
-            if plan.engine == .siloPlayerLoopback {
+            if plan.engine == .prairiePlayerLoopback {
                 throw SourceProxyPreparationError.unsupportedSourceURL
             }
             return SourceProxyPreparation(plan: plan, proxy: nil)
@@ -2486,7 +2486,7 @@ class PlayerViewModel {
             try await proxy.start()
             guard let localURL = proxy.localURL else {
                 proxy.stop()
-                if plan.engine == .siloPlayerLoopback {
+                if plan.engine == .prairiePlayerLoopback {
                     throw SourceProxyPreparationError.missingLocalURL
                 }
                 return SourceProxyPreparation(plan: plan, proxy: nil)
@@ -2540,14 +2540,14 @@ class PlayerViewModel {
                 normalizationSummary: plan.normalizationSummary,
                 validationClaims: plan.validationClaims
             )
-            if plan.engine == .siloPlayerLoopback, loopbackSession == nil {
+            if plan.engine == .prairiePlayerLoopback, loopbackSession == nil {
                 proxy.stop()
                 throw SourceProxyPreparationError.missingLoopbackSession
             }
             return SourceProxyPreparation(plan: proxiedPlan, proxy: proxy)
         } catch {
             proxy.stop()
-            if plan.engine == .siloPlayerLoopback {
+            if plan.engine == .prairiePlayerLoopback {
                 Self.logger.info("[CMP-SOURCE-CACHE] required proxy failed route=\(plan.engine.label, privacy: .public) error=\(String(describing: error), privacy: .public)")
                 throw error
             }
@@ -2558,12 +2558,12 @@ class PlayerViewModel {
 
     private func sourceCacheBudget(for plan: PlaybackExecutionPlan) -> Int {
         switch plan.engine {
-        case .siloPlayerLoopback:
-            return PlaybackSourceCache.siloLoopbackMemoryBudgetBytes
+        case .prairiePlayerLoopback:
+            return PlaybackSourceCache.prairieLoopbackMemoryBudgetBytes
         case .playerCoreDirect, .avPlayerNativeDirect, .avPlayerHLS:
             if let bps = sourceBitrateBps(for: plan), bps >= 200_000_000 {
                 if PlaybackSourceCache.isConstrainedMemoryDevice {
-                    return PlaybackSourceCache.siloLoopbackMemoryBudgetBytes
+                    return PlaybackSourceCache.prairieLoopbackMemoryBudgetBytes
                 }
                 return 512 * 1024 * 1024
             }
@@ -2571,7 +2571,7 @@ class PlayerViewModel {
                 if PlaybackSourceCache.isConstrainedMemoryDevice {
                     return 192 * 1024 * 1024
                 }
-                return PlaybackSourceCache.siloLoopbackMemoryBudgetBytes
+                return PlaybackSourceCache.prairieLoopbackMemoryBudgetBytes
             }
             return PlaybackSourceCache.defaultMemoryBudgetBytes
         }
@@ -2599,7 +2599,7 @@ class PlayerViewModel {
         session: PlaybackSessionResponse,
         requestedStart: Double?
     ) -> Double {
-        if plan.engine == .siloPlayerLoopback {
+        if plan.engine == .prairiePlayerLoopback {
             let start = plan.startMode.seconds
             return start.isFinite ? max(0, start) : 0
         }
@@ -2622,7 +2622,7 @@ class PlayerViewModel {
         startTime: Double
     ) -> Double {
         switch plan.engine {
-        case .siloPlayerLoopback:
+        case .prairiePlayerLoopback:
             return startTime.isFinite ? max(0, startTime) : 0
         case .avPlayerHLS:
             return playbackTimelineOffset
@@ -3098,7 +3098,7 @@ class PlayerViewModel {
         subtitleLoadStatus = [.primary: .idle, .secondary: .idle]
         if resetRouteRecoveryFlags {
             hasAttemptedNativeDirectRouteRecovery = false
-            hasAttemptedSiloRouteCompatibilityFallback = false
+            hasAttemptedPrairieRouteCompatibilityFallback = false
         }
         knownExternalSubtitles = []
         pendingRecoveredAudioSelection = nil
@@ -4666,7 +4666,7 @@ class PlayerViewModel {
 
     private func reloadLocalLoopbackForSeekBeforeAnchor(to target: Double) -> Bool {
         guard let plan = activeExecutionPlan,
-              plan.engine == .siloPlayerLoopback,
+              plan.engine == .prairiePlayerLoopback,
               let loopbackSession = plan.loopbackSession else {
             return false
         }
@@ -5777,7 +5777,7 @@ class PlayerViewModel {
         #endif
         activeExecutionPlan = nil
         hasAttemptedNativeDirectRouteRecovery = false
-        hasAttemptedSiloRouteCompatibilityFallback = false
+        hasAttemptedPrairieRouteCompatibilityFallback = false
         activePlaybackSessionId = nil
         staleSessionRecoverySessionId = nil
         currentWatchDetail = nil
@@ -6684,19 +6684,19 @@ class PlayerViewModel {
     private func humanReadableRouteReason(_ reason: String) -> String {
         switch reason {
         case "dolby_vision_profile7_to81_loopback", "dolby_vision_profile7_to81_base_layer_loopback":
-            return "Dolby Vision Profile 7 base layer selected for Profile 8.1 SiloPlayer signaling"
+            return "Dolby Vision Profile 7 base layer selected for Profile 8.1 PrairiePlayer signaling"
         case "dolby_vision_profile7_hdr10_fallback_loopback":
             return "Dolby Vision Profile 7 using HDR10 fallback"
         case "dolby_vision_disabled_base_layer_loopback":
             return "Dolby Vision is off in Settings, so the HDR base layer was selected"
         case "dolby_vision_profile5_loopback":
-            return "Dolby Vision Profile 5 selected SiloPlayer normalization"
+            return "Dolby Vision Profile 5 selected PrairiePlayer normalization"
         case "h264_container_loopback", "h264_audio_normalization_loopback",
              "h264_subtitle_normalization_loopback":
-            return "H.264 direct play selected SiloPlayer normalization"
+            return "H.264 direct play selected PrairiePlayer normalization"
         case "hevc_container_loopback", "hevc_audio_normalization_loopback",
              "hevc_subtitle_normalization_loopback":
-            return "HEVC direct play selected SiloPlayer normalization"
+            return "HEVC direct play selected PrairiePlayer normalization"
         case "native_direct_asset":
             return "Native Player Direct allowlist matched"
         case "native_direct_avplayer_failed_playercore_fallback":
@@ -6809,7 +6809,7 @@ class PlayerViewModel {
 
     private var activeRouteUsesEmbeddedAVPlayerSubtitleExtraction: Bool {
         switch activeRouteKind {
-        case .avPlayerNativeDirect, .siloPlayerLoopback:
+        case .avPlayerNativeDirect, .prairiePlayerLoopback:
             return true
         case .playerCoreDirect, .avPlayerHLS:
             return false
@@ -7438,7 +7438,7 @@ class PlayerViewModel {
     }
 }
 
-private enum SiloControlPlayerError: LocalizedError {
+private enum PrairieControlPlayerError: LocalizedError {
     case missingSeekPosition
     case missingTrackId
     case missingSpeed
@@ -7475,7 +7475,7 @@ private enum SiloControlPlayerError: LocalizedError {
 
 extension PlayerViewModel {
     @MainActor
-    func applySiloControlCommand(_ command: SiloControlCommand) throws {
+    func applyPrairieControlCommand(_ command: PrairieControlCommand) throws {
         switch command.name {
         case .play:
             activePlayer.play()
@@ -7487,7 +7487,7 @@ extension PlayerViewModel {
             togglePlayPause()
         case .seek:
             guard let seconds = command.seconds else {
-                throw SiloControlPlayerError.missingSeekPosition
+                throw PrairieControlPlayerError.missingSeekPosition
             }
             seekTo(seconds: seconds)
         case .stop:
@@ -7495,10 +7495,10 @@ extension PlayerViewModel {
             requestRemoteDismiss()
         case .selectAudioTrack:
             guard let trackId = command.trackId else {
-                throw SiloControlPlayerError.missingTrackId
+                throw PrairieControlPlayerError.missingTrackId
             }
             guard let track = audioTracks.first(where: { $0.trackId == trackId }) else {
-                throw SiloControlPlayerError.trackNotFound
+                throw PrairieControlPlayerError.trackNotFound
             }
             selectAudio(track)
         case .selectSubtitleTrack:
@@ -7507,53 +7507,53 @@ extension PlayerViewModel {
                 return
             }
             guard let track = subtitleTracks.first(where: { $0.trackId == trackId }) else {
-                throw SiloControlPlayerError.trackNotFound
+                throw PrairieControlPlayerError.trackNotFound
             }
             selectSubtitle(track)
         case .setPlaybackSpeed:
             guard let speed = command.speed, speed.isFinite, speed > 0 else {
-                throw SiloControlPlayerError.missingSpeed
+                throw PrairieControlPlayerError.missingSpeed
             }
             setPlaybackSpeed(speed)
         case .setQuality:
             guard let value = command.value else {
-                throw SiloControlPlayerError.missingValue
+                throw PrairieControlPlayerError.missingValue
             }
             switchQuality(value)
         case .setVideoGravity:
             guard let value = command.value else {
-                throw SiloControlPlayerError.missingValue
+                throw PrairieControlPlayerError.missingValue
             }
             guard let gravity = VideoGravity(rawValue: value) else {
-                throw SiloControlPlayerError.invalidVideoGravity
+                throw PrairieControlPlayerError.invalidVideoGravity
             }
             setVideoGravity(gravity)
         case .setHDREnabled:
             guard let enabled = command.enabled else {
-                throw SiloControlPlayerError.missingEnabledValue
+                throw PrairieControlPlayerError.missingEnabledValue
             }
             setHDREnabled(enabled)
         case .setSubtitleSyncMs:
             guard let milliseconds = command.milliseconds else {
-                throw SiloControlPlayerError.missingMilliseconds
+                throw PrairieControlPlayerError.missingMilliseconds
             }
             setSubtitleSyncMilliseconds(milliseconds)
         case .setSubtitlePosition:
             guard let value = command.value else {
-                throw SiloControlPlayerError.missingValue
+                throw PrairieControlPlayerError.missingValue
             }
             guard let position = SubtitlePositionPreset(rawValue: value) else {
-                throw SiloControlPlayerError.invalidSubtitlePosition
+                throw PrairieControlPlayerError.invalidSubtitlePosition
             }
             setSubtitlePosition(position)
         case .setVolume:
             guard let volume = command.volume, volume.isFinite else {
-                throw SiloControlPlayerError.missingValue
+                throw PrairieControlPlayerError.missingValue
             }
             applyUserVolume(Float(volume))
         case .setMuted:
             guard let enabled = command.enabled else {
-                throw SiloControlPlayerError.missingEnabledValue
+                throw PrairieControlPlayerError.missingEnabledValue
             }
             applyUserMuted(enabled)
         case .playNext:
@@ -7562,7 +7562,7 @@ extension PlayerViewModel {
     }
 
     @MainActor
-    func makeSiloControlPlaybackState(contentId: String?) -> SiloControlPlaybackState {
+    func makePrairieControlPlaybackState(contentId: String?) -> PrairieControlPlaybackState {
         let liveContentId = lastLoadRequest?.contentId ?? contentId
         let titleText = metadata.primaryTitle.isEmpty ? title : metadata.primaryTitle
         let subtitleText = [metadata.seriesTitle, metadata.episodeTag]
@@ -7572,7 +7572,7 @@ extension PlayerViewModel {
             }
             .joined(separator: " · ")
 
-        return SiloControlPlaybackState(
+        return PrairieControlPlaybackState(
             contentId: liveContentId,
             sessionId: activePlaybackSessionId,
             title: titleText.isEmpty ? "Loading" : titleText,
@@ -7582,11 +7582,11 @@ extension PlayerViewModel {
             isBuffering: isBuffering,
             currentTime: currentTime,
             duration: duration,
-            audioTracks: audioTracks.map(makeSiloControlTrack),
-            subtitleTracks: subtitleTracks.map(makeSiloControlTrack),
+            audioTracks: audioTracks.map(makePrairieControlTrack),
+            subtitleTracks: subtitleTracks.map(makePrairieControlTrack),
             selectedAudioTrackId: selectedAudioId,
             selectedSubtitleTrackId: selectedSubtitleId,
-            qualityOptions: qualityOptions.map(makeSiloControlOption),
+            qualityOptions: qualityOptions.map(makePrairieControlOption),
             activeQualityId: activeQualityId,
             isQualitySwitching: isQualitySwitching,
             playbackSpeed: settings.playbackSpeed,
@@ -7606,8 +7606,8 @@ extension PlayerViewModel {
         )
     }
 
-    private func makeSiloControlTrack(_ track: PlayerTrack) -> SiloControlTrack {
-        SiloControlTrack(
+    private func makePrairieControlTrack(_ track: PlayerTrack) -> PrairieControlTrack {
+        PrairieControlTrack(
             kind: track.kind.rawValue,
             trackId: track.trackId,
             title: track.primaryLabel,
@@ -7615,8 +7615,8 @@ extension PlayerViewModel {
         )
     }
 
-    private func makeSiloControlOption(_ option: ApplePlaybackQualityOption) -> SiloControlOption {
-        SiloControlOption(
+    private func makePrairieControlOption(_ option: ApplePlaybackQualityOption) -> PrairieControlOption {
+        PrairieControlOption(
             id: option.id,
             label: option.labelWithBitrate,
             detail: option.subtitle

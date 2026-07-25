@@ -1,6 +1,6 @@
 import XCTest
 import Foundation
-@testable import Silo
+@testable import Prairie
 
 /// The pref-request builders feed the server's per-series audio /
 /// subtitle preference endpoints; a wrong index space or a signature

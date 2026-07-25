@@ -62,7 +62,7 @@ struct TVLoginView: View {
 
     private var topBar: some View {
         HStack(spacing: 18) {
-            SiloWordmarkView(width: 132)
+            PrairieWordmarkView(width: 132)
             if let host = hostLabel {
                 Label(host, systemImage: "server.rack")
                     .font(.continuumCaption)

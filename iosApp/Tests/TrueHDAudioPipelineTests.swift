@@ -2,7 +2,7 @@ import Libavcodec
 import Libavformat
 import Libavutil
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 /// Exercises the TrueHD startup shape that triggered silent playback on iPad
 /// and tvOS: at high video bitrates the one-megabyte stream probe can finish
@@ -64,7 +64,7 @@ final class TrueHDAudioPipelineTests: XCTestCase {
                 forResource: "delayed_truehd_probe",
                 withExtension: "mkv"
             ),
-            "Missing delayed_truehd_probe.mkv from SiloTests resources"
+            "Missing delayed_truehd_probe.mkv from PrairieTests resources"
         )
     }
 

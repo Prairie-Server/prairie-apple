@@ -1,8 +1,8 @@
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 /// Verifies the exact catalog wire format produced by `CatalogQueryBuilder`
-/// against what `silo-server/internal/catalog/catalog_parser.go` parses.
+/// against what `prairie-server/internal/catalog/catalog_parser.go` parses.
 /// This is the one place a silent mismatch would produce "green build, wrong
 /// server results", so it gets focused coverage.
 final class CatalogQueryBuilderTests: XCTestCase {

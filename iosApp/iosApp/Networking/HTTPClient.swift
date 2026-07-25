@@ -1,7 +1,7 @@
 import Foundation
 import OSLog
 
-/// URLSession-backed HTTP client for the Silo server.
+/// URLSession-backed HTTP client for the Prairie server.
 ///
 /// Responsibilities:
 /// - Resolve relative paths against the configured server URL from ``TokenStore``.
@@ -349,7 +349,7 @@ actor HTTPClient {
         }
 
         let authStateBeforeRequest = await tokenStore.getAccessToken()
-        let boundary = "SiloDiagnostics-\(UUID().uuidString)"
+        let boundary = "PrairieDiagnostics-\(UUID().uuidString)"
         let body = Self.multipartBody(parts: parts, boundary: boundary)
         var request = try buildRequest(
             serverUrl: serverUrl,
@@ -470,9 +470,9 @@ actor HTTPClient {
             attached.append("profileToken")
         }
         let device = AppleDeviceIdentity.current
-        request.setValue(device.id, forHTTPHeaderField: "X-Silo-Device-Id")
-        request.setValue(device.name, forHTTPHeaderField: "X-Silo-Device-Name")
-        request.setValue(device.platform, forHTTPHeaderField: "X-Silo-Device-Platform")
+        request.setValue(device.id, forHTTPHeaderField: "X-Prairie-Device-Id")
+        request.setValue(device.name, forHTTPHeaderField: "X-Prairie-Device-Name")
+        request.setValue(device.platform, forHTTPHeaderField: "X-Prairie-Device-Platform")
         attached.append("device=\(device.platform)")
         let method = request.httpMethod ?? ""
         let attachedDesc = attached.joined(separator: ", ")

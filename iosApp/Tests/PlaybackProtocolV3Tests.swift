@@ -1,6 +1,6 @@
 import Foundation
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 final class PlaybackProtocolV3Tests: XCTestCase {
     func testDecisionValidationAndSessionTimeline() throws {
@@ -217,7 +217,7 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         )
         let base = makeBaseExecutionPlan(
             streamRequest: streamRequest,
-            engine: .siloPlayerLoopback,
+            engine: .prairiePlayerLoopback,
             loopbackSession: baseLoopback
         )
 
@@ -238,7 +238,7 @@ final class PlaybackProtocolV3Tests: XCTestCase {
             base: base,
             streamRequest: streamRequest
         )
-        XCTAssertEqual(dv81.engine, .siloPlayerLoopback)
+        XCTAssertEqual(dv81.engine, .prairiePlayerLoopback)
         XCTAssertEqual(dv81.loopbackSession?.videoMode, .convertProfile7To81)
         XCTAssertEqual(dv81.loopbackSession?.manifestMetadata.advertisedDolbyVisionProfile, 8)
         XCTAssertEqual(dv81.loopbackSession?.manifestMetadata.compatibilityBrand, "db1p")
@@ -260,7 +260,7 @@ final class PlaybackProtocolV3Tests: XCTestCase {
             base: base,
             streamRequest: streamRequest
         )
-        XCTAssertEqual(hdr10.engine, .siloPlayerLoopback)
+        XCTAssertEqual(hdr10.engine, .prairiePlayerLoopback)
         XCTAssertEqual(hdr10.loopbackSession?.videoMode, .passthroughHEVC)
         XCTAssertNil(hdr10.loopbackSession?.manifestMetadata.advertisedDolbyVisionProfile)
         XCTAssertNil(hdr10.loopbackSession?.manifestMetadata.compatibilityBrand)

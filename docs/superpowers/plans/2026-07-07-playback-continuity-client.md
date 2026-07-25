@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-07
 **Status:** planned
-**Server counterpart:** [silo-server#333](https://github.com/Silo-Server/silo-server/issues/333) — reconstruct-wire the control-plane endpoints (progress, audio change, subtitle, ws, start-transcode). This plan is the silo-apple half; it must also degrade gracefully against servers that predate #333.
+**Server counterpart:** [prairie-server#333](https://github.com/Prairie-Server/prairie-server/issues/333) — reconstruct-wire the control-plane endpoints (progress, audio change, subtitle, ws, start-transcode). This plan is the prairie-apple half; it must also degrade gracefully against servers that predate #333.
 
 ## Problem
 
@@ -130,7 +130,7 @@ While `originOutage` is active and within budget, suppress the escalations that 
 
 ### B5. Kill switch
 
-`PlayerSettings` flag (pattern of `seekCacheEnabled`) + env override `SILO_DISABLE_OUTAGE_RIDE_THROUGH`, default ON. Killing it restores today's immediate-teardown behavior verbatim (the `escalateInterruption` path stays compiled in behind the flag).
+`PlayerSettings` flag (pattern of `seekCacheEnabled`) + env override `PRAIRIE_DISABLE_OUTAGE_RIDE_THROUGH`, default ON. Killing it restores today's immediate-teardown behavior verbatim (the `escalateInterruption` path stays compiled in behind the flag).
 
 Scope note: this workstream is loopback-route only. `playerCoreDirect` has no source proxy (`prepareSourceProxy` guard, `PlayerViewModel.swift:2088-2091`) and keeps current behavior; `avPlayerHLS`/transcode likewise.
 

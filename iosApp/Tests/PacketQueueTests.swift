@@ -1,6 +1,6 @@
 import Libavcodec
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 final class PacketQueueTests: XCTestCase {
     /// Allocate a real AVPacket with the given size/duration/key flag. The

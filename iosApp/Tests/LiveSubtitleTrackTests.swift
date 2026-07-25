@@ -1,5 +1,5 @@
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 /// Tests for `LiveSubtitleTrack` — the pure cue→ASS conversion that feeds
 /// the libass `ass_process_chunk` live-render path. The crux is that the

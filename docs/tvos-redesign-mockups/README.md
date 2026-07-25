@@ -7,7 +7,7 @@
 > prompts in `../skyline-implementation-prompt.md` /
 > `../rail-implementation-prompt.md`.
 
-Three navigation paradigms for a ground-up redesign of the Silo tvOS app, each
+Three navigation paradigms for a ground-up redesign of the Prairie tvOS app, each
 attacking the two current UX pain points:
 
 1. **Library switching** — today a full-screen modal picker behind the Libraries tab.

@@ -4,5 +4,5 @@
 # APPLE_ID is intentionally omitted: all lanes authenticate via the App Store
 # Connect API key, so username/password auth is never invoked.
 
-app_identifier("org.siloserver.silo")
+app_identifier("org.prairieserver.prairie")
 team_id(ENV["TEAM_ID"])

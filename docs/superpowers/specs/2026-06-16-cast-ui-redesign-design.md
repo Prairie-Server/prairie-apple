@@ -15,14 +15,14 @@ casting.
 
 Three surfaces are reworked:
 
-1. **The remote-control screen** (`SiloCastRemoteControlView`) — today a black
+1. **The remote-control screen** (`PrairieCastRemoteControlView`) — today a black
    screen of centered text, a slider, three transport buttons, and a cramped row
    of six `.bordered` menu buttons. It becomes an **immersive, artwork-forward
    now-playing screen** (the Apple Music / TV-app idiom).
-2. **The target picker** (`SiloCastTargetPickerView`) — gains a proper
-   **"Searching…"** state instead of flashing the "No Silo TVs Found" failure
+2. **The target picker** (`PrairieCastTargetPickerView`) — gains a proper
+   **"Searching…"** state instead of flashing the "No Prairie TVs Found" failure
    card the instant it opens.
-3. **The control-mode button** (`SiloCastControlModeButton`) in the Home top bar
+3. **The control-mode button** (`PrairieCastControlModeButton`) in the Home top bar
    — aligned to the app's chrome tokens with a clearer **active/connected** read.
 
 The defining new capability is **artwork**: the remote shows poster/backdrop art
@@ -31,7 +31,7 @@ protocol field needs to be added.
 
 ## 2. What's wrong today (the problems being fixed)
 
-From `iosApp/iosApp/Cast/iOS/SiloCastViews.swift`:
+From `iosApp/iosApp/Cast/iOS/PrairieCastViews.swift`:
 
 | # | Problem | Why it reads as non-native |
 |---|---|---|
@@ -40,7 +40,7 @@ From `iosApp/iosApp/Cast/iOS/SiloCastViews.swift`:
 | 3 | `Stop` is a stray button wedged between `Speed` and the menus. | Destructive/terminal action with no deliberate placement. |
 | 4 | `Spacer`-driven vertical stack, no hierarchy, no material, no grouping. | Flat and unstructured vs. the layered system look. |
 | 5 | Quality/Display chips render even when empty/unsupported. | Dead controls; iOS hides what doesn't apply. |
-| 6 | Picker shows `ContentUnavailableView("No Silo TVs Found")` immediately, before discovery has had time to find anything. | Looks broken on first open; AirPlay shows a spinner while it scans. |
+| 6 | Picker shows `ContentUnavailableView("No Prairie TVs Found")` immediately, before discovery has had time to find anything. | Looks broken on first open; AirPlay shows a spinner while it scans. |
 | 7 | Connecting state is a bare centered `ProgressView` + text; error is raw red `.footnote`. | No skeleton, no styled banner. |
 
 ## 3. Design language (source of truth)
@@ -76,7 +76,7 @@ Time strings go through the existing `PlayerTimeFormatter.formatHMS`.
 | 7 | Surfaces in scope | Remote screen **+** target picker **+** control-mode button. |
 | 8 | Out of scope | Wire protocol, tvOS `TVCastReceiver`, `PlayerViewModel` cast extensions, server, Android. |
 
-## 5. Remote screen anatomy (`SiloCastRemoteControlView`)
+## 5. Remote screen anatomy (`PrairieCastRemoteControlView`)
 
 Presented as today via `.fullScreenCover` from `MainTabView`, driven by
 `controller.isShowingRemoteControl`. Top-to-bottom, over a blurred-artwork
@@ -155,7 +155,7 @@ tracks → omit Audio; `supportsVideoGravity == false && supportsHDRToggle == fa
 
 The chevron-down is *minimize only*. This removes `Stop` from the controls row
 and gives the destructive actions a deliberate, conventional home. The
-`SiloCastControlModeButton` menu (Remote Control / Choose TV / Turn Off) is kept
+`PrairieCastControlModeButton` menu (Remote Control / Choose TV / Turn Off) is kept
 as the entry point from Home.
 
 ## 9. States
@@ -167,18 +167,18 @@ as the entry point from Home.
 - **Error** (`state.error ?? controller.errorMessage`): compact inline banner on
   `continuumSurfaceElevated` with `continuumError` text, not raw red caption.
 
-## 10. Target picker (`SiloCastTargetPickerView`)
+## 10. Target picker (`PrairieCastTargetPickerView`)
 
 - **Found TVs**: keep the clean `List` of rows (glyph + name + server name +
   trailing spinner while connecting). Restyle rows to the token system.
 - **Searching** (`found.isEmpty`, within ~8s of `browser.start()`): centered
-  "Searching for Silo TVs…" + `ProgressView` — the AirPlay-style state.
+  "Searching for Prairie TVs…" + `ProgressView` — the AirPlay-style state.
 - **Empty** (`found.isEmpty`, after the timeout): the existing
-  `ContentUnavailableView("No Silo TVs Found", …)`.
+  `ContentUnavailableView("No Prairie TVs Found", …)`.
 - Implemented with a `@State` "searching" flag flipped by a `.task` timeout; no
-  change to `SiloCastBrowser`.
+  change to `PrairieCastBrowser`.
 
-## 11. Control-mode button (`SiloCastControlModeButton`, Home top bar)
+## 11. Control-mode button (`PrairieCastControlModeButton`, Home top bar)
 
 Keep the `airplayvideo`-in-a-circle. Replace the ad-hoc `Color.white`/`.clear`
 fills with the chrome tokens (`continuumChromeSelectedFill` /
@@ -197,22 +197,22 @@ is unchanged.
 
 ## 13. Files touched
 
-- `iosApp/iosApp/Cast/iOS/SiloCastViews.swift` — the bulk (remote screen, picker,
+- `iosApp/iosApp/Cast/iOS/PrairieCastViews.swift` — the bulk (remote screen, picker,
   control-mode button). May be split into focused files
-  (`SiloCastRemoteControlView.swift`, `SiloCastTargetPickerView.swift`,
-  `SiloCastControlModeButton.swift`) plus a small artwork resolver — at the
+  (`PrairieCastRemoteControlView.swift`, `PrairieCastTargetPickerView.swift`,
+  `PrairieCastControlModeButton.swift`) plus a small artwork resolver — at the
   implementer's discretion. **If files are added, regenerate with
   `cd iosApp && xcodegen generate`.**
 - `iosApp/iosApp/Screens/Home/HomeView.swift` — only if the button restyle needs
   a call-site tweak (likely none).
-- No other files. Verified build target: `SiloTV` is unaffected; iOS builds via
-  scheme `Silo`.
+- No other files. Verified build target: `PrairieTV` is unaffected; iOS builds via
+  scheme `Prairie`.
 
 ## 14. Non-goals
 
 - **No** new wire-protocol fields, message types, or version bump.
 - **No** changes to `TVCastReceiver`, `PlayerViewModel` cast extensions,
-  `SiloCastController`, `SiloCastSession`, or `SiloCastBrowser` logic (only the
+  `PrairieCastController`, `PrairieCastSession`, or `PrairieCastBrowser` logic (only the
   picker's view adds a local "searching" flag).
 - **No** server or Android changes — this is purely the iOS presentation layer.
 - **No** new playback capabilities beyond what the protocol already exposes.
@@ -223,6 +223,6 @@ is unchanged.
   with a single clean control row — no row of bordered buttons, no stray Stop.
 - Artwork appears (instantly when cast from a detail page) with no protocol change.
 - The picker shows "Searching…" before "No TVs," never the failure card on open.
-- iOS builds clean (`xcodebuild build -project Silo.xcodeproj -scheme Silo
+- iOS builds clean (`xcodebuild build -project Prairie.xcodeproj -scheme Prairie
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO`).
 - tvOS is byte-for-byte unaffected.

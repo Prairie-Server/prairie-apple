@@ -7,24 +7,24 @@ struct NowPlayingShelf: View {
     var style: NowPlayingBarStyle = .card
 
     #if os(iOS)
-    @Environment(SiloControlClient.self) private var siloControl
+    @Environment(PrairieControlClient.self) private var prairieControl
     #endif
     @Environment(AudioPlaybackStore.self) private var audioStore
 
     /// Single source of truth for "is a now-playing bar currently shown".
     /// TV control (when not showing the full remote) takes priority over audio.
     #if os(iOS)
-    static func hasActiveAccessory(control: SiloControlClient, audio: AudioPlaybackStore) -> Bool {
+    static func hasActiveAccessory(control: PrairieControlClient, audio: AudioPlaybackStore) -> Bool {
         if controlBarVisible(control) { return true }
         return audio.player.hasActiveSession
     }
 
-    /// Mirrors `SiloControlMiniBar.isVisible`: a live session (excluding a
+    /// Mirrors `PrairieControlMiniBar.isVisible`: a live session (excluding a
     /// still-unconfirmed auto-resume probe) or an in-flight reconnect. The bar
     /// stays mounted while the full remote sheet is up — detaching the
     /// tabViewBottomAccessory there made it re-insert (with a system slide-in)
     /// every time the sheet was swiped away.
-    static func controlBarVisible(_ control: SiloControlClient) -> Bool {
+    static func controlBarVisible(_ control: PrairieControlClient) -> Bool {
         (control.hasActiveSession && !control.isAutoResuming) || control.isReconnecting
     }
     #else
@@ -35,10 +35,10 @@ struct NowPlayingShelf: View {
 
     var body: some View {
         #if os(iOS)
-        if Self.controlBarVisible(siloControl) {
-            SiloControlMiniBar(controller: siloControl, style: style)
-                .animation(.snappy, value: siloControl.hasActiveSession)
-                .animation(.snappy, value: siloControl.isReconnecting)
+        if Self.controlBarVisible(prairieControl) {
+            PrairieControlMiniBar(controller: prairieControl, style: style)
+                .animation(.snappy, value: prairieControl.hasActiveSession)
+                .animation(.snappy, value: prairieControl.isReconnecting)
         } else if audioStore.player.hasActiveSession {
             AudioMiniPlayerView(style: style)
                 .animation(.snappy, value: audioStore.player.hasActiveSession)
@@ -58,11 +58,11 @@ struct NowPlayingShelf: View {
 /// accessory is only attached while something is playing, so no empty bar shows
 /// when idle.
 struct NowPlayingShelfAttachment: ViewModifier {
-    @Environment(SiloControlClient.self) private var siloControl
+    @Environment(PrairieControlClient.self) private var prairieControl
     @Environment(AudioPlaybackStore.self) private var audioStore
 
     private var isActive: Bool {
-        NowPlayingShelf.hasActiveAccessory(control: siloControl, audio: audioStore)
+        NowPlayingShelf.hasActiveAccessory(control: prairieControl, audio: audioStore)
     }
 
     func body(content: Content) -> some View {

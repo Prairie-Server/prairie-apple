@@ -27,7 +27,7 @@ work.
   whatever card the user points at.
 - The iOS/iPadOS/macOS clients still render `FeaturedCarousel`: an 8-second auto-advancing,
   3-card deck hero (`iosApp/iosApp/Screens/Home/FeaturedCarousel.swift`, ~1,600 lines).
-- Silo is a self-hosted, **library-centric** product. Unlike a commercial service, it has
+- Prairie is a self-hosted, **library-centric** product. Unlike a commercial service, it has
   no marketing imperative to push a curated billboard. Competitor research (see "Research"
   below) shows the closest analog — Plex — deliberately ships **no** home hero and leads
   with Continue Watching. For a returning user of their own library, "get me back into what
@@ -51,11 +51,11 @@ Phone home-screen "featured" treatments across the industry group into four patt
 2. **Single editorial spotlight** (Netflix) — one confident pick with artwork-derived color
    theming.
 3. **No hero / resume-first** (Plex) — opens straight into Continue Watching. The closest
-   analog to Silo (self-hosted, library-centric).
+   analog to Prairie (self-hosted, library-centric).
 4. **Feed-first / vertical video** (YouTube, Spotify, "Clips") — engagement play, not our lane.
 
 Cross-cutting 2025–26 trends: full-bleed art under transparent chrome; UI color sampled
-from artwork. Silo's tvOS Skyline already samples a backdrop tint, so the DNA exists — but
+from artwork. Prairie's tvOS Skyline already samples a backdrop tint, so the DNA exists — but
 on touch there is no focused card to source an ambient backdrop from, which is part of why
 direction A (flat background) is the honest fit.
 
@@ -133,12 +133,12 @@ direction A (flat background) is the honest fit.
 
 ## Coordination
 
-- **Server (`silo-server`):** no change required. The server may keep sending the `featured`
+- **Server (`prairie-server`):** no change required. The server may keep sending the `featured`
   section; clients ignore it, exactly as noted in `docs/skyline-design-guide.md` §9. **One
   thing to confirm:** the non-tvOS `/api/v1/home/sections` payload should order Continue
   Watching first, because the client now renders server order verbatim with no client-side
   reordering. (tvOS already relies on this ordering.)
-- **Android (`silo-android`):** the Android **phone** client likely still renders a featured
+- **Android (`prairie-android`):** the Android **phone** client likely still renders a featured
   carousel. For cross-client parity it should adopt the same resume-first home. Tracked as a
   follow-up in that repo; not addressed here.
 
@@ -152,7 +152,7 @@ removal. Optional, low-cost coverage if desired:
 - A view-model-level assertion that the empty state is reported only when not loading and
   with no error.
 
-Manual verification: build and run iOS (`Silo` scheme), iPad, and macOS (`SiloMac` scheme);
+Manual verification: build and run iOS (`Prairie` scheme), iPad, and macOS (`PrairieMac` scheme);
 confirm Home and a library's Recommended tab lead with Continue Watching, no hero, no
 clipping under the header/chrome, and a graceful empty state on a server with no content.
 

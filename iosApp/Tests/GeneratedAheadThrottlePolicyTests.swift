@@ -1,5 +1,5 @@
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 final class GeneratedAheadThrottlePolicyTests: XCTestCase {
     func testThrottleWaitBudgetStaysBelowLivePlaylistReloadFailureWindow() {

@@ -1,6 +1,6 @@
 //
 //  SubtitleSearchModelTests.swift
-//  SiloTests
+//  PrairieTests
 //
 //  Focused tests for the subtitle provider-search wire contract: the
 //  snake_case decode of search responses (including tolerant defaults), the
@@ -10,7 +10,7 @@
 //
 
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 final class SubtitleSearchModelTests: XCTestCase {
     private var decoder: JSONDecoder {

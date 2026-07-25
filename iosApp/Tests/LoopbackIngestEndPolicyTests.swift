@@ -1,5 +1,5 @@
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 final class LoopbackIngestEndPolicyTests: XCTestCase {
     private let avErrorEOF = -Int32(bitPattern: 0x20464F45)

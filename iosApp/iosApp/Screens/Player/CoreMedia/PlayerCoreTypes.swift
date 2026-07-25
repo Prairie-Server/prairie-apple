@@ -51,7 +51,7 @@ extension PlayerCore {
         /// playback; do not mask it with software fallback.
         case videoToolboxBadDataH264
         /// VideoToolbox accepted the HEVC session but later rejected compressed
-        /// samples as bad data. Route the original source through SiloPlayer's
+        /// samples as bad data. Route the original source through PrairiePlayer's
         /// AVPlayer loopback so the stream can continue on the presentation
         /// path used for other HEVC VideoToolbox rejections.
         case videoToolboxBadDataHEVC

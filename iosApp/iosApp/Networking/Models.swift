@@ -222,7 +222,7 @@ struct SectionItem: Codable, Identifiable, Hashable {
     }
 }
 
-enum SiloMediaType {
+enum PrairieMediaType {
     private static func normalized(_ type: String) -> String {
         type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
@@ -300,11 +300,11 @@ enum SiloMediaType {
 }
 
 extension BrowseItem {
-    var isAudiobook: Bool { SiloMediaType.isAudiobook(type) }
+    var isAudiobook: Bool { PrairieMediaType.isAudiobook(type) }
 }
 
 extension SectionItem {
-    var isAudiobook: Bool { SiloMediaType.isAudiobook(type) }
+    var isAudiobook: Bool { PrairieMediaType.isAudiobook(type) }
 }
 
 struct ResolvedSection: Codable, Identifiable {
@@ -379,7 +379,7 @@ struct SectionsResponse: Codable {
     ) -> [ResolvedSection] {
         sections.map { section in
             let kept = section.items.filter {
-                SiloMediaType.isSupportedSectionItem($0.type)
+                PrairieMediaType.isSupportedSectionItem($0.type)
             }
             guard kept.count != section.items.count else { return section }
             return ResolvedSection(
@@ -466,7 +466,7 @@ struct ItemDetail: Codable {
 
 extension ItemDetail {
     var isAudiobook: Bool {
-        audiobook != nil || SiloMediaType.isAudiobook(type)
+        audiobook != nil || PrairieMediaType.isAudiobook(type)
     }
 }
 
@@ -1143,11 +1143,11 @@ struct Library: Codable, Identifiable, Hashable {
     let sortOrder: Int?
     let posterUrl: String?
 
-    var isMovieLibrary: Bool { SiloMediaType.isMovieLibrary(type) }
-    var isAudiobookLibrary: Bool { SiloMediaType.isAudiobookLibrary(type) }
-    var isSeriesLibrary: Bool { SiloMediaType.isSeries(type) }
-    var isMixedLibrary: Bool { SiloMediaType.isMixedLibrary(type) }
-    var isSupportedLibrary: Bool { SiloMediaType.isSupportedLibrary(type) }
+    var isMovieLibrary: Bool { PrairieMediaType.isMovieLibrary(type) }
+    var isAudiobookLibrary: Bool { PrairieMediaType.isAudiobookLibrary(type) }
+    var isSeriesLibrary: Bool { PrairieMediaType.isSeries(type) }
+    var isMixedLibrary: Bool { PrairieMediaType.isMixedLibrary(type) }
+    var isSupportedLibrary: Bool { PrairieMediaType.isSupportedLibrary(type) }
 }
 
 struct LibrariesResponse: Codable {

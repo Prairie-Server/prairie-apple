@@ -3,8 +3,8 @@
 **Status:** Draft for review
 **Author:** (Apple client)
 **Date:** 2026-06-13
-**Repos touched:** `silo-apple` (this repo). **No server changes required.**
-**Related:** `silo-android` (parity follow-up), `silo-server` events hub.
+**Repos touched:** `prairie-apple` (this repo). **No server changes required.**
+**Related:** `prairie-android` (parity follow-up), `prairie-server` events hub.
 
 ---
 
@@ -63,7 +63,7 @@ will mirror. Key properties to reuse as a pattern:
 - **Generation-based binding** to cancel stale connection loops on rebind/unbind.
 - `ContinuumAPI.shared.currentServerUrl()` and `.currentAccessToken()` provide base URL + token.
 
-### 2.3 Server events hub (already live — verify in `silo-server`)
+### 2.3 Server events hub (already live — verify in `prairie-server`)
 
 - **Endpoint:** `GET /api/v1/events/ws` — `internal/api/handlers/events_ws.go`.
 - **Auth:** standard JWT claims middleware. The web passes `?token=`; **header `Authorization:
@@ -100,7 +100,7 @@ will mirror. Key properties to reuse as a pattern:
 
 ### 2.4 Android parity (per workspace guidance)
 
-`silo-android` already connects to `/api/v1/events/ws` but subscribes **only** to `notifications`
+`prairie-android` already connects to `/api/v1/events/ws` but subscribes **only** to `notifications`
 (`NotificationsRealtimeClient.kt`); its Home/Continue-Watching is pull-based too. It has the proven
 transport + lifecycle infra (Ktor WS, **1s→30s capped backoff**, `ProcessLifecycleOwner` foreground
 binding, profile-switch reconnect, ws-ticket minting). **Neither mobile client does live
@@ -355,7 +355,7 @@ Focused tests only (per repo guidelines — no broad UI tests):
   none needed).
 - **Feature flag:** gate Layer 2 behind a simple local flag/remote-config so it can be disabled
   without a rebuild if it misbehaves on a device class.
-- **Android parity:** separate `silo-android` task to subscribe its existing events client to
+- **Android parity:** separate `prairie-android` task to subscribe its existing events client to
   `user_state`/`catalog` and refresh Home. Tracked, not in this repo's scope.
 
 ---
@@ -409,7 +409,7 @@ Focused tests only (per repo guidelines — no broad UI tests):
 - (Reference only, no change) `ContinuumAPI` — already exposes `currentServerUrl()`,
   `currentAccessToken()`, `homeSections()`.
 
-**Server (`silo-server`): none.** (Possible *future* opt-in: add `position_seconds` to
+**Server (`prairie-server`): none.** (Possible *future* opt-in: add `position_seconds` to
 `user_state.changed` for instant position — only if §8.1 is pursued.)
 
 ---

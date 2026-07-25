@@ -1,6 +1,6 @@
-name: Silo
+name: Prairie
 options:
-  bundleIdPrefix: org.siloserver.silo
+  bundleIdPrefix: org.prairieserver.prairie
   deploymentTarget:
     iOS: "26.0"
     macOS: "26.0"
@@ -11,7 +11,7 @@ options:
 settings:
   configs:
     Debug:
-      # Required for `@testable import Silo` in SiloTests; Xcode's Debug
+      # Required for `@testable import Prairie` in PrairieTests; Xcode's Debug
       # template sets this but XcodeGen does not.
       ENABLE_TESTABILITY: "YES"
   base:
@@ -43,7 +43,7 @@ packages:
     from: "12.8.0"
 
 targets:
-  Silo:
+  Prairie:
     type: application
     platform: iOS
     sources:
@@ -55,16 +55,16 @@ targets:
       - path: Resources
         buildPhase: resources
     # PRODUCT_BUNDLE_IDENTIFIER and CODE_SIGN_ENTITLEMENTS live in
-    # Signing/Silo.xcconfig so local contributors can override
+    # Signing/Prairie.xcconfig so local contributors can override
     # them via Signing/Local.xcconfig without dirtying this file.
     # Target-level `settings` entries win over xcconfig, so they MUST
     # NOT be set below.
     configFiles:
-      Debug: Signing/Silo.xcconfig
-      Release: Signing/Silo.xcconfig
+      Debug: Signing/Prairie.xcconfig
+      Release: Signing/Prairie.xcconfig
     settings:
       base:
-        PRODUCT_NAME: Silo
+        PRODUCT_NAME: Prairie
         INFOPLIST_FILE: iosApp/Info.plist
         MARKETING_VERSION: "1.0.0"
         CURRENT_PROJECT_VERSION: 1
@@ -75,7 +75,7 @@ targets:
         SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: "NO"
         SDKROOT: iphoneos
         SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
-        SWIFT_OBJC_BRIDGING_HEADER: iosApp/Screens/Player/CoreMedia/SiloPlayerBridging.h
+        SWIFT_OBJC_BRIDGING_HEADER: iosApp/Screens/Player/CoreMedia/PrairiePlayerBridging.h
       configs:
         Debug:
           APS_ENVIRONMENT: development
@@ -88,15 +88,15 @@ targets:
         product: Nuke
       - package: Nuke
         product: NukeUI
-      - target: SiloNotificationService
+      - target: PrairieNotificationService
         embed: true
-      - target: SiloDownloadsActivity
+      - target: PrairieDownloadsActivity
         embed: true
 
   # NOTE: tvOS-specific source files live under iosApp/tvOS/. They are guarded
   # by #if os(tvOS) so they compile out on the iOS target even though the
   # directory is included in both targets' source tree.
-  SiloTV:
+  PrairieTV:
     type: application
     platform: tvOS
     sources:
@@ -109,16 +109,16 @@ targets:
       - path: Resources
         buildPhase: resources
     # PRODUCT_BUNDLE_IDENTIFIER and CODE_SIGN_ENTITLEMENTS live in
-    # Signing/SiloTV.xcconfig so local contributors can override
+    # Signing/PrairieTV.xcconfig so local contributors can override
     # them via Signing/Local.xcconfig without dirtying this file.
     # Target-level `settings` entries win over xcconfig, so they MUST
     # NOT be set below.
     configFiles:
-      Debug: Signing/SiloTV.xcconfig
-      Release: Signing/SiloTV.xcconfig
+      Debug: Signing/PrairieTV.xcconfig
+      Release: Signing/PrairieTV.xcconfig
     settings:
       base:
-        PRODUCT_NAME: SiloTV
+        PRODUCT_NAME: PrairieTV
         INFOPLIST_FILE: iosApp/tvOS-Info.plist
         MARKETING_VERSION: "1.0.0"
         CURRENT_PROJECT_VERSION: 1
@@ -129,7 +129,7 @@ targets:
         SUPPORTED_PLATFORMS: "appletvos appletvsimulator"
         # Bridging header exposes the Obj-C audio graph exception catcher on
         # Apple targets and the private AVDisplayCriteria initializer on tvOS.
-        SWIFT_OBJC_BRIDGING_HEADER: iosApp/Screens/Player/CoreMedia/SiloPlayerBridging.h
+        SWIFT_OBJC_BRIDGING_HEADER: iosApp/Screens/Player/CoreMedia/PrairiePlayerBridging.h
     dependencies:
       - package: FFmpeg
         product: FFmpeg
@@ -137,10 +137,10 @@ targets:
         product: Nuke
       - package: Nuke
         product: NukeUI
-      - target: SiloTVTopShelf
+      - target: PrairieTVTopShelf
         embed: true
 
-  SiloMac:
+  PrairieMac:
     type: application
     platform: macOS
     sources:
@@ -167,11 +167,11 @@ targets:
         name: Prepare macOS FFmpeg Frameworks
         basedOnDependencyAnalysis: false
     configFiles:
-      Debug: Signing/SiloMac.xcconfig
-      Release: Signing/SiloMac.xcconfig
+      Debug: Signing/PrairieMac.xcconfig
+      Release: Signing/PrairieMac.xcconfig
     settings:
       base:
-        PRODUCT_NAME: Silo
+        PRODUCT_NAME: Prairie
         INFOPLIST_FILE: macOS-Info.plist
         MARKETING_VERSION: "1.0.0"
         CURRENT_PROJECT_VERSION: 1
@@ -179,7 +179,7 @@ targets:
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         SDKROOT: macosx
         SUPPORTED_PLATFORMS: "macosx"
-        SWIFT_OBJC_BRIDGING_HEADER: iosApp/Screens/Player/CoreMedia/SiloPlayerBridging.h
+        SWIFT_OBJC_BRIDGING_HEADER: iosApp/Screens/Player/CoreMedia/PrairiePlayerBridging.h
     dependencies:
       - package: FFmpeg
         product: FFmpeg
@@ -189,11 +189,11 @@ targets:
         product: NukeUI
 
   # Top Shelf extension: populates the Apple TV Home Screen with
-  # Continue Watching / Next Up rows when the Silo app icon is
+  # Continue Watching / Next Up rows when the Prairie app icon is
   # focused. Shares auth state with the host app via an App Group +
   # shared Keychain access group. Compiles `iosApp/Shared/` for the
   # SharedStorage helpers used on both sides.
-  SiloTVTopShelf:
+  PrairieTVTopShelf:
     type: app-extension
     platform: tvOS
     sources:
@@ -202,16 +202,16 @@ targets:
         excludes:
           - "Diagnostics/**"
     # PRODUCT_BUNDLE_IDENTIFIER and CODE_SIGN_ENTITLEMENTS live in
-    # Signing/SiloTVTopShelf.xcconfig so local contributors can
+    # Signing/PrairieTVTopShelf.xcconfig so local contributors can
     # override them via Signing/Local.xcconfig without dirtying this
     # file. Target-level `settings` entries win over xcconfig, so they
     # MUST NOT be set below.
     configFiles:
-      Debug: Signing/SiloTVTopShelf.xcconfig
-      Release: Signing/SiloTVTopShelf.xcconfig
+      Debug: Signing/PrairieTVTopShelf.xcconfig
+      Release: Signing/PrairieTVTopShelf.xcconfig
     settings:
       base:
-        PRODUCT_NAME: SiloTVTopShelf
+        PRODUCT_NAME: PrairieTVTopShelf
         INFOPLIST_FILE: TopShelf/Info.plist
         MARKETING_VERSION: "1.0.0"
         CURRENT_PROJECT_VERSION: 1
@@ -221,10 +221,10 @@ targets:
       - sdk: TVServices.framework
 
   # iOS Notification Service extension: enriches generic APNs alerts by
-  # fetching compact display metadata directly from the user's Silo server.
+  # fetching compact display metadata directly from the user's Prairie server.
   # Shares active server/profile/token state via the App Group + shared
   # Keychain access group, but does not link the main app's AuthService.
-  SiloNotificationService:
+  PrairieNotificationService:
     type: app-extension
     platform: iOS
     sources:
@@ -232,11 +232,11 @@ targets:
       - path: iosApp/Notifications/ApplePushDisplayMetadata.swift
       - path: iosApp/Shared/SharedStorage.swift
     configFiles:
-      Debug: Signing/SiloNotificationService.xcconfig
-      Release: Signing/SiloNotificationService.xcconfig
+      Debug: Signing/PrairieNotificationService.xcconfig
+      Release: Signing/PrairieNotificationService.xcconfig
     settings:
       base:
-        PRODUCT_NAME: SiloNotificationService
+        PRODUCT_NAME: PrairieNotificationService
         INFOPLIST_FILE: NotificationService/Info.plist
         MARKETING_VERSION: "1.0.0"
         CURRENT_PROJECT_VERSION: 1
@@ -251,18 +251,18 @@ targets:
   # and pushes content states through ActivityKit; this target only renders
   # them, so it compiles just the shared attributes schema and needs no
   # entitlements or shared storage.
-  SiloDownloadsActivity:
+  PrairieDownloadsActivity:
     type: app-extension
     platform: iOS
     sources:
       - path: DownloadsActivity
       - path: iosApp/Downloads/DownloadActivityAttributes.swift
     configFiles:
-      Debug: Signing/SiloDownloadsActivity.xcconfig
-      Release: Signing/SiloDownloadsActivity.xcconfig
+      Debug: Signing/PrairieDownloadsActivity.xcconfig
+      Release: Signing/PrairieDownloadsActivity.xcconfig
     settings:
       base:
-        PRODUCT_NAME: SiloDownloadsActivity
+        PRODUCT_NAME: PrairieDownloadsActivity
         INFOPLIST_FILE: DownloadsActivity/Info.plist
         MARKETING_VERSION: "1.0.0"
         CURRENT_PROJECT_VERSION: 1
@@ -273,16 +273,16 @@ targets:
       - sdk: WidgetKit.framework
       - sdk: SwiftUI.framework
 
-  # Unit-test bundle for the iOS Silo app. Hosts the XCTest cases under
-  # Tests/ and loads the Silo.app binary so `@testable import Silo` can
+  # Unit-test bundle for the iOS Prairie app. Hosts the XCTest cases under
+  # Tests/ and loads the Prairie.app binary so `@testable import Prairie` can
   # reach the app's internal types (policies, codecs, formatting helpers).
-  SiloTests:
+  PrairieTests:
     type: bundle.unit-test
     platform: iOS
     sources:
       - path: Tests
     dependencies:
-      - target: Silo
+      - target: Prairie
       # PacketQueueTests allocates real AVPackets, so the test bundle needs
       # the Libav* module maps the app target gets from this package.
       # link: false — the symbols come from the test host (BUNDLE_LOADER);
@@ -292,39 +292,39 @@ targets:
         link: false
     settings:
       base:
-        PRODUCT_NAME: SiloTests
+        PRODUCT_NAME: PrairieTests
         GENERATE_INFOPLIST_FILE: "YES"
         # Without an explicit SDKROOT the generated test config resolves
         # BUILT_PRODUCTS_DIR without a platform suffix, so TEST_HOST points
-        # at .../Debug/Silo.app and xcodebuild can't find the test host.
+        # at .../Debug/Prairie.app and xcodebuild can't find the test host.
         SDKROOT: iphoneos
         SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
         BUNDLE_LOADER: "$(TEST_HOST)"
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Silo.app/Silo"
-        SWIFT_OBJC_BRIDGING_HEADER: iosApp/Screens/Player/CoreMedia/SiloPlayerBridging.h
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Prairie.app/Prairie"
+        SWIFT_OBJC_BRIDGING_HEADER: iosApp/Screens/Player/CoreMedia/PrairiePlayerBridging.h
 
 schemes:
-  Silo:
+  Prairie:
     build:
       targets:
-        Silo: all
-        SiloTests: [test]
+        Prairie: all
+        PrairieTests: [test]
     run:
       config: Debug
     test:
       config: Debug
       targets:
-        - SiloTests
+        - PrairieTests
     archive:
       config: Release
     analyze:
       config: Debug
     profile:
       config: Release
-  SiloNoDebugger:
+  PrairieNoDebugger:
     build:
       targets:
-        Silo: all
+        Prairie: all
     run:
       config: Debug
       debugEnabled: false
@@ -336,10 +336,10 @@ schemes:
       config: Debug
     profile:
       config: Release
-  SiloTV:
+  PrairieTV:
     build:
       targets:
-        SiloTV: all
+        PrairieTV: all
     run:
       config: Debug
     test:
@@ -350,10 +350,10 @@ schemes:
       config: Debug
     profile:
       config: Release
-  SiloMac:
+  PrairieMac:
     build:
       targets:
-        SiloMac: all
+        PrairieMac: all
     run:
       config: Debug
     test:

@@ -212,8 +212,8 @@ struct TVLibraryGridView: View {
     }
 
     private var emptyGridIcon: String {
-        if SiloMediaType.isSeries(libraryType) { return "tv" }
-        if SiloMediaType.isAudiobook(libraryType) { return "book.closed" }
+        if PrairieMediaType.isSeries(libraryType) { return "tv" }
+        if PrairieMediaType.isAudiobook(libraryType) { return "book.closed" }
         return "film.stack"
     }
 

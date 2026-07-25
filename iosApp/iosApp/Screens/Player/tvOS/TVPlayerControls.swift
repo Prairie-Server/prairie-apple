@@ -330,7 +330,7 @@ struct TVPlayerControls: View {
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .siloPlayerGlass(in: Capsule())
+                .prairiePlayerGlass(in: Capsule())
             }
 
             if viewModel.sleepTimer.isActive {
@@ -341,7 +341,7 @@ struct TVPlayerControls: View {
                     .monospacedDigit()
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
-                    .siloPlayerGlass(in: Capsule())
+                    .prairiePlayerGlass(in: Capsule())
             }
         }
     }

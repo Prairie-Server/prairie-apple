@@ -122,7 +122,7 @@ struct TVSettingsView: View {
 
             signOutRow
 
-            Text("Silo \(Self.versionString)")
+            Text("Prairie \(Self.versionString)")
                 .font(.system(size: 16, weight: .medium, design: .monospaced))
                 .tracking(1)
                 .foregroundColor(.continuumSecondaryText.opacity(0.7))
@@ -398,9 +398,9 @@ enum TVSettingsCategory: String, CaseIterable, Identifiable {
         case .subtitles:
             return "Language, behavior, and on-screen appearance."
         case .diagnostics:
-            return "Review and send diagnostics to this Silo server."
+            return "Review and send diagnostics to this Prairie server."
         case .server:
-            return "The Silo server this Apple TV is connected to."
+            return "The Prairie server this Apple TV is connected to."
         }
     }
 }

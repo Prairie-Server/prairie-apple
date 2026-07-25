@@ -1,6 +1,6 @@
 //
 //  SubtitleAIControllerTests.swift
-//  SiloTests
+//  PrairieTests
 //
 //  Controller-level tests for the poller-vs-websocket completion race — the
 //  highest-risk untested seam in the AI subtitle pipeline (M4 FIX 10). The
@@ -18,7 +18,7 @@
 
 import XCTest
 import Foundation
-@testable import Silo
+@testable import Prairie
 
 @MainActor
 final class SubtitleAIControllerTests: XCTestCase {

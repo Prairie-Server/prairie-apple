@@ -1,6 +1,6 @@
 //
 //  LoopbackSubtitleTap.swift
-//  Silo (iOS + tvOS + macOS)
+//  Prairie (iOS + tvOS + macOS)
 //
 //  Persistent store for text-subtitle cues harvested from the loopback
 //  writer's own demuxer ("subtitle tap"). The writer already reads the

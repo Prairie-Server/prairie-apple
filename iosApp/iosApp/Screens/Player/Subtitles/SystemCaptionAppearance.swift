@@ -7,7 +7,7 @@
 //  the player can offer a "match device settings" appearance source.
 //
 //  Only fields the user actually customized (behavior == .useValue) are
-//  taken from the system; everything else keeps the Silo default, which
+//  taken from the system; everything else keeps the Prairie default, which
 //  mirrors how AVPlayer applies these preferences to its own captions.
 //
 
@@ -144,7 +144,7 @@ enum SystemCaptionAppearance {
     }
 
     /// Map the system's relative character size (1.0 = default) onto our
-    /// preset ladder, anchoring 1.0 at the Silo default preset.
+    /// preset ladder, anchoring 1.0 at the Prairie default preset.
     static func fontSizePreset(forRelativeSize relative: Double) -> SubtitleFontSizePreset {
         let anchors: [(preset: SubtitleFontSizePreset, relative: Double)] = [
             (.small, 0.6),

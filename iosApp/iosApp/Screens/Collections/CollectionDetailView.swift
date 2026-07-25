@@ -67,7 +67,7 @@ struct CollectionDetailView: View {
 
     private func playAction(for item: BrowseItem) -> (() -> Void)? {
         #if os(tvOS)
-        guard SiloMediaType.isDirectlyPlayable(item.type) else { return nil }
+        guard PrairieMediaType.isDirectlyPlayable(item.type) else { return nil }
         return {
             router.presentPlayer(
                 contentId: item.contentId,

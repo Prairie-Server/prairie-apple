@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Picker + management UI for the set of saved Silo servers.
+/// Picker + management UI for the set of saved Prairie servers.
 ///
 /// Shared between iOS and tvOS with minor platform-specific tweaks:
 /// - iOS: Navigation `List` with swipe-to-delete.
@@ -73,7 +73,7 @@ struct ServerListView: View {
                     Text("Manage Servers")
                         .font(.system(size: 38, weight: .semibold))
                         .foregroundColor(.continuumOnSurface)
-                    Text("Manage saved Silo servers or add another connection.")
+                    Text("Manage saved Prairie servers or add another connection.")
                         .font(.system(size: 20))
                         .foregroundColor(.continuumSecondaryText)
                 }

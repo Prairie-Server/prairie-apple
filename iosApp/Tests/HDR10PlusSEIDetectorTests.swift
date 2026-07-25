@@ -1,5 +1,5 @@
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 final class HDR10PlusSEIDetectorTests: XCTestCase {
     /// ITU-T T.35 header for SMPTE ST 2094-40 (HDR10+) dynamic metadata.

@@ -1,5 +1,5 @@
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 /// Focused coverage for the behavior fixes made in response to the PR #96
 /// review: permanent-failure gating, consent notice refresh on upload,

@@ -1,5 +1,5 @@
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 final class LoopbackSegmentCutterTests: XCTestCase {
     // Boundaries in 90 kHz ticks: segments start at 0 s, 4 s, 8 s, 12 s;

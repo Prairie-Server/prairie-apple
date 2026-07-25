@@ -6,7 +6,7 @@
 
 **Architecture:** This is predominantly *subtraction*. The clients already filter the server's `featured` section out of their row lists (`regularSections`); `FeaturedCarousel` is the only thing that renders it. We stop rendering the carousel in both places (`HomeView`, `LibraryRecommendedView`), strip the page-level ambient backdrop/tint that only existed to back the hero, fix the one layout coupling it leaves behind (the Libraries-tab refresh-pill inset), redirect startup artwork prefetch to the first content row, then delete `FeaturedCarousel.swift` and regenerate the project.
 
-**Tech Stack:** Swift 5, SwiftUI, XcodeGen (`project.yml` → `Silo.xcodeproj`), `xcodebuild`.
+**Tech Stack:** Swift 5, SwiftUI, XcodeGen (`project.yml` → `Prairie.xcodeproj`), `xcodebuild`.
 
 **Spec:** `docs/superpowers/specs/2026-06-15-resume-first-home-design.md`
 
@@ -18,11 +18,11 @@ This change is UI removal in a codebase whose `CLAUDE.md` says **not** to add te
 
 **Build commands (memorize):**
 
-- iOS: `cd iosApp && xcodebuild build -project Silo.xcodeproj -scheme Silo -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO`
-- macOS: `cd iosApp && xcodebuild build -project Silo.xcodeproj -scheme SiloMac -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO`
-- tvOS: `cd iosApp && xcodebuild build -project Silo.xcodeproj -scheme SiloTV -destination 'platform=tvOS Simulator,name=Apple TV' CODE_SIGNING_ALLOWED=NO`
+- iOS: `cd iosApp && xcodebuild build -project Prairie.xcodeproj -scheme Prairie -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO`
+- macOS: `cd iosApp && xcodebuild build -project Prairie.xcodeproj -scheme PrairieMac -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO`
+- tvOS: `cd iosApp && xcodebuild build -project Prairie.xcodeproj -scheme PrairieTV -destination 'platform=tvOS Simulator,name=Apple TV' CODE_SIGNING_ALLOWED=NO`
 
-If a simulator name is unavailable, list with `xcrun simctl list devices available` and substitute. `Silo.xcodeproj/` is gitignored, so regeneration never shows up in `git status`.
+If a simulator name is unavailable, list with `xcrun simctl list devices available` and substitute. `Prairie.xcodeproj/` is gitignored, so regeneration never shows up in `git status`.
 
 **Task order matters:** Tasks 1 and 2 each remove one `FeaturedCarousel` usage. The file is only deleted in Task 4, after both usages are gone, so every intermediate task still compiles.
 
@@ -184,7 +184,7 @@ Expected: no matches after deleting `navigateToPlayer`. If so, delete the declar
 
 - [ ] **Step 8: Build iOS**
 
-Run: `cd iosApp && xcodebuild build -project Silo.xcodeproj -scheme Silo -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO`
+Run: `cd iosApp && xcodebuild build -project Prairie.xcodeproj -scheme Prairie -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO`
 Expected: `** BUILD SUCCEEDED **`. (`FeaturedCarousel.swift` still compiles — it is still referenced by `LibraryRecommendedView` until Task 2.)
 
 - [ ] **Step 9: Commit**
@@ -307,7 +307,7 @@ And the `topChrome` `.background` comment:
 
 - [ ] **Step 6: Build iOS**
 
-Run: `cd iosApp && xcodebuild build -project Silo.xcodeproj -scheme Silo -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO`
+Run: `cd iosApp && xcodebuild build -project Prairie.xcodeproj -scheme Prairie -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO`
 Expected: `** BUILD SUCCEEDED **`. (`FeaturedCarousel.swift` now has zero references but still compiles as an unused file — deleted in Task 4.)
 
 - [ ] **Step 7: Commit**
@@ -363,7 +363,7 @@ The `#if os(tvOS)` branch already warms the first content row (correct for a no-
 
 - [ ] **Step 2: Build iOS**
 
-Run: `cd iosApp && xcodebuild build -project Silo.xcodeproj -scheme Silo -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO`
+Run: `cd iosApp && xcodebuild build -project Prairie.xcodeproj -scheme Prairie -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO`
 Expected: `** BUILD SUCCEEDED **`.
 
 - [ ] **Step 3: Commit**
@@ -395,21 +395,21 @@ git rm iosApp/iosApp/Screens/Home/FeaturedCarousel.swift
 - [ ] **Step 3: Regenerate the Xcode project**
 
 Run: `cd iosApp && xcodegen generate`
-Expected: `Created project at .../Silo.xcodeproj`. (XcodeGen globs sources by directory, so the deleted file drops out automatically; `Silo.xcodeproj/` is gitignored.)
+Expected: `Created project at .../Prairie.xcodeproj`. (XcodeGen globs sources by directory, so the deleted file drops out automatically; `Prairie.xcodeproj/` is gitignored.)
 
 - [ ] **Step 4: Build iOS**
 
-Run: `cd iosApp && xcodebuild build -project Silo.xcodeproj -scheme Silo -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO`
+Run: `cd iosApp && xcodebuild build -project Prairie.xcodeproj -scheme Prairie -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO`
 Expected: `** BUILD SUCCEEDED **`.
 
 - [ ] **Step 5: Build macOS**
 
-Run: `cd iosApp && xcodebuild build -project Silo.xcodeproj -scheme SiloMac -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO`
+Run: `cd iosApp && xcodebuild build -project Prairie.xcodeproj -scheme PrairieMac -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO`
 Expected: `** BUILD SUCCEEDED **`.
 
 - [ ] **Step 6: Build tvOS (regression guard)**
 
-Run: `cd iosApp && xcodebuild build -project Silo.xcodeproj -scheme SiloTV -destination 'platform=tvOS Simulator,name=Apple TV' CODE_SIGNING_ALLOWED=NO`
+Run: `cd iosApp && xcodebuild build -project Prairie.xcodeproj -scheme PrairieTV -destination 'platform=tvOS Simulator,name=Apple TV' CODE_SIGNING_ALLOWED=NO`
 Expected: `** BUILD SUCCEEDED **`. (tvOS never referenced `FeaturedCarousel`; this confirms the deletion didn't disturb the shared Home/prefetch code.)
 
 - [ ] **Step 7: Commit**
@@ -428,7 +428,7 @@ No code changes — confirm behavior on a simulator signed into a dev server wit
 
 - [ ] **Step 1: iPhone Home**
 
-Run the `Silo` scheme on an iPhone simulator. Confirm: no hero/carousel; the floating "Home" header sits over a flat OLED background; the first row is Continue Watching (when present); the header chrome fades in on scroll; rows are not clipped under the header.
+Run the `Prairie` scheme on an iPhone simulator. Confirm: no hero/carousel; the floating "Home" header sits over a flat OLED background; the first row is Continue Watching (when present); the header chrome fades in on scroll; rows are not clipped under the header.
 
 - [ ] **Step 2: Library Recommended tab**
 
@@ -440,7 +440,7 @@ If a profile with no Continue Watching / empty library is available, confirm Hom
 
 - [ ] **Step 4: iPad + macOS spot check**
 
-Run the `Silo` scheme on an iPad simulator and the `SiloMac` scheme; confirm Home and the library Recommended tab render resume-first rows with no carousel and no layout breakage.
+Run the `Prairie` scheme on an iPad simulator and the `PrairieMac` scheme; confirm Home and the library Recommended tab render resume-first rows with no carousel and no layout breakage.
 
 ---
 

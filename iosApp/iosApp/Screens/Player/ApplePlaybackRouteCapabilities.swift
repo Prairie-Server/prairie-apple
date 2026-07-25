@@ -215,11 +215,11 @@ extension ApplePlaybackRouteCapabilities {
         backendCapabilities: .coreMedia,
         primaryAudioSelection: .init(
             state: .repoVerified,
-            note: "Silo switches compatibility-player audio tracks directly."
+            note: "Prairie switches compatibility-player audio tracks directly."
         ),
         primarySubtitleSelection: .init(
             state: .repoVerified,
-            note: "Silo owns embedded and sidecar subtitle selection on the compatibility player."
+            note: "Prairie owns embedded and sidecar subtitle selection on the compatibility player."
         ),
         sidecarPrimarySubtitles: .init(
             state: .repoVerified,
@@ -239,7 +239,7 @@ extension ApplePlaybackRouteCapabilities {
         ),
         subtitleStyling: .init(
             state: .repoVerified,
-            note: "The compatibility player applies Silo-owned subtitle styling overrides."
+            note: "The compatibility player applies Prairie-owned subtitle styling overrides."
         ),
         audioDelay: .init(
             state: .unsupported,
@@ -263,7 +263,7 @@ extension ApplePlaybackRouteCapabilities {
         ),
         tvOSRemoteOwnership: .init(
             state: .repoVerified,
-            note: "Silo owns the tvOS focus and Siri Remote shell."
+            note: "Prairie owns the tvOS focus and Siri Remote shell."
         ),
         premiumClaims: .init(
             localDeviceHDR: .init(
@@ -306,11 +306,11 @@ extension ApplePlaybackRouteCapabilities {
         ),
         subtitleDelay: .init(
             state: .repoVerified,
-            note: "Silo-rendered sidecar subtitles honor subtitle delay on Native Player HLS."
+            note: "Prairie-rendered sidecar subtitles honor subtitle delay on Native Player HLS."
         ),
         subtitleStyling: .init(
             state: .repoVerified,
-            note: "Silo-rendered sidecar subtitles honor shared subtitle styling on Native Player HLS."
+            note: "Prairie-rendered sidecar subtitles honor shared subtitle styling on Native Player HLS."
         ),
         audioDelay: .init(
             state: .unsupported,
@@ -322,7 +322,7 @@ extension ApplePlaybackRouteCapabilities {
         ),
         pictureInPicture: .init(
             state: .validationRequired,
-            note: "PiP is enabled on iOS Native Player HLS; Silo-rendered subtitles do not appear in the PiP window."
+            note: "PiP is enabled on iOS Native Player HLS; Prairie-rendered subtitles do not appear in the PiP window."
         ),
         externalPlayback: .init(
             state: .validationRequired,
@@ -334,7 +334,7 @@ extension ApplePlaybackRouteCapabilities {
         ),
         tvOSRemoteOwnership: .init(
             state: .repoVerified,
-            note: "Silo keeps the custom tvOS shell even on Native Player routes."
+            note: "Prairie keeps the custom tvOS shell even on Native Player routes."
         ),
         premiumClaims: .init(
             localDeviceHDR: .init(
@@ -361,7 +361,7 @@ extension ApplePlaybackRouteCapabilities {
         ),
         primarySubtitleSelection: .init(
             state: .repoVerified,
-            note: "Native-direct subtitle selection is allowed only for assets that match the Native Player allowlist; ASS/SSA text tracks are Silo-rendered through the extractor."
+            note: "Native-direct subtitle selection is allowed only for assets that match the Native Player allowlist; ASS/SSA text tracks are Prairie-rendered through the extractor."
         ),
         sidecarPrimarySubtitles: .init(
             state: .repoVerified,
@@ -377,11 +377,11 @@ extension ApplePlaybackRouteCapabilities {
         ),
         subtitleDelay: .init(
             state: .repoVerified,
-            note: "Silo-rendered extracted and sidecar subtitles honor subtitle delay on Native Player Direct assets."
+            note: "Prairie-rendered extracted and sidecar subtitles honor subtitle delay on Native Player Direct assets."
         ),
         subtitleStyling: .init(
             state: .repoVerified,
-            note: "Silo-rendered extracted and sidecar subtitles honor shared subtitle styling on Native Player Direct assets."
+            note: "Prairie-rendered extracted and sidecar subtitles honor shared subtitle styling on Native Player Direct assets."
         ),
         audioDelay: .init(
             state: .unsupported,
@@ -393,7 +393,7 @@ extension ApplePlaybackRouteCapabilities {
         ),
         pictureInPicture: .init(
             state: .validationRequired,
-            note: "PiP is enabled on iOS Native Player Direct assets; Silo-rendered subtitles do not appear in the PiP window."
+            note: "PiP is enabled on iOS Native Player Direct assets; Prairie-rendered subtitles do not appear in the PiP window."
         ),
         externalPlayback: .init(
             state: .unsupported,
@@ -405,7 +405,7 @@ extension ApplePlaybackRouteCapabilities {
         ),
         tvOSRemoteOwnership: .init(
             state: .repoVerified,
-            note: "Silo keeps the custom tvOS shell even on Native Player Direct assets."
+            note: "Prairie keeps the custom tvOS shell even on Native Player Direct assets."
         ),
         premiumClaims: .init(
             localDeviceHDR: .init(
@@ -423,12 +423,12 @@ extension ApplePlaybackRouteCapabilities {
         )
     )
 
-    static let siloPlayerLoopback = ApplePlaybackRouteCapabilities(
+    static let prairiePlayerLoopback = ApplePlaybackRouteCapabilities(
         routeLabel: "Direct Stream",
         backendCapabilities: .avFoundation,
         primaryAudioSelection: .init(
             state: .repoVerified,
-            note: "AVFoundation media selection owns primary audio on SiloPlayer output."
+            note: "AVFoundation media selection owns primary audio on PrairiePlayer output."
         ),
         primarySubtitleSelection: .init(
             state: .repoVerified,
@@ -436,7 +436,7 @@ extension ApplePlaybackRouteCapabilities {
         ),
         sidecarPrimarySubtitles: .init(
             state: .repoVerified,
-            note: "Primary sidecar subtitles remain available on SiloPlayer output."
+            note: "Primary sidecar subtitles remain available on PrairiePlayer output."
         ),
         secondarySubtitles: .init(
             state: .repoVerified,
@@ -444,15 +444,15 @@ extension ApplePlaybackRouteCapabilities {
         ),
         chapters: .init(
             state: .repoVerified,
-            note: "Bridge-supplied chapters remain available on SiloPlayer output."
+            note: "Bridge-supplied chapters remain available on PrairiePlayer output."
         ),
         subtitleDelay: .init(
             state: .repoVerified,
-            note: "Silo-rendered sidecar subtitles honor subtitle delay on SiloPlayer output."
+            note: "Prairie-rendered sidecar subtitles honor subtitle delay on PrairiePlayer output."
         ),
         subtitleStyling: .init(
             state: .repoVerified,
-            note: "Silo-rendered sidecar subtitles honor shared subtitle styling on SiloPlayer output."
+            note: "Prairie-rendered sidecar subtitles honor shared subtitle styling on PrairiePlayer output."
         ),
         audioDelay: .init(
             state: .unsupported,
@@ -460,15 +460,15 @@ extension ApplePlaybackRouteCapabilities {
         ),
         bufferedAheadReporting: .init(
             state: .repoVerified,
-            note: "AVPlayer publishes playable buffered-ahead state on SiloPlayer output."
+            note: "AVPlayer publishes playable buffered-ahead state on PrairiePlayer output."
         ),
         pictureInPicture: .init(
             state: .validationRequired,
-            note: "PiP is enabled on iOS SiloPlayer output; Silo-rendered subtitles do not appear in the PiP window."
+            note: "PiP is enabled on iOS PrairiePlayer output; Prairie-rendered subtitles do not appear in the PiP window."
         ),
         externalPlayback: .init(
             state: .repoVerified,
-            note: "AirPlay from iPhone to Apple TV is hardware-validated for SiloPlayer loopback delivery."
+            note: "AirPlay from iPhone to Apple TV is hardware-validated for PrairiePlayer loopback delivery."
         ),
         nowPlayingIntegration: .init(
             state: .repoVerified,
@@ -476,7 +476,7 @@ extension ApplePlaybackRouteCapabilities {
         ),
         tvOSRemoteOwnership: .init(
             state: .repoVerified,
-            note: "Silo keeps the custom tvOS shell even on the local loopback route."
+            note: "Prairie keeps the custom tvOS shell even on the local loopback route."
         ),
         premiumClaims: .init(
             localDeviceHDR: .init(
@@ -507,7 +507,7 @@ extension ApplePlaybackRouteCapabilities {
         ),
         sidecarPrimarySubtitles: .init(
             state: .repoVerified,
-            note: "macOS registers and renders sidecar subtitles through the shared Silo subtitle session."
+            note: "macOS registers and renders sidecar subtitles through the shared Prairie subtitle session."
         ),
         secondarySubtitles: .init(
             state: .repoVerified,
@@ -519,11 +519,11 @@ extension ApplePlaybackRouteCapabilities {
         ),
         subtitleDelay: .init(
             state: .repoVerified,
-            note: "macOS sidecar subtitles honor shared subtitle delay through the Silo overlay."
+            note: "macOS sidecar subtitles honor shared subtitle delay through the Prairie overlay."
         ),
         subtitleStyling: .init(
             state: .repoVerified,
-            note: "macOS sidecar subtitles honor shared subtitle styling through the Silo overlay."
+            note: "macOS sidecar subtitles honor shared subtitle styling through the Prairie overlay."
         ),
         audioDelay: .init(
             state: .unsupported,

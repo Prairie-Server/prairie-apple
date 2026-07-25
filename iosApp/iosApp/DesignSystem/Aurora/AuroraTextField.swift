@@ -150,7 +150,7 @@ struct AuroraTextField<F: Hashable>: View {
 
 // MARK: - Screen scaffold
 
-/// Silo backdrop + a vertically scrollable, keyboard-friendly column capped
+/// Prairie backdrop + a vertically scrollable, keyboard-friendly column capped
 /// to a comfortable reading width. Callers supply the wordmark + content.
 struct AuroraScreen<Content: View>: View {
     var variant: AuroraVariant

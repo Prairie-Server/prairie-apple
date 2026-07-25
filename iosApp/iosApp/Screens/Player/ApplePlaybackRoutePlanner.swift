@@ -77,7 +77,7 @@ struct ApplePlaybackPlannerInput {
     let hlsRouteFeatureEnabled: Bool
     /// Stage 2 rollout gate: lifts the loopback startup-unreliable blockers
     /// and serves eligible sources through the VOD plan mode.
-    let siloPlayerPrimaryEnabled: Bool
+    let prairiePlayerPrimaryEnabled: Bool
     /// Snapshot of the user's Dolby Vision settings, captured at plan time.
     let dolbyVisionPolicy: DolbyVisionPolicy.Snapshot
     /// Captured at plan-creation time so route choice and degradation
@@ -97,7 +97,7 @@ struct ApplePlaybackPlannerInput {
         selectedPrimarySubtitleTrackId: Int64?,
         selectedSecondarySubtitleTrackId: Int64?,
         hlsRouteFeatureEnabled: Bool,
-        siloPlayerPrimaryEnabled: Bool = false,
+        prairiePlayerPrimaryEnabled: Bool = false,
         dolbyVisionPolicy: DolbyVisionPolicy.Snapshot,
         displayCapabilities: ApplePlaybackDisplayCapabilities = .unknown
     ) {
@@ -111,7 +111,7 @@ struct ApplePlaybackPlannerInput {
         self.selectedPrimarySubtitleTrackId = selectedPrimarySubtitleTrackId
         self.selectedSecondarySubtitleTrackId = selectedSecondarySubtitleTrackId
         self.hlsRouteFeatureEnabled = hlsRouteFeatureEnabled
-        self.siloPlayerPrimaryEnabled = siloPlayerPrimaryEnabled
+        self.prairiePlayerPrimaryEnabled = prairiePlayerPrimaryEnabled
         self.dolbyVisionPolicy = dolbyVisionPolicy
         self.displayCapabilities = displayCapabilities
     }
@@ -124,23 +124,23 @@ struct ApplePlaybackRoutePlanner {
     private static let nativeDirectSubtitleCodecs: Set<String> = [
         "ass", "ssa", "mov_text", "tx3g", "wvtt", "webvtt"
     ]
-    private static let siloSourceContainers: Set<String> = ["mkv", "matroska", "ts", "m2ts", "mts", "mpegts"]
-    private static let siloVideoCodecs: Set<String> = ["h264", "hevc"]
-    private static let siloTextSubtitleCodecs: Set<String> = [
+    private static let prairieSourceContainers: Set<String> = ["mkv", "matroska", "ts", "m2ts", "mts", "mpegts"]
+    private static let prairieVideoCodecs: Set<String> = ["h264", "hevc"]
+    private static let prairieTextSubtitleCodecs: Set<String> = [
         "ass", "ssa", "srt", "subrip", "webvtt", "mov_text", "tx3g"
     ]
     /// Canonical bitmap-subtitle codec identifiers (PGS/DVD/DVB/VobSub).
     /// Bitmap subs have no text representation, so they can't be AI-translated
     /// (`SubtitleTranslateMenu` reads this to offer "Transcribe" instead) and
     /// gate routing here. Exposed `static` so callers share one source of truth.
-    static let siloBitmapSubtitleCodecs: Set<String> = [
+    static let prairieBitmapSubtitleCodecs: Set<String> = [
         "pgs", "hdmv_pgs_subtitle", "dvd_subtitle", "dvb_subtitle", "vobsub"
     ]
-    /// Bitmap codecs the SiloPlayer route renders client-side: the AVPlayer
+    /// Bitmap codecs the PrairiePlayer route renders client-side: the AVPlayer
     /// subtitle extractor decodes them into RGBA cue images for the overlay,
     /// so they no longer force the compatibility (burn-in transcode) route.
     /// DVB stays out — its broadcast region/CLUT model is unvalidated here.
-    static let siloClientRenderedBitmapSubtitleCodecs: Set<String> = [
+    static let prairieClientRenderedBitmapSubtitleCodecs: Set<String> = [
         "pgs", "hdmv_pgs_subtitle", "dvd_subtitle", "vobsub"
     ]
 
@@ -186,7 +186,7 @@ struct ApplePlaybackRoutePlanner {
                 session: session,
                 requirements: input.routeRequirements
             )
-            let siloAssessment = Self.assessSiloRoute(
+            let prairieAssessment = Self.assessPrairieRoute(
                 selectedVersion: selectedVersion,
                 session: session,
                 nativeAssessment: directAssessment,
@@ -197,9 +197,9 @@ struct ApplePlaybackRoutePlanner {
                 preferredAudioTrackIndex: input.preferredAudioTrackIndex,
                 selectedPrimarySubtitleTrackId: input.selectedPrimarySubtitleTrackId,
                 selectedSecondarySubtitleTrackId: input.selectedSecondarySubtitleTrackId,
-                siloPlayerPrimaryEnabled: input.siloPlayerPrimaryEnabled
+                prairiePlayerPrimaryEnabled: input.prairiePlayerPrimaryEnabled
             )
-            if directLoopbackVideoMode == nil, let mode = siloAssessment.videoMode {
+            if directLoopbackVideoMode == nil, let mode = prairieAssessment.videoMode {
                 directLoopbackVideoMode = mode
             }
             directLoopbackSession = directLoopbackVideoMode.flatMap { videoMode in
@@ -213,14 +213,14 @@ struct ApplePlaybackRoutePlanner {
                     videoMode: videoMode,
                     videoRange: Self.videoRange(for: videoMode, source: selectedVersion),
                     sourceStartTimeSeconds: session.position,
-                    servingMode: input.siloPlayerPrimaryEnabled ? .vodPlan : .event
+                    servingMode: input.prairiePlayerPrimaryEnabled ? .vodPlan : .event
                 )
             }
             if let directDolbyVisionProfile, let directDolbyVisionResolution,
                [5, 7, 8].contains(directDolbyVisionProfile), directLoopbackSession != nil {
-                engine = .siloPlayerLoopback
+                engine = .prairiePlayerLoopback
                 parityBlockers = []
-                routeCapabilities = .siloPlayerLoopback
+                routeCapabilities = .prairiePlayerLoopback
                 reason = Self.dolbyVisionRouteToken(
                     profile: directDolbyVisionProfile,
                     resolution: directDolbyVisionResolution,
@@ -232,26 +232,26 @@ struct ApplePlaybackRoutePlanner {
                 parityBlockers = []
                 routeCapabilities = .avPlayerNativeDirect
                 reason = "native_direct_asset"
-            } else if siloAssessment.isEligible, directLoopbackSession != nil {
-                engine = .siloPlayerLoopback
+            } else if prairieAssessment.isEligible, directLoopbackSession != nil {
+                engine = .prairiePlayerLoopback
                 parityBlockers = []
-                routeCapabilities = .siloPlayerLoopback
-                reason = siloAssessment.reason
+                routeCapabilities = .prairiePlayerLoopback
+                reason = prairieAssessment.reason
             } else {
                 #if os(macOS)
                 engine = .playerCoreDirect
-                parityBlockers = directAssessment.blockers + siloAssessment.blockers.map { "silo_\($0)" }
+                parityBlockers = directAssessment.blockers + prairieAssessment.blockers.map { "prairie_\($0)" }
                 routeCapabilities = .playerCoreDirect
                 reason = "macos_direct_blocked"
                 #else
                 engine = .playerCoreDirect
-                var blockers = directAssessment.blockers + siloAssessment.blockers.map { "silo_\($0)" }
+                var blockers = directAssessment.blockers + prairieAssessment.blockers.map { "prairie_\($0)" }
                 if (directDolbyVisionProfile == 5
                     || directDolbyVisionProfile == 7
                     || directDolbyVisionProfile == 8
-                    || siloAssessment.isEligible),
+                    || prairieAssessment.isEligible),
                    directLoopbackSession == nil {
-                    blockers.append("silo_loopback_session_unresolved")
+                    blockers.append("prairie_loopback_session_unresolved")
                 }
                 parityBlockers = blockers
                 routeCapabilities = .playerCoreDirect
@@ -272,22 +272,22 @@ struct ApplePlaybackRoutePlanner {
                     profile8BaseLayer: directDvProfile8BaseLayer,
                     vocabulary: .trace
                 ))
-            } else if siloAssessment.isEligible, engine == .siloPlayerLoopback {
-                trace.append("\(siloAssessment.reason)_selected")
+            } else if prairieAssessment.isEligible, engine == .prairiePlayerLoopback {
+                trace.append("\(prairieAssessment.reason)_selected")
             }
             let fallbackOrderToken: String = switch engine {
             case .avPlayerNativeDirect:
-                "fallback_order_native_silo_compatibility"
-            case .siloPlayerLoopback:
-                "fallback_order_silo_compatibility"
+                "fallback_order_native_prairie_compatibility"
+            case .prairiePlayerLoopback:
+                "fallback_order_prairie_compatibility"
             case .playerCoreDirect:
                 "fallback_order_compatibility_only"
             case .avPlayerHLS:
                 "fallback_order_hls_controlled_retry"
             }
-            decisionTrace = trace + directAssessment.trace + siloAssessment.trace + [fallbackOrderToken]
+            decisionTrace = trace + directAssessment.trace + prairieAssessment.trace + [fallbackOrderToken]
             degradationWarnings = routeCapabilities.degradationNotes(for: input.routeRequirements)
-                + siloAssessment.degradations
+                + prairieAssessment.degradations
         case .remux, .transcode:
             let flagOn = input.hlsRouteFeatureEnabled
             featureFlagEnabled = flagOn
@@ -319,7 +319,7 @@ struct ApplePlaybackRoutePlanner {
             engine: engine,
             startMode: startMode,
             streamRequest: input.streamRequest,
-            loopbackSession: engine == .siloPlayerLoopback ? directLoopbackSession : nil,
+            loopbackSession: engine == .prairiePlayerLoopback ? directLoopbackSession : nil,
             capabilities: routeCapabilities.backendCapabilities,
             routeCapabilities: routeCapabilities,
             requirements: input.routeRequirements,
@@ -464,7 +464,7 @@ private struct NativeDirectAssessment {
     let trace: [String]
 }
 
-private struct SiloRouteAssessment {
+private struct PrairieRouteAssessment {
     let isEligible: Bool
     let videoMode: LoopbackSessionSpec.VideoMode?
     let blockers: [String]
@@ -540,7 +540,7 @@ private extension ApplePlaybackRoutePlanner {
         )
     }
 
-    static func assessSiloRoute(
+    static func assessPrairieRoute(
         selectedVersion: FileVersion,
         session: PlaybackSessionResponse,
         nativeAssessment: NativeDirectAssessment,
@@ -551,18 +551,18 @@ private extension ApplePlaybackRoutePlanner {
         preferredAudioTrackIndex: Int?,
         selectedPrimarySubtitleTrackId: Int64?,
         selectedSecondarySubtitleTrackId: Int64?,
-        siloPlayerPrimaryEnabled: Bool = false
-    ) -> SiloRouteAssessment {
+        prairiePlayerPrimaryEnabled: Bool = false
+    ) -> PrairieRouteAssessment {
         var blockers: [String] = []
-        var trace: [String] = ["silo_assessment"]
+        var trace: [String] = ["prairie_assessment"]
         var degradations: [String] = []
 
         guard sourceMetadata.dolbyVisionProfile == nil else {
-            return SiloRouteAssessment(
+            return PrairieRouteAssessment(
                 isEligible: true,
                 videoMode: nil,
                 blockers: [],
-                trace: trace + ["silo_dv_profile_owned_by_dv_policy"],
+                trace: trace + ["prairie_dv_profile_owned_by_dv_policy"],
                 degradations: [],
                 reason: "dolby_vision_loopback"
             )
@@ -571,33 +571,33 @@ private extension ApplePlaybackRoutePlanner {
         guard nativeAssessment.blockers.contains("container_not_allowlisted")
                 || nativeAssessment.blockers.contains("audio_codec_not_allowlisted")
                 || nativeAssessment.blockers.contains("embedded_subtitles_require_compatibility") else {
-            return SiloRouteAssessment(
+            return PrairieRouteAssessment(
                 isEligible: false,
                 videoMode: nil,
                 blockers: ["no_normalization_needed"],
-                trace: trace + ["silo_not_needed"],
+                trace: trace + ["prairie_not_needed"],
                 degradations: [],
-                reason: "silo_not_needed"
+                reason: "prairie_not_needed"
             )
         }
 
         guard let container = sourceMetadata.container else {
             blockers.append("container_unknown")
-            return blockedSilo(blockers: blockers, trace: trace, degradations: degradations)
+            return blockedPrairie(blockers: blockers, trace: trace, degradations: degradations)
         }
-        trace.append("silo_container_\(container)")
-        if !siloSourceContainers.contains(container), !nativeDirectContainers.contains(container) {
+        trace.append("prairie_container_\(container)")
+        if !prairieSourceContainers.contains(container), !nativeDirectContainers.contains(container) {
             blockers.append("container_not_normalizable")
         }
 
         guard let videoCodec = sourceMetadata.videoCodec else {
             blockers.append("video_codec_unknown")
-            return blockedSilo(blockers: blockers, trace: trace, degradations: degradations)
+            return blockedPrairie(blockers: blockers, trace: trace, degradations: degradations)
         }
-        trace.append("silo_video_\(videoCodec)")
-        guard siloVideoCodecs.contains(videoCodec) else {
+        trace.append("prairie_video_\(videoCodec)")
+        guard prairieVideoCodecs.contains(videoCodec) else {
             blockers.append("video_not_copyable")
-            return blockedSilo(blockers: blockers, trace: trace, degradations: degradations)
+            return blockedPrairie(blockers: blockers, trace: trace, degradations: degradations)
         }
 
         let mandatoryEmbeddedSubtitleCodecs = selectedOrMandatoryEmbeddedSubtitleCodecs(
@@ -605,31 +605,31 @@ private extension ApplePlaybackRoutePlanner {
             selectedPrimarySubtitleTrackId: selectedPrimarySubtitleTrackId,
             selectedSecondarySubtitleTrackId: selectedSecondarySubtitleTrackId
         )
-        let bitmapSubtitleCodecs = mandatoryEmbeddedSubtitleCodecs.filter { siloBitmapSubtitleCodecs.contains($0) }
+        let bitmapSubtitleCodecs = mandatoryEmbeddedSubtitleCodecs.filter { prairieBitmapSubtitleCodecs.contains($0) }
         let blockedBitmapSubtitleCodecs = bitmapSubtitleCodecs.filter {
-            !siloClientRenderedBitmapSubtitleCodecs.contains($0)
+            !prairieClientRenderedBitmapSubtitleCodecs.contains($0)
         }
         if !blockedBitmapSubtitleCodecs.isEmpty {
             blockers.append("bitmap_subtitles_require_compatibility")
-            trace.append("silo_bitmap_subtitles_\(blockedBitmapSubtitleCodecs.joined(separator: "_"))")
+            trace.append("prairie_bitmap_subtitles_\(blockedBitmapSubtitleCodecs.joined(separator: "_"))")
         }
         let clientRenderedBitmapSubtitleCodecs = bitmapSubtitleCodecs.filter {
-            siloClientRenderedBitmapSubtitleCodecs.contains($0)
+            prairieClientRenderedBitmapSubtitleCodecs.contains($0)
         }
         if !clientRenderedBitmapSubtitleCodecs.isEmpty {
             trace.append(
-                "silo_bitmap_subtitles_client_rendered_\(clientRenderedBitmapSubtitleCodecs.joined(separator: "_"))"
+                "prairie_bitmap_subtitles_client_rendered_\(clientRenderedBitmapSubtitleCodecs.joined(separator: "_"))"
             )
         }
         let nonTextSubtitleCodecs = mandatoryEmbeddedSubtitleCodecs.filter {
-            !siloTextSubtitleCodecs.contains($0) && !siloBitmapSubtitleCodecs.contains($0)
+            !prairieTextSubtitleCodecs.contains($0) && !prairieBitmapSubtitleCodecs.contains($0)
         }
         if !nonTextSubtitleCodecs.isEmpty {
             blockers.append("embedded_subtitle_codec_unknown")
-            trace.append("silo_unknown_subtitles_\(nonTextSubtitleCodecs.joined(separator: "_"))")
+            trace.append("prairie_unknown_subtitles_\(nonTextSubtitleCodecs.joined(separator: "_"))")
         }
         if !mandatoryEmbeddedSubtitleCodecs.isEmpty, blockers.isEmpty {
-            trace.append("silo_subtitles_extract_or_register")
+            trace.append("prairie_subtitles_extract_or_register")
         }
 
         let audioMode = normalizedLoopbackAudioTracks(
@@ -642,14 +642,14 @@ private extension ApplePlaybackRoutePlanner {
             degradations.append("Loopback audio may use an explicit lossy fallback.")
         }
 
-        if !PlaybackEngineKind.siloPlayerLoopback.routeCapabilities
+        if !PlaybackEngineKind.prairiePlayerLoopback.routeCapabilities
             .blockingReasons(for: requirements).isEmpty {
-            blockers.append(contentsOf: PlaybackEngineKind.siloPlayerLoopback.routeCapabilities
+            blockers.append(contentsOf: PlaybackEngineKind.prairiePlayerLoopback.routeCapabilities
                 .blockingReasons(for: requirements))
         }
 
         guard blockers.isEmpty else {
-            return blockedSilo(blockers: blockers, trace: trace, degradations: degradations)
+            return blockedPrairie(blockers: blockers, trace: trace, degradations: degradations)
         }
 
         let mode: LoopbackSessionSpec.VideoMode = videoCodec == "hevc"
@@ -663,55 +663,55 @@ private extension ApplePlaybackRoutePlanner {
         } else {
             reason = "\(videoCodec)_container_loopback"
         }
-        if mode == .passthroughH264, !siloPlayerPrimaryEnabled {
+        if mode == .passthroughH264, !prairiePlayerPrimaryEnabled {
             // The EVENT loopback writer fragments H.264 at source keyframes.
             // Long-GOP MKVs can show one frame, then stall while AVPlayer waits
             // on sparse fMP4/HLS fragments. The VOD serving mode (Stage 2 gate)
             // removes the growing-playlist startup dependency — the full title
             // is advertised at load and AVPlayer buffers against it.
-            return blockedSilo(
+            return blockedPrairie(
                 blockers: ["h264_loopback_startup_unreliable"],
-                trace: trace + ["silo_reason_\(reason)", "silo_h264_loopback_disabled"],
+                trace: trace + ["prairie_reason_\(reason)", "prairie_h264_loopback_disabled"],
                 degradations: degradations
             )
         }
         if mode == .passthroughHEVC,
            (Self.transferKind(for: selectedVersion) ?? "SDR") == "SDR",
-           !siloPlayerPrimaryEnabled {
+           !prairiePlayerPrimaryEnabled {
             // Plain SDR HEVC has the same long-fragment startup risk without a
             // Dolby Vision/HDR video presentation claim that requires AVPlayer
             // ownership; lifted by the same VOD gate as H.264 above.
-            return blockedSilo(
+            return blockedPrairie(
                 blockers: ["hevc_sdr_loopback_startup_unreliable"],
-                trace: trace + ["silo_reason_\(reason)", "silo_hevc_sdr_loopback_disabled"],
+                trace: trace + ["prairie_reason_\(reason)", "prairie_hevc_sdr_loopback_disabled"],
                 degradations: degradations
             )
         }
-        if siloPlayerPrimaryEnabled {
-            trace.append("silo_vod_gate_open")
+        if prairiePlayerPrimaryEnabled {
+            trace.append("prairie_vod_gate_open")
         }
-        return SiloRouteAssessment(
+        return PrairieRouteAssessment(
             isEligible: true,
             videoMode: mode,
             blockers: [],
-            trace: trace + ["silo_eligible", "silo_reason_\(reason)"],
+            trace: trace + ["prairie_eligible", "prairie_reason_\(reason)"],
             degradations: degradations,
             reason: reason
         )
     }
 
-    static func blockedSilo(
+    static func blockedPrairie(
         blockers: [String],
         trace: [String],
         degradations: [String]
-    ) -> SiloRouteAssessment {
-        SiloRouteAssessment(
+    ) -> PrairieRouteAssessment {
+        PrairieRouteAssessment(
             isEligible: false,
             videoMode: nil,
             blockers: blockers,
-            trace: trace + blockers.map { "silo_blocker_\($0)" },
+            trace: trace + blockers.map { "prairie_blocker_\($0)" },
             degradations: degradations,
-            reason: "silo_blocked"
+            reason: "prairie_blocked"
         )
     }
 
@@ -743,7 +743,7 @@ private extension ApplePlaybackRoutePlanner {
                 audioMode: "server_output",
                 subtitleMode: "server_or_sidecar"
             )
-        case .siloPlayerLoopback:
+        case .prairiePlayerLoopback:
             return PlaybackNormalizationSummary(
                 containerMode: "local_fmp4_hls",
                 videoMode: loopbackSession?.videoMode.logToken ?? "loopback_unresolved",

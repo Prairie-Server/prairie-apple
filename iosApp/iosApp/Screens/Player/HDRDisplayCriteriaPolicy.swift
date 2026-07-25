@@ -70,7 +70,7 @@ enum HDRDisplayCriteriaPolicy {
     static let switchStartPollIntervalMs = 10
     static let switchSettlePollAttempts = 50
     static let switchSettlePollIntervalMs = 100
-    /// A panel hosting HDR reports EDR headroom above 1.0; the epsilon
+    /// A panel hosting HDR reports EDR headroom above 1.0; the epprairien
     /// guards float noise on SDR panels reporting exactly 1.0.
     static let hdrHeadroomFloor: Double = 1.001
 
