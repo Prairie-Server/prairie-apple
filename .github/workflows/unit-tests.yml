@@ -5,12 +5,10 @@ name: Unit Tests
 # Coverage gate choice:
 #   Overall Prairie.app coverage includes large SwiftUI surfaces that unit tests
 #   do not exercise, so a 75% *overall* gate is unrealistic today. Instead we
-#   gate line coverage for product folders PrairieTests primarily covers:
-#     - iosApp/iosApp/Networking/ (API clients, stores, wire models including
-#       Live TV)
-#     - iosApp/iosApp/Screens/LiveTV/ (channel list + EPG view models)
-#     - BrowseViewModel.swift (colocated pure logic with focused unit tests)
-#   See scripts/check-xccov-coverage.sh.
+#   gate line coverage for files under iosApp/iosApp/Networking/ (API clients,
+#   stores, and model/wire types colocated there — Models.swift, *Models.swift,
+#   including Live TV). That is the product surface PrairieTests primarily
+#   covers. See scripts/check-xccov-coverage.sh.
 
 on:
   push:
@@ -118,8 +116,8 @@ jobs:
           # Also emit a human-readable summary for the job log.
           xcrun xccov view --report TestResults.xcresult | tee coverage-report.txt
 
-      - name: Enforce 75% scoped coverage gate
-        # Gates Networking + LiveTV screens + BrowseViewModel — not overall UI.
+      - name: Enforce 75% Networking coverage gate
+        # Gates iosApp/iosApp/Networking/ (models included) — not overall app UI.
         # See workflow header comment and scripts/check-xccov-coverage.sh.
         run: |
           set -euo pipefail
@@ -127,10 +125,7 @@ jobs:
             echo "error: coverage.json missing; cannot enforce 75% gate" >&2
             exit 1
           fi
-          scripts/check-xccov-coverage.sh iosApp/coverage.json 75 \
-            /Networking/ \
-            /Screens/LiveTV/ \
-            BrowseViewModel.swift
+          scripts/check-xccov-coverage.sh iosApp/coverage.json 75 /Networking/
 
       - name: Upload test results and coverage
         if: always()

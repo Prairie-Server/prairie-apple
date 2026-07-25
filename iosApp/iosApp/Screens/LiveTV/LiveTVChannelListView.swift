@@ -54,6 +54,7 @@ struct LiveTVChannelListView: View {
                 state: error,
                 onRetry: { Task { await viewModel.load() } }
             )
+            .accessibilityIdentifier("livetv-error")
         } else if viewModel.isEmpty {
             EmptyStateView(
                 icon: "tv",
