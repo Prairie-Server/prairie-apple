@@ -3,7 +3,7 @@
 //  Continuum (iOS + tvOS)
 //
 //  In-player external subtitle search (OpenSubtitles / SubDL / Subsource via
-//  silo-server). Android/web parity: pick a language (the profile's preferred
+//  prairie-server). Android/web parity: pick a language (the profile's preferred
 //  subtitle language floats to the top and is pre-selected), Search — no
 //  free-text query, the server keys the search on the media file — then tap a
 //  result to download it. The downloaded track registers on the live backend
@@ -87,7 +87,7 @@ struct SubtitleSearchMenu: View {
     private var title: String { "Search Subtitles" }
 
     private var explainer: String {
-        "Pick a language and Silo searches its subtitle providers for this video."
+        "Pick a language and Prairie searches its subtitle providers for this video."
     }
 
     // MARK: - Languages

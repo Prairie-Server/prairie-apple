@@ -151,7 +151,7 @@ Manual operations behave like this:
 
 ## 8. Subtitles today
 
-Text subtitles are Silo-rendered through the shared libass session:
+Text subtitles are Prairie-rendered through the shared libass session:
 
 - ASS/SSA events decode through FFmpeg and are fed to libass.
 - SRT/WebVTT/MOV_TEXT sidecars and extracted text tracks are converted into
@@ -166,7 +166,7 @@ Current gaps are important:
 - Bitmap subtitles are filtered out of controlled subtitle selection until a
   bitmap renderer exists.
 - Native AVFoundation caption fallback can still be used where extraction is
-  unavailable, but it does not honor Silo delay/styling.
+  unavailable, but it does not honor Prairie delay/styling.
 
 One more subtle truth: `openAndDemux(...)` comments that it should default to
 the first non-forced subtitle stream, but the executable code only opens a
@@ -221,15 +221,15 @@ software decoder. The display layer is unchanged; only the source of decoded
 
 This fallback is per-load: once the software path is engaged it stays for the
 remainder of the session. HEVC and Dolby Vision do not have an equivalent
-software fallback today; HEVC failures route to SiloPlayer instead (see
-[03 - Dolby Vision and SiloPlayer route](03-dolby-vision-and-avplayer-route.md)).
+software fallback today; HEVC failures route to PrairiePlayer instead (see
+[03 - Dolby Vision and PrairiePlayer route](03-dolby-vision-and-avplayer-route.md)).
 
 ## 13. Source delivery via PlaybackSourceProxy
 
 For routes that download from origin (CompatibilityPlayer and NativePlayer
 HLS), the view model can interpose
 [`PlaybackSourceProxy`](../../iosApp/iosApp/Screens/Player/PlaybackSourceProxy.swift)
-between the active backend and the upstream Silo server. It rewrites the
+between the active backend and the upstream Prairie server. It rewrites the
 source URL to a localhost listener and streams the origin response through to
 the consumer.
 

@@ -503,7 +503,7 @@ struct PlayerView: View {
             .scaleEffect(1.3)
             .frame(width: 62, height: 62)
             #endif
-            .siloPlayerGlass(in: .rect(cornerRadius: 8))
+            .prairiePlayerGlass(in: .rect(cornerRadius: 8))
             .shadow(color: .black.opacity(0.45), radius: 24, y: 10)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             .allowsHitTesting(false)
@@ -528,11 +528,11 @@ struct PlayerView: View {
                 Button("Retry") {
                     viewModel.retry()
                 }
-                .siloPrimaryButton()
+                .prairiePrimaryButton()
                 .frame(minWidth: 140)
 
                 Button("Go Back") { dismissPlayer() }
-                    .siloPrimaryButton()
+                    .prairiePrimaryButton()
                     .frame(minWidth: 140)
             }
         }
@@ -836,7 +836,7 @@ private struct PlayerNextUpScreen<MiniPlayer: View>: View {
                 Button(action: { viewModel.playNextEpisodeNow() }) {
                     Label("Play Now", systemImage: "play.fill")
                 }
-                .siloPrimaryButton()
+                .prairiePrimaryButton()
                 .frame(maxWidth: .infinity)
             }
 
@@ -844,14 +844,14 @@ private struct PlayerNextUpScreen<MiniPlayer: View>: View {
                 Button(action: { viewModel.keepWatchingCurrentEpisode() }) {
                     Label("Keep Watching", systemImage: "rectangle.inset.filled")
                 }
-                .siloSecondaryButton()
+                .prairieSecondaryButton()
                 .frame(maxWidth: .infinity)
             }
 
             Button(action: onBack) {
                 Label("Back", systemImage: "chevron.left")
             }
-            .siloSecondaryButton()
+            .prairieSecondaryButton()
             .frame(maxWidth: .infinity)
 
             if let seconds = viewModel.nextUpCountdownSeconds {

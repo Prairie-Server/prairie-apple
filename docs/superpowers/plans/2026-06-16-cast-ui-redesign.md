@@ -4,7 +4,7 @@
 
 **Goal:** Rework the iOS cast/remote UI into a native, artwork-forward "now-playing" experience without changing the wire protocol or the tvOS receiver.
 
-**Architecture:** Pure iOS view-layer change. `SiloCastViews.swift` is split into four focused, `#if os(iOS)`-guarded files under `iosApp/iosApp/Cast/iOS/`. Artwork is resolved client-side from the `contentId` already in the cast state (cache → API), so no protocol field is added. The remote screen is split into a thin controller-observing wrapper plus a pure presentational view driven by plain `SiloCastPlaybackState` + a command callback, which makes it previewable with mock data.
+**Architecture:** Pure iOS view-layer change. `PrairieCastViews.swift` is split into four focused, `#if os(iOS)`-guarded files under `iosApp/iosApp/Cast/iOS/`. Artwork is resolved client-side from the `contentId` already in the cast state (cache → API), so no protocol field is added. The remote screen is split into a thin controller-observing wrapper plus a pure presentational view driven by plain `PrairieCastPlaybackState` + a command callback, which makes it previewable with mock data.
 
 **Tech Stack:** Swift 5, SwiftUI, `@Observable`, XcodeGen (`project.yml`), existing app primitives (`AsyncImageView`, `PlayerTimeFormatter`, `ContinuumAPI`, `ResponseCache`, `Color.continuum*` tokens).
 
@@ -23,27 +23,27 @@ The artwork resolver is low-risk network/cache glue (not critical/high-risk shar
 
 - **Build (iOS):**
   ```bash
-  cd iosApp && xcodebuild build -project Silo.xcodeproj -scheme Silo \
+  cd iosApp && xcodebuild build -project Prairie.xcodeproj -scheme Prairie \
     -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO
   ```
   Expected: ends with `** BUILD SUCCEEDED **`.
-- **Regenerate the project** whenever a file is **added or deleted** (the iOS/tvOS targets glob `iosApp/`, but the generated `Silo.xcodeproj` must be refreshed to pick up new/removed files):
+- **Regenerate the project** whenever a file is **added or deleted** (the iOS/tvOS targets glob `iosApp/`, but the generated `Prairie.xcodeproj` must be refreshed to pick up new/removed files):
   ```bash
   cd iosApp && xcodegen generate
   ```
-- **`Silo.xcodeproj` is gitignored** (XcodeGen output) — never `git add` it. Commit only the Swift/doc files.
-- **Every new file under `Cast/iOS/` MUST be wrapped in `#if os(iOS) … #endif`** — the tvOS (`SiloTV`) target also globs `iosApp/` and will otherwise try to compile iOS-only types.
+- **`Prairie.xcodeproj` is gitignored** (XcodeGen output) — never `git add` it. Commit only the Swift/doc files.
+- **Every new file under `Cast/iOS/` MUST be wrapped in `#if os(iOS) … #endif`** — the tvOS (`PrairieTV`) target also globs `iosApp/` and will otherwise try to compile iOS-only types.
 - **Monochrome chrome** (spec §3): no chromatic accent. White (`continuumOnSurface`) fills, black (`continuumBackground`) glyph on the play button; artwork is the only color.
 
 ## File structure (decomposition)
 
 | File | Responsibility | Task |
 |---|---|---|
-| `iosApp/iosApp/Cast/iOS/SiloCastArtwork.swift` (new) | `SiloCastArtworkResolver` (contentId → poster/backdrop) + `SiloCastArtworkBackground` (blurred backdrop). | 1 |
-| `iosApp/iosApp/Cast/iOS/SiloCastRemoteControlView.swift` (new) | `SiloCastRemoteControlView` wrapper + `RemoteNowPlayingContent` presentational view + `RemoteChipLabel` + previews. | 2 |
-| `iosApp/iosApp/Cast/iOS/SiloCastTargetPickerView.swift` (new) | `SiloCastTargetPickerView` with searching/found/empty states. | 3 |
-| `iosApp/iosApp/Cast/iOS/SiloCastControlModeButton.swift` (new) | `SiloCastControlModeButton` restyled to chrome tokens. | 4 |
-| `iosApp/iosApp/Cast/iOS/SiloCastViews.swift` (delete by end of Task 4) | Emptied as structs migrate out; deleted once empty. | 2–4 |
+| `iosApp/iosApp/Cast/iOS/PrairieCastArtwork.swift` (new) | `PrairieCastArtworkResolver` (contentId → poster/backdrop) + `PrairieCastArtworkBackground` (blurred backdrop). | 1 |
+| `iosApp/iosApp/Cast/iOS/PrairieCastRemoteControlView.swift` (new) | `PrairieCastRemoteControlView` wrapper + `RemoteNowPlayingContent` presentational view + `RemoteChipLabel` + previews. | 2 |
+| `iosApp/iosApp/Cast/iOS/PrairieCastTargetPickerView.swift` (new) | `PrairieCastTargetPickerView` with searching/found/empty states. | 3 |
+| `iosApp/iosApp/Cast/iOS/PrairieCastControlModeButton.swift` (new) | `PrairieCastControlModeButton` restyled to chrome tokens. | 4 |
+| `iosApp/iosApp/Cast/iOS/PrairieCastViews.swift` (delete by end of Task 4) | Emptied as structs migrate out; deleted once empty. | 2–4 |
 
 Call sites in `HomeView.swift`, `ContentView.swift`/`MainTabView` reference these types **by name only**, which is preserved — so no call-site edits are required.
 
@@ -52,9 +52,9 @@ Call sites in `HomeView.swift`, `ContentView.swift`/`MainTabView` reference thes
 ### Task 1: Artwork resolver + blurred background
 
 **Files:**
-- Create: `iosApp/iosApp/Cast/iOS/SiloCastArtwork.swift`
+- Create: `iosApp/iosApp/Cast/iOS/PrairieCastArtwork.swift`
 
-- [ ] **Step 1: Create `SiloCastArtwork.swift`**
+- [ ] **Step 1: Create `PrairieCastArtwork.swift`**
 
 ```swift
 #if os(iOS)
@@ -65,7 +65,7 @@ import SwiftUI
 /// Reuses the same item-detail path (cache → API) the detail screen uses.
 @MainActor
 @Observable
-final class SiloCastArtworkResolver {
+final class PrairieCastArtworkResolver {
     private(set) var posterURL: String?
     private(set) var backdropURL: String?
     private var resolvedContentId: String?
@@ -101,7 +101,7 @@ final class SiloCastArtworkResolver {
 
 /// Full-bleed blurred-artwork backdrop behind the now-playing content.
 /// Falls back to flat OLED black when no artwork is available.
-struct SiloCastArtworkBackground: View {
+struct PrairieCastArtworkBackground: View {
     let urlString: String?
 
     var body: some View {
@@ -125,7 +125,7 @@ struct SiloCastArtworkBackground: View {
 - [ ] **Step 2: Regenerate the project**
 
 Run: `cd iosApp && xcodegen generate`
-Expected: `Created project at … Silo.xcodeproj`.
+Expected: `Created project at … Prairie.xcodeproj`.
 
 - [ ] **Step 3: Build**
 
@@ -135,7 +135,7 @@ Expected: `** BUILD SUCCEEDED **`.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add iosApp/iosApp/Cast/iOS/SiloCastArtwork.swift
+git add iosApp/iosApp/Cast/iOS/PrairieCastArtwork.swift
 git commit -m "iOS cast: add client-side artwork resolver + blurred backdrop"
 ```
 
@@ -144,28 +144,28 @@ git commit -m "iOS cast: add client-side artwork resolver + blurred backdrop"
 ### Task 2: Native now-playing remote screen
 
 **Files:**
-- Create: `iosApp/iosApp/Cast/iOS/SiloCastRemoteControlView.swift`
-- Modify: `iosApp/iosApp/Cast/iOS/SiloCastViews.swift` (delete the old `SiloCastRemoteControlView` struct)
+- Create: `iosApp/iosApp/Cast/iOS/PrairieCastRemoteControlView.swift`
+- Modify: `iosApp/iosApp/Cast/iOS/PrairieCastViews.swift` (delete the old `PrairieCastRemoteControlView` struct)
 
-- [ ] **Step 1: Create `SiloCastRemoteControlView.swift`**
+- [ ] **Step 1: Create `PrairieCastRemoteControlView.swift`**
 
 ```swift
 #if os(iOS)
 import SwiftUI
 
-/// Native "now-playing" remote for controlling Silo playback on an Apple TV.
+/// Native "now-playing" remote for controlling Prairie playback on an Apple TV.
 /// Thin wrapper: observes the cast session and drives the presentational
 /// `RemoteNowPlayingContent` with plain state + a command callback.
-struct SiloCastRemoteControlView: View {
-    @Bindable var controller: SiloCastController
+struct PrairieCastRemoteControlView: View {
+    @Bindable var controller: PrairieCastController
     @Environment(\.dismiss) private var dismiss
-    @State private var artwork = SiloCastArtworkResolver()
+    @State private var artwork = PrairieCastArtworkResolver()
     @State private var isShowingPicker = false
 
     var body: some View {
         NavigationStack {
             ZStack {
-                SiloCastArtworkBackground(urlString: artwork.backdropURL ?? artwork.posterURL)
+                PrairieCastArtworkBackground(urlString: artwork.backdropURL ?? artwork.posterURL)
                 content
             }
             .navigationTitle("")
@@ -208,7 +208,7 @@ struct SiloCastRemoteControlView: View {
                 }
             }
             .sheet(isPresented: $isShowingPicker) {
-                SiloCastTargetPickerView(request: nil, controller: controller)
+                PrairieCastTargetPickerView(request: nil, controller: controller)
             }
         }
         .preferredColorScheme(.dark)
@@ -246,7 +246,7 @@ struct SiloCastRemoteControlView: View {
                     .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.continuumError.opacity(0.9)))
             } else {
                 ProgressView()
-                Text("Connecting to \(controller.activeTarget?.name ?? "Silo TV")…")
+                Text("Connecting to \(controller.activeTarget?.name ?? "Prairie TV")…")
                     .font(.headline)
                     .foregroundStyle(Color.continuumSecondaryText)
             }
@@ -256,12 +256,12 @@ struct SiloCastRemoteControlView: View {
 }
 
 /// Pure presentational now-playing layout — no controller dependency, so it
-/// previews with mock `SiloCastPlaybackState`.
+/// previews with mock `PrairieCastPlaybackState`.
 private struct RemoteNowPlayingContent: View {
-    let state: SiloCastPlaybackState
+    let state: PrairieCastPlaybackState
     let targetName: String?
     let posterURL: String?
-    let onCommand: (SiloCastControlCommand) -> Void
+    let onCommand: (PrairieCastControlCommand) -> Void
 
     @State private var scrubPreview: Double?
     private let speedOptions: [Double] = [0.75, 1.0, 1.25, 1.5, 2.0]
@@ -530,18 +530,18 @@ private struct RemoteChipLabel: View {
 }
 
 #if DEBUG
-private extension SiloCastPlaybackState {
-    static func previewPlaying() -> SiloCastPlaybackState {
-        SiloCastPlaybackState(
+private extension PrairieCastPlaybackState {
+    static func previewPlaying() -> PrairieCastPlaybackState {
+        PrairieCastPlaybackState(
             contentId: "preview", sessionId: "s1", title: "The Bear",
             subtitle: "Season 3 · Episode 4 · Children",
             isPlaying: true, isLoading: false, isBuffering: false,
             currentTime: 1104, duration: 2895,
-            audioTracks: [SiloCastTrack(kind: "audio", trackId: 1, title: "English 5.1", detail: "AC-3")],
-            subtitleTracks: [SiloCastTrack(kind: "subtitle", trackId: 10, title: "English", detail: nil)],
+            audioTracks: [PrairieCastTrack(kind: "audio", trackId: 1, title: "English 5.1", detail: "AC-3")],
+            subtitleTracks: [PrairieCastTrack(kind: "subtitle", trackId: 10, title: "English", detail: nil)],
             selectedAudioTrackId: 1, selectedSubtitleTrackId: nil,
-            qualityOptions: [SiloCastOption(id: "auto", label: "Auto", detail: nil),
-                             SiloCastOption(id: "1080", label: "1080p", detail: nil)],
+            qualityOptions: [PrairieCastOption(id: "auto", label: "Auto", detail: nil),
+                             PrairieCastOption(id: "1080", label: "1080p", detail: nil)],
             activeQualityId: "auto", isQualitySwitching: false,
             playbackSpeed: 1.0, videoGravity: VideoGravity.fit.rawValue, hdrEnabled: false,
             supportsVideoGravity: true, supportsHDRToggle: true, error: nil
@@ -551,7 +551,7 @@ private extension SiloCastPlaybackState {
 
 #Preview("Now Playing") {
     ZStack {
-        SiloCastArtworkBackground(urlString: nil)
+        PrairieCastArtworkBackground(urlString: nil)
         RemoteNowPlayingContent(
             state: .previewPlaying(),
             targetName: "Living Room",
@@ -565,9 +565,9 @@ private extension SiloCastPlaybackState {
 #endif
 ```
 
-- [ ] **Step 2: Delete the old remote view from `SiloCastViews.swift`**
+- [ ] **Step 2: Delete the old remote view from `PrairieCastViews.swift`**
 
-In `iosApp/iosApp/Cast/iOS/SiloCastViews.swift`, delete the **entire** `struct SiloCastRemoteControlView: View { … }` definition (lines ~135–377, including its `content`, `progressControl`, `transportControls`, `commandMenus`, and `speedLabel` members). Leave `SiloCastTargetPickerView`, `SiloCastControlModeButton`, the leading `#if os(iOS)` / `import SwiftUI`, and trailing `#endif` intact.
+In `iosApp/iosApp/Cast/iOS/PrairieCastViews.swift`, delete the **entire** `struct PrairieCastRemoteControlView: View { … }` definition (lines ~135–377, including its `content`, `progressControl`, `transportControls`, `commandMenus`, and `speedLabel` members). Leave `PrairieCastTargetPickerView`, `PrairieCastControlModeButton`, the leading `#if os(iOS)` / `import SwiftUI`, and trailing `#endif` intact.
 
 - [ ] **Step 3: Regenerate the project**
 
@@ -576,7 +576,7 @@ Run: `cd iosApp && xcodegen generate`
 - [ ] **Step 4: Build**
 
 Run the iOS build command.
-Expected: `** BUILD SUCCEEDED **`. (If it fails with "invalid redeclaration of 'SiloCastRemoteControlView'", Step 2's deletion was incomplete.)
+Expected: `** BUILD SUCCEEDED **`. (If it fails with "invalid redeclaration of 'PrairieCastRemoteControlView'", Step 2's deletion was incomplete.)
 
 - [ ] **Step 5: Visual check**
 
@@ -585,7 +585,7 @@ Open the `Now Playing` preview in Xcode's canvas (or run the simulator — Task 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add iosApp/iosApp/Cast/iOS/SiloCastRemoteControlView.swift iosApp/iosApp/Cast/iOS/SiloCastViews.swift
+git add iosApp/iosApp/Cast/iOS/PrairieCastRemoteControlView.swift iosApp/iosApp/Cast/iOS/PrairieCastViews.swift
 git commit -m "iOS cast: native now-playing remote (artwork, scrubber, consolidated controls)"
 ```
 
@@ -594,20 +594,20 @@ git commit -m "iOS cast: native now-playing remote (artwork, scrubber, consolida
 ### Task 3: Target picker with searching state
 
 **Files:**
-- Create: `iosApp/iosApp/Cast/iOS/SiloCastTargetPickerView.swift`
-- Modify: `iosApp/iosApp/Cast/iOS/SiloCastViews.swift` (delete the old `SiloCastTargetPickerView` struct)
+- Create: `iosApp/iosApp/Cast/iOS/PrairieCastTargetPickerView.swift`
+- Modify: `iosApp/iosApp/Cast/iOS/PrairieCastViews.swift` (delete the old `PrairieCastTargetPickerView` struct)
 
-- [ ] **Step 1: Create `SiloCastTargetPickerView.swift`**
+- [ ] **Step 1: Create `PrairieCastTargetPickerView.swift`**
 
 ```swift
 #if os(iOS)
 import SwiftUI
 
-struct SiloCastTargetPickerView: View {
-    let request: SiloCastPlaybackRequest?
-    @Bindable var controller: SiloCastController
+struct PrairieCastTargetPickerView: View {
+    let request: PrairieCastPlaybackRequest?
+    @Bindable var controller: PrairieCastController
 
-    @State private var browser = SiloCastBrowser()
+    @State private var browser = PrairieCastBrowser()
     @State private var searchTimedOut = false
     @Environment(\.dismiss) private var dismiss
 
@@ -643,7 +643,7 @@ struct SiloCastTargetPickerView: View {
     private var searchingState: some View {
         VStack(spacing: 16) {
             ProgressView()
-            Text("Searching for Silo TVs…")
+            Text("Searching for Prairie TVs…")
                 .font(.headline)
                 .foregroundStyle(Color.continuumSecondaryText)
         }
@@ -652,7 +652,7 @@ struct SiloCastTargetPickerView: View {
 
     private var emptyState: some View {
         ContentUnavailableView(
-            "No Silo TVs Found",
+            "No Prairie TVs Found",
             systemImage: "tv",
             description: Text("Foreground Apple TVs on this server appear here.")
         )
@@ -703,15 +703,15 @@ struct SiloCastTargetPickerView: View {
 
 #if DEBUG
 #Preview("Searching") {
-    SiloCastTargetPickerView(request: nil, controller: SiloCastController())
+    PrairieCastTargetPickerView(request: nil, controller: PrairieCastController())
 }
 #endif
 #endif
 ```
 
-- [ ] **Step 2: Delete the old picker from `SiloCastViews.swift`**
+- [ ] **Step 2: Delete the old picker from `PrairieCastViews.swift`**
 
-In `SiloCastViews.swift`, delete the **entire** `struct SiloCastTargetPickerView: View { … }` definition. Leave `SiloCastControlModeButton` and the `#if os(iOS)` / `import SwiftUI` / `#endif` wrapper intact.
+In `PrairieCastViews.swift`, delete the **entire** `struct PrairieCastTargetPickerView: View { … }` definition. Leave `PrairieCastControlModeButton` and the `#if os(iOS)` / `import SwiftUI` / `#endif` wrapper intact.
 
 - [ ] **Step 3: Regenerate the project**
 
@@ -724,12 +724,12 @@ Expected: `** BUILD SUCCEEDED **`.
 
 - [ ] **Step 5: Visual check**
 
-Open the `Searching` preview. Expected: a centered spinner + "Searching for Silo TVs…" — **not** the "No Silo TVs Found" card. (The empty card appears only after the 8s timeout with still-empty results.)
+Open the `Searching` preview. Expected: a centered spinner + "Searching for Prairie TVs…" — **not** the "No Prairie TVs Found" card. (The empty card appears only after the 8s timeout with still-empty results.)
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add iosApp/iosApp/Cast/iOS/SiloCastTargetPickerView.swift iosApp/iosApp/Cast/iOS/SiloCastViews.swift
+git add iosApp/iosApp/Cast/iOS/PrairieCastTargetPickerView.swift iosApp/iosApp/Cast/iOS/PrairieCastViews.swift
 git commit -m "iOS cast: target picker shows Searching state before the empty card"
 ```
 
@@ -738,17 +738,17 @@ git commit -m "iOS cast: target picker shows Searching state before the empty ca
 ### Task 4: Control-mode button restyle + remove dead file
 
 **Files:**
-- Create: `iosApp/iosApp/Cast/iOS/SiloCastControlModeButton.swift`
-- Delete: `iosApp/iosApp/Cast/iOS/SiloCastViews.swift` (now empty)
+- Create: `iosApp/iosApp/Cast/iOS/PrairieCastControlModeButton.swift`
+- Delete: `iosApp/iosApp/Cast/iOS/PrairieCastViews.swift` (now empty)
 
-- [ ] **Step 1: Create `SiloCastControlModeButton.swift`**
+- [ ] **Step 1: Create `PrairieCastControlModeButton.swift`**
 
 ```swift
 #if os(iOS)
 import SwiftUI
 
-struct SiloCastControlModeButton: View {
-    @Bindable var controller: SiloCastController
+struct PrairieCastControlModeButton: View {
+    @Bindable var controller: PrairieCastController
     let onChooseTarget: () -> Void
 
     var body: some View {
@@ -796,7 +796,7 @@ struct SiloCastControlModeButton: View {
 #if DEBUG
 #Preview {
     HStack(spacing: 20) {
-        SiloCastControlModeButton(controller: SiloCastController(), onChooseTarget: {})
+        PrairieCastControlModeButton(controller: PrairieCastController(), onChooseTarget: {})
     }
     .padding()
     .background(Color.continuumBackground)
@@ -805,12 +805,12 @@ struct SiloCastControlModeButton: View {
 #endif
 ```
 
-- [ ] **Step 2: Delete the now-empty `SiloCastViews.swift`**
+- [ ] **Step 2: Delete the now-empty `PrairieCastViews.swift`**
 
 Confirm only the `#if os(iOS)` / `import SwiftUI` / `#endif` shell remains (all three structs migrated out), then delete the file:
 
 ```bash
-git rm iosApp/iosApp/Cast/iOS/SiloCastViews.swift
+git rm iosApp/iosApp/Cast/iOS/PrairieCastViews.swift
 ```
 
 - [ ] **Step 3: Regenerate the project**
@@ -825,8 +825,8 @@ Expected: `** BUILD SUCCEEDED **`.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add iosApp/iosApp/Cast/iOS/SiloCastControlModeButton.swift
-git commit -m "iOS cast: restyle control-mode button to chrome tokens; remove split-out SiloCastViews"
+git add iosApp/iosApp/Cast/iOS/PrairieCastControlModeButton.swift
+git commit -m "iOS cast: restyle control-mode button to chrome tokens; remove split-out PrairieCastViews"
 ```
 
 ---
@@ -843,15 +843,15 @@ Expected: `** BUILD SUCCEEDED **`.
 - [ ] **Step 2: tvOS build is unaffected**
 
 ```bash
-cd iosApp && xcodebuild build -project Silo.xcodeproj -scheme SiloTV \
+cd iosApp && xcodebuild build -project Prairie.xcodeproj -scheme PrairieTV \
   -destination 'platform=tvOS Simulator,name=Apple TV' CODE_SIGNING_ALLOWED=NO
 ```
 Expected: `** BUILD SUCCEEDED **`. (All new files are `#if os(iOS)`-guarded, so tvOS compiles them to nothing.)
 
 - [ ] **Step 3: Simulator smoke test**
 
-Boot an iPhone simulator, run the `Silo` scheme, sign in (`admin` / `water1234`), and on Home tap the airplay button in the top bar. Confirm:
-- The picker opens showing **"Searching for Silo TVs…"** with a spinner (not the empty card) on first open.
+Boot an iPhone simulator, run the `Prairie` scheme, sign in (`admin` / `water1234`), and on Home tap the airplay button in the top bar. Confirm:
+- The picker opens showing **"Searching for Prairie TVs…"** with a spinner (not the empty card) on first open.
 - With no live Apple TV receiver, the remote screen itself is best verified via the Xcode `Now Playing` preview (Task 2, Step 5) since it needs a cast session. If a tvOS receiver is available on the same network, cast a title and confirm the now-playing screen matches the design (artwork, scrubber, transport, single control row, `•••` menu with Stop/Disconnect/Choose TV).
 
 - [ ] **Step 4: Confirm git state**
@@ -859,7 +859,7 @@ Boot an iPhone simulator, run the `Silo` scheme, sign in (`admin` / `water1234`)
 ```bash
 git status --short
 ```
-Expected: clean working tree for the cast files; `Silo.xcodeproj` does not appear (gitignored). Codex's other uncommitted cast plumbing (`PlayerViewModel`, `TVCastReceiver`, etc.) is untouched and unchanged from before this plan.
+Expected: clean working tree for the cast files; `Prairie.xcodeproj` does not appear (gitignored). Codex's other uncommitted cast plumbing (`PlayerViewModel`, `TVCastReceiver`, etc.) is untouched and unchanged from before this plan.
 
 ---
 
@@ -881,6 +881,6 @@ Expected: clean working tree for the cast files; `Silo.xcodeproj` does not appea
 
 **2. Placeholder scan:** No TBD/TODO/"handle errors"/"similar to". Every code step is complete and compilable.
 
-**3. Type consistency:** `SiloCastArtworkResolver.resolve(contentId:)` / `.posterURL` / `.backdropURL`; `SiloCastArtworkBackground(urlString:)`; `RemoteNowPlayingContent(state:targetName:posterURL:onCommand:)`; `RemoteChipLabel(systemImage:caption:)`; `SiloCastPlaybackState.previewPlaying()` — all used consistently across tasks. Command factories (`.seek`, `.playPause`, `.stop`, `.selectAudioTrack`, `.selectSubtitleTrack`, `.setPlaybackSpeed`, `.setQuality`, `.setVideoGravity`, `.setHDREnabled`) match `SiloCastControlCommand`. State fields match `SiloCastPlaybackState`. `VideoGravity.allCases`/`.label`/`.rawValue`, `ResponseCache.shared.get`/`CacheKey.itemDetail`, `ContinuumAPI.shared.itemDetail(contentId:)`/`ItemDetail.posterUrl`/`.backdropUrl`, `AsyncImageView(url:contentMode:placeholderStyle:)`, `PlayerTimeFormatter.formatHMS` — all verified against the codebase.
+**3. Type consistency:** `PrairieCastArtworkResolver.resolve(contentId:)` / `.posterURL` / `.backdropURL`; `PrairieCastArtworkBackground(urlString:)`; `RemoteNowPlayingContent(state:targetName:posterURL:onCommand:)`; `RemoteChipLabel(systemImage:caption:)`; `PrairieCastPlaybackState.previewPlaying()` — all used consistently across tasks. Command factories (`.seek`, `.playPause`, `.stop`, `.selectAudioTrack`, `.selectSubtitleTrack`, `.setPlaybackSpeed`, `.setQuality`, `.setVideoGravity`, `.setHDREnabled`) match `PrairieCastControlCommand`. State fields match `PrairieCastPlaybackState`. `VideoGravity.allCases`/`.label`/`.rawValue`, `ResponseCache.shared.get`/`CacheKey.itemDetail`, `ContinuumAPI.shared.itemDetail(contentId:)`/`ItemDetail.posterUrl`/`.backdropUrl`, `AsyncImageView(url:contentMode:placeholderStyle:)`, `PlayerTimeFormatter.formatHMS` — all verified against the codebase.
 
 No gaps found.

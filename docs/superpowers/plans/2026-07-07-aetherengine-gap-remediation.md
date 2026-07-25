@@ -66,7 +66,7 @@ three route through the same stall-recovery ladder. **Do A1+A2+A3 as one branch*
 2. **Intent lifecycle (audit #7).** Retire `vodPendingSeekMediaTarget` only when
    `finished == true` AND landed within ~5 s of the target; add staleness
    retirement (~3 s of organic progress far from the target); have
-   `attemptSiloRouteCompatibilityFallback` prefer the unlanded target over the
+   `attemptPrairieRouteCompatibilityFallback` prefer the unlanded target over the
    frozen `currentTime` when building the fallback start.
 3. **Item-death revive.** In `recoverLocalLoopbackFailureIfNeeded`, treat any
    `failedToPlayToEndTime` with `!isUserPaused` as item death: bounded revive
@@ -200,7 +200,7 @@ B4+B5 are an hour with tests.
 ### C1 — AirPlay + audio re-select guard (audit #2)
 
 *Stage 1 (ship immediately, one line + guard):*
-`avPlayer.allowsExternalPlayback = false` for `.siloLoopback` in
+`avPlayer.allowsExternalPlayback = false` for `.prairieLoopback` in
 `prepareAssetPlayback` (AirPlay degrades to screen mirroring instead of a dead
 127.0.0.1 session; stays `true` for receiver-reachable strategies). Early
 return in `PlayerViewModel.selectAudio` when `selectedAudioId ==

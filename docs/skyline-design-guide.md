@@ -1,6 +1,6 @@
 # Skyline Design Guide
 
-**Silo TV client navigation redesign — tvOS & Android TV**
+**Prairie TV client navigation redesign — tvOS & Android TV**
 
 Status: approved direction (chosen over "Rail" and "Stage" candidates)
 Rev 2 (2026-06-12): the Featured hero carousel is removed in favor of the
@@ -458,7 +458,7 @@ stays empty (backdrop scrim only) until the first row has content.
 
 ---
 
-## 9. API & server notes (coordinate with `silo-server`)
+## 9. API & server notes (coordinate with `prairie-server`)
 
 - **Merged scope (`All <Type>`): removed (Rev 3, user decision).** No server or
   client merge is needed; multi-library tabs scope to a single library chosen via
@@ -474,7 +474,7 @@ stays empty (backdrop scrim only) until the first row has content.
 - Home sections, library sections, collections, calendar, and recommendations
   endpoints are otherwise reused as-is; "For You" folding is purely a client
   presentation change.
-- Top Shelf (tvOS) and deep links (`continuum://`) are unaffected — routes for
+- Top Shelf (tvOS) and deep links (`prairie://`) are unaffected — routes for
   detail/player don't change.
 
 ---
@@ -548,7 +548,7 @@ stays empty (backdrop scrim only) until the first row has content.
 
 1. ~~Should `All <Type>` be server-side or client-merged?~~ **Resolved (Rev 3): `All <Type>` dropped; single-library scoping only.**
 2. Music tab pill set: confirm `Playlists` exists server-side for TV contexts.
-3. Do we keep the wordmark text or swap in the `SiloWordmark` asset at 26 px cap height?
+3. Do we keep the wordmark text or swap in the `PrairieWordmark` asset at 26 px cap height?
 4. Calendar on Android: ship in Phase 3 or cut scope to tvOS-only initially?
 5. Cascade dwell duration: 250 ms is the spec start point — tune on device so
    deliberate landings always open it and bar sweeps never do; confirm the

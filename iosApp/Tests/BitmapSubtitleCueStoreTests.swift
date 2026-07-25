@@ -1,6 +1,6 @@
 import CoreGraphics
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 /// Timing/expiry semantics of the bitmap subtitle cue store, including
 /// the PGS "next event trims the previous cue" model.

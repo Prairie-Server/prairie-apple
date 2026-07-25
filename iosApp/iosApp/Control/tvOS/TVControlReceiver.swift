@@ -20,7 +20,7 @@ final class TVControlReceiver {
     /// silent auto-reconnect must only target TVs that are actually playing.
     private var isPlaybackAdvertised = false
     private weak var router: AppRouter?
-    private var activeSession: SiloControlSession?
+    private var activeSession: PrairieControlSession?
     private var activeConnectionId: UUID?
     private(set) var standbyState: TVControlStandbyState?
     private var readTask: Task<Void, Never>?
@@ -74,7 +74,7 @@ final class TVControlReceiver {
 
         let device = AppleDeviceIdentity.current
         let txt = NWTXTRecord([
-            "v": String(SiloControlProtocol.version),
+            "v": String(PrairieControlProtocol.version),
             "name": device.name,
             "id": device.id,
             "server": serverId,
@@ -83,10 +83,10 @@ final class TVControlReceiver {
         ])
 
         do {
-            let listener = try NWListener(using: SiloControlSession.tlsParameters())
+            let listener = try NWListener(using: PrairieControlSession.tlsParameters())
             listener.service = NWListener.Service(
                 name: device.name,
-                type: SiloControlProtocol.serviceType,
+                type: PrairieControlProtocol.serviceType,
                 txtRecord: txt
             )
             listener.newConnectionHandler = { [weak self] connection in
@@ -140,7 +140,7 @@ final class TVControlReceiver {
     private func refreshAdvertisement() {
         guard listener != nil,
               let serverId = RemotePlaybackIdentityManager.shared.effectiveServerId else { return }
-        let serverName = RemotePlaybackIdentityManager.shared.effectiveServerName ?? "Silo"
+        let serverName = RemotePlaybackIdentityManager.shared.effectiveServerName ?? "Prairie"
         listenerGeneration += 1
         listener?.cancel()
         listener = nil
@@ -214,7 +214,7 @@ final class TVControlReceiver {
             closeActiveSession(sendClose: true)
         }
 
-        let session = SiloControlSession(connection: connection)
+        let session = PrairieControlSession(connection: connection)
         let connectionId = UUID()
         activeSession = session
         activeConnectionId = connectionId
@@ -242,7 +242,7 @@ final class TVControlReceiver {
     }
 
     private func startReadLoop(
-        stream: AsyncThrowingStream<SiloControlMessage, Error>,
+        stream: AsyncThrowingStream<PrairieControlMessage, Error>,
         connectionId: UUID
     ) {
         readTask?.cancel()
@@ -265,7 +265,7 @@ final class TVControlReceiver {
         }
     }
 
-    private func handle(_ message: SiloControlMessage, connectionId: UUID) {
+    private func handle(_ message: PrairieControlMessage, connectionId: UUID) {
         guard activeConnectionId == connectionId else { return }
         // NOTE: liveness is reset only on `.pong` (below), not on every inbound
         // message. A `.pong` is the controller's reply to our ping, so it's the
@@ -276,9 +276,9 @@ final class TVControlReceiver {
         switch message {
         case .hello(let hello):
             guard hello.role == .phone,
-                  let version = SiloControlProtocol.negotiatedVersion(with: hello.supportedVersions),
+                  let version = PrairieControlProtocol.negotiatedVersion(with: hello.supportedVersions),
                   let serverId = hello.serverId, !serverId.isEmpty else {
-                sendError(code: "version_unsupported", message: "Update Silo on both devices to continue.")
+                sendError(code: "version_unsupported", message: "Update Prairie on both devices to continue.")
                 closeActiveSession(sendClose: true)
                 return
             }
@@ -299,12 +299,12 @@ final class TVControlReceiver {
                 standbyState = nil
             } else {
                 sendError(code: "server_mismatch",
-                          message: "This Apple TV is connected to a different Silo server.")
+                          message: "This Apple TV is connected to a different Prairie server.")
                 closeActiveSession(sendClose: true)
             }
         case .handoffOffer(let offer):
             guard negotiatedVersion == 2, let controllerDeviceId = remoteControllerDeviceId else {
-                sendHandoffCancel(offer.requestId, reason: "version_unsupported", message: "Update Silo on both devices to continue.")
+                sendHandoffCancel(offer.requestId, reason: "version_unsupported", message: "Update Prairie on both devices to continue.")
                 return
             }
             beginHandoff(offer, controllerDeviceId: controllerDeviceId, connectionId: connectionId)
@@ -313,7 +313,7 @@ final class TVControlReceiver {
             cancelPendingHandoff()
         case .launch(let launch):
             guard isAuthorized else {
-                sendError(code: "unauthorized", message: "Connect with a matching Silo account first.")
+                sendError(code: "unauthorized", message: "Connect with a matching Prairie account first.")
                 return
             }
             if negotiatedVersion == 2,
@@ -324,7 +324,7 @@ final class TVControlReceiver {
             handleLaunch(launch)
         case .control(let command):
             guard isAuthorized else {
-                sendError(code: "unauthorized", message: "Connect with a matching Silo account first.")
+                sendError(code: "unauthorized", message: "Connect with a matching Prairie account first.")
                 return
             }
             handleControl(command)
@@ -340,7 +340,7 @@ final class TVControlReceiver {
     }
 
     private func beginHandoff(
-        _ offer: SiloControlHandoffOffer,
+        _ offer: PrairieControlHandoffOffer,
         controllerDeviceId: String,
         connectionId: UUID
     ) {
@@ -426,16 +426,16 @@ final class TVControlReceiver {
     }
 
     private func sendHandoffCancel(_ requestId: String, reason: String, message: String?) {
-        activeSession?.enqueue(.handoffCancel(SiloControlHandoffCancel(
+        activeSession?.enqueue(.handoffCancel(PrairieControlHandoffCancel(
             requestId: requestId,
             reason: reason,
             message: message
         )))
     }
 
-    private func handleLaunch(_ launch: SiloControlLaunchRequest) {
+    private func handleLaunch(_ launch: PrairieControlLaunchRequest) {
         guard launch.serverId == RemotePlaybackIdentityManager.shared.effectiveServerId else {
-            sendError(code: "server_mismatch", message: "This Apple TV is connected to a different Silo server.")
+            sendError(code: "server_mismatch", message: "This Apple TV is connected to a different Prairie server.")
             return
         }
 
@@ -453,13 +453,13 @@ final class TVControlReceiver {
         sendLoadingState(for: playback.contentId)
     }
 
-    private func handleControl(_ command: SiloControlCommand) {
+    private func handleControl(_ command: PrairieControlCommand) {
         if command.name == .stop {
             stopRemotePlayback()
             return
         }
 
-        // Volume, mute, and next-episode all flow through applySiloControlCommand
+        // Volume, mute, and next-episode all flow through applyPrairieControlCommand
         // below; only .stop needs special handling (it dismisses the player).
         guard let playerViewModel else {
             sendError(code: "player_not_ready", message: "The TV player is not ready yet.")
@@ -467,7 +467,7 @@ final class TVControlReceiver {
         }
 
         do {
-            try playerViewModel.applySiloControlCommand(command)
+            try playerViewModel.applyPrairieControlCommand(command)
             sendState()
         } catch {
             sendError(code: "command_failed", message: error.localizedDescription)
@@ -611,9 +611,9 @@ final class TVControlReceiver {
 
     private func sendState() {
         guard isAuthorized, let session = activeSession else { return }
-        let state: SiloControlPlaybackState
+        let state: PrairieControlPlaybackState
         if let playerViewModel {
-            state = playerViewModel.makeSiloControlPlaybackState(contentId: playerContentId)
+            state = playerViewModel.makePrairieControlPlaybackState(contentId: playerContentId)
         } else {
             state = idleState()
         }
@@ -622,7 +622,7 @@ final class TVControlReceiver {
 
     private func sendLoadingState(for contentId: String) {
         guard let session = activeSession else { return }
-        let state = SiloControlPlaybackState(
+        let state = PrairieControlPlaybackState(
             contentId: contentId,
             sessionId: nil,
             title: "Loading",
@@ -655,23 +655,23 @@ final class TVControlReceiver {
 
     private func sendError(code: String, message: String) {
         guard let session = activeSession else { return }
-        session.enqueue(.error(SiloControlErrorMessage(code: code, message: message)))
+        session.enqueue(.error(PrairieControlErrorMessage(code: code, message: message)))
     }
 
-    private func makeHello() -> SiloControlMessage {
+    private func makeHello() -> PrairieControlMessage {
         let device = AppleDeviceIdentity.current
-        return .hello(SiloControlHello(
+        return .hello(PrairieControlHello(
             role: .tv,
             deviceName: device.name,
             deviceId: device.id,
             serverId: RemotePlaybackIdentityManager.shared.effectiveServerId,
             serverName: RemotePlaybackIdentityManager.shared.effectiveServerName,
-            supportedVersions: SiloControlProtocol.supportedVersions
+            supportedVersions: PrairieControlProtocol.supportedVersions
         ))
     }
 
-    private func idleState() -> SiloControlPlaybackState {
-        SiloControlPlaybackState(
+    private func idleState() -> PrairieControlPlaybackState {
+        PrairieControlPlaybackState(
             contentId: nil,
             sessionId: nil,
             title: "Ready",

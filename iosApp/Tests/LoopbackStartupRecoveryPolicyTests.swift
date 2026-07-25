@@ -1,6 +1,6 @@
 import AVFoundation
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 final class LoopbackStartupRecoveryPolicyTests: XCTestCase {
     private func transportContext(
@@ -101,7 +101,7 @@ final class LoopbackStartupRecoveryPolicyTests: XCTestCase {
         // send.
         XCTAssertFalse(
             AVPlayerBackend.isReceiverFetchableAsset(
-                url: URL(string: "https://silo.example.com/api/v1/stream/abc?st=xyz")!,
+                url: URL(string: "https://prairie.example.com/api/v1/stream/abc?st=xyz")!,
                 headers: ["Authorization": "Bearer token"]
             )
         )

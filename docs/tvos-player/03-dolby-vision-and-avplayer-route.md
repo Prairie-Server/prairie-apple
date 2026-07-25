@@ -1,6 +1,6 @@
 Repo snapshot date: 2026-04-29
 
-# Dolby Vision And SiloPlayer Route
+# Dolby Vision And PrairiePlayer Route
 
 ## 1. Routing matrix
 
@@ -11,7 +11,7 @@ route families are:
 - CompatibilityPlayer
 - NativePlayer Direct
 - NativePlayer HLS
-- SiloPlayer
+- PrairiePlayer
 
 Within that family, Dolby Vision-specific routing currently works as follows:
 
@@ -19,14 +19,14 @@ Within that family, Dolby Vision-specific routing currently works as follows:
   stays on CompatibilityPlayer and follows the HDR10-compatible path with DV
   signaling omitted
 - **Profile 5**  
-  routes to SiloPlayer through the local Dolby Vision loopback
+  routes to PrairiePlayer through the local Dolby Vision loopback
 - **Profile 7**  
-  routes to the SiloPlayer loopback as `profile7_to81_base_layer`; this must not
+  routes to the PrairiePlayer loopback as `profile7_to81_base_layer`; this must not
   be treated as raw P7 HLS support or full FEL reconstruction. The user-facing
   `preferProfile7HDR10Fallback` setting (Settings → Player) flips this branch:
   when on, P7 streams stay on the HDR10-compatible CompatibilityPlayer HEVC
   passthrough path with DV signaling omitted; when off (default), the route
-  takes the SiloPlayer 8.1 conversion loopback. This is the single setting
+  takes the PrairiePlayer 8.1 conversion loopback. This is the single setting
   name that gates the runtime choice; the planner exposes it as
   `ApplePlaybackRoutePlanner.Input.preferProfile7HDR10Fallback`.
 - **Profiles 8 / 9**  
@@ -41,7 +41,7 @@ Within that family, Dolby Vision-specific routing currently works as follows:
 There is also a second fallback trigger:
 
 - if `VTDecompressionSessionCreate` returns `unimpErr` for HEVC+PQ and the code
-  suspects unsignalled Dolby Vision, CompatibilityPlayer rejects to SiloPlayer
+  suspects unsignalled Dolby Vision, CompatibilityPlayer rejects to PrairiePlayer
   even if DOVI side data was not surfaced cleanly
 
 ## 2. What "fallback" means in practice
@@ -77,13 +77,13 @@ If it were wired back in, the gate would:
 - refuse immediately if `Match Content: Dynamic Range` is off
 - wait up to 3 seconds for display-mode switching to settle
 
-## 4. What AVPlayerBackend actually does for SiloPlayer
+## 4. What AVPlayerBackend actually does for PrairiePlayer
 
 The Dolby Vision fallback path is not "just use AVPlayer on the original URL."
 
 `AVPlayerBackend` builds a local remux pipeline:
 
-1. require `PlaybackSourceProxy` for remote HTTP(S) direct Silo sources
+1. require `PlaybackSourceProxy` for remote HTTP(S) direct Prairie sources
 2. rewrite `LoopbackSessionSpec.sourceURL` to the local proxy URL
 3. create a loopback generation and `DVSegmentStore`
 4. enable generated-HLS temp spill for sources above 40 Mbps
@@ -146,7 +146,7 @@ Without that ATS exception, AVPlayer cannot load the loopback playlist.
 
 ## 7. What AVPlayerBackend reports back
 
-Across the NativePlayer and SiloPlayer route families, the backend publishes:
+Across the NativePlayer and PrairiePlayer route families, the backend publishes:
 
 - time updates
 - duration
@@ -160,12 +160,12 @@ On the local Dolby Vision loopback path, AVFoundation media selection plus
 server-supplied chapters now keep Audio / Subtitles / Chapters populated. That
 is different from the older empty-array behavior this doc used to describe.
 
-## 8. Current limitations on NativePlayer and SiloPlayer routes
+## 8. Current limitations on NativePlayer and PrairiePlayer routes
 
 These are explicit in the current code:
 
 - no audio-delay path
-- native AVFoundation caption fallback does not support Silo subtitle
+- native AVFoundation caption fallback does not support Prairie subtitle
   delay/styling; controlled tracks render through the shared libass overlay
 - no video-gravity path
 - no tvOS-side HDR toggle logic inside the backend itself
@@ -176,13 +176,13 @@ One especially important nuance:
 - `PlayerViewModel.setPlaybackSpeed(...)` now routes through `activePlayer`
   for both backends
 
-So speed changes continue to work after NativePlayer/SiloPlayer route switches.
+So speed changes continue to work after NativePlayer/PrairiePlayer route switches.
 
 ## 9. Source-auth detail
 
 The fallback route has two separate HTTP layers:
 
-- `PlaybackSourceProxy` owns the authenticated original Silo stream URL,
+- `PlaybackSourceProxy` owns the authenticated original Prairie stream URL,
   performs origin range fetching, and exposes a session-tokenized localhost URL
 - `DVSegmentWriter` opens the localhost source-proxy URL without remote auth
   headers
@@ -194,7 +194,7 @@ FFmpeg and AVPlayer-facing clients.
 ## 10. Generated HLS storage policy
 
 `DVSegmentStore` is memory-first with a 128 MB generated segment budget. For
-Silo sources above 40 Mbps, the backend enables bounded session-scoped temp spill
+Prairie sources above 40 Mbps, the backend enables bounded session-scoped temp spill
 so append-only `EVENT` playlists do not reference segments that have disappeared
 from memory. Lower-bitrate sessions remain memory-first when practical.
 
@@ -203,16 +203,16 @@ Temp spill is not debug mirroring:
 - generated HLS temp spill: `tmp/continuum-dv-hls/<generation>/`, removed on
   teardown
 - debug artifacts: `tmp/continuum-dv-hls-debug/<session>/`, only when
-  `SILO_KEEP_DV_HLS=1`
+  `PRAIRIE_KEEP_DV_HLS=1`
 - source cache disk spill: separate optional path, controlled by
-  `SILO_ENABLE_SOURCE_DISK_SPILL=1`
+  `PRAIRIE_ENABLE_SOURCE_DISK_SPILL=1`
 
 The HUD/log stats keep source cache bytes, generated store bytes, generated temp
 spill bytes, debug mirror bytes, and AVPlayer playable ahead separate.
 
 ## 11. Audio policy
 
-For the high-quality Silo route:
+For the high-quality Prairie route:
 
 - AAC / AC-3 / E-AC-3 copy when compatible.
 - TrueHD / MLP / MLPA / Dolby TrueHD use `require_flac` and emit `fLaC` in the
@@ -225,21 +225,21 @@ For the high-quality Silo route:
 
 - corrected: AVPlayer-backed playback is no longer a DV-specific fallback
   backend; NativePlayer covers the native-direct allowlist and gated HLS, while
-  SiloPlayer covers local normalized Dolby Vision paths.
+  PrairiePlayer covers local normalized Dolby Vision paths.
 - verified: DV Profile 5 and the current Profile 7-to-8.1 experiment are the
-  explicit DOVI routes to SiloPlayer's local AVPlayer loopback; Profile 7 is now
+  explicit DOVI routes to PrairiePlayer's local AVPlayer loopback; Profile 7 is now
   logged as `profile7_to81_base_layer`.
 - corrected: the `strippedHdr10` routing name is stronger than the current live
   behavior; the code no longer strips EL/RPU NALs and instead omits DV
   signaling while keeping playback on the HDR10-compatible path.
 - corrected: `applyDvGatedDisplayCriteria(...)` exists but is currently dormant
   in the active Profile 5 flow.
-- corrected: NativePlayer and SiloPlayer routes now keep track/chapter
+- corrected: NativePlayer and PrairiePlayer routes now keep track/chapter
   publication and live speed controls aligned with the shared route-aware
   player shell.
-- corrected: Silo loopback now requires the localhost source proxy and hides
+- corrected: Prairie loopback now requires the localhost source proxy and hides
   remote auth from FFmpeg and AVPlayer-facing clients.
 - corrected: high-bitrate generated HLS uses bounded temp spill above 40 Mbps;
-  debug artifacts remain opt-in through `SILO_KEEP_DV_HLS=1`.
-- corrected: TrueHD-family audio on the high-quality Silo path now requires FLAC
+  debug artifacts remain opt-in through `PRAIRIE_KEEP_DV_HLS=1`.
+- corrected: TrueHD-family audio on the high-quality Prairie path now requires FLAC
   and does not silently degrade to lossy audio.

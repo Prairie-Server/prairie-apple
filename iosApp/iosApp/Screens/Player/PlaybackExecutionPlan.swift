@@ -167,7 +167,7 @@ enum LoopbackServingMode: Equatable {
     /// Static VOD playlist derived from a load-time segment plan: the full
     /// title is advertised up front, fragments are cut explicitly at plan
     /// boundaries, and producer restarts continue the session timeline
-    /// (docs/tvos-player/2026-07-03-siloplayer-loopback-primary-plan.md).
+    /// (docs/tvos-player/2026-07-03-prairieplayer-loopback-primary-plan.md).
     case vodPlan
 }
 
@@ -175,7 +175,7 @@ extension LoopbackServingMode {
     /// Rollout gate. Stage 3 flipped the default ON after the living-room
     /// hardware pass (2026-07-03): an absent key serves VOD; an explicit
     /// `false` remains the kill switch back to the EVENT path.
-    static let primaryGateKey = "player.apple.siloplayer_primary_enabled"
+    static let primaryGateKey = "player.apple.prairieplayer_primary_enabled"
 
     static var gated: LoopbackServingMode {
         let defaults = UserDefaults.standard
@@ -195,7 +195,7 @@ struct StreamRequest {
 
 enum PlaybackRouteFamily: String, Equatable {
     case nativePlayer = "NativePlayer"
-    case siloPlayer = "SiloPlayer"
+    case prairiePlayer = "PrairiePlayer"
     case compatibilityPlayer = "CompatibilityPlayer"
 
     var diagnosticsLabel: String { rawValue }
@@ -205,7 +205,7 @@ enum PlaybackRouteFamily: String, Equatable {
     var displayLabel: String {
         switch self {
         case .nativePlayer: return "Native Player"
-        case .siloPlayer: return "SiloPlayer"
+        case .prairiePlayer: return "PrairiePlayer"
         case .compatibilityPlayer: return "Compatibility Player"
         }
     }
@@ -233,14 +233,14 @@ enum PlaybackEngineKind: Equatable {
     /// AVPlayer consuming locally-remuxed fragmented MP4 served via the
     /// in-process HLS loopback. Used when AVPlayer presentation is preferred
     /// but the original source container is not native-direct compatible.
-    case siloPlayerLoopback
+    case prairiePlayerLoopback
 
     var label: String {
         switch self {
         case .playerCoreDirect: return "playerCoreDirect"
         case .avPlayerHLS: return "avPlayerHLS"
         case .avPlayerNativeDirect: return "avPlayerNativeDirect"
-        case .siloPlayerLoopback: return "siloPlayerLoopback"
+        case .prairiePlayerLoopback: return "prairiePlayerLoopback"
         }
     }
 
@@ -250,8 +250,8 @@ enum PlaybackEngineKind: Equatable {
             return .compatibilityPlayer
         case .avPlayerHLS, .avPlayerNativeDirect:
             return .nativePlayer
-        case .siloPlayerLoopback:
-            return .siloPlayer
+        case .prairiePlayerLoopback:
+            return .prairiePlayer
         }
     }
 
@@ -263,7 +263,7 @@ enum PlaybackEngineKind: Equatable {
             return "Server Stream"
         case .avPlayerNativeDirect:
             return "Direct"
-        case .siloPlayerLoopback:
+        case .prairiePlayerLoopback:
             return "Direct Stream"
         }
     }
@@ -276,8 +276,8 @@ enum PlaybackEngineKind: Equatable {
             return .avPlayerHLS
         case .avPlayerNativeDirect:
             return .avPlayerNativeDirect
-        case .siloPlayerLoopback:
-            return .siloPlayerLoopback
+        case .prairiePlayerLoopback:
+            return .prairiePlayerLoopback
         }
     }
 
@@ -505,17 +505,17 @@ struct PlaybackExecutionPlan {
         playbackSessionId: String? = nil,
         sourceMetadata: PlaybackSourceMetadata = .unknown
     ) -> PlaybackExecutionPlan {
-        let routeCapabilities = PlaybackEngineKind.siloPlayerLoopback.routeCapabilities
+        let routeCapabilities = PlaybackEngineKind.prairiePlayerLoopback.routeCapabilities
         let reason = rejectionReason == "dolbyVisionProfile5"
             ? "dolby_vision_profile5_loopback"
             : "playercore_rejected_\(rejectionReason)"
         return PlaybackExecutionPlan(
             delivery: .direct,
-            engine: .siloPlayerLoopback,
+            engine: .prairiePlayerLoopback,
             startMode: .absolutePosition(startTime),
             streamRequest: streamRequest,
             loopbackSession: loopbackSession,
-            capabilities: PlaybackEngineKind.siloPlayerLoopback.capabilities,
+            capabilities: PlaybackEngineKind.prairiePlayerLoopback.capabilities,
             routeCapabilities: routeCapabilities,
             requirements: routeRequirements,
             featureFlagEnabled: true,
@@ -546,15 +546,15 @@ struct PlaybackExecutionPlan {
         playbackSessionId: String? = nil,
         sourceMetadata: PlaybackSourceMetadata = .unknown
     ) -> PlaybackExecutionPlan {
-        let routeCapabilities = PlaybackEngineKind.siloPlayerLoopback.routeCapabilities
+        let routeCapabilities = PlaybackEngineKind.prairiePlayerLoopback.routeCapabilities
         let reason = "playercore_rejected_\(rejectionReason)_hevc_loopback"
         return PlaybackExecutionPlan(
             delivery: .direct,
-            engine: .siloPlayerLoopback,
+            engine: .prairiePlayerLoopback,
             startMode: .absolutePosition(startTime),
             streamRequest: streamRequest,
             loopbackSession: loopbackSession,
-            capabilities: PlaybackEngineKind.siloPlayerLoopback.capabilities,
+            capabilities: PlaybackEngineKind.prairiePlayerLoopback.capabilities,
             routeCapabilities: routeCapabilities,
             requirements: routeRequirements,
             featureFlagEnabled: true,

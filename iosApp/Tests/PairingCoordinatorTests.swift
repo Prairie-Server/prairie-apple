@@ -1,5 +1,5 @@
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 /// State-machine tests for both pairing coordinators, driven through the
 /// `PairingChannel` / `PairingDeviceAuthorizing` seams with scripted fakes —

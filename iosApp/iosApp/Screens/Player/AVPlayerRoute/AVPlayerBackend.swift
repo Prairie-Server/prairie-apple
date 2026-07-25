@@ -312,7 +312,7 @@ final class AVPlayerAudioSessionCoordinator: @unchecked Sendable {
     /// per-instance queues would let a stale deactivation land after the next
     /// playback's activation and silently kill its audio route.
     private static let sharedWorkQueue = DispatchQueue(
-        label: "org.siloserver.silo.avplayer-audio-session",
+        label: "org.prairieserver.prairie.avplayer-audio-session",
         qos: .userInitiated
     )
 
@@ -381,7 +381,7 @@ final class AVPlayerBackend {
     enum SourceStrategy {
         case remoteHLS(url: URL, headers: [String: String])
         case remoteDirect(url: URL, headers: [String: String])
-        case siloLoopback(spec: LoopbackSessionSpec)
+        case prairieLoopback(spec: LoopbackSessionSpec)
     }
 
     private struct MediaSelectionState {
@@ -428,7 +428,7 @@ final class AVPlayerBackend {
     /// `playheadWatchdogStallSeconds` while generated media is available ahead,
     /// reanchor the loopback. After `playheadWatchdogMaxReanchors` failed
     /// attempts inside `playheadWatchdogReanchorWindowSeconds`, rebuild the
-    /// complete Silo loopback pipeline at the rendered clock.
+    /// complete Prairie loopback pipeline at the rendered clock.
     private static let playheadWatchdogTickSeconds: TimeInterval = 1.0
     private static let playheadWatchdogStallSeconds: Double = 10.0
     /// Kept above the reanchor path's own steady-state `generatedAhead`
@@ -546,7 +546,7 @@ final class AVPlayerBackend {
     }
 
     private static func generatedHLSSpillPolicy(for spec: LoopbackSessionSpec) -> LoopbackSegmentStore.SpillPolicy {
-        if ProcessInfo.processInfo.environment["SILO_ENABLE_HLS_DISK_SPILL"] == "1" {
+        if ProcessInfo.processInfo.environment["PRAIRIE_ENABLE_HLS_DISK_SPILL"] == "1" {
             return .enabled(reason: "env", maxBytes: generatedHLSSpillBudgetBytes)
         }
         return .enabled(
@@ -582,7 +582,7 @@ final class AVPlayerBackend {
     var onExternalPlaybackUnavailable: (() -> Void)?
     /// PiP controls mutate `AVPlayer` directly instead of calling this
     /// backend's `play()` / `pause()` methods. The shell supplies PiP ownership
-    /// here so transport KVO can reconcile those changes into Silo's intent.
+    /// here so transport KVO can reconcile those changes into Prairie's intent.
     var isPictureInPictureActiveProvider: (() -> Bool)?
     var onSidecarTracksRegistered: (([SidecarSubtitleDescriptor]) -> Void)?
     var onSubtitleLoadStatusChange: ((SubtitleSlot, SubtitleLoadStatus) -> Void)?
@@ -617,7 +617,7 @@ final class AVPlayerBackend {
     func kickPlaybackAfterExternalStallCleared() {
         guard !isDisposed,
               let item = currentItem,
-              case .some(.siloLoopback(let spec)) = currentSourceStrategy,
+              case .some(.prairieLoopback(let spec)) = currentSourceStrategy,
               !isUserPaused,
               avPlayer.timeControlStatus == .waitingToPlayAtSpecifiedRate else { return }
         let bufferedAhead = bufferedAheadSeconds(for: item, referenceTime: currentTime()) ?? 0
@@ -890,7 +890,7 @@ final class AVPlayerBackend {
     ) {
         isUserPaused = false
         load(
-            strategy: .siloLoopback(spec: sessionSpec),
+            strategy: .prairieLoopback(spec: sessionSpec),
             startTime: startTime
         )
     }
@@ -914,7 +914,7 @@ final class AVPlayerBackend {
     func play() {
         isUserPaused = false
         onPauseChange?(false)
-        if case .some(.siloLoopback(let spec)) = currentSourceStrategy,
+        if case .some(.prairieLoopback(let spec)) = currentSourceStrategy,
            let mediaSeconds = pendingLocalLoopbackRecoveryMediaTime {
             pendingLocalLoopbackRecoveryMediaTime = nil
             Self.logger.info(
@@ -922,7 +922,7 @@ final class AVPlayerBackend {
             )
             subtitleSession?.flushOnSeek()
             embeddedSubtitleExtractor?.seek(to: mediaSeconds)
-            load(strategy: .siloLoopback(spec: spec.reanchored(at: mediaSeconds)), startTime: mediaSeconds)
+            load(strategy: .prairieLoopback(spec: spec.reanchored(at: mediaSeconds)), startTime: mediaSeconds)
             return
         }
         avPlayer.play()
@@ -981,7 +981,7 @@ final class AVPlayerBackend {
     private func applyExternalPlaybackPolicy(for strategy: SourceStrategy) {
         let allowed: Bool
         switch strategy {
-        case .siloLoopback:
+        case .prairieLoopback:
             // Only the iOS loopback server is LAN-reachable; elsewhere it
             // binds to 127.0.0.1 and no receiver could ever fetch it.
             #if os(iOS)
@@ -999,7 +999,7 @@ final class AVPlayerBackend {
     /// nothing else — none of the asset's HTTP headers, and its own network
     /// stack. Two disqualifiers, both of which occur on direct-play routes:
     ///
-    /// - Header authentication. Silo's `/api/v1/...` stream URLs carry a
+    /// - Header authentication. Prairie's `/api/v1/...` stream URLs carry a
     ///   bearer token in `Authorization`, and the receiver's fetch gets a 401.
     /// - A loopback host. `PlayerViewModel.prepareSourceProxy` rewrites
     ///   direct-play URLs to the on-device caching proxy at 127.0.0.1 *and
@@ -1035,7 +1035,7 @@ final class AVPlayerBackend {
     @MainActor
     private func updateLoopbackURLForExternalPlayback(_ active: Bool) {
         guard active != loopbackPlaybackUsesExternalURL,
-              case .some(.siloLoopback) = currentSourceStrategy,
+              case .some(.prairieLoopback) = currentSourceStrategy,
               let item = currentItem,
               let server = segmentServer,
               let playlistName = loopbackPlaylistName else { return }
@@ -1090,7 +1090,7 @@ final class AVPlayerBackend {
         let mediaSeconds = seconds.isFinite ? max(0, seconds) : 0
         let playerSeconds = playerTime(forMediaTime: mediaSeconds)
         hasReachedItemEnd = false
-        if case .some(.siloLoopback(let spec)) = currentSourceStrategy {
+        if case .some(.prairieLoopback(let spec)) = currentSourceStrategy {
             // VOD serving mode: every seek is in-item. The static playlist
             // covers the whole title; a fetch into never-produced content
             // restarts the producer behind the stable item (1e), so the
@@ -1209,7 +1209,7 @@ final class AVPlayerBackend {
             Self.logger.error(
                 "[CMP-SEEK] AVPlayer seek deadline mediaTarget=\(mediaTarget, privacy: .public) id=\(id, privacy: .public); re-enabling recovery"
             )
-            if case .some(.siloLoopback(let spec)) = currentSourceStrategy {
+            if case .some(.prairieLoopback(let spec)) = currentSourceStrategy {
                 if spec.servingMode == .vodPlan {
                     Task { @MainActor [weak self] in
                         guard let self, !self.isDisposed else { return }
@@ -1286,7 +1286,7 @@ final class AVPlayerBackend {
         )
         subtitleSession?.flushOnSeek()
         embeddedSubtitleExtractor?.seek(to: mediaSeconds)
-        load(strategy: .siloLoopback(spec: spec.reanchored(at: mediaSeconds)), startTime: mediaSeconds)
+        load(strategy: .prairieLoopback(spec: spec.reanchored(at: mediaSeconds)), startTime: mediaSeconds)
     }
 
     func currentTime() -> Double {
@@ -1382,7 +1382,7 @@ final class AVPlayerBackend {
     }
 
     func selectAudioTrack(_ trackId: Int64) {
-        if case .some(.siloLoopback(let spec)) = currentSourceStrategy {
+        if case .some(.prairieLoopback(let spec)) = currentSourceStrategy {
             guard let selectedTrack = spec.availableAudioTracks.first(where: { $0.trackId == trackId }),
                   let selectedTrackIndex = selectedTrack.srcId else {
                 return
@@ -1439,7 +1439,7 @@ final class AVPlayerBackend {
                 "[CMP-AVP] rebuilding loopback for audio trackId=\(trackId, privacy: .public) trackIndex=\(selectedTrackIndex, privacy: .public) ffIndex=\(selectedTrack.ffIndex ?? -1, privacy: .public)"
             )
             load(
-                strategy: .siloLoopback(spec: updatedSpec),
+                strategy: .prairieLoopback(spec: updatedSpec),
                 startTime: startTime
             )
             return
@@ -1636,7 +1636,7 @@ final class AVPlayerBackend {
         }
     }
 
-    // MARK: - Startup (TTFF) telemetry — SiloPlayer plan Stage 0
+    // MARK: - Startup (TTFF) telemetry — PrairiePlayer plan Stage 0
 
     private var ttffLoadAnchor: CFAbsoluteTime = 0
     private var ttffFirstSegmentMs: Int?
@@ -1721,7 +1721,7 @@ final class AVPlayerBackend {
             prepareAssetPlayback(url: url, headers: headers)
         case .remoteDirect(let url, let headers):
             prepareAssetPlayback(url: url, headers: headers)
-        case .siloLoopback(let spec):
+        case .prairieLoopback(let spec):
             if spec.servingMode == .vodPlan {
                 // The VOD item timeline is the plan's playlist axis; its
                 // origin is the plan anchor (near 0 for normal titles, the
@@ -1733,7 +1733,7 @@ final class AVPlayerBackend {
             } else {
                 setMediaTimelineOffset(spec.sourceStartTimeSeconds)
             }
-            startSiloLoopback(sessionSpec: spec)
+            startPrairieLoopback(sessionSpec: spec)
         }
     }
 
@@ -1799,7 +1799,7 @@ final class AVPlayerBackend {
     @MainActor
     private func requestVODProducerRestart(at index: Int, authoritative: Bool = false) {
         guard !isDisposed,
-              case .some(.siloLoopback(let spec)) = currentSourceStrategy,
+              case .some(.prairieLoopback(let spec)) = currentSourceStrategy,
               spec.servingMode == .vodPlan,
               let plan = vodPlanForCurrentSource(spec: spec),
               plan.segmentCount > 0,
@@ -1840,7 +1840,7 @@ final class AVPlayerBackend {
                 handoff = h
                 retiring.stop(recyclingInputInto: h)
             }
-            startSiloLoopbackWriter(
+            startPrairieLoopbackWriter(
                 sessionID: sessionID,
                 sessionSpec: spec.reanchored(at: plan.sourceStartSeconds(ofSegment: current)),
                 sessionDir: sessionDir,
@@ -1923,7 +1923,7 @@ final class AVPlayerBackend {
         )
     }
 
-    private func startSiloLoopback(
+    private func startPrairieLoopback(
         sessionSpec: LoopbackSessionSpec
     ) {
         let sessionID = UUID().uuidString
@@ -1951,7 +1951,7 @@ final class AVPlayerBackend {
         }
         segmentStore = store
         if preserveSessionDirectory {
-            print("[CMP-AVP] preserving local DV artifacts due to SILO_KEEP_DV_HLS=1 dir=\(sessionDir.path)")
+            print("[CMP-AVP] preserving local DV artifacts due to PRAIRIE_KEEP_DV_HLS=1 dir=\(sessionDir.path)")
         }
 
         #if os(iOS)
@@ -2009,7 +2009,7 @@ final class AVPlayerBackend {
                 server.stop()
                 return
             }
-            self.startSiloLoopbackWriter(sessionID: sessionID,
+            self.startPrairieLoopbackWriter(sessionID: sessionID,
                                              sessionSpec: sessionSpec,
                                              sessionDir: sessionDir,
                                              segmentStore: store,
@@ -2018,7 +2018,7 @@ final class AVPlayerBackend {
     }
 
     @MainActor
-    private func startSiloLoopbackWriter(
+    private func startPrairieLoopbackWriter(
         sessionID: String,
         sessionSpec: LoopbackSessionSpec,
         sessionDir: URL,
@@ -2140,7 +2140,7 @@ final class AVPlayerBackend {
             DispatchQueue.main.async { [weak self] in
                 guard let self, !self.isDisposed else { return }
                 guard self.activeLoopbackSessionID == sessionID else { return }
-                guard case .siloLoopback = self.currentSourceStrategy else { return }
+                guard case .prairieLoopback = self.currentSourceStrategy else { return }
                 self.setMediaTimelineOffset(sourceStartSeconds)
             }
         }
@@ -2281,7 +2281,7 @@ final class AVPlayerBackend {
     /// item buffers from position 0 whose segments may never exist.
     /// Re-issued after a startup-watchdog item reload for the same reason.
     private func issueVODResumePreSeekIfNeeded(context: String) {
-        guard case .some(.siloLoopback(let spec)) = currentSourceStrategy,
+        guard case .some(.prairieLoopback(let spec)) = currentSourceStrategy,
               spec.servingMode == .vodPlan,
               pendingStartTime > 0 else { return }
         let target = max(0, playerTime(forMediaTime: pendingStartTime))
@@ -2333,7 +2333,7 @@ final class AVPlayerBackend {
         //
         // Remote routes keep AVPlayer's defaults since automatic buffering
         // is genuinely useful over the WAN.
-        if case .siloLoopback = currentSourceStrategy {
+        if case .prairieLoopback = currentSourceStrategy {
             avPlayer.automaticallyWaitsToMinimizeStalling = false
             item.preferredForwardBufferDuration = Self.loopbackStartupForwardBuffer
             // Do not let AVPlayer poll the local EVENT playlist while paused.
@@ -2369,11 +2369,11 @@ final class AVPlayerBackend {
                 routeLabel: "remoteDirect",
                 seekable: true
             )
-        case .siloLoopback(let spec):
+        case .prairieLoopback(let spec):
             source = AVPlayerSubtitleExtractionSource(
                 mediaURL: spec.sourceURL,
                 requestHeaders: spec.headers,
-                routeLabel: "siloLoopback",
+                routeLabel: "prairieLoopback",
                 seekable: true
             )
         case .remoteHLS:
@@ -2398,7 +2398,7 @@ final class AVPlayerBackend {
     /// Loopback-route only: other routes have no writer harvesting cues,
     /// so a leftover store must not shadow the extractor.
     private func tapServesEmbeddedTrack(_ trackId: Int64) -> Bool {
-        guard case .some(.siloLoopback) = currentSourceStrategy,
+        guard case .some(.prairieLoopback) = currentSourceStrategy,
               SubtitleTrackIdSpace.isAVPlayerEmbedded(trackId),
               let tap = loopbackSubtitleTap else { return false }
         let streamIndex = Int(SubtitleTrackIdSpace.avPlayerEmbeddedStreamIndex(from: trackId))
@@ -2406,7 +2406,7 @@ final class AVPlayerBackend {
     }
 
     private func bitmapTapServesEmbeddedTrack(_ trackId: Int64) -> Bool {
-        guard case .some(.siloLoopback) = currentSourceStrategy,
+        guard case .some(.prairieLoopback) = currentSourceStrategy,
               SubtitleTrackIdSpace.isAVPlayerEmbedded(trackId) else { return false }
         let streamIndex = Int(SubtitleTrackIdSpace.avPlayerEmbeddedStreamIndex(from: trackId))
         return bitmapTapAvailableStreams.contains(streamIndex)
@@ -2510,7 +2510,7 @@ final class AVPlayerBackend {
         ) { [weak self] time in
             guard let self, !self.isDisposed else { return }
             if self.isSeekPending { return }
-            if case .siloLoopback = self.currentSourceStrategy {
+            if case .prairieLoopback = self.currentSourceStrategy {
                 self.setLoopbackPlaybackClock(time.seconds)
             }
             self.releaseInitialVideoDisplayGateIfPlaybackAdvanced(currentTime: time.seconds)
@@ -2670,7 +2670,7 @@ final class AVPlayerBackend {
 
     private var publishesRemoteAccessLogNetworkStats: Bool {
         switch currentSourceStrategy {
-        case .siloLoopback:
+        case .prairieLoopback:
             return false
         case .remoteHLS, .remoteDirect:
             return true
@@ -2683,7 +2683,7 @@ final class AVPlayerBackend {
         switch strategy {
         case .remoteHLS(let url, _), .remoteDirect(let url, _):
             return url.host ?? url.scheme
-        case .siloLoopback(let spec):
+        case .prairieLoopback(let spec):
             // The loopback is an implementation detail; the user-meaningful
             // source is the origin the media is actually fetched from.
             return spec.sourceURL.host ?? "local"
@@ -2694,7 +2694,7 @@ final class AVPlayerBackend {
 
     private func videoCodecLabel(for strategy: SourceStrategy?) -> String? {
         switch strategy {
-        case .siloLoopback(let spec):
+        case .prairieLoopback(let spec):
             return spec.videoMode.sampleEntryCodec
         case .remoteHLS:
             return "hls"
@@ -2713,7 +2713,7 @@ final class AVPlayerBackend {
 
     @MainActor
     private func audioStats(for item: AVPlayerItem) async -> PlaybackStats.MediaStream {
-        if case .siloLoopback(let spec) = currentSourceStrategy {
+        if case .prairieLoopback(let spec) = currentSourceStrategy {
             let outputMode = Self.audioOutputModeLabel(spec.selectedAudio.outputMode)
             let liveStream = await AVFoundationPlaybackIntrospection.audioStream(for: item)
             return PlaybackStats.MediaStream(
@@ -2772,7 +2772,7 @@ final class AVPlayerBackend {
     }
 
     private func dynamicRangeLabel(for strategy: SourceStrategy?) -> String? {
-        guard case .siloLoopback(let spec) = strategy else { return nil }
+        guard case .prairieLoopback(let spec) = strategy else { return nil }
         switch spec.videoMode {
         case .passthroughProfile5:
             return "Dolby Vision (Profile \(spec.manifestMetadata.advertisedDolbyVisionProfile ?? 5))"
@@ -2798,8 +2798,8 @@ final class AVPlayerBackend {
         to next: SourceStrategy
     ) -> Bool {
         #if os(tvOS)
-        guard case .siloLoopback(let currentSpec) = current,
-              case .siloLoopback(let nextSpec) = next else {
+        guard case .prairieLoopback(let currentSpec) = current,
+              case .prairieLoopback(let nextSpec) = next else {
             return false
         }
         // With the HDR gate off this reduces to the shipped DV→DV rule
@@ -2912,11 +2912,11 @@ final class AVPlayerBackend {
     /// recovery hooks miss: `.AVPlayerItemPlaybackStalled` only fires on buffer
     /// starvation, the edge watchdog requires the buffered edge to sit at the
     /// playhead, and the periodic time observer stops firing the moment the
-    /// playhead freezes. Silo's explicit play-intent latch distinguishes a
+    /// playhead freezes. Prairie's explicit play-intent latch distinguishes a
     /// terminal AVPlayer pause from an intentional user pause.
     private func loopbackPlayheadWatchdogTick() {
         guard !isDisposed,
-              case .siloLoopback = currentSourceStrategy,
+              case .prairieLoopback = currentSourceStrategy,
               let item = currentItem,
               didFireFileLoaded,
               !isSeekPending else { return }
@@ -2988,7 +2988,7 @@ final class AVPlayerBackend {
             Self.logger.info(
                 "[CMP-AVP] loopback playhead state pos=\(position, privacy: .public) tc=\(statusLabel, privacy: .public) rate=\(self.avPlayer.rate, privacy: .public) paused=\(self.isUserPaused ? 1 : 0, privacy: .public) bufAhead=\(bufferedAhead, privacy: .public) generatedAhead=\(generatedAhead, privacy: .public) stationaryFor=\(stationaryFor, privacy: .public)\(memSuffix, privacy: .public)"
             )
-            if case .some(.siloLoopback(let stateSpec)) = currentSourceStrategy,
+            if case .some(.prairieLoopback(let stateSpec)) = currentSourceStrategy,
                stateSpec.servingMode == .vodPlan {
                 // OSLog is invisible to the devicectl console; mirror the
                 // transport state so on-device render stalls (frozen picture,
@@ -3039,8 +3039,8 @@ final class AVPlayerBackend {
 
         // Producer-dead starvation: waiting on an empty buffer with no
         // successful segment serves for a sustained stretch. Rebuild the
-        // Silo loopback session at the rendered clock; changing playback
-        // engines would hide the fault and lose SiloPlayer capabilities.
+        // Prairie loopback session at the rendered clock; changing playback
+        // engines would hide the fault and lose PrairiePlayer capabilities.
         if !isUserPaused,
            timeControlStatus == .waitingToPlayAtSpecifiedRate,
            bufferedAhead < 2.0,
@@ -3058,9 +3058,9 @@ final class AVPlayerBackend {
             }
             didEscalateLoopbackStall = true
             cmpLog(
-                "[CMP-AVP] loopback starvation: playhead frozen \(Int(stationaryFor))s with empty buffer and no segment serves; rebuilding Silo loopback"
+                "[CMP-AVP] loopback starvation: playhead frozen \(Int(stationaryFor))s with empty buffer and no segment serves; rebuilding Prairie loopback"
             )
-            rebuildSiloLoopbackSession(at: position, reason: "loopback_starvation")
+            rebuildPrairieLoopbackSession(at: position, reason: "loopback_starvation")
             return
         }
 
@@ -3077,7 +3077,7 @@ final class AVPlayerBackend {
         }
 
         // Bound lightweight reanchors within a rolling window. Once exhausted,
-        // rebuild the Silo loopback session (producer, cache, server, item) at
+        // rebuild the Prairie loopback session (producer, cache, server, item) at
         // the rendered clock instead of changing playback engines.
         if watchdogReanchorWindowStartWall == 0
             || now - watchdogReanchorWindowStartWall > Self.playheadWatchdogReanchorWindowSeconds {
@@ -3096,13 +3096,13 @@ final class AVPlayerBackend {
             }
             didEscalateLoopbackStall = true
             Self.logger.error(
-                "[CMP-AVP] local loopback playhead_watchdog exhausted reanchors=\(self.watchdogReanchorCount, privacy: .public) pos=\(position, privacy: .public) stationaryFor=\(stationaryFor, privacy: .public); rebuilding Silo loopback"
+                "[CMP-AVP] local loopback playhead_watchdog exhausted reanchors=\(self.watchdogReanchorCount, privacy: .public) pos=\(position, privacy: .public) stationaryFor=\(stationaryFor, privacy: .public); rebuilding Prairie loopback"
             )
-            rebuildSiloLoopbackSession(at: position, reason: "playhead_watchdog")
+            rebuildPrairieLoopbackSession(at: position, reason: "playhead_watchdog")
             return
         }
 
-        if case .some(.siloLoopback(let servingSpec)) = currentSourceStrategy,
+        if case .some(.prairieLoopback(let servingSpec)) = currentSourceStrategy,
            servingSpec.servingMode == .vodPlan,
            let sinceServe = segmentStore?.secondsSinceLastSegmentServe(),
            sinceServe < 4.0 {
@@ -3117,7 +3117,7 @@ final class AVPlayerBackend {
         Self.logger.error(
             "[CMP-AVP] local loopback playhead_watchdog trigger attempt=\(self.watchdogReanchorCount, privacy: .public) pos=\(position, privacy: .public) tc=\(statusLabel, privacy: .public) bufAhead=\(bufferedAhead, privacy: .public) generatedAhead=\(generatedAhead, privacy: .public) stationaryFor=\(stationaryFor, privacy: .public)"
         )
-        if case .some(.siloLoopback(let spec)) = currentSourceStrategy,
+        if case .some(.prairieLoopback(let spec)) = currentSourceStrategy,
            spec.servingMode == .vodPlan {
             let attempt = watchdogReanchorCount
             Task { @MainActor [weak self] in
@@ -3129,7 +3129,7 @@ final class AVPlayerBackend {
     }
 
     private func sampleLocalLoopbackEdge(item: AVPlayerItem, referenceTime: Double, trigger: String) {
-        guard case .siloLoopback = currentSourceStrategy,
+        guard case .prairieLoopback = currentSourceStrategy,
               item === currentItem,
               didFireFileLoaded,
               !isUserPaused,
@@ -3257,7 +3257,7 @@ final class AVPlayerBackend {
                     from: player,
                     isInitialObservation: isInitialObservation
                 ) { return }
-                guard case .siloLoopback = self.currentSourceStrategy else { return }
+                guard case .prairieLoopback = self.currentSourceStrategy else { return }
                 let status: String
                 switch player.timeControlStatus {
                 case .paused:
@@ -3284,7 +3284,7 @@ final class AVPlayerBackend {
                 guard let self, !self.isDisposed else { return }
                 if item.isPlaybackBufferEmpty {
                     self.bufferLoadCount += 1
-                    if case .siloLoopback = self.currentSourceStrategy {
+                    if case .prairieLoopback = self.currentSourceStrategy {
                         Self.logger.info(
                             "[CMP-AVP] item buffer empty current=\(self.currentTime(), privacy: .public) loadedRanges=\(self.describeLoadedRanges(item), privacy: .public)"
                         )
@@ -3368,7 +3368,7 @@ final class AVPlayerBackend {
             cmpLog(
                 "[CMP-AVP] item failedToEnd current=\(position) userPaused=\(self.isUserPaused ? 1 : 0) itemStatus=\(item.status.rawValue) error=\(String(describing: error))"
             )
-            if case .siloLoopback = self.currentSourceStrategy,
+            if case .prairieLoopback = self.currentSourceStrategy,
                self.didFireFileLoaded {
                 self.loopbackItemDeathConfirmationState.noteExplicitFailure(
                     position: position,
@@ -3415,7 +3415,7 @@ final class AVPlayerBackend {
             }
             if event.errorStatusCode == -15628,
                !self.didFireFileLoaded,
-               case .siloLoopback = self.currentSourceStrategy {
+               case .prairieLoopback = self.currentSourceStrategy {
                 self.escalateLoopbackStartupRecovery(trigger: "errorLog_-15628")
             }
         }
@@ -3491,7 +3491,7 @@ final class AVPlayerBackend {
         evidenceWeight: Int,
         trigger: String
     ) {
-        guard case .some(.siloLoopback) = currentSourceStrategy,
+        guard case .some(.prairieLoopback) = currentSourceStrategy,
               item === currentItem,
               didFireFileLoaded else { return }
         let position = currentTime()
@@ -3539,18 +3539,18 @@ final class AVPlayerBackend {
         case .escalate:
             loopbackItemDeathConfirmationState.resetCandidate()
             cmpLog(
-                "[CMP-AVP] loopback item-death repeated at same position; rebuilding Silo loopback trigger=\(trigger) status=\(statusCode ?? 0) pos=\(position)"
+                "[CMP-AVP] loopback item-death repeated at same position; rebuilding Prairie loopback trigger=\(trigger) status=\(statusCode ?? 0) pos=\(position)"
             )
-            rebuildSiloLoopbackSession(at: position, reason: "loopback_item_death")
+            rebuildPrairieLoopbackSession(at: position, reason: "loopback_item_death")
         }
     }
 
     /// Last-resort recovery for a poisoned AVPlayer item or dead producer.
     /// Recreate the complete local-HLS pipeline at the rendered media clock,
-    /// but keep the selected route in SiloPlayer. The new UUID-backed cache
+    /// but keep the selected route in PrairiePlayer. The new UUID-backed cache
     /// cannot collide with cleanup from the retired session.
-    private func rebuildSiloLoopbackSession(at playerSeconds: Double, reason: String) {
-        guard case .some(.siloLoopback(let spec)) = currentSourceStrategy,
+    private func rebuildPrairieLoopbackSession(at playerSeconds: Double, reason: String) {
+        guard case .some(.prairieLoopback(let spec)) = currentSourceStrategy,
               playerSeconds.isFinite,
               !isUserPaused else { return }
         let mediaSeconds = max(0, mediaTime(for: playerSeconds))
@@ -3560,12 +3560,12 @@ final class AVPlayerBackend {
         watchdogReanchorWindowStartWall = CACurrentMediaTime()
         didEscalateLoopbackStall = false
         Self.logger.error(
-            "[CMP-AVP] rebuilding Silo loopback reason=\(reason, privacy: .public) media=\(mediaSeconds, privacy: .public) player=\(playerSeconds, privacy: .public)"
+            "[CMP-AVP] rebuilding Prairie loopback reason=\(reason, privacy: .public) media=\(mediaSeconds, privacy: .public) player=\(playerSeconds, privacy: .public)"
         )
         subtitleSession?.flushOnSeek()
         embeddedSubtitleExtractor?.seek(to: mediaSeconds)
         load(
-            strategy: .siloLoopback(spec: spec.reanchored(at: mediaSeconds)),
+            strategy: .prairieLoopback(spec: spec.reanchored(at: mediaSeconds)),
             startTime: mediaSeconds
         )
     }
@@ -3575,7 +3575,7 @@ final class AVPlayerBackend {
         requireBufferedEdge: Bool = true,
         reason: String = "stall"
     ) {
-        guard case .some(.siloLoopback(let spec)) = currentSourceStrategy,
+        guard case .some(.prairieLoopback(let spec)) = currentSourceStrategy,
               item === currentItem,
               didFireFileLoaded,
               !isUserPaused else { return }
@@ -3598,11 +3598,11 @@ final class AVPlayerBackend {
         )
         subtitleSession?.flushOnSeek()
         embeddedSubtitleExtractor?.seek(to: mediaSeconds)
-        load(strategy: .siloLoopback(spec: spec.reanchored(at: mediaSeconds)), startTime: mediaSeconds)
+        load(strategy: .prairieLoopback(spec: spec.reanchored(at: mediaSeconds)), startTime: mediaSeconds)
     }
 
     private func resumeLocalLoopbackPlaybackIfNeeded(for item: AVPlayerItem, trigger: String) {
-        guard case .siloLoopback = currentSourceStrategy,
+        guard case .prairieLoopback = currentSourceStrategy,
               item === currentItem,
               didFireFileLoaded,
               !isUserPaused,
@@ -3708,7 +3708,7 @@ final class AVPlayerBackend {
     }
 
     private func armLoopbackStartupWatchdogIfNeeded() {
-        guard case .siloLoopback = currentSourceStrategy else { return }
+        guard case .prairieLoopback = currentSourceStrategy else { return }
         cancelLoopbackStartupWatchdog()
         let now = Date()
         loopbackStartupWatchdogStartedAt = now
@@ -3728,7 +3728,7 @@ final class AVPlayerBackend {
     private func loopbackStartupWatchdogTick() {
         guard !isDisposed,
               !didFireFileLoaded,
-              case .siloLoopback = currentSourceStrategy,
+              case .prairieLoopback = currentSourceStrategy,
               let item = currentItem,
               let startedAt = loopbackStartupWatchdogStartedAt else {
             cancelLoopbackStartupWatchdog()
@@ -3805,7 +3805,7 @@ final class AVPlayerBackend {
     /// transport intent.
     private func nudgeLoopbackStartupConsumer() {
         let target: CMTime
-        if case .some(.siloLoopback(let spec)) = currentSourceStrategy,
+        if case .some(.prairieLoopback(let spec)) = currentSourceStrategy,
            spec.servingMode == .vodPlan,
            pendingStartTime > 0 {
             target = CMTime(
@@ -3834,7 +3834,7 @@ final class AVPlayerBackend {
         cmpLog("[CMP-AVP] startup watchdog reloading item in place url=\(loggableURLDescription(url))")
         detachPerItemObservers()
         let item = AVPlayerItem(asset: AVURLAsset(url: url))
-        if case .siloLoopback = currentSourceStrategy {
+        if case .prairieLoopback = currentSourceStrategy {
             item.preferredForwardBufferDuration = Self.loopbackStartupForwardBuffer
             item.canUseNetworkResourcesForLiveStreamingWhilePaused = false
         }
@@ -3920,7 +3920,7 @@ final class AVPlayerBackend {
     /// their live-edge cushion; static VOD playlists stay near one segment so
     /// AVPlayer cannot outrun the bounded producer window.
     private func rampLoopbackBufferToSteadyStateIfNeeded(for item: AVPlayerItem) {
-        guard case .siloLoopback(let spec) = currentSourceStrategy else { return }
+        guard case .prairieLoopback(let spec) = currentSourceStrategy else { return }
         guard canRampLoopbackBufferToSteadyState else { return }
         let generatedStats = latestLoopbackGeneratedStats
         let mediaBitrate = generatedStats?.rollingBitrateBps ?? spec.sourceBitrateBps
@@ -4476,7 +4476,7 @@ final class AVPlayerBackend {
     @discardableResult
     private func applyTVDisplayCriteriaForLoopbackIfNeeded(context: String) -> Bool {
         #if os(tvOS)
-        guard case .siloLoopback(let spec) = currentSourceStrategy else { return false }
+        guard case .prairieLoopback(let spec) = currentSourceStrategy else { return false }
         let selection = HDRDisplayCriteriaPolicy.selection(
             videoMode: spec.videoMode,
             manifestVideoRange: spec.manifestMetadata.videoRange,
@@ -4583,7 +4583,7 @@ final class AVPlayerBackend {
     }
 
     private static var keepLoopbackArtifacts: Bool {
-        let raw = ProcessInfo.processInfo.environment["SILO_KEEP_DV_HLS"]?
+        let raw = ProcessInfo.processInfo.environment["PRAIRIE_KEEP_DV_HLS"]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
         return raw == "1" || raw == "true" || raw == "yes"
@@ -4595,8 +4595,8 @@ final class AVPlayerBackend {
             return "remoteHLS(\(url.absoluteString))"
         case .remoteDirect(let url, _):
             return "remoteDirect(\(url.absoluteString))"
-        case .siloLoopback(let spec):
-            return "siloLoopback(\(spec.sourceURL.absoluteString), videoMode=\(spec.videoMode.logToken), start=\(spec.sourceStartTimeSeconds), audioTrackIndex=\(spec.selectedAudio.trackIndex), audioFfIndex=\(spec.selectedAudio.ffIndex ?? -1))"
+        case .prairieLoopback(let spec):
+            return "prairieLoopback(\(spec.sourceURL.absoluteString), videoMode=\(spec.videoMode.logToken), start=\(spec.sourceStartTimeSeconds), audioTrackIndex=\(spec.selectedAudio.trackIndex), audioFfIndex=\(spec.selectedAudio.ffIndex ?? -1))"
         }
     }
 
@@ -4606,21 +4606,21 @@ final class AVPlayerBackend {
             return "Native Player HLS"
         case .remoteDirect:
             return "Native Player Direct"
-        case .siloLoopback(let spec):
+        case .prairieLoopback(let spec):
             switch spec.videoMode {
             case .passthroughH264:
-                return "SiloPlayer (H.264)"
+                return "PrairiePlayer (H.264)"
             case .passthroughHEVC:
-                return "SiloPlayer (HEVC)"
+                return "PrairiePlayer (HEVC)"
             case .passthroughProfile5, .convertProfile7To81, .passthroughProfile8:
-                return "SiloPlayer (Dolby Vision)"
+                return "PrairiePlayer (Dolby Vision)"
             }
         }
     }
 
     private static func normalizedLoopbackAudioTracks(for strategy: SourceStrategy) -> [PlayerTrack] {
         switch strategy {
-        case .siloLoopback(let spec):
+        case .prairieLoopback(let spec):
             let audioTracks = spec.availableAudioTracks
             guard !audioTracks.isEmpty else { return [] }
             if audioTracks.contains(where: { $0.isSelected }) {

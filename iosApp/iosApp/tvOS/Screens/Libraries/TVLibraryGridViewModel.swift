@@ -47,7 +47,7 @@ final class TVLibraryGridViewModel {
     init(libraryId: Int, libraryType: String, initialFilter: CatalogFilterState = .none) {
         self.libraryId = libraryId
         self.mediaType = BrowseMediaType.from(libraryType: libraryType)
-        self.sendsType = SiloMediaType.isSeries(libraryType) || SiloMediaType.isMovieLibrary(libraryType)
+        self.sendsType = PrairieMediaType.isSeries(libraryType) || PrairieMediaType.isMovieLibrary(libraryType)
         // A non-default initial filter (a deep-linked landing tap) wins;
         // otherwise restore the persisted per-library state.
         if !initialFilter.isDefault {

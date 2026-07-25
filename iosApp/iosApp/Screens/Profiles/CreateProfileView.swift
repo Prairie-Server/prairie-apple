@@ -336,7 +336,7 @@ struct CreateProfileView: View {
                         Button("Create Profile") {
                             Task { await createProfile() }
                         }
-                        .siloPrimaryButton(isLoading: isLoading)
+                        .prairiePrimaryButton(isLoading: isLoading)
                         .disabled(isLoading || name.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
                     .padding(.horizontal, ContinuumTheme.largePadding)

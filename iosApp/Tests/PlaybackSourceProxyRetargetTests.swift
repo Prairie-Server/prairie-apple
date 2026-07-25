@@ -1,6 +1,6 @@
 import XCTest
 import Network
-@testable import Silo
+@testable import Prairie
 
 /// Workstream A1 of the playback-continuity plan: `retargetOrigin` swaps the
 /// proxy's origin endpoint in place after a silent session renewal. The

@@ -1,5 +1,5 @@
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 final class DiagnosticsContractTests: XCTestCase {
     private enum InvalidExpectation {

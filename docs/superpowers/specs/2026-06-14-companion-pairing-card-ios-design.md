@@ -28,7 +28,7 @@ native-feeling surface that handles discovery through completion in place.
 
 ## Current state (what exists)
 
-- `Pairing/Companion/TVPairingBrowser.swift` — browses `_silopair._tcp`,
+- `Pairing/Companion/TVPairingBrowser.swift` — browses `_prairiepair._tcp`,
   publishes `[DiscoveredTV]`. `DiscoveredTV` carries `id` (stable device id),
   `name`, `state`, `endpoint`.
 - `Pairing/Companion/SetUpTVBanner.swift` — `SetUpTVBannerModifier`, a
@@ -148,7 +148,7 @@ logic for testing (§5).
 ### 4. Data flow
 
 ```
-TVPairingBrowser (NWBrowser, _silopair._tcp)
+TVPairingBrowser (NWBrowser, _prairiepair._tcp)
   └─ found: [DiscoveredTV{ id, name, state, endpoint, sid? }]
        └─ CompanionPairingCardModifier
             ├─ candidate = first .setup TV whose key ∉ dismissed
@@ -171,7 +171,7 @@ Add only that focused test under `iosApp/Tests/`.
 
 ### 6. Out of scope / follow-ups
 
-- **Android parity:** `silo-android`'s TV advertiser should add the same `sid`
+- **Android parity:** `prairie-android`'s TV advertiser should add the same `sid`
   to its TXT record so the Android TV client (and any cross-client browsing)
   stays aligned. Separate repo; **not** done here. The iOS `sid` fallback means
   Apple TVs that haven't shipped `sid` yet still work (session-scoped dismissal).

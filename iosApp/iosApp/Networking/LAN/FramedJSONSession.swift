@@ -1,14 +1,14 @@
 import Foundation
 import Network
 
-/// TLS-PSK parameter builder shared by every Silo LAN protocol. The keys are
+/// TLS-PSK parameter builder shared by every Prairie LAN protocol. The keys are
 /// FIXED, non-secret strings compiled into the app: opportunistic
 /// confidentiality only, NOT an authentication boundary. Each protocol layers
 /// its own trust anchor on top (pairing: the server-issued match code;
-/// SiloControl: same-account discovery). A PSK lets both an `NWListener` and
+/// PrairieControl: same-account discovery). A PSK lets both an `NWListener` and
 /// an outbound `NWConnection` negotiate TLS without certificate/identity
 /// management.
-enum SiloLANTLS {
+enum PrairieLANTLS {
     static func parameters(psk: String, identity: String) -> NWParameters {
         let tls = NWProtocolTLS.Options()
         let pskData = Data(psk.utf8)
@@ -33,10 +33,10 @@ enum SiloLANTLS {
 
 /// One `NWConnection` carrying length-prefixed JSON frames of a single
 /// message type. The shared transport under companion pairing and
-/// SiloControl — both sides of each protocol use it (inbound via
+/// PrairieControl — both sides of each protocol use it (inbound via
 /// `init(connection:)` from an `NWListener`, outbound via `init(endpoint:)`).
 ///
-/// Hardened behaviors (originally battle-tested in SiloControl, now shared):
+/// Hardened behaviors (originally battle-tested in PrairieControl, now shared):
 /// - Ordered outbound FIFO: `enqueue` is fire-and-forget, `send` is awaited,
 ///   and both route through one drain task so frames never reorder.
 /// - `closeGracefully(goodbye:)` sends a final frame ahead of the FIN under a
@@ -49,7 +49,7 @@ actor FramedJSONSession<Message: Codable & Sendable> {
     }
 
     private let connection: NWConnection
-    private var frameBuffer = SiloFrameBuffer()
+    private var frameBuffer = PrairieFrameBuffer()
     private var continuation: AsyncThrowingStream<Message, Error>.Continuation?
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
@@ -160,7 +160,7 @@ actor FramedJSONSession<Message: Codable & Sendable> {
 
     private func writeRaw(_ message: Message) async throws {
         let payload = try encoder.encode(message)
-        let framed = try SiloFrame.encode(payload)
+        let framed = try PrairieFrame.encode(payload)
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             connection.send(content: framed, completion: .contentProcessed { error in
                 if let error {

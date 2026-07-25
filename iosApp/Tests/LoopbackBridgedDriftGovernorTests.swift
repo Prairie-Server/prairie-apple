@@ -1,5 +1,5 @@
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 final class LoopbackBridgedDriftGovernorTests: XCTestCase {
     private let rate: Int64 = 48_000

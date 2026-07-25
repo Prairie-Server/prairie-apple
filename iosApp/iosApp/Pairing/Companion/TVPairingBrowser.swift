@@ -16,7 +16,7 @@ struct DiscoveredTV: Identifiable, Equatable {
     static func == (a: DiscoveredTV, b: DiscoveredTV) -> Bool { a.id == b.id }
 }
 
-/// Browses `_silopair._tcp` and publishes discovered TVs. Drives the
+/// Browses `_prairiepair._tcp` and publishes discovered TVs. Drives the
 /// hands-off card. Owns the Local Network permission prompt (triggered on
 /// first browse).
 ///

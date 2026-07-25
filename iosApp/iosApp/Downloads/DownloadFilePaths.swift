@@ -8,7 +8,7 @@ import OSLog
 /// different directory tree with no migration.
 ///
 /// ```
-/// <AppSupport>/SiloDownloads/<serverId>/<profileId>/
+/// <AppSupport>/PrairieDownloads/<serverId>/<profileId>/
 ///   store.json
 ///   <downloadId>/
 ///     media.<ext>
@@ -26,10 +26,10 @@ enum DownloadFilePaths {
         category: "Downloads"
     )
 
-    private static let rootFolderName = "SiloDownloads"
+    private static let rootFolderName = "PrairieDownloads"
     static let storeFileName = "store.json"
 
-    /// `<AppSupport>/SiloDownloads`, created on first use and excluded from
+    /// `<AppSupport>/PrairieDownloads`, created on first use and excluded from
     /// iCloud/iTunes backup (downloads are large and not re-uploadable).
     static func rootDirectory() -> URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]

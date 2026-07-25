@@ -30,7 +30,7 @@ final class RemotePlaybackIdentityManager {
             case .invalidOffer:
                 return "The phone sent an invalid server or profile."
             case .unsupportedServer:
-                return "Update the phone's Silo server to use profile handoff."
+                return "Update the phone's Prairie server to use profile handoff."
             case .denied:
                 return "Profile handoff was denied."
             case .expired:
@@ -54,7 +54,7 @@ final class RemotePlaybackIdentityManager {
         activeIdentity?.serverName ?? ServerRegistry.shared.activeServer?.displayName
     }
 
-    func matches(_ offer: SiloControlHandoffOffer, controllerDeviceId: String) -> Bool {
+    func matches(_ offer: PrairieControlHandoffOffer, controllerDeviceId: String) -> Bool {
         guard let activeIdentity else { return false }
         return activeIdentity.serverId == offer.serverId
             && activeIdentity.profileId == offer.profileId
@@ -62,11 +62,11 @@ final class RemotePlaybackIdentityManager {
     }
 
     func prepare(
-        offer: SiloControlHandoffOffer,
+        offer: PrairieControlHandoffOffer,
         controllerDeviceId: String,
         controllerDeviceName: String?,
-        onChallenge: @escaping (SiloControlHandoffChallenge) async throws -> Void
-    ) async throws -> SiloControlHandoffReady {
+        onChallenge: @escaping (PrairieControlHandoffChallenge) async throws -> Void
+    ) async throws -> PrairieControlHandoffReady {
         let normalizedURL = ServerRegistry.normalize(url: offer.serverURL)
         guard !normalizedURL.isEmpty,
               !offer.profileId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -76,7 +76,7 @@ final class RemotePlaybackIdentityManager {
 
         if matches(offer, controllerDeviceId: controllerDeviceId),
            let activeIdentity {
-            return SiloControlHandoffReady(
+            return PrairieControlHandoffReady(
                 requestId: offer.requestId,
                 serverId: activeIdentity.serverId,
                 profileId: activeIdentity.profileId,
@@ -87,7 +87,7 @@ final class RemotePlaybackIdentityManager {
 
         let capability = try await api.remotePlaybackCapability(serverURL: normalizedURL)
         guard capability.remotePlaybackHandoff,
-              capability.protocolVersions.contains(SiloControlProtocol.version) else {
+              capability.protocolVersions.contains(PrairieControlProtocol.version) else {
             throw HandoffError.unsupportedServer
         }
 
@@ -101,7 +101,7 @@ final class RemotePlaybackIdentityManager {
             throw HandoffError.unsupportedServer
         }
 
-        try await onChallenge(SiloControlHandoffChallenge(
+        try await onChallenge(PrairieControlHandoffChallenge(
             requestId: offer.requestId,
             userCode: started.userCode,
             matchCode: started.matchCode,
@@ -138,7 +138,7 @@ final class RemotePlaybackIdentityManager {
                     profileName: offer.profileName,
                     controllerDeviceName: controllerDeviceName
                 )
-                return SiloControlHandoffReady(
+                return PrairieControlHandoffReady(
                     requestId: offer.requestId,
                     serverId: offer.serverId,
                     profileId: offer.profileId,

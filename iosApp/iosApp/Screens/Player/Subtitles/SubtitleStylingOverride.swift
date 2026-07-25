@@ -238,7 +238,7 @@ enum SubtitleStylingOverride {
     ///   primary slot participates in `use_margins` placement below.
     /// - Parameter fontScaleCompensation: multiplier that re-keys libass's
     ///   font scaling from the video area (frame minus letterbox margins)
-    ///   back to the full frame, so Silo-styled text renders at the same
+    ///   back to the full frame, so Prairie-styled text renders at the same
     ///   physical size regardless of the content's aspect ratio. 1.0 when
     ///   the overlay is video-rect sized (no margins). Native ASS is never
     ///   compensated — authored typesetting must keep tracking the picture.

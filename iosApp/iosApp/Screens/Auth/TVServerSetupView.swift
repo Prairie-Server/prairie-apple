@@ -118,7 +118,7 @@ struct TVServerSetupView: View {
 
     private var topBar: some View {
         HStack {
-            SiloWordmarkView(width: 132)
+            PrairieWordmarkView(width: 132)
             Spacer(minLength: 0)
             AuroraJourneyProgress(currentStep: 1)
                 .frame(width: 430)
@@ -137,7 +137,7 @@ struct TVServerSetupView: View {
             Text("Looking for an iPhone…")
                 .font(.continuumHeadline)
                 .foregroundStyle(Color.auroraInk)
-            Text("Open Silo on an iPhone connected to the same Wi-Fi. Accept the setup card and Silo will securely bring over the server and account.")
+            Text("Open Prairie on an iPhone connected to the same Wi-Fi. Accept the setup card and Prairie will securely bring over the server and account.")
                 .font(.continuumBody)
                 .foregroundStyle(Color.auroraInkSecondary)
                 .lineSpacing(4)
@@ -191,7 +191,7 @@ struct TVServerSetupView: View {
                 fieldLabel("Server address")
                 AuroraInputField(
                     text: $viewModel.host,
-                    placeholder: "silo.example.com",
+                    placeholder: "prairie.example.com",
                     focus: $focusedField,
                     equals: .host,
                     contentType: .URL,

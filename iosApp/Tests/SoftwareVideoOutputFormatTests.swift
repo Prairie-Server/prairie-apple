@@ -1,7 +1,7 @@
 import CoreVideo
 import Libavutil
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 /// Covers the pure decision helpers behind the software decode path's
 /// bit-depth-aware output: which FFmpeg pixel formats count as >8-bit, and

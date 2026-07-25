@@ -13,7 +13,7 @@ struct LoginView: View {
 
     var body: some View {
         AuroraScreen(variant: .signIn, scrim: .soft) {
-            SiloWordmarkView(width: 112)
+            PrairieWordmarkView(width: 112)
                 .frame(maxWidth: .infinity)
                 .padding(.bottom, 26)
 

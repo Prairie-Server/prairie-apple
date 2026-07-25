@@ -1,5 +1,5 @@
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 /// Redaction is asserted through `DiagLog.renderedLine`, the same path every
 /// captured log line takes before it reaches the ring.

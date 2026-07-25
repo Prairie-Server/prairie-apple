@@ -49,7 +49,7 @@ struct RemotePlaybackIdentityNotice: View {
         .padding(.horizontal, ContinuumTheme.padding)
         .padding(.vertical, ContinuumTheme.spacing)
         .frame(maxWidth: 720)
-        .siloPlayerGlass(
+        .prairiePlayerGlass(
             in: RoundedRectangle(cornerRadius: ContinuumTheme.cardCornerRadius),
             tint: Color.continuumPrimary.opacity(0.24)
         )

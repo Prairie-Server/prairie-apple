@@ -290,7 +290,7 @@ struct TVTopMenuBar: View {
             .font(.system(size: ContinuumTheme.Skyline.wordmarkSize, weight: .heavy))
             .tracking(ContinuumTheme.Skyline.wordmarkTracking)
             .foregroundStyle(.white)
-            .accessibilityLabel("Silo")
+            .accessibilityLabel("Prairie")
             .accessibilityHidden(true)
     }
 

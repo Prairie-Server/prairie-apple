@@ -211,7 +211,7 @@ enum ApplePlaybackV3PlanAdapter {
                     "\(transformation.name) requires the Apple loopback executor"
                 )
             }
-            engine = .siloPlayerLoopback
+            engine = .prairiePlayerLoopback
             loopbackSession = forcedLoopbackSession(
                 baseLoopbackSession,
                 transformation: transformation.name
@@ -246,7 +246,7 @@ enum ApplePlaybackV3PlanAdapter {
             startMode: .absolutePosition(max(0, plan.timeline.playerStartSeconds)),
             streamRequest: streamRequest,
             sourceStreamRequest: streamRequest,
-            loopbackSession: engine == .siloPlayerLoopback ? loopbackSession : nil,
+            loopbackSession: engine == .prairiePlayerLoopback ? loopbackSession : nil,
             capabilities: routeCapabilities.backendCapabilities,
             routeCapabilities: routeCapabilities,
             requirements: routeRequirements,

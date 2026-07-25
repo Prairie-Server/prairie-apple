@@ -6,17 +6,17 @@
 
 **Architecture:** A view-layer reskin. The auth/session logic (`AuthService`, `ServerRegistry`, `TokenStore`), the view models, and the `AppRouter` state machine are unchanged. The Aurora design system (currently `#if os(tvOS)` under `iosApp/iosApp/tvOS/Aurora/`) moves to a shared `DesignSystem/Aurora/` folder so iOS and macOS can use it; the only UIKit-coupled piece (`AuroraInputField`, the tvOS controlled-overlay field) stays tvOS-only and iOS gets a real editable `AuroraTextField`.
 
-**Tech Stack:** Swift 5, SwiftUI, XcodeGen (`project.yml` → `Silo.xcodeproj`). Targets: `Silo` (iOS), `SiloTV` (tvOS), `SiloMac` (macOS). Deployment: iOS 18, tvOS 26, macOS 15.
+**Tech Stack:** Swift 5, SwiftUI, XcodeGen (`project.yml` → `Prairie.xcodeproj`). Targets: `Prairie` (iOS), `PrairieTV` (tvOS), `PrairieMac` (macOS). Deployment: iOS 18, tvOS 26, macOS 15.
 
 **Testing note (per `CLAUDE.md`):** This is UI work — do **not** add XCTest cases. Each task is verified by compiling the affected targets and, at the end, a simulator smoke test. The build commands assume the project has been regenerated with `xcodegen generate` whenever files are added/moved/deleted.
 
 **Reference build commands:**
 - Regenerate project: `cd iosApp && xcodegen generate`
-- iOS: `cd iosApp && xcodebuild build -project Silo.xcodeproj -scheme Silo -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO`
-- tvOS: `cd iosApp && xcodebuild build -project Silo.xcodeproj -scheme SiloTV -destination 'platform=tvOS Simulator,name=Apple TV' CODE_SIGNING_ALLOWED=NO`
-- macOS: `cd iosApp && xcodebuild build -project Silo.xcodeproj -scheme SiloMac -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO`
+- iOS: `cd iosApp && xcodebuild build -project Prairie.xcodeproj -scheme Prairie -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO`
+- tvOS: `cd iosApp && xcodebuild build -project Prairie.xcodeproj -scheme PrairieTV -destination 'platform=tvOS Simulator,name=Apple TV' CODE_SIGNING_ALLOWED=NO`
+- macOS: `cd iosApp && xcodebuild build -project Prairie.xcodeproj -scheme PrairieMac -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO`
 
-**Source-path note:** `project.yml` lives at `iosApp/project.yml` and globs `path: iosApp`, so all app sources are under `iosApp/iosApp/…`. The iOS and tvOS targets include the whole tree; **`SiloMac` excludes `tvOS/**`** — this is why Aurora must leave `tvOS/`.
+**Source-path note:** `project.yml` lives at `iosApp/project.yml` and globs `path: iosApp`, so all app sources are under `iosApp/iosApp/…`. The iOS and tvOS targets include the whole tree; **`PrairieMac` excludes `tvOS/**`** — this is why Aurora must leave `tvOS/`.
 
 ---
 
@@ -192,16 +192,16 @@ Everything else (the `Color` palette extension, `AuroraEyebrow`, `AuroraGlassPan
 - [ ] **Step 5: Regenerate the project**
 
 Run: `cd iosApp && xcodegen generate`
-Expected: `Created project at .../Silo.xcodeproj` with no errors.
+Expected: `Created project at .../Prairie.xcodeproj` with no errors.
 
 - [ ] **Step 6: Build all three targets**
 
 Run each and expect `** BUILD SUCCEEDED **`:
 ```bash
 cd iosApp
-xcodebuild build -project Silo.xcodeproj -scheme SiloTV -destination 'platform=tvOS Simulator,name=Apple TV' CODE_SIGNING_ALLOWED=NO
-xcodebuild build -project Silo.xcodeproj -scheme Silo -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO
-xcodebuild build -project Silo.xcodeproj -scheme SiloMac -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
+xcodebuild build -project Prairie.xcodeproj -scheme PrairieTV -destination 'platform=tvOS Simulator,name=Apple TV' CODE_SIGNING_ALLOWED=NO
+xcodebuild build -project Prairie.xcodeproj -scheme Prairie -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO
+xcodebuild build -project Prairie.xcodeproj -scheme PrairieMac -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
 ```
 tvOS exercises `AuroraInputField` + the moved files; iOS/macOS prove the un-gated Aurora compiles where it previously didn't.
 
@@ -425,8 +425,8 @@ Expected: success.
 Run (expect `** BUILD SUCCEEDED **`):
 ```bash
 cd iosApp
-xcodebuild build -project Silo.xcodeproj -scheme Silo -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO
-xcodebuild build -project Silo.xcodeproj -scheme SiloMac -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
+xcodebuild build -project Prairie.xcodeproj -scheme Prairie -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO
+xcodebuild build -project Prairie.xcodeproj -scheme PrairieMac -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
 ```
 
 - [ ] **Step 4: Commit**
@@ -464,7 +464,7 @@ struct ServerSetupView: View {
 
     var body: some View {
         AuroraScreen(variant: .server, scrim: .soft) {
-            SiloWordmarkView(width: 132)
+            PrairieWordmarkView(width: 132)
                 .frame(maxWidth: .infinity)
                 .padding(.bottom, 30)
 
@@ -573,8 +573,8 @@ struct ServerSetupView: View {
 Run (expect `** BUILD SUCCEEDED **`):
 ```bash
 cd iosApp
-xcodebuild build -project Silo.xcodeproj -scheme Silo -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO
-xcodebuild build -project Silo.xcodeproj -scheme SiloMac -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
+xcodebuild build -project Prairie.xcodeproj -scheme Prairie -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO
+xcodebuild build -project Prairie.xcodeproj -scheme PrairieMac -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
 ```
 (`ServerSetupView` is now `#if !os(tvOS)`. ContentView already only references it under `#else`/non-tvOS branches, so tvOS is unaffected — but the tvOS build is verified in Task 8 after the ContentView edits land.)
 
@@ -689,7 +689,7 @@ to:
 Run (expect `** BUILD SUCCEEDED **`):
 ```bash
 cd iosApp
-xcodebuild build -project Silo.xcodeproj -scheme SiloTV -destination 'platform=tvOS Simulator,name=Apple TV' CODE_SIGNING_ALLOWED=NO
+xcodebuild build -project Prairie.xcodeproj -scheme PrairieTV -destination 'platform=tvOS Simulator,name=Apple TV' CODE_SIGNING_ALLOWED=NO
 ```
 
 - [ ] **Step 5: Commit**
@@ -724,7 +724,7 @@ struct LoginView: View {
 
     var body: some View {
         AuroraScreen(variant: .signIn, scrim: .soft) {
-            SiloWordmarkView(width: 132)
+            PrairieWordmarkView(width: 132)
                 .frame(maxWidth: .infinity)
                 .padding(.bottom, 30)
 
@@ -824,8 +824,8 @@ struct LoginView: View {
 Run (expect `** BUILD SUCCEEDED **`):
 ```bash
 cd iosApp
-xcodebuild build -project Silo.xcodeproj -scheme Silo -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO
-xcodebuild build -project Silo.xcodeproj -scheme SiloMac -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
+xcodebuild build -project Prairie.xcodeproj -scheme Prairie -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO
+xcodebuild build -project Prairie.xcodeproj -scheme PrairieMac -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
 ```
 
 - [ ] **Step 3: Commit**
@@ -858,7 +858,7 @@ struct SignupView: View {
 
     var body: some View {
         AuroraScreen(variant: .signIn, scrim: .soft) {
-            SiloWordmarkView(width: 132)
+            PrairieWordmarkView(width: 132)
                 .frame(maxWidth: .infinity)
                 .padding(.bottom, 30)
 
@@ -938,8 +938,8 @@ struct SignupView: View {
 Run (expect `** BUILD SUCCEEDED **`):
 ```bash
 cd iosApp
-xcodebuild build -project Silo.xcodeproj -scheme Silo -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO
-xcodebuild build -project Silo.xcodeproj -scheme SiloMac -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
+xcodebuild build -project Prairie.xcodeproj -scheme Prairie -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO
+xcodebuild build -project Prairie.xcodeproj -scheme PrairieMac -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
 ```
 
 - [ ] **Step 3: Commit**
@@ -1025,9 +1025,9 @@ with:
 Run (expect `** BUILD SUCCEEDED **` for each):
 ```bash
 cd iosApp
-xcodebuild build -project Silo.xcodeproj -scheme Silo -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO
-xcodebuild build -project Silo.xcodeproj -scheme SiloMac -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
-xcodebuild build -project Silo.xcodeproj -scheme SiloTV -destination 'platform=tvOS Simulator,name=Apple TV' CODE_SIGNING_ALLOWED=NO
+xcodebuild build -project Prairie.xcodeproj -scheme Prairie -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO
+xcodebuild build -project Prairie.xcodeproj -scheme PrairieMac -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
+xcodebuild build -project Prairie.xcodeproj -scheme PrairieTV -destination 'platform=tvOS Simulator,name=Apple TV' CODE_SIGNING_ALLOWED=NO
 ```
 
 - [ ] **Step 4: Commit**
@@ -1066,7 +1066,7 @@ struct ServerNeedsSetupView: View {
 
     var body: some View {
         AuroraScreen(variant: .server, scrim: .soft) {
-            SiloWordmarkView(width: 132)
+            PrairieWordmarkView(width: 132)
                 .frame(maxWidth: .infinity)
                 .padding(.bottom, 26)
 
@@ -1314,9 +1314,9 @@ Expected: **no matches** in `iosApp/` app sources except (a) `setupAdmin` in `Au
 ```bash
 cd iosApp
 xcodegen generate
-xcodebuild build -project Silo.xcodeproj -scheme Silo -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO
-xcodebuild build -project Silo.xcodeproj -scheme SiloTV -destination 'platform=tvOS Simulator,name=Apple TV' CODE_SIGNING_ALLOWED=NO
-xcodebuild build -project Silo.xcodeproj -scheme SiloMac -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
+xcodebuild build -project Prairie.xcodeproj -scheme Prairie -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO
+xcodebuild build -project Prairie.xcodeproj -scheme PrairieTV -destination 'platform=tvOS Simulator,name=Apple TV' CODE_SIGNING_ALLOWED=NO
+xcodebuild build -project Prairie.xcodeproj -scheme PrairieMac -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
 ```
 Expected: `** BUILD SUCCEEDED **` for all three.
 
@@ -1337,22 +1337,22 @@ git commit -m "Replace iOS Create-Admin with a 'finish setup in your browser' sc
 
 ```bash
 cd iosApp
-xcodebuild clean build -project Silo.xcodeproj -scheme Silo -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO
-xcodebuild clean build -project Silo.xcodeproj -scheme SiloTV -destination 'platform=tvOS Simulator,name=Apple TV' CODE_SIGNING_ALLOWED=NO
-xcodebuild clean build -project Silo.xcodeproj -scheme SiloMac -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
+xcodebuild clean build -project Prairie.xcodeproj -scheme Prairie -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO
+xcodebuild clean build -project Prairie.xcodeproj -scheme PrairieTV -destination 'platform=tvOS Simulator,name=Apple TV' CODE_SIGNING_ALLOWED=NO
+xcodebuild clean build -project Prairie.xcodeproj -scheme PrairieMac -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
 ```
 Expected: `** BUILD SUCCEEDED **` for all three.
 
 - [ ] **Step 2: Run the iOS app in the simulator and walk the flow**
 
-Boot the iPhone simulator, install, and launch the `Silo` scheme. Verify visually:
+Boot the iPhone simulator, install, and launch the `Prairie` scheme. Verify visually:
 - **Server setup**: plum Aurora backdrop with drifting ribbons + starfield, `SILO.` wordmark, "Step 01 — Connect" gold eyebrow, single glass form, "Advanced options" collapsed by default; expanding reveals Protocol + Port. Enter a known dev server and connect.
 - **Sign in**: "Step 02 — Sign in" + "Welcome back" + host label; username/password with a working eye toggle; keyboard pushes the focused field into view (form scrolls); "Create account" appears only when signup is enabled; "Change server" returns to server setup.
 - **Profile**: "Who's watching?" over the Aurora backdrop; tiles tappable; a PIN profile presents the PIN sheet; "Switch server"/"Sign out" chips work.
 - **Sign up** (if the dev server allows it): all fields render and scroll; create-account works.
 - **Server needs setup**: point the app at a fresh/unconfigured server → the gear screen appears (not a Create-Admin form); "Change server" works; "retry" re-probes.
 
-Reference the `silotv-simulator-debugging` memory for boot/install/sign-in mechanics (the same `xcrun simctl` patterns apply to the iOS simulator; use local dev credentials such as `<username>` / `<password>`).
+Reference the `prairietv-simulator-debugging` memory for boot/install/sign-in mechanics (the same `xcrun simctl` patterns apply to the iOS simulator; use local dev credentials such as `<username>` / `<password>`).
 
 - [ ] **Step 3: Verify Reduce Motion**
 
@@ -1371,7 +1371,7 @@ git commit -m "Polish iOS Aurora first-run flow after simulator verification"
 
 **Spec coverage:** Server setup (T3) ✓ · Sign-in password-first (T5) ✓ · Profile (T7) ✓ · Sign-up (T6) ✓ · Server-needs-setup replacing Create-Admin (T8) ✓ · Advanced disclosure iOS (T3) + tvOS (T4) ✓ · Aurora promoted to shared code with iOS field (T1, T2) ✓ · Reduce Motion (T9) ✓ · "no TV footnote on iOS" — N/A (current iOS `ServerSetupView` has none; the reskin doesn't add one) ✓.
 
-**macOS:** Because `SiloMac` compiles these views but excludes `tvOS/**`, Aurora is moved to `DesignSystem/Aurora/` (T1) and every reskinned view + the form kit is `#if !os(tvOS)`; `ContentView` route arms are platform-gated (T8). macOS inherits the reskin and is built in every task — it is not separately *designed*, only kept green.
+**macOS:** Because `PrairieMac` compiles these views but excludes `tvOS/**`, Aurora is moved to `DesignSystem/Aurora/` (T1) and every reskinned view + the form kit is `#if !os(tvOS)`; `ContentView` route arms are platform-gated (T8). macOS inherits the reskin and is built in every task — it is not separately *designed*, only kept green.
 
 **Naming consistency:** `AuroraTextField` parameters (`label`, `text`, `placeholder`, `focus`, `equals`, `isSecure`, `showsRevealToggle`, `contentType`, `keyboard`, `submitLabel`, `onSubmit`) are used identically in T3/T5/T6. `viewModel.showsAdvancedOptions` (existing on `ServerSetupViewModel`) drives both the iOS (T3) and tvOS (T4) disclosures. `Route.serverNeedsSetup` is defined (T8 S2), navigated to (S3), and handled (S4) consistently.
 

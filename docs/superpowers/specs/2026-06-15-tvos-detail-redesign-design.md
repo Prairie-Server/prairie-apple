@@ -17,7 +17,7 @@ episode, audiobook) — not a restructure. The current cinematic layout
    version control, overflow menu, season chips) — replacing today's capsule
    pills and circular icon buttons.
 2. A **pre-Play playback-selection row** (Edition · Version · Audio · Subtitles)
-   is added under the action buttons, mirroring the Silo **webapp**, so the user
+   is added under the action buttons, mirroring the Prairie **webapp**, so the user
    sees and can change what will play before pressing Play.
 3. The **audiobook** page is reworked from a flat side-by-side header into a
    **cover-forward** member of the same cinematic family.
@@ -108,7 +108,7 @@ scrim stack, lower-left content column). Content, top→bottom:
 ## 6. Playback selection row (webapp parity)
 
 A second row directly under the action buttons, matching the webapp's model and
-terminology (see `silo-server/web/src/pages/ItemDetail/components/`).
+terminology (see `prairie-server/web/src/pages/ItemDetail/components/`).
 
 **Items** (each a squared 8 pt selector button: `[icon] LABEL  value  ⌄`, caps
 tertiary label, white value, tertiary chevron):
@@ -228,7 +228,7 @@ focus.
 
 - **Editions:** tvOS has `FileVersion.edition: String?` but **no `PlaybackVariant`
   grouping**. Client-side, group versions by `edition` to build the Edition
-  selector. *Coordinate with `silo-server`:* confirm whether to surface the
+  selector. *Coordinate with `prairie-server`:* confirm whether to surface the
   normalized `edition_key` (+ ranking) on the tvOS detail DTO for correct
   grouping/default selection, or rely on the raw string. (Open.)
 - **Edition stickiness:** there is no `lastEditionKey` on tvOS. Derive the sticky
@@ -276,7 +276,7 @@ focus.
 ## 14. Open questions
 
 1. **Edition grouping/ranking:** group by the raw `edition` string client-side,
-   or have `silo-server` surface `edition_key` (+ default ranking) on the tvOS
+   or have `prairie-server` surface `edition_key` (+ default ranking) on the tvOS
    DTO? (§11)
 2. **Edition stickiness:** derive from the sticky version, or add a server
    `lastEditionKey`? (§11)

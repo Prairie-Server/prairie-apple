@@ -1,6 +1,6 @@
 //
 //  AIModelDecodingTests.swift
-//  SiloTests
+//  PrairieTests
 //
 //  Wire-decoding tests for the AI subtitle/metadata models. Decodes raw
 //  snake_case JSON exactly as `HTTPClient` does (`.convertFromSnakeCase`),
@@ -10,7 +10,7 @@
 
 import XCTest
 import Foundation
-@testable import Silo
+@testable import Prairie
 
 final class AIModelDecodingTests: XCTestCase {
 

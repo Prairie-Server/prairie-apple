@@ -11,7 +11,7 @@ struct SignupView: View {
 
     var body: some View {
         AuroraScreen(variant: .signIn, scrim: .soft) {
-            SiloWordmarkView(width: 112)
+            PrairieWordmarkView(width: 112)
                 .frame(maxWidth: .infinity)
                 .padding(.bottom, 26)
 
@@ -26,7 +26,7 @@ struct SignupView: View {
                     .font(.continuumTitle)
                     .foregroundStyle(Color.auroraInk)
                     .multilineTextAlignment(.center)
-                Text("Your invite code connects this account to the right Silo household.")
+                Text("Your invite code connects this account to the right Prairie household.")
                     .font(.continuumBody)
                     .foregroundStyle(Color.auroraInkSecondary)
                     .multilineTextAlignment(.center)

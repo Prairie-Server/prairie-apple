@@ -1,6 +1,6 @@
 import Foundation
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 final class HomeSectionsMutationTests: XCTestCase {
     private enum TestError: Error {

@@ -31,7 +31,7 @@ filenames like `<date>-<platform>-<implementation-route>-<claim>.yaml`.
 date: 2026-04-22
 platform: tvOS 18.5
 device: Apple TV 4K (3rd gen)
-route_family: SiloPlayer
+route_family: PrairiePlayer
 implementation_route: avPlayerLocalDVLoopback
 delivery: direct
 asset:

@@ -1,5 +1,5 @@
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 final class DolbyVisionPolicyTests: XCTestCase {
     private let dvOn = DolbyVisionPolicy.Snapshot(

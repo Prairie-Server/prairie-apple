@@ -1,38 +1,38 @@
-# Silo Cast Remote (iOS → tvOS)
+# Prairie Cast Remote (iOS → tvOS)
 
-Peer-to-peer LAN remote control: an iPhone discovers a Silo Apple TV on the
+Peer-to-peer LAN remote control: an iPhone discovers a Prairie Apple TV on the
 local network, connects directly to it, and drives playback (launch, transport,
 tracks, quality, speed, aspect/HDR, **volume/mute**, **next episode**) from a
 native now-playing screen. Control stays LAN-local; launching new content uses
-the phone's Silo server to authorize a playback-scoped TV session. Apple and
+the phone's Prairie server to authorize a playback-scoped TV session. Apple and
 Android use the same wire protocol.
 
 ## Architecture
 
 | Layer | Type | Role |
 |-------|------|------|
-| Wire protocol | `Control/SiloControlProtocol.swift` | Message enum + Codable framing; v1/v2 negotiation, `serviceType = _silocast._tcp` |
-| Transport | `Control/SiloControlSession.swift` | `actor` over `NWConnection` (TLS-PSK), TLV-framed JSON, ordered outbound queue |
-| Phone controller | `Control/iOS/SiloControlClient.swift` | Connect, negotiate, authorize handoff, heartbeat, reconnect, command send |
+| Wire protocol | `Control/PrairieControlProtocol.swift` | Message enum + Codable framing; v1/v2 negotiation, `serviceType = _prairiecast._tcp` |
+| Transport | `Control/PrairieControlSession.swift` | `actor` over `NWConnection` (TLS-PSK), TLV-framed JSON, ordered outbound queue |
+| Phone controller | `Control/iOS/PrairieControlClient.swift` | Connect, negotiate, authorize handoff, heartbeat, reconnect, command send |
 | TV receiver | `Control/tvOS/TVControlReceiver.swift` | Advertise, negotiate, authorize, launch, apply controls, broadcast state |
 | Temporary identity | `Control/tvOS/RemotePlaybackIdentityManager.swift` | Explicit device-login exchange, in-memory auth overlay, logout and restore |
 
 Player integration: the tvOS player registers with `TVCastReceiver` on appear
-(`PlayerView`); controls are applied via `PlayerViewModel.applySiloControlCommand(_:)`
-and state is published via `PlayerViewModel.makeSiloControlPlaybackState(contentId:)`.
+(`PlayerView`); controls are applied via `PlayerViewModel.applyPrairieControlCommand(_:)`
+and state is published via `PlayerViewModel.makePrairieControlPlaybackState(contentId:)`.
 
 ## Message protocol
 
-`SiloCastMessage` (Codable, tagged by `type`, carries protocol `v`):
+`PrairieCastMessage` (Codable, tagged by `type`, carries protocol `v`):
 
 - `hello` — identity exchange (role phone/tv, deviceName/id, serverId/Name, supportedVersions)
 - `handoff_offer` — phone offers its normalized server ID/URL and active profile
 - `handoff_challenge` — TV returns the server-issued user/match code
 - `handoff_ready` — TV confirms that its temporary phone profile is active
 - `handoff_cancel` — either peer cancels a stale, denied, or failed handoff
-- `launch` — phone asks the TV to start playing a `SiloCastPlaybackRequest`
-- `control` — `SiloCastControlCommand` (play/pause/seek/stop, select audio/subtitle, speed, quality, video gravity, HDR, **set_volume**, **set_muted**, **play_next**)
-- `state` — `SiloCastPlaybackState` snapshot (TV → phone, ~2 Hz while playing)
+- `launch` — phone asks the TV to start playing a `PrairieCastPlaybackRequest`
+- `control` — `PrairieCastControlCommand` (play/pause/seek/stop, select audio/subtitle, speed, quality, video gravity, HDR, **set_volume**, **set_muted**, **play_next**)
+- `state` — `PrairieCastPlaybackState` snapshot (TV → phone, ~2 Hz while playing)
 - `error` — coded error (`server_mismatch`, `unauthorized`, `player_not_ready`, …)
 - `ping` / `pong` — heartbeat
 - `close` — graceful disconnect
@@ -69,7 +69,7 @@ phones during the compatibility window; those retain the legacy TV-owned
 identity behavior.
 
 ### Ordering
-All non-hello sends go through `SiloCastSession.enqueue(_:)`, drained by a single
+All non-hello sends go through `PrairieCastSession.enqueue(_:)`, drained by a single
 internal task, so state snapshots and commands cannot reorder on the wire (a
 stale snapshot can never overwrite a fresh one). The initial `hello` uses the
 awaitable `send(_:)` and is always sent before any `enqueue`.
@@ -116,16 +116,16 @@ Consequences, surfaced honestly in the UI:
 ## Security — known limitation (deferred)
 
 The cast channel uses **TLS-PSK with a single static pre-shared key compiled into
-every build** (`SiloControlSession.tlsParameters()`). The channel is therefore
+every build** (`PrairieControlSession.tlsParameters()`). The channel is therefore
 **encrypted but not peer-authenticated**. v2 improves credential handling and
 binds the temporary TV session to a server-approved phone user/profile, but a
-Silo-capable device on the LAN can still initiate a connection or handoff. The
+Prairie-capable device on the LAN can still initiate a connection or handoff. The
 authenticated phone approval prevents that peer from receiving another user's
 credentials without the user's participation; it does not cryptographically
 pair the LAN devices.
 
 **Deferred follow-up (recommended):** derive a per-pair / per-server secret from
-the existing companion-pairing trust (`_silopair`, see the pairing flow) and bind
+the existing companion-pairing trust (`_prairiepair`, see the pairing flow) and bind
 it into the cast `hello` handshake (e.g. HMAC the hello/launch with the per-pair
 secret, or a one-time PIN echoed from the TV), so only paired devices can control
 the TV. Until then, treat LAN access as the trust boundary.
@@ -133,7 +133,7 @@ the TV. Until then, treat LAN access as the trust boundary.
 ## Testing
 
 Protocol negotiation, v2 message round-trips, and `RemotePlaybackClock`
-interpolation/optimistic math live in `iosApp/Tests/SiloControlTests.swift` and
-run through the `SiloTests` target.
+interpolation/optimistic math live in `iosApp/Tests/PrairieControlTests.swift` and
+run through the `PrairieTests` target.
 End-to-end behavior is verified with two simulators sharing the host network
 (see the `companion-pairing-sim-test` notes for the Bonjour/TLS sim-to-sim setup).

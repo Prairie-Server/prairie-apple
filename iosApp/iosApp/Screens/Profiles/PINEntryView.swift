@@ -163,7 +163,7 @@ struct PINEntryView: View {
 
     private var cancelButton: some View {
         Button("Cancel", action: cancel)
-            .siloTextButton()
+            .prairieTextButton()
     }
 
     private func cancel() {

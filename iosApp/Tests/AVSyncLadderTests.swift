@@ -1,5 +1,5 @@
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 final class AVSyncLadderTests: XCTestCase {
     private let frameDuration = 1.0 / 24.0

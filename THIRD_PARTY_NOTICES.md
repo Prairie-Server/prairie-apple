@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-Silo Apple is licensed under `AGPL-3.0-or-later`. Third-party dependencies keep their original licenses.
+Prairie Apple is licensed under `AGPL-3.0-or-later`. Third-party dependencies keep their original licenses.
 
 ## FFmpeg
 

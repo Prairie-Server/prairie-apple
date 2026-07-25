@@ -1,5 +1,5 @@
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 /// Pure conversion tests for the PAL8 → premultiplied-RGBA path used by
 /// bitmap subtitle decoding (PGS/DVD). Palette entries are 4 bytes in

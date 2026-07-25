@@ -56,8 +56,8 @@ struct ApplePushDisplayAuthState: Equatable {
 }
 
 enum ApplePushDisplayWire {
-    static let deliveryIDUserInfoKey = "silo_delivery_id"
-    static let urlUserInfoKey = "silo_url"
+    static let deliveryIDUserInfoKey = "prairie_delivery_id"
+    static let urlUserInfoKey = "prairie_url"
 
     static func deliveryID(from userInfo: [AnyHashable: Any]) -> String? {
         guard let raw = userInfo[deliveryIDUserInfoKey] as? String else { return nil }

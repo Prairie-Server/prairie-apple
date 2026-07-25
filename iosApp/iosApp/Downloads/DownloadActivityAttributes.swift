@@ -5,7 +5,7 @@ import ActivityKit
 import Foundation
 
 /// Content schema for the downloads Live Activity, shared between the app
-/// (which starts/updates the activity) and the SiloDownloadsActivity widget
+/// (which starts/updates the activity) and the PrairieDownloadsActivity widget
 /// extension (which renders it on the lock screen and in the Dynamic
 /// Island). One activity summarizes the whole active queue rather than one
 /// per item — iOS caps concurrent Live Activities per app, and a queue

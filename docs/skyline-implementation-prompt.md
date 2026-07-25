@@ -7,7 +7,7 @@
 > and Phase 4 (polish & parity) prompts after this phase merges.
 
 Copy everything below the line into a fresh Claude Code session at the root of
-`silo-apple`. An Android adaptation note is at the end.
+`prairie-apple`. An Android adaptation note is at the end.
 
 ---
 
@@ -107,7 +107,7 @@ any server changes, any iOS/macOS behavior changes.
 ## Repo constraints
 
 - After any target/file-layout change: `cd iosApp && xcodegen generate`. Never
-  hand-edit `Silo.xcodeproj`. Never touch signing.
+  hand-edit `Prairie.xcodeproj`. Never touch signing.
 - Platform code stays under `iosApp/iosApp/tvOS/`; shared screens (Home,
   Search, Calendar, Recommendations) are also compiled for iOS/macOS — guard
   tvOS-only changes and keep the other platforms building unchanged.
@@ -161,8 +161,8 @@ The codebase already encodes several tvOS lessons — preserve them:
 
 1. `cd iosApp && xcodegen generate`
 2. Build all three:
-   - `xcodebuild build -project Silo.xcodeproj -scheme SiloTV -destination 'platform=tvOS Simulator,name=Apple TV' CODE_SIGNING_ALLOWED=NO`
-   - same for scheme `Silo` (iPhone 17 Pro sim) and `SiloMac` (`platform=macOS`)
+   - `xcodebuild build -project Prairie.xcodeproj -scheme PrairieTV -destination 'platform=tvOS Simulator,name=Apple TV' CODE_SIGNING_ALLOWED=NO`
+   - same for scheme `Prairie` (iPhone 17 Pro sim) and `PrairieMac` (`platform=macOS`)
 3. Run the tvOS simulator and walk the focus map with the remote/arrow keys:
    - cold start → Home, focus on the **first Continue Watching card**, marquee
      previewing it (eyebrow `CONTINUE WATCHING`), no carousel/dots/buttons
@@ -175,9 +175,9 @@ The codebase already encodes several tvOS lessons — preserve them:
      grid pills, per §6.4)
    - Menu from content → bar; Menu on Movies → Home; Menu on Home → exits
    - Reduce Motion on → marquee snaps, no crossfade
-4. Confirm iOS (`Silo` scheme) Home/Browse still show the Featured carousel
+4. Confirm iOS (`Prairie` scheme) Home/Browse still show the Featured carousel
    exactly as before — screenshot-compare if in doubt.
-5. Confirm Top Shelf deep links and `continuum://` routes still resolve.
+5. Confirm Top Shelf deep links and `prairie://` routes still resolve.
 6. Report results honestly, including anything you could not verify in the
    simulator, and list any synopsis/badge fields missing from section models
    (for the §9 server audit).
@@ -187,7 +187,7 @@ deploys to the physical Apple TV — ask before using it.
 
 ---
 
-## Adapting this prompt for `silo-android` (androidTvApp)
+## Adapting this prompt for `prairie-android` (androidTvApp)
 
 Swap the read-first list for `TvAppNavigation.kt`, `TvMainShell.kt`,
 `TvTopMenuBar.kt`, `TvHomeScreen.kt`, `TvLibraryDetailScreen.kt`, theme files

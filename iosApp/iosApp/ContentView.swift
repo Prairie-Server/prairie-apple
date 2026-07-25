@@ -8,7 +8,7 @@ struct ContentView: View {
     @State private var serverRegistry = ServerRegistry.shared
     @State private var audioStore = AudioPlaybackStore()
     #if os(iOS)
-    @State private var siloControl = SiloControlClient()
+    @State private var prairieControl = PrairieControlClient()
     #endif
     @State private var debugPlayContentId: String?
     @State private var didAttemptDebugAutoPlay = false
@@ -40,7 +40,7 @@ struct ContentView: View {
         .id(serverRegistry.activeServerId)
         .environment(audioStore)
         #if os(iOS)
-        .environment(siloControl)
+        .environment(prairieControl)
         #endif
         .environmentObject(overlayPrefs)
         .preferredColorScheme(.dark)
@@ -198,9 +198,9 @@ struct ContentView: View {
             #if os(iOS)
             switch newPhase {
             case .active:
-                siloControl.appDidBecomeActive()
+                prairieControl.appDidBecomeActive()
             case .background:
-                siloControl.appDidEnterBackground()
+                prairieControl.appDidEnterBackground()
                 // Keep series monitoring alive while backgrounded; only
                 // worth a wake when the profile can download at all.
                 if DownloadManager.shared.downloadsEnabled {
@@ -331,12 +331,12 @@ struct ContentView: View {
         )
     }
 
-    /// Resolves a `continuum://` URL to a navigation action. Supported
+    /// Resolves a `prairie://` URL to a navigation action. Supported
     /// shapes:
-    /// - `continuum://item/{contentId}` — push the detail screen
-    /// - `continuum://play/{contentId}` — push the player (resume from
+    /// - `prairie://item/{contentId}` — push the detail screen
+    /// - `prairie://play/{contentId}` — push the player (resume from
     ///   last known position)
-    /// - `continuum://downloads` — select the Downloads tab (local
+    /// - `prairie://downloads` — select the Downloads tab (local
     ///   download notifications)
     ///
     /// If the auth state isn't ready yet, the link is queued in
@@ -748,7 +748,7 @@ struct MainTabView: View {
     @Namespace private var zoomNamespace
     @Environment(AudioPlaybackStore.self) private var audioStore
     #if os(iOS)
-    @Environment(SiloControlClient.self) private var siloControl
+    @Environment(PrairieControlClient.self) private var prairieControl
     #endif
     #if !os(macOS)
     @Environment(\.horizontalSizeClass) private var hSize
@@ -790,7 +790,7 @@ struct MainTabView: View {
         // already be .active when the authenticated UI first appears, so the
         // scenePhase onChange alone would miss it. Idempotent — the controller
         // guards against duplicate probes.
-        .task { siloControl.attemptAutoResumeIfIdle() }
+        .task { prairieControl.attemptAutoResumeIfIdle() }
         #endif
         .onChange(of: router.requestedTab) { _, tab in
             guard let tab else { return }
@@ -819,10 +819,10 @@ struct MainTabView: View {
         }
         #if os(iOS)
         .sheet(isPresented: Binding(
-            get: { siloControl.isShowingRemoteControl },
-            set: { if !$0 { siloControl.hideRemoteControl() } }
+            get: { prairieControl.isShowingRemoteControl },
+            set: { if !$0 { prairieControl.hideRemoteControl() } }
         )) {
-            SiloControlRemoteView(controller: siloControl)
+            PrairieControlRemoteView(controller: prairieControl)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
@@ -915,7 +915,7 @@ struct MainTabView: View {
                     .tag(tab)
                 }
             }
-            .navigationTitle("Silo")
+            .navigationTitle("Prairie")
         } detail: {
             NavigationStack(path: $router.path) {
                 tabContent(for: selectedTab)

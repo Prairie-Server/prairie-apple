@@ -1,0 +1,16 @@
+// Top Shelf extension signing defaults. CI and the paid team use these
+// as-is. Local contributors without access to the paid team can override
+// any of these by dropping a `Local.xcconfig` into this directory — see
+// `Local.xcconfig.sample` for the template.
+//
+// Indirection via `PRAIRIE_TOPSHELF_BUNDLE_ID` /
+// `PRAIRIE_TOPSHELF_ENTITLEMENTS` lets Local.xcconfig swap values
+// without touching the other targets' xcconfigs.
+
+PRAIRIE_TOPSHELF_BUNDLE_ID = org.prairieserver.prairie.topshelf
+PRAIRIE_TOPSHELF_ENTITLEMENTS = TopShelf/TopShelf.entitlements
+
+PRODUCT_BUNDLE_IDENTIFIER = $(PRAIRIE_TOPSHELF_BUNDLE_ID)
+CODE_SIGN_ENTITLEMENTS = $(PRAIRIE_TOPSHELF_ENTITLEMENTS)
+
+#include? "Local.xcconfig"

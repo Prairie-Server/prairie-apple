@@ -9,7 +9,7 @@ typealias PairingSession = FramedJSONSession<PairingMessage>
 
 enum PairingTransport {
     static func tlsParameters() -> NWParameters {
-        SiloLANTLS.parameters(psk: "silo-companion-pairing-v1", identity: "silo-pairing")
+        PrairieLANTLS.parameters(psk: "prairie-companion-pairing-v1", identity: "prairie-pairing")
     }
 }
 

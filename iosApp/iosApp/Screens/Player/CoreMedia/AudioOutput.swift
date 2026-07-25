@@ -90,7 +90,7 @@ final class AudioEngineAudioOutput {
     /// Fires exactly once per `prepare`/`play` failure transition, after the
     /// failure has been recorded on `lastErrorDescription`. PlayerCore wires
     /// this into `reportError` so AVAudioEngine setup/start failures reach
-    /// the VM (which can fall back to SiloPlayer or surface a user error)
+    /// the VM (which can fall back to PrairiePlayer or surface a user error)
     /// instead of only landing on a DIAG log line.
     var onFailure: ((String) -> Void)?
 

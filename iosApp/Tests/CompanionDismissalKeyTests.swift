@@ -1,6 +1,6 @@
 import XCTest
 import Foundation
-@testable import Silo
+@testable import Prairie
 
 final class CompanionDismissalKeyTests: XCTestCase {
     func testSameSidStaysDismissed() {

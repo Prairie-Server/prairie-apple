@@ -3,7 +3,7 @@ import CryptoKit
 import Foundation
 
 /// SHA-256 helpers shared by every diagnostics consumer, including the
-/// SiloTVTopShelf extension. It lives in its own file (rather than alongside
+/// PrairieTVTopShelf extension. It lives in its own file (rather than alongside
 /// `PendingReportStore`) so targets that only compile the logging/redaction
 /// slice — where `DiagLog.hostToken` hashes server hostnames — still link it
 /// without pulling in the pending-report store.

@@ -15,7 +15,7 @@ struct TVDiagnosticsConsentScreen: View {
             VStack(alignment: .leading, spacing: 24) {
                 Text("Crash Reports")
                     .font(.system(size: 48, weight: .bold))
-                Text("Choose what Silo should do when a crash, hang, or unclean shutdown report is available.")
+                Text("Choose what Prairie should do when a crash, hang, or unclean shutdown report is available.")
                     .font(.system(size: 24))
                     .foregroundStyle(Color.continuumSecondaryText)
 

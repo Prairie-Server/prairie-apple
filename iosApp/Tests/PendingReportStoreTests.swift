@@ -1,5 +1,5 @@
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 final class PendingReportStoreTests: XCTestCase {
     func testCapKeepsThreeNewestReportsPerBinding() throws {
@@ -136,7 +136,7 @@ final class PendingReportStoreTests: XCTestCase {
     ) -> PendingReportCapture {
         let device = makeDeviceSnapshot(capturedAt: capturedAt)
         let crash = DiagnosticsCrashInfo(
-            summary: "Silo did not shut down cleanly last time",
+            summary: "Prairie did not shut down cleanly last time",
             stackExcerpt: nil,
             thread: "unknown",
             foreground: true,

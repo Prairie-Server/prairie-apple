@@ -3,7 +3,7 @@
 //  Continuum (iOS + tvOS)
 //
 //  Fetches server-provided subtitle sidecar URLs (`subtitle_urls[].url`)
-//  using the app's auth headers. The Silo server serves either raw
+//  using the app's auth headers. The Prairie server serves either raw
 //  ASS (`text/x-ssa`) for ASS/SSA tracks or WebVTT (`text/vtt`) for every
 //  other text codec. The fetcher returns the raw body + a detected
 //  format; the caller (`SubtitleSession`) decides whether to feed

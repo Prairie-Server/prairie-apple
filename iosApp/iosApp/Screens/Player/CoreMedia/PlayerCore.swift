@@ -229,7 +229,7 @@ final class PlayerCore: NSObject {
     private var hasFiredFileLoaded = false
     private var hasFiredFirstFrameSignpost = false
     /// Wall-clock anchor for the one-shot `[CMP-TTFF]` first-frame log
-    /// (SiloPlayer plan Stage 0). Set on every `load(url:...)`.
+    /// (PrairiePlayer plan Stage 0). Set on every `load(url:...)`.
     private var ttffLoadAnchor: CFAbsoluteTime = 0
     private var hasLoggedFirstDecodedVideoBuffer = false
     /// PTS floor for frames/samples that should reach the renderers. Set after
@@ -3566,7 +3566,7 @@ final class PlayerCore: NSObject {
                 Int(codecpar.color_trc.rawValue), Int(codecpar.color_range.rawValue)))
             return setupSoftwareVideoDecoder(codecpar: codecpar, codecparPtr: codecparPtr)
         default:
-            // Codec-tail fallback (SiloPlayer plan, Stage 4): anything FFmpeg
+            // Codec-tail fallback (PrairiePlayer plan, Stage 4): anything FFmpeg
             // ships a decoder for routes through the generic software path
             // instead of being rejected — VP9/VP8, AV1 (dav1d), MPEG-4
             // Part 2, VC-1, and friends. The decoders were always compiled

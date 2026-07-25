@@ -18,13 +18,13 @@ struct ItemDetailView: View {
 }
 
 #if os(iOS)
-/// Identifiable box so a one-shot `SiloControlPlaybackRequest` can drive a
+/// Identifiable box so a one-shot `PrairieControlPlaybackRequest` can drive a
 /// `.sheet(item:)`. `id` keys off `contentId` so re-presenting for the
 /// same item is idempotent.
 private struct ControlRequestBox: Identifiable {
-    let request: SiloControlPlaybackRequest
+    let request: PrairieControlPlaybackRequest
     var id: String { request.contentId }
-    init(_ request: SiloControlPlaybackRequest) { self.request = request }
+    init(_ request: PrairieControlPlaybackRequest) { self.request = request }
 }
 #endif
 
@@ -76,7 +76,7 @@ private struct ItemDetailPhoneContent: View {
     @State private var offlinePlayChoice: OfflinePlayChoice?
     @State private var unreachablePlayRequest: UnreachablePlayRequest?
     #if os(iOS)
-    @Environment(SiloControlClient.self) private var siloControl
+    @Environment(PrairieControlClient.self) private var prairieControl
     @State private var controlRequestBox: ControlRequestBox?
     #endif
     @Environment(AppRouter.self) private var router
@@ -183,7 +183,7 @@ private struct ItemDetailPhoneContent: View {
                     Button {
                         playOnTV(currentControlRequest(for: detail))
                     } label: {
-                        Image(systemName: siloControl.hasActiveSession
+                        Image(systemName: prairieControl.hasActiveSession
                             ? "appletvremote.gen4.fill"
                             : "appletvremote.gen4")
                     }
@@ -193,7 +193,7 @@ private struct ItemDetailPhoneContent: View {
             }
         }
         .sheet(item: $controlRequestBox) { box in
-            SiloControlTargetPickerView(request: box.request, controller: siloControl)
+            PrairieControlTargetPickerView(request: box.request, controller: prairieControl)
         }
         #endif
     }
@@ -209,7 +209,7 @@ private struct ItemDetailPhoneContent: View {
     /// Builds the cast request for the visible movie/episode using the
     /// IDENTICAL expressions as the `MovieDetailContent.onPlay` callback
     /// (resume-aware: play from the saved position when available).
-    private func currentControlRequest(for detail: ItemDetail) -> SiloControlPlaybackRequest {
+    private func currentControlRequest(for detail: ItemDetail) -> PrairieControlPlaybackRequest {
         currentControlRequest(
             contentId: contentId,
             fileId: playbackFileId(for: detail),
@@ -227,8 +227,8 @@ private struct ItemDetailPhoneContent: View {
         subtitleTrackIndex: Int?,
         startFromBeginning: Bool,
         resumePosition: Double?
-    ) -> SiloControlPlaybackRequest {
-        SiloControlPlaybackRequest(
+    ) -> PrairieControlPlaybackRequest {
+        PrairieControlPlaybackRequest(
             contentId: contentId,
             fileId: fileId,
             audioTrackIndex: audioTrackIndex,
@@ -238,10 +238,10 @@ private struct ItemDetailPhoneContent: View {
         )
     }
 
-    private func playOnTV(_ request: SiloControlPlaybackRequest) {
-        if siloControl.hasActiveSession {
+    private func playOnTV(_ request: PrairieControlPlaybackRequest) {
+        if prairieControl.hasActiveSession {
             // Already connected ⇒ cast this item now.
-            Task { await siloControl.launch(request) }
+            Task { await prairieControl.launch(request) }
         } else {
             // No session ⇒ pick a TV, then cast-and-play in one step.
             controlRequestBox = ControlRequestBox(request)
@@ -794,8 +794,8 @@ private struct ItemDetailPhoneContent: View {
         resumePosition: Double?
     ) {
         #if os(iOS)
-        if siloControl.hasActiveSession {
-            let request = SiloControlPlaybackRequest(
+        if prairieControl.hasActiveSession {
+            let request = PrairieControlPlaybackRequest(
                 contentId: contentId,
                 fileId: fileId,
                 audioTrackIndex: audioTrackIndex,
@@ -804,7 +804,7 @@ private struct ItemDetailPhoneContent: View {
                 resumePosition: resumePosition
             )
             Task {
-                await siloControl.launch(request)
+                await prairieControl.launch(request)
             }
             return
         }

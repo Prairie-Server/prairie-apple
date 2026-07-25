@@ -1,7 +1,7 @@
 # Apple Companion Pairing - Current Implementation Summary
 
 - **Date:** 2026-06-14
-- **Repo:** `silo-apple`
+- **Repo:** `prairie-apple`
 - **Scope:** Current iOS companion plus tvOS receiver implementation
 - **Note:** This summary reflects the current working tree, including local
   receiver-side edits in `ReceiverPairingCoordinator.swift` and
@@ -9,13 +9,13 @@
 
 ## 1. What It Does
 
-The Apple implementation lets a signed-in iPhone set up a nearby Silo tvOS app
+The Apple implementation lets a signed-in iPhone set up a nearby Prairie tvOS app
 without typing the server URL or password on the remote.
 
 The TV advertises itself on the local network. The iPhone discovers the TV,
 connects over a local socket, lets the user choose one or more already-signed-in
 servers, confirms a server-issued match code, and approves the TV's device-login
-request. The TV then receives its own access and refresh tokens from the Silo
+request. The TV then receives its own access and refresh tokens from the Prairie
 server over HTTPS.
 
 Tokens never cross the LAN pairing channel.
@@ -61,7 +61,7 @@ Tests:
 `PairingProtocol` defines:
 
 - `PairingProtocol.version = 1`
-- `PairingProtocol.serviceType = "_silopair._tcp"`
+- `PairingProtocol.serviceType = "_prairiepair._tcp"`
 
 `PairingReceiverState` wire values:
 
@@ -128,8 +128,8 @@ Methods:
 `tlsParameters()` configures:
 
 - TLS over TCP.
-- fixed PSK bytes: `silo-companion-pairing-v1`
-- fixed PSK identity: `silo-pairing`
+- fixed PSK bytes: `prairie-companion-pairing-v1`
+- fixed PSK identity: `prairie-pairing`
 - cipher suite: `AES_128_GCM_SHA256`
 - `includePeerToPeer = true`
 
@@ -163,9 +163,9 @@ Companion-side authenticated calls:
 
 Every request includes:
 
-- `X-Silo-Device-Id`
-- `X-Silo-Device-Name`
-- `X-Silo-Device-Platform`
+- `X-Prairie-Device-Id`
+- `X-Prairie-Device-Name`
+- `X-Prairie-Device-Platform`
 
 Authenticated calls include:
 
@@ -444,13 +444,13 @@ returns tokens.
 iOS `Info.plist` includes:
 
 - `NSLocalNetworkUsageDescription`
-- `NSBonjourServices` containing `_silopair._tcp`
+- `NSBonjourServices` containing `_prairiepair._tcp`
 - `NSAppTransportSecurity.NSAllowsLocalNetworking = true`
 
 tvOS `tvOS-Info.plist` includes:
 
 - `NSLocalNetworkUsageDescription`
-- `NSBonjourServices` containing `_silopair._tcp`
+- `NSBonjourServices` containing `_prairiepair._tcp`
 - `NSAppTransportSecurity.NSAllowsLocalNetworking = true`
 
 ## 15. Tests

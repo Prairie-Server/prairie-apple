@@ -90,7 +90,7 @@ struct CalendarFilterBar: View {
             }
         }
         .padding(containerPadding)
-        .siloGlass(in: .capsule)
+        .prairieGlass(in: .capsule)
         .focusSection()
         .onMoveCommand { direction in
             if direction == .up {

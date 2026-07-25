@@ -204,7 +204,7 @@ extension View {
 // MARK: - Continuum Button Styles
 
 // NOTE: On the migrated paths these styles now serve tvOS only — iOS/macOS
-// route to native `.glass`/`.glassProminent` via the `silo*Button()` view
+// route to native `.glass`/`.glassProminent` via the `prairie*Button()` view
 // extensions below. They stay defined because tvOS focus appearance (scale,
 // glow, focus stroke, `.focusEffectDisabled()`) depends on them. If tvOS later
 // adopts glass too, they can be retired.
@@ -368,7 +368,7 @@ private struct TextButtonBody: View {
     }
 }
 
-// MARK: - Silo button style routing (glass on iOS/macOS, Continuum on tvOS)
+// MARK: - Prairie button style routing (glass on iOS/macOS, Continuum on tvOS)
 
 extension View {
     /// Primary action button: native Liquid Glass on iOS/macOS, focus-reactive
@@ -376,7 +376,7 @@ extension View {
     /// 10-foot focus, which glass does not provide). All Apple targets are 26+,
     /// so `.glassProminent` is unconditional on the non-tvOS path.
     @ViewBuilder
-    func siloPrimaryButton(isLoading: Bool = false) -> some View {
+    func prairiePrimaryButton(isLoading: Bool = false) -> some View {
         #if os(tvOS)
         self.buttonStyle(ContinuumPrimaryButtonStyle(isLoading: isLoading))
         #else
@@ -402,7 +402,7 @@ extension View {
     /// Secondary action button: native glass on iOS/macOS, `ContinuumSecondaryButtonStyle`
     /// on tvOS.
     @ViewBuilder
-    func siloSecondaryButton() -> some View {
+    func prairieSecondaryButton() -> some View {
         #if os(tvOS)
         self.buttonStyle(ContinuumSecondaryButtonStyle())
         #else
@@ -413,7 +413,7 @@ extension View {
     /// Tertiary / text action button: native glass on iOS/macOS, `ContinuumTextButtonStyle`
     /// on tvOS.
     @ViewBuilder
-    func siloTextButton() -> some View {
+    func prairieTextButton() -> some View {
         #if os(tvOS)
         self.buttonStyle(ContinuumTextButtonStyle())
         #else

@@ -1,0 +1,9 @@
+// macOS app signing defaults. CI and paid-team builds can use these as-is.
+// Local contributors can override the bundle identifier by dropping a
+// `Local.xcconfig` into this directory.
+
+PRAIRIE_MAC_BUNDLE_ID = org.prairieserver.prairie.mac
+
+PRODUCT_BUNDLE_IDENTIFIER = $(PRAIRIE_MAC_BUNDLE_ID)
+
+#include? "Local.xcconfig"

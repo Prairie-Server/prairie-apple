@@ -1,5 +1,5 @@
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 /// The bootstrap keyframe-flag repair (living-room Ali Wong startup stall)
 /// gates on `firstIRAPNALType`: an HEVC packet whose bitstream carries a VCL

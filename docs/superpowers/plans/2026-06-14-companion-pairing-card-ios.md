@@ -28,10 +28,10 @@
 - `iosApp/iosApp/Pairing/Companion/TVPairingView.swift` — folded into the card.
 
 **Notes for all tasks:**
-- `iosApp/Silo.xcodeproj` is gitignored; regenerate freely and never `git add` it. Each commit adds only the listed source files.
-- Regenerate the project after adding/removing files: `xcodegen generate --spec iosApp/project.yml` (writes `iosApp/Silo.xcodeproj`; no `cd` needed).
-- iOS build (no signing): `xcodebuild build -project iosApp/Silo.xcodeproj -scheme Silo -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO`
-- tvOS build: same with `-scheme SiloTV -destination 'generic/platform=tvOS Simulator'`.
+- `iosApp/Prairie.xcodeproj` is gitignored; regenerate freely and never `git add` it. Each commit adds only the listed source files.
+- Regenerate the project after adding/removing files: `xcodegen generate --spec iosApp/project.yml` (writes `iosApp/Prairie.xcodeproj`; no `cd` needed).
+- iOS build (no signing): `xcodebuild build -project iosApp/Prairie.xcodeproj -scheme Prairie -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO`
+- tvOS build: same with `-scheme PrairieTV -destination 'generic/platform=tvOS Simulator'`.
 - The card deliberately uses **system blue** for its primary button and selection accents (the app's global tint is `.continuumOnSurface`, near-white). Blue matches the native iOS pairing aesthetic the card emulates. This is intentional, not a mistake.
 
 ---
@@ -72,7 +72,7 @@ Replace it with (adds a fresh nonce generated on every `start()` call):
 
 - [ ] **Step 2: Build the tvOS target to verify it compiles**
 
-Run: `xcodegen generate --spec iosApp/project.yml && xcodebuild build -project iosApp/Silo.xcodeproj -scheme SiloTV -destination 'generic/platform=tvOS Simulator' CODE_SIGNING_ALLOWED=NO 2>&1 | tail -5`
+Run: `xcodegen generate --spec iosApp/project.yml && xcodebuild build -project iosApp/Prairie.xcodeproj -scheme PrairieTV -destination 'generic/platform=tvOS Simulator' CODE_SIGNING_ALLOWED=NO 2>&1 | tail -5`
 Expected: `** BUILD SUCCEEDED **`
 
 - [ ] **Step 3: Commit**
@@ -242,7 +242,7 @@ with:
 
 - [ ] **Step 3: Build the iOS target to verify it compiles**
 
-Run: `xcodebuild build -project iosApp/Silo.xcodeproj -scheme Silo -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO 2>&1 | tail -5`
+Run: `xcodebuild build -project iosApp/Prairie.xcodeproj -scheme Prairie -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO 2>&1 | tail -5`
 Expected: `** BUILD SUCCEEDED **`
 
 (Note: the existing project still references the old banner; this step only verifies the browser edit compiles. New files are wired in Tasks 4–5.)
@@ -541,7 +541,7 @@ struct CompanionPairingCard: View {
 
 - [ ] **Step 2: Regenerate the project and build iOS**
 
-Run: `xcodegen generate --spec iosApp/project.yml && xcodebuild build -project iosApp/Silo.xcodeproj -scheme Silo -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO 2>&1 | tail -5`
+Run: `xcodegen generate --spec iosApp/project.yml && xcodebuild build -project iosApp/Prairie.xcodeproj -scheme Prairie -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO 2>&1 | tail -5`
 Expected: `** BUILD SUCCEEDED **` (the card is not referenced yet, but must compile; this also pulls in `CompanionPairingDismissal.swift` from Task 2.)
 
 - [ ] **Step 3: Commit**
@@ -639,7 +639,7 @@ with:
 
 - [ ] **Step 4: Regenerate the project and build iOS**
 
-Run: `xcodegen generate --spec iosApp/project.yml && xcodebuild build -project iosApp/Silo.xcodeproj -scheme Silo -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO 2>&1 | tail -5`
+Run: `xcodegen generate --spec iosApp/project.yml && xcodebuild build -project iosApp/Prairie.xcodeproj -scheme Prairie -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO 2>&1 | tail -5`
 Expected: `** BUILD SUCCEEDED **`
 
 - [ ] **Step 5: Commit**
@@ -664,17 +664,17 @@ Expected: `CompanionDismissalKeyTests: all passed`
 
 - [ ] **Step 2: Build iOS and tvOS clean**
 
-Run: `xcodegen generate --spec iosApp/project.yml && xcodebuild build -project iosApp/Silo.xcodeproj -scheme Silo -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO 2>&1 | tail -5`
+Run: `xcodegen generate --spec iosApp/project.yml && xcodebuild build -project iosApp/Prairie.xcodeproj -scheme Prairie -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO 2>&1 | tail -5`
 Expected: `** BUILD SUCCEEDED **`
 
-Run: `xcodebuild build -project iosApp/Silo.xcodeproj -scheme SiloTV -destination 'generic/platform=tvOS Simulator' CODE_SIGNING_ALLOWED=NO 2>&1 | tail -5`
+Run: `xcodebuild build -project iosApp/Prairie.xcodeproj -scheme PrairieTV -destination 'generic/platform=tvOS Simulator' CODE_SIGNING_ALLOWED=NO 2>&1 | tail -5`
 Expected: `** BUILD SUCCEEDED **`
 
 - [ ] **Step 3: Manual two-simulator smoke test**
 
 Per the spec, no UI tests. Verify by hand using two simulators on the same host network (see memory: companion-pairing-sim-test):
-1. Launch SiloTV on a tvOS simulator and reach its setup screen (advertising).
-2. Launch Silo on an iOS simulator already signed in to ≥1 server.
+1. Launch PrairieTV on a tvOS simulator and reach its setup screen (advertising).
+2. Launch Prairie on an iOS simulator already signed in to ≥1 server.
 3. Confirm the **card rises from the bottom** (no top banner), dims the app, and shows "Set Up {tvName}" + Set Up / Not Now.
 4. Tap **Set Up** → Connecting → **Choose servers** (in-card multi-select) → Continue → **match code** → Yes → progress → **Done**, all within the card.
 5. Tap **Not Now**; confirm the card stays dismissed while the TV keeps advertising.

@@ -1,14 +1,14 @@
 import MediaAccessibility
 import XCTest
 
-@testable import Silo
+@testable import Prairie
 
 /// Mapping tests for the Media Accessibility → SubtitleAppearance bridge.
 /// The snapshot struct is exercised directly so tests never depend on the
 /// process-wide caption preferences.
 final class SystemCaptionAppearanceTests: XCTestCase {
 
-    func testEmptySnapshotKeepsSiloDefaults() {
+    func testEmptySnapshotKeepsPrairieDefaults() {
         let mapped = SystemCaptionAppearance.appearance(from: .init())
         XCTAssertEqual(mapped, SubtitleAppearance.default.sanitized())
     }
@@ -70,7 +70,7 @@ final class SystemCaptionAppearanceTests: XCTestCase {
         XCTAssertEqual(mapped.fontColor, "#facc15")
     }
 
-    func testRelativeSizeAnchorsDefaultAtSiloDefaultPreset() {
+    func testRelativeSizeAnchorsDefaultAtPrairieDefaultPreset() {
         XCTAssertEqual(SystemCaptionAppearance.fontSizePreset(forRelativeSize: 1.0), .large)
         XCTAssertEqual(SystemCaptionAppearance.fontSizePreset(forRelativeSize: 0.5), .small)
         XCTAssertEqual(SystemCaptionAppearance.fontSizePreset(forRelativeSize: 0.8), .medium)

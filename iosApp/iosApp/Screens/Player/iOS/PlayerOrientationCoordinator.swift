@@ -4,7 +4,7 @@ import UIKit
 
 /// SwiftUI app delegate bridge used only so UIKit asks our shared coordinator
 /// which orientations are currently allowed.
-final class SiloAppDelegate: NSObject, UIApplicationDelegate {
+final class PrairieAppDelegate: NSObject, UIApplicationDelegate {
     func application(
         _ application: UIApplication,
         supportedInterfaceOrientationsFor window: UIWindow?

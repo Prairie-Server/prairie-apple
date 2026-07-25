@@ -34,7 +34,7 @@ final class ApplePushNotificationSyncCoordinator {
     static let shared = ApplePushNotificationSyncCoordinator()
 
     private static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "org.siloserver.silo",
+        subsystem: Bundle.main.bundleIdentifier ?? "org.prairieserver.prairie",
         category: "ApplePushSync"
     )
 
@@ -90,10 +90,10 @@ final class ApplePushNotificationSyncCoordinator {
             if !response.notifications.isEmpty {
                 NotificationCenter.default.post(name: .homeSectionsShouldRefresh, object: nil)
             }
-            Self.logger.info("Synced Silo notifications after APNs wake count=\(response.notifications.count, privacy: .public) unread=\(response.unreadCount, privacy: .public)")
+            Self.logger.info("Synced Prairie notifications after APNs wake count=\(response.notifications.count, privacy: .public) unread=\(response.unreadCount, privacy: .public)")
             return true
         } catch HTTPError.http(let statusCode, _) where statusCode == 404 || statusCode == 405 {
-            Self.logger.info("Notification sync endpoint is not available on this Silo server yet")
+            Self.logger.info("Notification sync endpoint is not available on this Prairie server yet")
             return false
         } catch {
             Self.logger.error("Notification sync after APNs wake failed: \(String(describing: error), privacy: .public)")

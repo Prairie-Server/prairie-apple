@@ -144,7 +144,7 @@ final class PlayerSettings {
 
     /// Device-local: when true, subtitle styling mirrors the system's
     /// Subtitles & Captioning accessibility preferences instead of the
-    /// Silo appearance. Never synced to the server — it is inherently
+    /// Prairie appearance. Never synced to the server — it is inherently
     /// about *this* device's accessibility configuration.
     var subtitleMatchesSystemAppearance: Bool {
         didSet {
@@ -472,7 +472,7 @@ final class PlayerSettings {
     }
 
     /// Toggle mirroring the device's Subtitles & Captioning accessibility
-    /// preferences. Purely local; the saved Silo appearance is untouched
+    /// preferences. Purely local; the saved Prairie appearance is untouched
     /// so switching back restores it.
     func setSubtitleMatchesSystemAppearance(_ enabled: Bool) {
         guard enabled != subtitleMatchesSystemAppearance else { return }

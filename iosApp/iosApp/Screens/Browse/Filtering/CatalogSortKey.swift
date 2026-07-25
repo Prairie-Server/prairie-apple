@@ -20,9 +20,9 @@ enum BrowseMediaType: String, Codable, Hashable {
     case mixed
 
     static func from(libraryType: String) -> BrowseMediaType {
-        if SiloMediaType.isMixedLibrary(libraryType) { return .mixed }
-        if SiloMediaType.isAudiobook(libraryType) { return .audiobook }
-        if SiloMediaType.isSeries(libraryType) { return .series }
+        if PrairieMediaType.isMixedLibrary(libraryType) { return .mixed }
+        if PrairieMediaType.isAudiobook(libraryType) { return .audiobook }
+        if PrairieMediaType.isSeries(libraryType) { return .series }
         return .movie
     }
 
@@ -41,7 +41,7 @@ enum BrowseMediaType: String, Codable, Hashable {
 }
 
 /// One sortable field. The raw value is the canonical server `sort` field
-/// (silo-server `query_definition.go` `querySortDefs`). `defaultOrder`
+/// (prairie-server `query_definition.go` `querySortDefs`). `defaultOrder`
 /// mirrors the server's per-field default so the first selection lands the
 /// natural direction and a flip is meaningful. This enum is the single
 /// source of truth that eliminates the old `sort=added` phantom (the real

@@ -338,7 +338,7 @@ struct PlayerSettingsSheet: View {
                 .disabled(matchesSystem)
             } footer: {
                 Text(matchesSystem
-                     ? "Following this device's caption style from Accessibility settings. Editing any option below switches back to Silo styling."
+                     ? "Following this device's caption style from Accessibility settings. Editing any option below switches back to Prairie styling."
                      : "Subtitles with their own built-in styling keep their original appearance; image-based subtitles keep their authored fonts and colors but follow the size, position, and background settings.")
             }
 
@@ -804,7 +804,7 @@ struct PlayerSettingsSheet: View {
                     Text("Subtitle appearance")
                 } footer: {
                     Text(matchesSystem
-                         ? "Following this device's caption style from Accessibility settings. Editing any option switches back to Silo styling."
+                         ? "Following this device's caption style from Accessibility settings. Editing any option switches back to Prairie styling."
                          : "Subtitles with their own built-in styling keep their original appearance; image-based subtitles keep their authored fonts and colors but follow the size, position, and background settings.")
                 }
             }

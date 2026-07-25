@@ -4,7 +4,7 @@ Snapshot date: 2026-04-29
 
 ## 1. Goal
 
-Silo should play a direct-play UHD Blu-ray remux on Apple TV when the
+Prairie should play a direct-play UHD Blu-ray remux on Apple TV when the
 source looks like:
 
 - container: `mkv`
@@ -27,7 +27,7 @@ or AVR.
 
 ## 2. Why this needs to exist
 
-Apple TV is the primary high-end client for many Silo users, but Blu-ray
+Apple TV is the primary high-end client for many Prairie users, but Blu-ray
 remuxes do not map directly onto the native Apple playback contract.
 
 The three blockers are independent:
@@ -54,7 +54,7 @@ For AVPlayer, the stable target is local HLS over fragmented MP4/CMAF-style
 segments. Apple HLS uses the `CODECS` attribute to declare sample types and has
 explicit Dolby Vision signaling forms for Apple devices.
 
-For Profile 7 sources, Silo should not attempt to hand AVPlayer raw P7
+For Profile 7 sources, Prairie should not attempt to hand AVPlayer raw P7
 dual-layer media. The target is a derived single-layer Dolby Vision stream:
 
 - keep the base-layer HEVC video
@@ -73,7 +73,7 @@ AVPlayer is not expected to consume. Jellyfin's special FFmpeg
 `hevc_metadata=delete_dovi=1` path is an HDR10 fallback, not a Dolby Vision P7
 solution; it removes DOVI metadata so the base layer can play as plain HDR10.
 
-So Silo has two separate responsibilities:
+So Prairie has two separate responsibilities:
 
 - keep Apple-native profiles healthy: P5 and P8.1 use PQ DV signaling, P8.4 uses
   an HLG base layer plus supplemental DV signaling, and AV1/P10 requires a real
@@ -110,7 +110,7 @@ preserved end to end.
 
 The first supported class is:
 
-- direct-play Silo stream URL
+- direct-play Prairie stream URL
 - Matroska/WebM demuxable by libavformat
 - one HEVC video stream with Dolby Vision side data
 - Dolby Vision Profile 7 detected from DOVI configuration
@@ -122,7 +122,7 @@ The first supported class is:
 
 The route may claim Dolby Vision only when:
 
-- route is SiloPlayer (current code: `avPlayerLocalDVLoopback`)
+- route is PrairiePlayer (current code: `avPlayerLocalDVLoopback`)
 - video mode is `profile7_to81_base_layer` or a validated native Apple DV mode
 - the emitted init segment and playlist advertise the final output shape, not
   just the input-side DOVI metadata
@@ -148,7 +148,7 @@ label is "lossless multichannel PCM" or "multichannel LPCM".
 PGS, VobSub, and DVB subtitles are bitmap subtitle formats, not libass text
 inputs. The current Apple subtitle stack renders text and ASS-like cues through
 the shared subtitle session and skips FFmpeg `SUBTITLE_BITMAP` rects, so these
-formats must not be treated as preserved by SiloPlayer or CompatibilityPlayer
+formats must not be treated as preserved by PrairiePlayer or CompatibilityPlayer
 today.
 
 Do not solve bitmap subtitles with client-side burn-in. True burn-in requires
@@ -160,7 +160,7 @@ metadata caveat unless a dedicated Dolby metadata regeneration path exists.
 The preferred future direction is a client-side bitmap subtitle overlay: decode
 PGS, VobSub, and DVB rectangles with FFmpeg, render them in a sibling overlay
 beside the existing libass text overlay, and leave the underlying
-AVPlayer/SiloPlayer video stream untouched. That can preserve HDR/Dolby Vision
+AVPlayer/PrairiePlayer video stream untouched. That can preserve HDR/Dolby Vision
 video presentation because subtitles are composed as UI, not baked into the
 video bitstream. Until that renderer exists, selectable/default/forced bitmap
 subtitles should be reported as unsupported or unpreserved rather than silently
@@ -181,9 +181,9 @@ Downgrades must be explicit.
 
 ### 5.1 Video path
 
-The video path remains the SiloPlayer local AVPlayer loopback route:
+The video path remains the PrairiePlayer local AVPlayer loopback route:
 
-1. `PlayerViewModel` selects SiloPlayer (current code:
+1. `PlayerViewModel` selects PrairiePlayer (current code:
    `avPlayerLocalDVLoopback`) for direct-play P7.
 2. `PlayerViewModel` requires `PlaybackSourceProxy` for the remote HTTP(S)
    direct stream and rewrites `LoopbackSessionSpec.sourceURL` to localhost.
@@ -250,7 +250,7 @@ Codec policy:
 
 Current implementation detail: TrueHD / MLP / MLPA / Dolby TrueHD selected audio
 uses `require_flac`, which restricts the encoder candidate list to FLAC. If FLAC
-cannot be opened or muxed, the high-quality Silo route fails clearly instead of
+cannot be opened or muxed, the high-quality Prairie route fails clearly instead of
 falling back to E-AC-3, AC-3, or AAC.
 
 #### Option C: split AVPlayer video plus Core Audio PCM fallback
@@ -267,7 +267,7 @@ audio output path:
 
 This is the likely path to Infuse-class TrueHD behavior because it can preserve
 the lossless 5.1/7.1 bed and let Apple TV output LPCM. It is more complex
-because Silo owns A/V sync, buffering, audio track switching, pause/resume,
+because Prairie owns A/V sync, buffering, audio track switching, pause/resume,
 seeks, and teardown.
 
 ### 5.3 Recommended implementation target
@@ -275,13 +275,13 @@ seeks, and teardown.
 The product target is Option B for TrueHD/DTS-HD-style sources:
 
 - AVPlayer owns the local Dolby Vision video presentation.
-- Silo decodes the selected TrueHD/DTS-HD-style audio stream to PCM and
+- Prairie decodes the selected TrueHD/DTS-HD-style audio stream to PCM and
   re-encodes the bed to lossless FLAC inside the HLS session.
 - The Apple TV output path presents decoded multichannel LPCM where the connected
   chain supports it.
 - TrueHD Atmos is not claimed as Atmos because object metadata is not preserved.
 - E-AC-3/JOC remains the only Atmos-preserving path in this spec, and only when
-  copied through a NativePlayer or SiloPlayer route and confirmed by receiver
+  copied through a NativePlayer or PrairiePlayer route and confirmed by receiver
   validation.
 
 Option A remains useful as a possible explicit lossy fallback, but it must never
@@ -290,7 +290,7 @@ architecture if AVPlayer cannot reliably accept FLAC 5.1/7.1 audio in local
 fMP4/HLS or if FLAC channel layout mapping cannot be made trustworthy on a
 physical Apple TV chain.
 
-## 6. Current Silo prototype state
+## 6. Current Prairie prototype state
 
 The current implementation has proven several important pieces:
 
@@ -350,7 +350,7 @@ combination of:
 
 For Profile 7 video, public Firecore community discussion repeatedly points at
 the Apple TV boundary: raw P7 is not the native target, while converted P8.1
-style files can play as Dolby Vision. That matches Silo's
+style files can play as Dolby Vision. That matches Prairie's
 `profile7_to81_base_layer` design.
 
 ### 7.2 KSPlayer issue #875
@@ -366,10 +366,10 @@ DV profiles and raw P7:
   declaration.
 - P7 should not be fed to AVPlayer as raw P7 HLS from regular FFmpeg. If DOVI is
   simply deleted, the result is HDR10 base-layer playback, not Dolby Vision.
-- P10 is AV1 Dolby Vision and should remain hardware/route-gated until Silo
+- P10 is AV1 Dolby Vision and should remain hardware/route-gated until Prairie
   has an actual AV1 direct path.
 
-This means Silo should validate P5/P8/P8.4 separately from the P7-to-P8.1
+This means Prairie should validate P5/P8/P8.4 separately from the P7-to-P8.1
 derivation work. A P7 experiment succeeding or failing does not prove native P5
 or P8 support is healthy.
 
@@ -419,7 +419,7 @@ Known nearby projects:
   behavior should not be treated as implementation evidence.
 
 Conclusion: Infuse is still the practical benchmark, but not an available source
-reference. Silo needs to build and validate its own pipeline.
+reference. Prairie needs to build and validate its own pipeline.
 
 ## 9. Validation requirements
 
@@ -502,8 +502,8 @@ To confirm the local loopback is actually producing Dolby Vision:
 4. Compare against a known Dolby Vision title in the Apple TV app or another
    trusted app using the same HDMI input and Apple TV settings. The TV's signal
    panel should report the same Dolby Vision mode.
-5. Capture Silo's route logs for the same playback session. A candidate DV
-   session should show SiloPlayer, or today's implementation identifier
+5. Capture Prairie's route logs for the same playback session. A candidate DV
+   session should show PrairiePlayer, or today's implementation identifier
    `backend=avPlayerLocalDVLoopback`,
    `videoMode=profile7_to81_base_layer`, final `CODECS`/sample-entry values containing
    `dvh1`, a final DOVI record such as profile 8, compatibility 1, and

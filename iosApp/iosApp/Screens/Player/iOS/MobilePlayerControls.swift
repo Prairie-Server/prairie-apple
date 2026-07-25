@@ -447,7 +447,7 @@ struct MobilePlayerControls: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 7)
-        .siloGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .prairieGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .fixedSize()
     }
 

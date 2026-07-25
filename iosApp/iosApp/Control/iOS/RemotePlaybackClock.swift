@@ -8,7 +8,7 @@ import Observation
 @MainActor
 @Observable
 final class RemotePlaybackClock {
-    private(set) var state: SiloControlPlaybackState?
+    private(set) var state: PrairieControlPlaybackState?
     private var anchorTime: Double = 0
     private var anchorDate = Date(timeIntervalSince1970: 0)
 
@@ -31,7 +31,7 @@ final class RemotePlaybackClock {
     /// a genuine seek/loop on the TV and honored immediately.
     private static let maxBackwardSmoothing: Double = 1.5
 
-    func ingest(_ next: SiloControlPlaybackState, asOf now: Date = Date()) {
+    func ingest(_ next: PrairieControlPlaybackState, asOf now: Date = Date()) {
         let priorDisplay = displayTime(asOf: now)
         state = next
 

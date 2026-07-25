@@ -1,6 +1,6 @@
 import XCTest
 
-@testable import Silo
+@testable import Prairie
 
 final class SubtitleStylingOverrideTests: XCTestCase {
 

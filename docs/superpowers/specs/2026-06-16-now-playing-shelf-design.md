@@ -7,7 +7,7 @@
 ## Problem
 
 When a cast session is active, the persistent "Playing on <TV>" mini-bar
-(`SiloCastMiniBar`) floats at the very bottom of the screen and **covers the
+(`PrairieCastMiniBar`) floats at the very bottom of the screen and **covers the
 bottom tab bar**, so taps meant for Home / Library / Search land on the mini-bar
 instead. The audiobook mini-player (`AudioMiniPlayerView`) shares the same
 bottom container and has the same latent overlap problem.
@@ -41,7 +41,7 @@ space and is not shown.
   shows only when there is no active cast session. This keeps the iOS 26 and iOS
   18 paths behaving identically and matches the single-accessory native model.
 - **Unify, don't duplicate.** One `NowPlayingShelf` view selects and renders the
-  active accessory, reusing the existing `SiloCastMiniBar` and
+  active accessory, reusing the existing `PrairieCastMiniBar` and
   `AudioMiniPlayerView` bodies. The loose cast+audio views in the outer
   `.safeAreaInset` are removed.
 
@@ -49,7 +49,7 @@ space and is not shown.
 
 ### `NowPlayingShelf` (new view)
 - Inputs: the cast controller and the audio store (via environment, as today).
-- Logic: if a cast session is active → render `SiloCastMiniBar`; else if an
+- Logic: if a cast session is active → render `PrairieCastMiniBar`; else if an
   audiobook session is active → render `AudioMiniPlayerView`; else render
   nothing (no reserved space).
 - Exposes whether anything is active (`isActive`) so the attachment can be gated.
@@ -82,7 +82,7 @@ sidebar layout. (macOS is audio-only; cast is `#if os(iOS)`.)
 ## Data flow
 
 No protocol or server changes. The shelf reads the same observable state it does
-today: `SiloCastController` (`hasActiveSession`, `isShowingRemoteControl`, clock,
+today: `PrairieCastController` (`hasActiveSession`, `isShowingRemoteControl`, clock,
 state) and `AudioPlaybackStore.player` (`hasActiveSession`, metadata). Tapping
 the cast bar calls `controller.showRemoteControl()`; the full remote remains a
 `fullScreenCover` on `castController.isShowingRemoteControl`, unchanged. Tapping
@@ -99,7 +99,7 @@ the audio bar calls `audioStore.showFullPlayer()`, unchanged.
 
 ## Verification
 
-- Build the `Silo` scheme on an **iOS 26 simulator**: start a cast session,
+- Build the `Prairie` scheme on an **iOS 26 simulator**: start a cast session,
   confirm the shelf sits above the tab bar with the tab bar fully tappable, and
   that when idle there is no empty accessory bar.
 - Build on an **iOS 18 simulator** (if an iOS 18 runtime is available): confirm

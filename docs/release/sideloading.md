@@ -27,8 +27,8 @@ build-number sequencing against App Store Connect is needed and the two jobs
 run in parallel.
 
 ## Fastlane lanes
-    bundle exec fastlane ios ipa_ios_unsigned    # -> build/ios-unsigned/Silo-unsigned.ipa
-    bundle exec fastlane ios ipa_tvos_unsigned   # -> build/tvos-unsigned/SiloTV-unsigned.ipa
+    bundle exec fastlane ios ipa_ios_unsigned    # -> build/ios-unsigned/Prairie-unsigned.ipa
+    bundle exec fastlane ios ipa_tvos_unsigned   # -> build/tvos-unsigned/PrairieTV-unsigned.ipa
 
 Both run locally with no credentials.
 
@@ -43,7 +43,7 @@ Both run locally with no credentials.
   installer. Users pair the Apple TV with a host (Mac + AltServer/Xcode, or a
   Linux box running atvloadly) over the network before installing, and the host
   must be reachable for refreshes.
-- **tvOS Top Shelf extension.** It is embedded in `SiloTV.app` and archived
+- **tvOS Top Shelf extension.** It is embedded in `PrairieTV.app` and archived
   automatically. Re-signers who cannot sign the extension (common on free
   accounts) can strip it before sideloading — the app installs without Top Shelf.
 - tvOS sideloading is more sensitive to OS version; new tvOS releases can

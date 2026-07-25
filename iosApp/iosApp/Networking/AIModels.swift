@@ -2,7 +2,7 @@
 //  AIModels.swift
 //  Continuum (iOS + tvOS)
 //
-//  Wire types for silo-server's two AI features: metadata translation
+//  Wire types for prairie-server's two AI features: metadata translation
 //  (overviews/taglines localized into the viewer's preferred language,
 //  plus an on-demand "translate this description" path) and subtitle
 //  translation/transcription (translate an existing track, transcribe

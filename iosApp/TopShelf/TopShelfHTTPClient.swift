@@ -8,7 +8,7 @@ import Foundation
 /// endpoint, and has no UI surface to refresh into — so a single
 /// `URLSession.data(for:)` call with pre-attached headers is sufficient.
 ///
-/// Access token refresh is intentionally absent: Silo's access
+/// Access token refresh is intentionally absent: Prairie's access
 /// tokens effectively don't expire, so a 401 here would indicate the
 /// user has signed out in the main app. In that case we simply return
 /// no content and let the system fall back to the static top-shelf

@@ -135,7 +135,7 @@ final class CompanionPairingCoordinator {
             disarmWatchdog()
             tvName = name
             guard supported.contains(PairingProtocol.version) else {
-                await conclude(.error("Update Silo on both devices to continue."), goodbye: .cancel(reason: "version_unsupported"))
+                await conclude(.error("Update Prairie on both devices to continue."), goodbye: .cancel(reason: "version_unsupported"))
                 return
             }
             let servers = await availableServers()

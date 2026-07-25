@@ -3,7 +3,7 @@ import Libavcodec
 import Libavformat
 import Libavutil
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 /// Exercises representative playback inputs inside the simulator test host.
 /// The fixtures are deliberately tiny but contain real encoded packets; this
@@ -93,9 +93,9 @@ final class PlaybackMediaFixtureTests: XCTestCase {
             "mp4": .avPlayerNativeDirect,
             "mov": .avPlayerNativeDirect,
             "m4v": .avPlayerNativeDirect,
-            "mkv": .siloPlayerLoopback,
-            "ts": .siloPlayerLoopback,
-            "m2ts": .siloPlayerLoopback
+            "mkv": .prairiePlayerLoopback,
+            "ts": .prairiePlayerLoopback,
+            "m2ts": .prairiePlayerLoopback
         ]
         for (container, expectedEngine) in expected {
             let session = PlaybackSessionResponse(
@@ -164,7 +164,7 @@ final class PlaybackMediaFixtureTests: XCTestCase {
                     selectedPrimarySubtitleTrackId: nil,
                     selectedSecondarySubtitleTrackId: nil,
                     hlsRouteFeatureEnabled: true,
-                    siloPlayerPrimaryEnabled: true,
+                    prairiePlayerPrimaryEnabled: true,
                     dolbyVisionPolicy: .default
                 )
             )
@@ -175,7 +175,7 @@ final class PlaybackMediaFixtureTests: XCTestCase {
     private func fixtureURL(_ fixture: Fixture) throws -> URL {
         try XCTUnwrap(
             Bundle(for: Self.self).url(forResource: fixture.resource, withExtension: fixture.ext),
-            "Missing \(fixture.resource).\(fixture.ext) from SiloTests resources"
+            "Missing \(fixture.resource).\(fixture.ext) from PrairieTests resources"
         )
     }
 

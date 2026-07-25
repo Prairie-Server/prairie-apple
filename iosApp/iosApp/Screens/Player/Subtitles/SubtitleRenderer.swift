@@ -6,7 +6,7 @@
 //  plus one `ASS_Renderer` per subtitle slot for the current playback
 //  session. libass style overrides are renderer-scoped, so primary and
 //  secondary tracks must not share a renderer when one track is authored
-//  ASS and the other is Silo-styled generated ASS. All libass API calls
+//  ASS and the other is Prairie-styled generated ASS. All libass API calls
 //  are serialised through `sessionQueue` because libass is not thread-safe.
 //
 //  The compositor path:
@@ -146,7 +146,7 @@ final class SubtitleRenderer {
     private var currentParams: SubtitleStylingOverride.Parameters = .default
 
     /// libass keys font scaling to the video area (frame minus letterbox
-    /// margins), which makes Silo-styled text shrink on wide-aspect content.
+    /// margins), which makes Prairie-styled text shrink on wide-aspect content.
     /// This multiplier re-keys the scale to the full frame height so text
     /// size stays constant on screen. 1.0 whenever margins are zero.
     private var fontScaleCompensation: Double = 1.0
@@ -739,7 +739,7 @@ final class SubtitleRenderer {
 
         // libass keys font scale to the video area (frame height minus
         // vertical margins), so letterboxed content would render smaller
-        // text than full-frame content. Compensate so Silo-styled text is
+        // text than full-frame content. Compensate so Prairie-styled text is
         // keyed to the full frame height instead; a no-op (1.0) when
         // margins are zero. Reapply overrides only when the factor moves so
         // steady-state layout passes stay cheap.

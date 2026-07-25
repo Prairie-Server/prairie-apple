@@ -1,20 +1,20 @@
-# Silo Companion Pairing — Design Spec
+# Prairie Companion Pairing — Design Spec
 
 - **Date:** 2026-06-14
 - **Status:** Approved design, pre-implementation
-- **Repo:** silo-apple (iOS + tvOS). Server endpoints already exist; Android is a documented follow-on.
+- **Repo:** prairie-apple (iOS + tvOS). Server endpoints already exist; Android is a documented follow-on.
 - **Related:** `docs/tvos-onboarding/` (Tandem "companion" direction), tvOS first-run redesign.
 - **Review history:** 2026-06-14 adversarial review (Codex). HIGH "persist-before-verify" → fixed (persist-on-success, §5/§6). CRITICAL "confirm-once multi-server MITM" → accepted as a documented v1 risk (§6, *Accepted risk*). 2026-06-14 second adversarial review: Face ID gate removed (a signed-in phone + the confirmation tap is the authorization); receiver poll loop made cancellable so peer cancel/drop aborts immediately (plan Task 8); confirm-once CRITICAL re-affirmed as accepted.
 
 ## 1. Summary
 
-Let the **iOS app set up the Apple TV**. When the Silo iOS app is open on the same
+Let the **iOS app set up the Apple TV**. When the Prairie iOS app is open on the same
 Wi-Fi as an Apple TV sitting on its onboarding / add-server screen, the phone
 discovers the TV automatically and offers a one-tap "Set up this Apple TV." The
 phone hands the TV the server address(es) it already knows and approves the
 TV's sign-in, so the user types **no URL and no password on the remote**.
 
-This rides the Silo server's **existing** device-authorization endpoints
+This rides the Prairie server's **existing** device-authorization endpoints
 (`/auth/device/start`, `/poll`, `/approve`, `GET /auth/device`). v1 is therefore
 **Apple-client work only** — no new server endpoints required.
 
@@ -59,7 +59,7 @@ is still dramatically faster than thumb-typing a URL and password on a remote.
 | **Companion** | iOS | Browses; in-hand; already signed in | `ServerRegistry`, `TokenStore`, `ContinuumAPI`, `HTTPClient` |
 | **Server** | Go | Mints tokens; unchanged in v1 | `/auth/device/{start,poll,approve}`, `GET /auth/device`, `GET /auth/sessions` |
 
-### Server endpoints (already implemented — verified in silo-server)
+### Server endpoints (already implemented — verified in prairie-server)
 - `POST /auth/device/start` → `{ deviceCode, userCode, matchCode, verificationUri, verificationUriComplete, expiresAt, interval }`. `deviceCode` is the TV's secret; `matchCode` is a human-readable adjective-noun pair issued by the server.
 - `GET /auth/device?code=<userCode>` (or `?token=<browserCode>`) → pending request metadata (device name, match code, masked IP).
 - `POST /auth/device/approve` (authenticated) → marks the pending request `approved`, records `approved_by_user_id`.
@@ -77,13 +77,13 @@ Each unit has one purpose, a defined interface, and is testable in isolation.
 
 ### Shared (compiled into both targets)
 - **`PairingProtocol`** — versioned `Codable` message envelope (the wire format).
-  Pure data, no I/O. Platform-neutral and documented so silo-android can mirror it.
+  Pure data, no I/O. Platform-neutral and documented so prairie-android can mirror it.
 - **`PairingSession`** — wraps a single `NWConnection`. Length-prefixed JSON
   framing, async `send`/`receive`, TLS configuration. One instance per connection.
   Testable over an in-memory loopback pair.
 
 ### iOS — Companion
-- **`TVPairingBrowser`** — wraps `NWBrowser` over `_silopair._tcp`. Publishes
+- **`TVPairingBrowser`** — wraps `NWBrowser` over `_prairiepair._tcp`. Publishes
   discovered TVs (name, deviceId, state, endpoint). Owns Local Network permission
   state and foreground/background lifecycle.
 - **`CompanionPairingCoordinator`** — phone-side state machine. Connects to the
@@ -97,7 +97,7 @@ Each unit has one purpose, a defined interface, and is testable in isolation.
     match-code confirmation, per-server progress, success/failure summary.
 
 ### tvOS — Receiver
-- **`TVPairingAdvertiser`** — wraps `NWListener` advertising `_silopair._tcp` + TXT.
+- **`TVPairingAdvertiser`** — wraps `NWListener` advertising `_prairiepair._tcp` + TXT.
   Accepts one inbound connection at a time. Lifecycle bound to the onboarding screen.
 - **`ReceiverPairingCoordinator`** — TV-side state machine. On `PushServer`:
   normalize the URL and hold it as a **pending candidate** (not yet persisted),
@@ -114,7 +114,7 @@ Each unit has one purpose, a defined interface, and is testable in isolation.
 ## 5. Wire protocol & flow
 
 ### Discovery
-- Bonjour service type **`_silopair._tcp`**, domain `local.`
+- Bonjour service type **`_prairiepair._tcp`**, domain `local.`
 - **TV advertises** (it is the device waiting to be found). TXT record carries
   **non-secret** fields only:
   - `v` — protocol version (e.g. `"1"`)
@@ -139,7 +139,7 @@ phone shows "update one of your apps" and offers QR fallback.
 
 ### First-run sequence (blank TV, two servers picked)
 1. TV enters onboarding → `TVPairingAdvertiser` advertises (`st=setup`). Screen
-   shows "Open Silo on your iPhone to set this up" + QR + "Enter manually."
+   shows "Open Prairie on your iPhone to set this up" + QR + "Enter manually."
 2. Phone (foreground, signed into ≥1 server) discovers the TV → `SetUpTVBanner`:
    "Set up Apple TV 'Living Room'?"
 3. Tap → phone opens TLS `NWConnection` → receives `Hello`.
@@ -253,13 +253,13 @@ exposure below for v1.
 
 ## 8. Permissions & configuration
 
-- **iOS Info.plist:** `NSLocalNetworkUsageDescription` (clear copy: "Silo uses your
+- **iOS Info.plist:** `NSLocalNetworkUsageDescription` (clear copy: "Prairie uses your
   local network to find and set up your Apple TV") and `NSBonjourServices` listing
-  `_silopair._tcp`. Browsing triggers the system Local Network prompt on first use.
+  `_prairiepair._tcp`. Browsing triggers the system Local Network prompt on first use.
 - **tvOS Info.plist:** same `NSLocalNetworkUsageDescription` + `NSBonjourServices`
   (tvOS also enforces local-network privacy for advertising).
 - Update `iosApp/project.yml` for any new source folders; regenerate with
-  `xcodegen generate`. New shared files compile into both `Silo` (iOS) and `SiloTV`.
+  `xcodegen generate`. New shared files compile into both `Prairie` (iOS) and `PrairieTV`.
 
 ## 9. Testing (per CLAUDE.md — critical/high-risk logic only, not UI)
 
@@ -279,15 +279,15 @@ exposure below for v1.
 
 ## 10. Cross-repo coordination (workspace convention)
 
-- **silo-server:** **No new endpoints for v1.** Awareness only. Nice-to-have
+- **prairie-server:** **No new endpoints for v1.** Awareness only. Nice-to-have
   later: surface `device_name` / `device_platform` (captured at `device/start`) in
   `GET /auth/sessions` so users recognize the TV in their session list.
-- **silo-android:** `PairingProtocol` (the JSON messages) and the `_silopair._tcp`
+- **prairie-android:** `PairingProtocol` (the JSON messages) and the `_prairiepair._tcp`
   Bonjour type are defined platform-neutrally and documented here so Android
   phone↔TV can mirror the flow with Android NSD + sockets. Compare Android's
   onboarding copy/flow before finalizing strings. v1 ships Apple-only; this spec
   is the coordination artifact.
-- **silo-apple:** all new client code + SwiftUI surfaces, wired into the Tandem
+- **prairie-apple:** all new client code + SwiftUI surfaces, wired into the Tandem
   first-run redesign.
 
 ## 11. Phasing

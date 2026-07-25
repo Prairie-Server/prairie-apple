@@ -1,10 +1,10 @@
 import Foundation
 
-/// A load-time segment plan for the SiloPlayer VOD loopback: every segment
+/// A load-time segment plan for the PrairiePlayer VOD loopback: every segment
 /// boundary is decided once, before the first byte is muxed, so the local
 /// playlist can advertise the whole title up front and AVPlayer sees a
 /// complete VOD asset instead of a growing EVENT playlist
-/// (docs/tvos-player/2026-07-03-siloplayer-loopback-primary-plan.md, M1).
+/// (docs/tvos-player/2026-07-03-prairieplayer-loopback-primary-plan.md, M1).
 ///
 /// `boundaries` are source-PTS values in the video stream's time base and
 /// carry `segmentCount + 1` entries — the final entry is the end of the last

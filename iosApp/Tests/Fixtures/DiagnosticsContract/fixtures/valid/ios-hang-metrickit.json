@@ -19,7 +19,7 @@
   },
   "crash": {
     "summary": "Main thread hang reported by MetricKit",
-    "stack_excerpt": "Thread 0 name: main\n0 Silo PlayerCore.waitForRouteChange",
+    "stack_excerpt": "Thread 0 name: main\n0 Prairie PlayerCore.waitForRouteChange",
     "thread": "main",
     "foreground": true,
     "source": "metrickit",

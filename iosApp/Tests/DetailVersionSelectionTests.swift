@@ -1,6 +1,6 @@
 import XCTest
 import Foundation
-@testable import Silo
+@testable import Prairie
 
 final class DetailVersionSelectionTests: XCTestCase {
     func testAutoDisplayPrefersBestVersionOverFirstReturnedVersion() {
@@ -566,7 +566,7 @@ final class DetailVersionSelectionTests: XCTestCase {
           "audiobook": {
             "authors": [{ "name": "Ada Writer" }],
             "narrators": [{ "name": "Nia Voice" }],
-            "publisher": "Silo Press",
+            "publisher": "Prairie Press",
             "total_duration_seconds": 1800
           },
           "versions": [
@@ -592,7 +592,7 @@ final class DetailVersionSelectionTests: XCTestCase {
         XCTAssertTrue(detail.type == "audiobook")
         XCTAssertTrue(detail.audiobook?.authors.first?.name == "Ada Writer")
         XCTAssertTrue(detail.audiobook?.narrators.first?.name == "Nia Voice")
-        XCTAssertTrue(detail.audiobook?.publisher == "Silo Press")
+        XCTAssertTrue(detail.audiobook?.publisher == "Prairie Press")
         XCTAssertTrue(detail.audiobook?.totalDurationSeconds == 1800)
         XCTAssertTrue(detail.versions?.first?.presentationKind == "audiobook_part")
         XCTAssertTrue(detail.versions?.first?.presentationGroupKey == "book-1")
@@ -601,11 +601,11 @@ final class DetailVersionSelectionTests: XCTestCase {
     }
 
     func testAudiobookMediaTypeNormalization() {
-        XCTAssertTrue(SiloMediaType.isAudiobook("audiobook"))
-        XCTAssertTrue(SiloMediaType.isAudiobook("audiobooks"))
-        XCTAssertTrue(SiloMediaType.isAudiobook("book"))
-        XCTAssertTrue(SiloMediaType.isAudiobook("books"))
-        XCTAssertFalse(SiloMediaType.isAudiobook("movies"))
+        XCTAssertTrue(PrairieMediaType.isAudiobook("audiobook"))
+        XCTAssertTrue(PrairieMediaType.isAudiobook("audiobooks"))
+        XCTAssertTrue(PrairieMediaType.isAudiobook("book"))
+        XCTAssertTrue(PrairieMediaType.isAudiobook("books"))
+        XCTAssertFalse(PrairieMediaType.isAudiobook("movies"))
 
         let library = Library(
             id: 10,

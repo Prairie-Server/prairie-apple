@@ -21,7 +21,7 @@ struct ApplePushRegistrationResponse: Decodable {
 
 enum ApplePushRegistrationWire {
     static let endpoint = "/api/v1/devices/push/apple"
-    static let defaultTopic = "org.siloserver.silo"
+    static let defaultTopic = "org.prairieserver.prairie"
     static let privatePushMode = "private_push"
 
     /// The APNs environment is a *signing-time* decision (the
@@ -89,7 +89,7 @@ final class ApplePushRegistrationCoordinator {
     static let shared = ApplePushRegistrationCoordinator()
 
     private static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "org.siloserver.silo",
+        subsystem: Bundle.main.bundleIdentifier ?? "org.prairieserver.prairie",
         category: "ApplePush"
     )
 
@@ -173,10 +173,10 @@ final class ApplePushRegistrationCoordinator {
             )
             lastSuccessfulFingerprint = fingerprint
             endpointUnsupportedForContext = nil
-            Self.logger.info("Registered APNs token with Silo server_device_id=\(response.serverDeviceId, privacy: .private) enabled=\(response.enabled, privacy: .public)")
+            Self.logger.info("Registered APNs token with Prairie server_device_id=\(response.serverDeviceId, privacy: .private) enabled=\(response.enabled, privacy: .public)")
         } catch HTTPError.http(let statusCode, _) where statusCode == 404 || statusCode == 405 {
             endpointUnsupportedForContext = fingerprint
-            Self.logger.info("Apple push device endpoint is not available on this Silo server yet")
+            Self.logger.info("Apple push device endpoint is not available on this Prairie server yet")
         } catch {
             Self.logger.error("Apple push device registration failed: \(String(describing: error), privacy: .public)")
         }

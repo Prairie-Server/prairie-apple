@@ -33,7 +33,7 @@ struct ErrorView: View {
             VStack(spacing: ContinuumTheme.smallPadding) {
                 if let primary = primaryAction {
                     Button(primary.title, action: primary.run)
-                        .siloPrimaryButton()
+                        .prairiePrimaryButton()
                         .frame(width: 200)
                 }
                 if let secondary = secondaryAction {

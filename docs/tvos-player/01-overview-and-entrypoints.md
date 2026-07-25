@@ -13,7 +13,7 @@ The tvOS player spans a small set of files:
   Playback coordinator. Owns the active backend, player state, settings
   application, progress reporting, and cleanup.
 - [`PlaybackSessionBridge.swift`](../../iosApp/iosApp/Screens/Player/PlaybackSessionBridge.swift)  
-  Talks to the Silo API, picks a version, starts playback sessions, and
+  Talks to the Prairie API, picks a version, starts playback sessions, and
   negotiates direct vs HLS delivery.
 - [`NowPlayingController.swift`](../../iosApp/iosApp/Screens/Player/NowPlayingController.swift)  
   Bridges the current backend into `MPNowPlayingInfoCenter` and
@@ -28,7 +28,7 @@ On iOS/tvOS, the view model still initializes with `.coreMedia(PlayerCore)`,
 but the actual playback route now lives in `PlaybackExecutionPlan`. The first
 real load can stay on CompatibilityPlayer, move allowlisted direct assets onto
 NativePlayer Direct, choose the gated NativePlayer HLS route, or hand off to
-SiloPlayer for local normalized Dolby Vision playback. On macOS, the shared view
+PrairiePlayer for local normalized Dolby Vision playback. On macOS, the shared view
 model stays on an AVPlayer-backed route.
 
 ## 2. Startup flow
@@ -113,7 +113,7 @@ Route switching is now split into two layers:
 2. `installPlayer(for:)` instantiates the matching backend and re-attaches the
    shared callback surface.
 3. `PlayerCore.onUnsupportedStream` can still force a runtime handoff into
-   SiloPlayer.
+   PrairiePlayer.
 4. A NativePlayer Direct failure now recovers back to CompatibilityPlayer direct
    rather than terminating playback immediately.
 

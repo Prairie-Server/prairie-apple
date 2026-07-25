@@ -150,11 +150,11 @@ enum PlaybackOriginOutagePolicy {
     /// `var` so tests can compress it.
     static var probeDelaySeconds: Double = 5.0
 
-    /// Kill switch: setting SILO_DISABLE_OUTAGE_RIDE_THROUGH=1 restores the
+    /// Kill switch: setting PRAIRIE_DISABLE_OUTAGE_RIDE_THROUGH=1 restores the
     /// legacy behavior (give-up fails waiters and escalates to the visible
     /// outage recovery immediately).
     static func rideThroughEnabled() -> Bool {
-        ProcessInfo.processInfo.environment["SILO_DISABLE_OUTAGE_RIDE_THROUGH"] != "1"
+        ProcessInfo.processInfo.environment["PRAIRIE_DISABLE_OUTAGE_RIDE_THROUGH"] != "1"
     }
 
     /// Whether a give-up with this cause parks the failed byte demands

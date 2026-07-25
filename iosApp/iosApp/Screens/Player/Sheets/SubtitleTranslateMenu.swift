@@ -76,7 +76,7 @@ struct SubtitleTranslateMenu: View {
     static func isBitmap(_ track: PlayerTrack) -> Bool {
         guard let codec = track.codec?.lowercased(), !codec.isEmpty else { return false }
         // Canonical set is the route planner's single source of truth.
-        if ApplePlaybackRoutePlanner.siloBitmapSubtitleCodecs.contains(codec) { return true }
+        if ApplePlaybackRoutePlanner.prairieBitmapSubtitleCodecs.contains(codec) { return true }
         // Tolerant substring match — codec strings vary across demuxers
         // (e.g. "hdmv_pgs_subtitle", "dvb_subtitle (dvbsub)").
         return codec.contains("pgs") || codec.contains("dvdsub")
@@ -142,7 +142,7 @@ struct SubtitleTranslateMenu: View {
     /// One-line explainer under the title / list — sets the expectation that the
     /// single language tap does everything, without a wizard.
     private var explainer: String {
-        "Pick a language. Silo translates an existing subtitle when it can, or transcribes the audio."
+        "Pick a language. Prairie translates an existing subtitle when it can, or transcribes the audio."
     }
 
     // MARK: - Language routing

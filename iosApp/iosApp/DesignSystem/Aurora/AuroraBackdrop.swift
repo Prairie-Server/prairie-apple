@@ -2,7 +2,7 @@ import SwiftUI
 
 // MARK: - Variants
 //
-// Each first-run screen gets a slightly different placement of Silo's cool
+// Each first-run screen gets a slightly different placement of Prairie's cool
 // signal glow. The canvas stays mostly black so authentication transitions
 // naturally into the signed-in media experience.
 

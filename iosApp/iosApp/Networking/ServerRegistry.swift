@@ -1,7 +1,7 @@
 import Foundation
 import OSLog
 
-/// A single Silo server the user has added to the device.
+/// A single Prairie server the user has added to the device.
 ///
 /// The registry stores one of these per remembered server. Tokens live in
 /// Keychain keyed by `id`, never in the entry itself. The display name is
@@ -39,7 +39,7 @@ private struct RegistryState: Codable {
     var entries: [ServerEntry]
 }
 
-/// Owns the list of known Silo servers and which one is currently
+/// Owns the list of known Prairie servers and which one is currently
 /// active. Singleton via `.shared`; observed by SwiftUI via `@Observable`.
 ///
 /// Per-server persistence splits across two stores:

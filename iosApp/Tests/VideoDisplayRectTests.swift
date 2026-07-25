@@ -1,7 +1,7 @@
 import AVFoundation
 import XCTest
 
-@testable import Silo
+@testable import Prairie
 
 final class VideoDisplayRectTests: XCTestCase {
     func testAspectFitLetterboxesWideVideoInPortraitBounds() {

@@ -65,7 +65,7 @@ struct StartupSplashView: View {
 
     private var fallbackContent: some View {
         VStack(spacing: 20) {
-            SiloWordmarkView(width: 132)
+            PrairieWordmarkView(width: 132)
 
             ProgressView()
                 .tint(.continuumOnSurface)

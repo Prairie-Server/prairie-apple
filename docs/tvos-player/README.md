@@ -3,7 +3,7 @@ Repo snapshot date: 2026-04-29 (HEAD `6c2b4af`)
 # tvOS Video Player Documentation
 
 This suite documents the **actual tvOS player implementation** in the current
-`silo-apple` working tree. It is intentionally code-grounded: the source of
+`prairie-apple` working tree. It is intentionally code-grounded: the source of
 truth is the live player code under
 [`iosApp/iosApp/Screens/Player`](../../iosApp/iosApp/Screens/Player), not older
 plan documents or stale comments that still mention `mpv`.
@@ -19,7 +19,7 @@ one backend:
 - `remux` and `transcode` sessions can route through NativePlayer HLS in
   [`AVPlayerBackend.swift`](../../iosApp/iosApp/Screens/Player/AVPlayerRoute/AVPlayerBackend.swift)
   when the local `player.apple.avplayer_hls_route_enabled` gate is on.
-- CompatibilityPlayer can also hand off to SiloPlayer, currently implemented by
+- CompatibilityPlayer can also hand off to PrairiePlayer, currently implemented by
   [`AVPlayerBackend.swift`](../../iosApp/iosApp/Screens/Player/AVPlayerRoute/AVPlayerBackend.swift)
   for Dolby Vision Profile 5 and a specific VideoToolbox rejection case.
 - The tvOS overlay and remote/focus behavior live in
@@ -37,7 +37,7 @@ one backend:
   software fallback), `AVSampleBufferDisplayLayer`, `AVAudioEngine` audio
   output, tracks, subtitles, seeks, HDMI-mode selection, and source delivery
   through `PlaybackSourceProxy`.
-- **[03 - Dolby Vision and SiloPlayer route](03-dolby-vision-and-avplayer-route.md)**
+- **[03 - Dolby Vision and PrairiePlayer route](03-dolby-vision-and-avplayer-route.md)**
   Dolby Vision routing decisions, the local HLS remux path, loopback server,
   `AVPlayerLayer`, and the gaps that remain on that backend.
 - **[04 - tvOS controls and current behavior](04-tvos-controls-and-current-behavior.md)**  
@@ -54,15 +54,15 @@ one backend:
   including why the route exists, the Infuse/VidHub inference, and the
   FLAC-to-multichannel-LPCM target plus Dolby Vision validation checklist.
 - **[08 - Validated Apple player review](08-validated-player-review.md)**
-  Corrected source-verified review findings for NativePlayer, SiloPlayer,
+  Corrected source-verified review findings for NativePlayer, PrairiePlayer,
   CompatibilityPlayer, the route planner, subtitles, stats, and lifecycle
   behavior.
-- **[SiloPlayer normalization architecture findings](../plans/apple-playback-normalization-architecture.md)**
-  Research notes comparing Silo's route direction with KSPlayer,
+- **[PrairiePlayer normalization architecture findings](../plans/apple-playback-normalization-architecture.md)**
+  Research notes comparing Prairie's route direction with KSPlayer,
   Swiftfin/Jellyfin-style clients, VLCKit, MPVKit, and closed-source Apple
   players.
 - **[Apple playback normalization spec](../plans/apple-playback-normalization-spec.md)**
-  Route contract for NativePlayer, SiloPlayer, CompatibilityPlayer,
+  Route contract for NativePlayer, PrairiePlayer, CompatibilityPlayer,
   normalization, fallbacks, logging, and validation.
 
 ## Quick answers
@@ -70,21 +70,21 @@ one backend:
 - **What backend does tvOS use by default?**  
   CompatibilityPlayer (`PlayerCore`) for compatibility-direct assets, with
   narrow NativePlayer routes for allowlisted native-direct files and gated HLS,
-  plus SiloPlayer for local normalized Dolby Vision paths.
+  plus PrairiePlayer for local normalized Dolby Vision paths.
 - **When does it switch away from CompatibilityPlayer?**
   Allowlisted native-direct MP4/MOV/M4V assets use NativePlayer Direct, HLS
   remux/transcode uses NativePlayer HLS when the feature flag is on, and local
-  Dolby Vision normalization uses SiloPlayer.
+  Dolby Vision normalization uses PrairiePlayer.
 - **Does tvOS use NativePlayer for all Dolby Vision?**
-  No. Profile 5 currently routes to SiloPlayer Dolby Vision loopback. Profile 7
-  currently routes to the experimental SiloPlayer-derived Profile 8.1 path,
+  No. Profile 5 currently routes to PrairiePlayer Dolby Vision loopback. Profile 7
+  currently routes to the experimental PrairiePlayer-derived Profile 8.1 path,
   because raw P7 is not an Apple HLS target. Profiles 8/9 use NativePlayer
   Direct only when the asset is already in the native-direct allowlist;
   otherwise they stay on the CompatibilityPlayer HEVC path. Profile 10 is not a live direct-play claim today: the route code
   recognizes AV1 Dolby Vision metadata, but the active direct/native paths still
   do not admit AV1 video.
 - **Are subtitle features complete?**  
-  Text subtitles are now Silo-rendered on controlled tracks. Primary,
+  Text subtitles are now Prairie-rendered on controlled tracks. Primary,
   secondary sidecar, delay, styling, and chapters are route-aware; bitmap
   subtitle formats remain outside the current renderer. The planned bitmap path
   is an overlay renderer, not client-side burn-in, so HDR/Dolby Vision video
@@ -115,4 +115,4 @@ one backend:
   AVPlayer stack.
 - corrected: older comments in `PlaybackSessionBridge.swift` and
   `PlayerViewModel.swift` still mention `mpv`; the live code now routes between
-  CompatibilityPlayer, NativePlayer, and SiloPlayer implementations.
+  CompatibilityPlayer, NativePlayer, and PrairiePlayer implementations.

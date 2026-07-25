@@ -1,6 +1,6 @@
 import XCTest
 import Network
-@testable import Silo
+@testable import Prairie
 
 final class PlaybackOriginOutagePolicyTests: XCTestCase {
     private func park(

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Typed facade over the native Silo **AI** endpoints — metadata
+/// Typed facade over the native Prairie **AI** endpoints — metadata
 /// translation and subtitle translation/transcription.
 ///
 /// Sibling to ``ContinuumAPI``: a separate actor keeps the AI surface

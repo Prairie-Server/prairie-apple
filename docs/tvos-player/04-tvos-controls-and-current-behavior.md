@@ -138,7 +138,7 @@ Route-gated controls appear only when the current backend actually supports
 them:
 
 - audio delay is hidden on every current route because it is not implemented
-- subtitle delay appears for routes with Silo-controlled subtitle rendering
+- subtitle delay appears for routes with Prairie-controlled subtitle rendering
 
 Current truth:
 
@@ -174,8 +174,8 @@ Current truth:
 
 - primary subtitle selection works on CompatibilityPlayer and on
   AVPlayer-backed routes
-- NativePlayer/SiloPlayer secondary subtitles are currently sidecar-only
-- subtitle delay and styling work for Silo-rendered subtitle tracks
+- NativePlayer/PrairiePlayer secondary subtitles are currently sidecar-only
+- subtitle delay and styling work for Prairie-rendered subtitle tracks
 
 ### Chapters
 
@@ -189,7 +189,7 @@ Selecting a row:
 
 There is no separate chapter-play mode.
 
-## 7. NativePlayer/SiloPlayer behavior in the tvOS shell
+## 7. NativePlayer/PrairiePlayer behavior in the tvOS shell
 
 The tvOS shell no longer treats AVPlayer-backed playback as a single no-tracks
 route. In practice:
@@ -197,7 +197,7 @@ route. In practice:
 - the HUD still always shows `Info` and `Video`
 - `Audio`, `Subtitles`, and `Chapters` appear whenever the active route has
   published rows for them
-- NativePlayer Direct, NativePlayer HLS, and SiloPlayer routes can now keep
+- NativePlayer Direct, NativePlayer HLS, and PrairiePlayer routes can now keep
   those tabs populated through AVFoundation media selection plus bridge-supplied
   chapters
 

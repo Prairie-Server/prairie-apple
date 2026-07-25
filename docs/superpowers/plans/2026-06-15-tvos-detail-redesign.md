@@ -6,7 +6,7 @@
 
 **Architecture:** A view-layer change on the existing `TVDetailHero` + per-type detail views. Today's round controls (`Capsule` pills, `Circle` icon buttons, capsule season chips) are reshaped to one 8 pt rounded-rectangle family. A new `TVPlaybackSelectorRow` consolidates the version picker and the audio/subtitle menus (which already exist in the `⋯` menu) into a webapp-parity row, and adds an Edition selector derived from `FileVersion.edition`. The `ReadableFocusSection` focus workaround is removed; the synopsis becomes an expand-in-place control. The audiobook page gets a cover-forward cinematic hero.
 
-**Tech Stack:** Swift 5 / SwiftUI, tvOS. XcodeGen (`project.yml` → `Silo.xcodeproj`). Design tokens in `ContinuumTheme.swift`.
+**Tech Stack:** Swift 5 / SwiftUI, tvOS. XcodeGen (`project.yml` → `Prairie.xcodeproj`). Design tokens in `ContinuumTheme.swift`.
 
 ---
 
@@ -15,10 +15,10 @@
 **Read before starting any task.**
 
 - **Design language:** Skyline — OLED black, monochrome chrome, white-at-opacity. Squared-control radius = `ContinuumTheme.smallCornerRadius` (8 pt). Spec: `docs/superpowers/specs/2026-06-15-tvos-detail-redesign-design.md`. Mockups: `docs/tvos-detail-mockups/`.
-- **TDD reconciliation (important):** `CLAUDE.md` says *do not add tests for UI changes* — only focused tests for critical/high-risk shared logic. So **only Task 3 (edition grouping) is test-first.** Every other task is **build-and-verify**: make the change, build `SiloTV`, then visually confirm in the tvOS Simulator (`admin` / `water1234` per the SiloTV debugging notes).
+- **TDD reconciliation (important):** `CLAUDE.md` says *do not add tests for UI changes* — only focused tests for critical/high-risk shared logic. So **only Task 3 (edition grouping) is test-first.** Every other task is **build-and-verify**: make the change, build `PrairieTV`, then visually confirm in the tvOS Simulator (`admin` / `water1234` per the PrairieTV debugging notes).
 - **Build gate (run after every task, must succeed):**
   ```bash
-  cd iosApp && xcodebuild build -project Silo.xcodeproj -scheme SiloTV \
+  cd iosApp && xcodebuild build -project Prairie.xcodeproj -scheme PrairieTV \
     -destination 'generic/platform=tvOS Simulator' CODE_SIGNING_ALLOWED=NO 2>&1 | tail -20
   ```
   Expected: `** BUILD SUCCEEDED **`.
@@ -26,7 +26,7 @@
   ```bash
   cd iosApp && xcodegen generate
   ```
-- **Logic-test harness caveat:** `iosApp/Tests/DetailVersionSelectionTests.swift` is a standalone `@main` precondition runner; it is **not** wired into `project.yml` or any in-repo CI script. Add Task 3's cases there (matching the existing pattern) and run them via the team's existing harness process. The authoritative per-task gate remains the `SiloTV` build above.
+- **Logic-test harness caveat:** `iosApp/Tests/DetailVersionSelectionTests.swift` is a standalone `@main` precondition runner; it is **not** wired into `project.yml` or any in-repo CI script. Add Task 3's cases there (matching the existing pattern) and run them via the team's existing harness process. The authoritative per-task gate remains the `PrairieTV` build above.
 - **Commit** at the end of each task. End every commit message with the trailer:
   ```
   Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
@@ -333,7 +333,7 @@ Run the `DetailVersionSelectionTests` harness. Expected: process exits 0 (no `pr
 
 - [ ] **Step 6: Commit.**
 ```bash
-git add iosApp/iosApp/Screens/Detail/PlaybackEditions.swift iosApp/Tests/DetailVersionSelectionTests.swift iosApp/Silo.xcodeproj
+git add iosApp/iosApp/Screens/Detail/PlaybackEditions.swift iosApp/Tests/DetailVersionSelectionTests.swift iosApp/Prairie.xcodeproj
 git commit -m "Add edition-grouping logic derived from FileVersion.edition
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
@@ -354,7 +354,7 @@ import SwiftUI
 
 /// Pre-Play playback-selection row shown under the hero actions. Renders
 /// Edition · Version · Audio · Subtitles as squared menu buttons, mirroring
-/// the Silo webapp. Each selector auto-hides when there is no real choice.
+/// the Prairie webapp. Each selector auto-hides when there is no real choice.
 /// Uses the detail view's existing version/audio/subtitle callbacks; Edition
 /// is derived from `FileVersion.edition` and selecting one routes through
 /// `onSelectVersion`.
@@ -575,7 +575,7 @@ cd iosApp && xcodegen generate
 
 - [ ] **Step 5: Commit.**
 ```bash
-git add iosApp/iosApp/tvOS/Screens/Detail/TVPlaybackSelectorRow.swift iosApp/Silo.xcodeproj
+git add iosApp/iosApp/tvOS/Screens/Detail/TVPlaybackSelectorRow.swift iosApp/Prairie.xcodeproj
 git commit -m "Add TVPlaybackSelectorRow (edition/version/audio/subtitles)
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
@@ -780,7 +780,7 @@ git add iosApp/iosApp/tvOS/Screens/Detail/TVExpandableSynopsis.swift \
         iosApp/iosApp/tvOS/Screens/Detail/TVMovieDetailView.swift \
         iosApp/iosApp/tvOS/Screens/Detail/TVSeriesDetailView.swift \
         iosApp/iosApp/tvOS/Screens/Detail/TVSeasonDetailView.swift \
-        iosApp/Silo.xcodeproj
+        iosApp/Prairie.xcodeproj
 git commit -m "tvOS detail: expand-in-place hero synopsis (with tagline)
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
@@ -830,7 +830,7 @@ Expected: `** BUILD SUCCEEDED **` (and no remaining references to `readableFocus
 
 - [ ] **Step 7: Commit.**
 ```bash
-git add -A iosApp/iosApp/tvOS/Screens/Detail/ iosApp/Silo.xcodeproj
+git add -A iosApp/iosApp/tvOS/Screens/Detail/ iosApp/Prairie.xcodeproj
 git commit -m "tvOS detail: remove ReadableFocusSection; fold About into hero synopsis
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
@@ -1010,7 +1010,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
     }
 ```
 
-- [ ] **Step 4: Build gate.** If `TVPillButtonStyle` is not visible from this file's module scope, confirm it is in the same target (it is — both build into `SiloTV`). Expected: `** BUILD SUCCEEDED **`.
+- [ ] **Step 4: Build gate.** If `TVPillButtonStyle` is not visible from this file's module scope, confirm it is in the same target (it is — both build into `PrairieTV`). Expected: `** BUILD SUCCEEDED **`.
 
 - [ ] **Step 5: Visually verify:** an audiobook with multiple narrations shows the squared Narration selector; chapter rows are squared.
 

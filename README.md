@@ -1,29 +1,29 @@
-# Silo Apple
+# Prairie Apple
 
-Native Apple clients for the [Silo](https://github.com/Silo-Server/silo-server) self-hosted media server.
+Native Apple clients for the [Prairie](https://github.com/Prairie-Server/prairie-server) self-hosted media server.
 
-This repo builds iOS, tvOS, and the early macOS target. It preserves the existing Apple bundle IDs, keychain groups, and signing IDs for TestFlight and install continuity, but user-facing names, docs, and server references now use Silo.
+This repo builds iOS, tvOS, and the early macOS target. Prairie is a fork of Silo, re-identified with Prairie bundle IDs, app groups, keychain groups, URL schemes, signing defaults, app names, and brand assets.
 
 ## TestFlight
 
 Try the latest beta builds of the iOS and tvOS apps:
 
-**[Join the Silo TestFlight beta](https://testflight.apple.com/join/XZy8cu5q)**
+**[Join the Prairie TestFlight beta](https://testflight.apple.com/join/XZy8cu5q)**
 
 ## Screenshots
 
 ### iOS
 
 <p>
-  <img src="project-images/silo-apple-native/04-home.png" width="260" alt="iOS home screen" />
-  <img src="project-images/silo-apple-native/09-movie-detail.png" width="260" alt="iOS movie detail" />
-  <img src="project-images/silo-apple-native/05-libraries.png" width="260" alt="iOS movies library" />
+  <img src="project-images/prairie-apple-native/04-home.png" width="260" alt="iOS home screen" />
+  <img src="project-images/prairie-apple-native/09-movie-detail.png" width="260" alt="iOS movie detail" />
+  <img src="project-images/prairie-apple-native/05-libraries.png" width="260" alt="iOS movies library" />
 </p>
 
 ### tvOS
 
 <p>
-  <img src="project-images/silo-tvos/05-tv-home.png" width="800" alt="tvOS home screen" />
+  <img src="project-images/prairie-tvos/05-tv-home.png" width="800" alt="tvOS home screen" />
 </p>
 
 ## Layout
@@ -42,7 +42,7 @@ Try the latest beta builds of the iOS and tvOS apps:
 - Xcode 16+
 - `xcodegen`
 - Ruby 3.2 with Bundler for release automation
-- A running Silo server for local auth, browsing, and playback validation
+- A running Prairie server for local auth, browsing, and playback validation
 
 ## Build
 
@@ -51,7 +51,7 @@ Generate the Xcode project from the checked-in XcodeGen spec:
 ```sh
 cd iosApp
 xcodegen generate
-open Silo.xcodeproj
+open Prairie.xcodeproj
 ```
 
 Build without local signing:
@@ -59,20 +59,20 @@ Build without local signing:
 ```sh
 cd iosApp
 xcodebuild build \
-  -project Silo.xcodeproj \
-  -scheme Silo \
+  -project Prairie.xcodeproj \
+  -scheme Prairie \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
   CODE_SIGN_IDENTITY='' CODE_SIGNING_ALLOWED=NO
 
 xcodebuild build \
-  -project Silo.xcodeproj \
-  -scheme SiloTV \
+  -project Prairie.xcodeproj \
+  -scheme PrairieTV \
   -destination 'platform=tvOS Simulator,name=Apple TV 4K (3rd generation)' \
   CODE_SIGN_IDENTITY='' CODE_SIGNING_ALLOWED=NO
 
 xcodebuild build \
-  -project Silo.xcodeproj \
-  -scheme SiloMac \
+  -project Prairie.xcodeproj \
+  -scheme PrairieMac \
   -destination 'platform=macOS' \
   CODE_SIGN_IDENTITY='' CODE_SIGNING_ALLOWED=NO
 ```
@@ -99,7 +99,7 @@ Xcode UI.
 
 3. Open the repository root in VS Code and accept its extension
    recommendations.
-4. Run `Tasks: Run Task` → `Silo: Generate Xcode project`.
+4. Run `Tasks: Run Task` → `Prairie: Generate Xcode project`.
 5. In the SweetPad sidebar, select a scheme and an installed destination.
 6. Run `SweetPad: Set up Swift code intelligence (BSP)` once from the command
    palette, then open a Swift file. The generated `buildServer.json` is
@@ -130,13 +130,12 @@ Fastlane lanes are defined in `fastlane/Fastfile`. All Apple IDs, team IDs, sign
 
 ## License & Trademarks
 
-Silo Apple is licensed under `AGPL-3.0-or-later`. See [LICENSE](LICENSE).
+Prairie Apple is licensed under `AGPL-3.0-or-later`. See [LICENSE](LICENSE).
 
-The **Silo name, logo, and wordmark are trademarks of Silo Media L.L.C.** and
-are **not** covered by the AGPL. You're free to fork and redistribute the code,
-but forks and redistributions must not use the Silo brand as their identity and
-must remove or replace the brand assets. Publishing a Silo-branded app to an app
-store requires written permission. See [TRADEMARK.md](TRADEMARK.md) for what's
-permitted — including referential use like "compatible with Silo."
+The **Prairie name, logo, wordmark, app icons, and other brand assets** are **not**
+covered by the AGPL. You're free to fork and redistribute the code, including with
+truthful notices such as "fork of Silo," but forks and redistributions must not
+use the Prairie brand as their identity and must remove or replace the Prairie
+brand assets. See [TRADEMARK.md](TRADEMARK.md).
 
 FFmpeg, Nuke, fastlane, and other third-party dependencies retain their own licenses. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

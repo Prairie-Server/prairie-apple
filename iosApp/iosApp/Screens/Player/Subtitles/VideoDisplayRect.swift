@@ -1,6 +1,6 @@
 //
 //  VideoDisplayRect.swift
-//  Silo (iOS + tvOS + macOS)
+//  Prairie (iOS + tvOS + macOS)
 //
 //  Computes the rect the video occupies inside a host view's bounds for a
 //  given gravity — the AVSampleBufferDisplayLayer equivalent of

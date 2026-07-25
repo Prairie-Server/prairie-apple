@@ -366,7 +366,7 @@ final class LoopbackSegmentWriter {
     )
     private static let traceTopLevelBoxes = false
     private static let verboseSegmentLogging =
-        ProcessInfo.processInfo.environment["SILO_TRACE_DV_SEGMENTS"] == "1"
+        ProcessInfo.processInfo.environment["PRAIRIE_TRACE_DV_SEGMENTS"] == "1"
     /// Producer-loop stage timing, logged once per second beside the source
     /// rate (two clock reads per packet + per io flush while enabled).
     /// Opt-in: this is an investigation probe, not shipping behavior — it
@@ -376,7 +376,7 @@ final class LoopbackSegmentWriter {
     /// (box-sink ingest) is nested inside `mux` (av_interleaved_write_frame).
     /// Enable: `defaults write <bundle> player.apple.loopback_trace_throughput -bool YES`
     private static let traceThroughput =
-        ProcessInfo.processInfo.environment["SILO_TRACE_DV_THROUGHPUT"] == "1"
+        ProcessInfo.processInfo.environment["PRAIRIE_TRACE_DV_THROUGHPUT"] == "1"
             || UserDefaults.standard.bool(forKey: "player.apple.loopback_trace_throughput")
     private let avErrorAgain = -Int32(EAGAIN)
     private let avErrorInvalidData = Int32(-1094995529) // AVERROR_INVALIDDATA
@@ -4798,7 +4798,7 @@ final class LoopbackSegmentWriter {
     /// structurally valid IRAP arrives. Audio continues on its source clock,
     /// while the last good video picture naturally holds across the damaged
     /// span. This is the same decoder-resynchronization boundary used by the
-    /// Compatibility path, but it keeps playback in SiloPlayer.
+    /// Compatibility path, but it keeps playback in PrairiePlayer.
     private func shouldDropCorruptHEVCVideoPacket(
         _ pkt: UnsafeMutablePointer<AVPacket>
     ) -> Bool {

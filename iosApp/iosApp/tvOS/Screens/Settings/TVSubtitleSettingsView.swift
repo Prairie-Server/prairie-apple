@@ -176,7 +176,7 @@ struct TVSubtitleSettingsPane: View {
     private var appearanceFooterText: String {
         let source: String
         if viewModel.subtitleMatchesSystemAppearance {
-            source = "Following this Apple TV's caption style from Settings → Accessibility. Editing any option switches back to Silo styling."
+            source = "Following this Apple TV's caption style from Settings → Accessibility. Editing any option switches back to Prairie styling."
         } else if viewModel.subtitleUsesDeviceAppearanceOverride {
             source = "Appearance is saved on the server for this profile on this Apple TV."
         } else {

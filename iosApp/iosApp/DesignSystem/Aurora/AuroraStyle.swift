@@ -4,7 +4,7 @@ import SwiftUI
 //
 // Authentication uses the same OLED-black, monochrome language as the signed-
 // in product. The existing Aurora names are retained to avoid a broad source
-// migration, but the tokens deliberately map onto Silo's core palette.
+// migration, but the tokens deliberately map onto Prairie's core palette.
 
 extension Color {
     static let auroraInk = Color.continuumOnSurface
@@ -126,7 +126,7 @@ struct AuroraGlassPanel: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .siloGlass(in: RoundedRectangle(cornerRadius: cornerRadius),
+            .prairieGlass(in: RoundedRectangle(cornerRadius: cornerRadius),
                        tint: Color.auroraGlassTint.opacity(0.72))
             .overlay {
                 RoundedRectangle(cornerRadius: cornerRadius)

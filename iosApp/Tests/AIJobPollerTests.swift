@@ -1,6 +1,6 @@
 //
 //  AIJobPollerTests.swift
-//  SiloTests
+//  PrairieTests
 //
 //  Behavioral tests for `AIJobPoller` using an injected fake `fetch` closure
 //  (no live `ContinuumAI`, no network): terminal-state stop on each terminal
@@ -9,7 +9,7 @@
 
 import XCTest
 import Foundation
-@testable import Silo
+@testable import Prairie
 
 final class AIJobPollerTests: XCTestCase {
 

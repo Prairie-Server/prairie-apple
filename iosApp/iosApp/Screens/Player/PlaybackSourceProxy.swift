@@ -77,7 +77,7 @@ final class PlaybackSourceCache {
     static var defaultMemoryBudgetBytes: Int {
         isConstrainedMemoryDevice ? 96 * 1024 * 1024 : 128 * 1024 * 1024
     }
-    static var siloLoopbackMemoryBudgetBytes: Int {
+    static var prairieLoopbackMemoryBudgetBytes: Int {
         isConstrainedMemoryDevice ? 128 * 1024 * 1024 : 256 * 1024 * 1024
     }
     /// Session NAND-write budget multiplier over the disk retention budget.
@@ -196,8 +196,8 @@ final class PlaybackSourceCache {
     /// state a replacement cache would get.
     static func resolveDiskSpillEnabled(_ requested: Bool) -> Bool {
         let env = ProcessInfo.processInfo.environment
-        if env["SILO_DISABLE_SOURCE_DISK_SPILL"] == "1" { return false }
-        if env["SILO_ENABLE_SOURCE_DISK_SPILL"] == "1" { return true }
+        if env["PRAIRIE_DISABLE_SOURCE_DISK_SPILL"] == "1" { return false }
+        if env["PRAIRIE_ENABLE_SOURCE_DISK_SPILL"] == "1" { return true }
         return requested
     }
 

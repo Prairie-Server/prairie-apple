@@ -85,7 +85,7 @@ final class TVSettingsViewModel {
         if let profileName = activeProfile?.name, !profileName.isEmpty {
             return profileName
         }
-        return userInfo?.username ?? "Silo"
+        return userInfo?.username ?? "Prairie"
     }
 
     var accountSubtitle: String {
