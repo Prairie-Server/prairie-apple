@@ -33,7 +33,13 @@ fastlane/screenshots/
 fastlane/test_output/
 
 # Local tooling state
-.claude/
+# `.agents/skills` is a symlink to `.claude/skills` so non-Claude agents find the
+# same files; everything else under .agents/ is per-developer scratch.
+/.agents/*
+!/.agents/skills
+# Ignore everything in .claude/ except the committed, shared skills.
+/.claude/*
+!/.claude/skills/
 .codex/
 .cursor/
 .sweetpad/
@@ -52,4 +58,5 @@ Thumbs.db
 .swiftpm/
 docs/*
 !docs/tvos-focus.md
+!docs/mac-builder.md
 !docs/release/*
