@@ -974,7 +974,7 @@ struct MainTabView: View {
             CalendarView()
 
         case .liveTV:
-            LiveTVChannelListView()
+            LiveTVChannelListView(viewModel: LiveTVChannelListViewModel())
 
         case .downloads:
             #if os(tvOS)

@@ -325,7 +325,7 @@ struct TVMainTabView: View {
                 onTopMenuFocusRequest: { focusTopMenuIfVisible() }
             )
         case .liveTV:
-            LiveTVChannelListView()
+            LiveTVChannelListView(viewModel: LiveTVChannelListViewModel())
         }
     }
 
