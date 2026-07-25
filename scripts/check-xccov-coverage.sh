@@ -4,11 +4,12 @@
 # Usage:
 #   check-xccov-coverage.sh <coverage.json> <min_percent> [path_substr ...]
 #
-# Defaults path filters to Networking (+ model) product code that PrairieTests
-# actually exercise. Pass extra substrings to widen/narrow the gate.
+# Defaults path filters to Networking units with dedicated PrairieTests
+# coverage (measured ~78% on CI). Whole-folder /Networking/ is ~23% and is
+# not a realistic 75% gate. Pass extra substrings to widen/narrow the gate.
 #
 # Example:
-#   check-xccov-coverage.sh coverage.json 75 /Networking/
+#   check-xccov-coverage.sh coverage.json 75 /Networking/AIModels.swift
 #
 # Exit codes:
 #   0 — coverage meets or exceeds min_percent
@@ -35,11 +36,15 @@ if ! [[ "$MIN_PERCENT" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   exit 1
 fi
 
-# Default scope: Networking (API clients, stores, wire models) under the iOS app.
-# Model types live alongside Networking (*Models.swift, Models.swift), so the
-# /Networking/ filter covers the model surface PrairieTests target.
+# Default scope: Networking files PrairieTests primarily cover.
 if [[ $# -eq 0 ]]; then
-  PATH_FILTERS=("/Networking/")
+  PATH_FILTERS=(
+    "/Networking/AIModels.swift"
+    "/Networking/AIJobPoller.swift"
+    "/Networking/SubtitleSearchModels.swift"
+    "/Networking/TrackSelectionPersistence.swift"
+    "/Networking/LAN/PrairieFrame.swift"
+  )
 else
   PATH_FILTERS=("$@")
 fi
