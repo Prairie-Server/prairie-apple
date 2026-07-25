@@ -75,6 +75,28 @@ class AppRouter {
 
     var presentedPlayer: PlayerPresentation?
 
+    /// Live TV HLS session presented as a full-screen cover. Distinct from
+    /// `presentedPlayer` so VOD/offline playback and live tuner sessions do
+    /// not share lifecycle or dismiss semantics (live must DELETE the session).
+    struct LivePlayerPresentation: Identifiable, Equatable {
+        let id = UUID()
+        let sessionId: String
+        let hlsURL: URL
+        let title: String
+    }
+
+    var presentedLivePlayer: LivePlayerPresentation?
+
+    /// Present an HLS live stream from a Live TV session. Callers must have
+    /// already started the session; dismiss releases it via `LiveTVPlayerView`.
+    func presentLivePlayer(sessionId: String, hlsURL: URL, title: String) {
+        presentedLivePlayer = LivePlayerPresentation(
+            sessionId: sessionId,
+            hlsURL: hlsURL,
+            title: title
+        )
+    }
+
     // MARK: - Tab Selection
 
     /// One-shot tab-switch request, consumed (and cleared) by `MainTabView`,

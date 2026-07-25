@@ -10,7 +10,7 @@
 #
 # Example:
 #   check-xccov-coverage.sh coverage.json 75 /Networking/AIModels.swift
-#
+
 # Exit codes:
 #   0 — coverage meets or exceeds min_percent
 #   1 — coverage below gate, or missing/invalid input

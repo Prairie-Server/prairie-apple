@@ -41,6 +41,10 @@ manual directional focus mutation.
 
 Apple tests use XCTest under `iosApp/Tests/`. Do not add tests for small changes or UI changes unless requested. For shared logic changes, add focused tests only for critical or high-risk behavior.
 
+ViewInspector (`https://github.com/nalexn/ViewInspector`) is linked to the `PrairieTests` target only (see `iosApp/project.yml`). Use it sparingly for high-risk SwiftUI screens where empty/loading/error affordances must not regress — for example Live TV channel list states — not as a default for every view. Prefer decoder and pure-logic unit tests for Networking and ViewModel code.
+
+CI enforces a 75% line-coverage gate over `/Networking/` via `scripts/check-xccov-coverage.sh` (not overall app UI coverage).
+
 ## Security & Configuration Tips
 
 Do not commit local signing overrides. Start from `iosApp/Signing/Local.xcconfig.sample`, create `iosApp/Signing/Local.xcconfig`, and regenerate with XcodeGen after signing changes. Keep App Store Connect keys, Match repo URLs, and team identifiers in environment variables only.

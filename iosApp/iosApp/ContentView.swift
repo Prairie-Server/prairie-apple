@@ -151,6 +151,7 @@ struct ContentView: View {
                 // failure-tolerant, so double-calling with `selectProfile` is safe.
                 await AICapabilities.shared.refresh()
                 await RequestsFeatureStore.shared.refresh()
+                await LiveTVFeatureStore.shared.refresh()
                 #if os(iOS)
                 await ApplePushRegistrationCoordinator.shared.prepareForAuthenticatedProfile()
                 #endif
@@ -247,6 +248,7 @@ struct ContentView: View {
             // happy path costs nothing.
             Task { await AICapabilities.shared.refresh() }
             Task { await RequestsFeatureStore.shared.refresh() }
+            Task { await LiveTVFeatureStore.shared.refresh() }
             #if os(iOS)
             Task {
                 await ApplePushRegistrationCoordinator.shared.prepareForAuthenticatedProfile()
@@ -797,6 +799,17 @@ struct MainTabView: View {
             selectedTab = tab
             router.requestedTab = nil
         }
+        // Capability refresh can remove Live TV (or Downloads) while it is
+        // still selected; snap back to Home so TabView isn't left on a
+        // missing tag.
+        .onChange(of: LiveTVFeatureStore.shared.isEnabled) { _, _ in
+            ensureSelectedTabIsVisible()
+        }
+        #if !os(tvOS)
+        .onChange(of: DownloadManager.shared.downloadsEnabled) { _, _ in
+            ensureSelectedTabIsVisible()
+        }
+        #endif
         #if !os(macOS)
         .fullScreenCover(isPresented: Binding(
             get: { audioStore.isShowingFullPlayer },
@@ -828,6 +841,17 @@ struct MainTabView: View {
         }
         #endif
         #endif
+        .fullScreenCover(item: $router.presentedLivePlayer) { session in
+            LiveTVPlayerView(
+                session: LiveTVPlayerSession(
+                    sessionId: session.sessionId,
+                    hlsURL: session.hlsURL,
+                    title: session.title
+                )
+            ) {
+                router.presentedLivePlayer = nil
+            }
+        }
         // Outside the presentation modifiers so presented covers (audio
         // player, video player) inherit the router — ErrorView requires
         // it and traps when it's absent.
@@ -842,18 +866,29 @@ struct MainTabView: View {
         #endif
     }
 
-    /// Visible tabs, plus a Downloads tab when the server advertises the
-    /// downloads capability for this profile. Reading
-    /// `DownloadManager.shared.downloadsEnabled` here registers the tab bar
-    /// as an observer, so the tab appears as soon as capability loads.
+    /// Visible tabs, plus Live TV / Downloads when the server advertises
+    /// those capabilities for this profile. Reading the feature stores here
+    /// registers the tab bar as an observer, so tabs appear as soon as the
+    /// probes land.
     private var visibleTabs: [AppTab] {
         var tabs = AppTab.visibleCases
         #if !os(tvOS)
+        if LiveTVFeatureStore.shared.isEnabled {
+            tabs.append(.liveTV)
+        }
         if DownloadManager.shared.downloadsEnabled {
             tabs.append(.downloads)
         }
         #endif
         return tabs
+    }
+
+    /// Capability probes can remove a tab while it is still selected; snap
+    /// back to Home rather than leaving TabView on a missing tag.
+    private func ensureSelectedTabIsVisible() {
+        if !visibleTabs.contains(selectedTab) {
+            selectedTab = .home
+        }
     }
 
     /// iPhone + iPad compact width: bottom tab bar, single navigation stack.
@@ -956,6 +991,9 @@ struct MainTabView: View {
 
         case .calendar:
             CalendarView()
+
+        case .liveTV:
+            LiveTVChannelListView(viewModel: LiveTVChannelListViewModel())
 
         case .downloads:
             #if os(tvOS)
