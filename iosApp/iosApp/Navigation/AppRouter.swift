@@ -23,7 +23,7 @@ class AppRouter {
     enum AuthState: Equatable {
         /// App is launching; checking for stored credentials.
         case loading
-        /// No server URL has been configured yet.
+        /// No active server — show Saved + LAN discovery (manual URL is secondary).
         case needsServerSetup
         /// Server known but user is not signed in.
         case needsLogin
@@ -255,9 +255,10 @@ class AppRouter {
         authState = .authenticated
     }
 
-    /// Return to server setup (e.g., to change servers).
+    /// Return to the first-run connect list (Saved + LAN discovery).
+    /// Manual URL entry is a secondary push from that list.
     func resetToServerSetup() {
-        recordScreenBreadcrumb(target: "serverSetup", action: "reset")
+        recordScreenBreadcrumb(target: "serverList", action: "reset")
         path = NavigationPath()
         authState = .needsServerSetup
     }
@@ -314,7 +315,7 @@ class AppRouter {
             recordScreenBreadcrumb(target: "login", action: "sessionExpired")
             authState = .needsLogin
         } else {
-            recordScreenBreadcrumb(target: "serverSetup", action: "sessionExpired")
+            recordScreenBreadcrumb(target: "serverList", action: "sessionExpired")
             authState = .needsServerSetup
         }
     }

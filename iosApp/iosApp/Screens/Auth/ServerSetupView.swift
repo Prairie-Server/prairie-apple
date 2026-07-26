@@ -1,10 +1,11 @@
 import SwiftUI
 
 #if !os(tvOS)
-/// First screen when no server is configured. A single centered glass form —
-/// no phone-pairing card, because on iPhone the
-/// phone *is* the companion (the pairing card auto-overlays from `ContentView`
-/// when a TV is nearby). Protocol + port stay tucked under "Advanced options".
+/// Manual server URL entry. Reached from the first-run connect list via
+/// **Add manually** (or from Settings → Servers). A single centered glass
+/// form — no phone-pairing card, because on iPhone the phone *is* the
+/// companion (the pairing card auto-overlays from `ContentView` when a TV
+/// is nearby). Protocol + port stay tucked under "Advanced options".
 struct ServerSetupView: View {
     var router: AppRouter
     @State private var viewModel = ServerSetupViewModel()

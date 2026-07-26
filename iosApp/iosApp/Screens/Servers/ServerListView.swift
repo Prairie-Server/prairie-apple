@@ -187,7 +187,7 @@ struct ServerListView: View {
 
             Section {
                 Button {
-                    router.resetToServerSetup()
+                    router.navigate(to: .serverSetup)
                 } label: {
                     Label("Add Server", systemImage: "plus")
                         .foregroundColor(.continuumOnSurface)
