@@ -1,0 +1,7 @@
+// Shared signing identity values included by every Prairie target xcconfig.
+// Keep the keychain access-group id here so entitlements, Info.plist, and
+// runtime validation (SharedStorage) cannot drift.
+
+// Bare keychain access-group id (no AppIdentifierPrefix). Entitlements and
+// ContinuumKeychainAccessGroup prepend $(AppIdentifierPrefix).
+PRAIRIE_KEYCHAIN_ACCESS_GROUP_ID = org.prairieserver.prairie.shared

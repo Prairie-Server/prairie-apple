@@ -35,7 +35,9 @@
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>ContinuumKeychainAccessGroup</key>
-	<string>$(AppIdentifierPrefix)org.prairieserver.prairie.shared</string>
+	<string>$(AppIdentifierPrefix)$(PRAIRIE_KEYCHAIN_ACCESS_GROUP_ID)</string>
+	<key>ContinuumKeychainAccessGroupID</key>
+	<string>$(PRAIRIE_KEYCHAIN_ACCESS_GROUP_ID)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>NSAppTransportSecurity</key>

@@ -48,6 +48,9 @@ final class PlaybackPrefsModelTests: XCTestCase {
         let encoder = JSONEncoder()
         encoder.keyEncodingStrategy = .convertToSnakeCase
         let data = try encoder.encode(sig)
+        let encoded = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(encoded["embedded_title"] as? String, "Atmos")
+        XCTAssertNil(encoded["embeddedTitle"])
         let again = try decoder().decode(AudioTrackSignature.self, from: data)
         XCTAssertEqual(again.embeddedTitle, "Atmos")
         XCTAssertTrue(again.isDefault)

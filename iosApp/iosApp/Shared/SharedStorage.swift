@@ -76,12 +76,17 @@ private enum RuntimeConfiguration {
             logger.error("Missing ContinuumKeychainAccessGroup Info.plist value; shared auth tokens may not persist.")
             return nil
         }
-        // Paid-team builds expand to `<TeamID>.org.prairieserver.prairie.shared`.
-        // Unsigned CI (`CODE_SIGNING_ALLOWED=NO`) leaves `$(AppIdentifierPrefix)`
-        // empty, so the plist value is the bare group id — still valid when it
-        // matches the entitlement string used for that build.
-        if group == "org.prairieserver.prairie.shared"
-            || group.hasSuffix(".org.prairieserver.prairie.shared") {
+        // Marker comes from Signing/Shared.xcconfig via ContinuumKeychainAccessGroupID
+        // so runtime validation stays aligned with entitlements.
+        let marker = Bundle.main.object(
+            forInfoDictionaryKey: "ContinuumKeychainAccessGroupID"
+        ) as? String
+        let expected = (marker?.isEmpty == false) ? marker! : "org.prairieserver.prairie.shared"
+        // Paid-team builds expand to `<TeamID>.<marker>`. Unsigned CI
+        // (`CODE_SIGNING_ALLOWED=NO`) leaves AppIdentifierPrefix empty, so the
+        // plist value is the bare marker — still valid when it matches the
+        // entitlement string used for that build.
+        if group == expected || group.hasSuffix("." + expected) {
             return group
         }
         logger.error("Unexpected ContinuumKeychainAccessGroup value: \(group, privacy: .public)")
@@ -89,14 +94,16 @@ private enum RuntimeConfiguration {
     }()
 
     static let legacyTeamPrefix: String? = {
-        // Only `<TeamID>.org.prairieserver.prairie.shared` yields a team prefix.
-        // Bare `org.prairieserver.prairie.shared` (unsigned CI) has no TeamID.
-        let marker = "org.prairieserver.prairie.shared"
+        // Only `<TeamID>.<marker>` yields a team prefix. Bare marker (unsigned CI) has no TeamID.
+        let marker = Bundle.main.object(
+            forInfoDictionaryKey: "ContinuumKeychainAccessGroupID"
+        ) as? String
+        let expected = (marker?.isEmpty == false) ? marker! : "org.prairieserver.prairie.shared"
         if let group = sharedKeychainAccessGroup,
-           group.hasSuffix(marker),
-           group.count > marker.count + 1,
-           group.dropLast(marker.count).hasSuffix(".") {
-            return String(group.dropLast(marker.count)) // e.g. "ABCDE12345."
+           group.hasSuffix(expected),
+           group.count > expected.count + 1,
+           group.dropLast(expected.count).hasSuffix(".") {
+            return String(group.dropLast(expected.count)) // e.g. "ABCDE12345."
         }
         logger.error("Could not derive team prefix from ContinuumKeychainAccessGroup; legacy keychain migration will only try the default access group.")
         return nil

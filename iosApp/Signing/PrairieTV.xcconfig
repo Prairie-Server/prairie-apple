@@ -7,6 +7,8 @@
 // lets Local.xcconfig swap values without touching the other targets'
 // xcconfigs.
 
+#include "Shared.xcconfig"
+
 PRAIRIE_TV_BUNDLE_ID = org.prairieserver.prairie
 PRAIRIE_TV_ENTITLEMENTS = PrairieTV.entitlements
 

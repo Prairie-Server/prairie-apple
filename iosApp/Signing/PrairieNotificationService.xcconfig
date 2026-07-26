@@ -3,6 +3,8 @@
 // can override any of these by dropping a `Local.xcconfig` into this
 // directory.
 
+#include "Shared.xcconfig"
+
 PRAIRIE_NOTIFICATION_SERVICE_BUNDLE_ID = org.prairieserver.prairie.NotificationService
 PRAIRIE_NOTIFICATION_SERVICE_ENTITLEMENTS = NotificationService/NotificationService.entitlements
 

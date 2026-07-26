@@ -17,6 +17,14 @@
 // After editing, run `xcodegen generate` from `iosApp/` and pick your
 // team in Xcode's Signing & Capabilities tab.
 //
+// ----- Keychain access group -----------------------------------------------
+//
+ // Shared across iOS / tvOS / Top Shelf / Notification Service via
+// Signing/Shared.xcconfig (`PRAIRIE_KEYCHAIN_ACCESS_GROUP_ID`). Override only
+// if your personal team uses a different shared keychain group id.
+//
+// PRAIRIE_KEYCHAIN_ACCESS_GROUP_ID = com.example.prairie.shared
+//
 // ----- Bundle IDs ---------------------------------------------------------
 //
 // Personal Teams can't register identifiers that another team already
