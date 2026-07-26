@@ -14,6 +14,7 @@ final class LiveTVChannelListViewModel {
     private(set) var loadState: LoadState = .idle
     private(set) var channels: [LiveTVChannel] = []
     private(set) var nowNextByChannel: [String: LiveTVNowNext] = [:]
+    private(set) var recordings: [LiveTVRecording] = []
     private(set) var recordingMessage: String?
 
     private let api: ContinuumAPI
@@ -47,8 +48,20 @@ final class LiveTVChannelListViewModel {
             }
             loadState = .loaded
             await refreshGuide()
+            await refreshRecordings()
         } catch {
             loadState = .failed(ErrorState(error))
+        }
+    }
+
+    func refreshRecordings() async {
+        do {
+            let all = try await api.liveTVRecordings()
+            recordings = all
+                .filter { $0.status.lowercased() != "cancelled" }
+                .sorted { $0.start < $1.start }
+        } catch {
+            // Recordings are best-effort; channel list remains usable.
         }
     }
 
@@ -118,6 +131,18 @@ final class LiveTVChannelListViewModel {
             )
             _ = try await api.scheduleLiveTVRecording(input)
             recordingMessage = "Recording scheduled"
+            await refreshRecordings()
+        } catch {
+            recordingMessage = error.localizedDescription
+        }
+    }
+
+    func cancelRecording(_ recording: LiveTVRecording) async {
+        recordingMessage = nil
+        do {
+            try await api.cancelLiveTVRecording(id: recording.id)
+            recordingMessage = "Recording cancelled"
+            await refreshRecordings()
         } catch {
             recordingMessage = error.localizedDescription
         }

@@ -116,13 +116,27 @@ struct LiveTVChannelListView: View {
 
     private var channelList: some View {
         List {
-            ForEach(viewModel.channels) { channel in
-                channelRow(channel)
-                    #if os(tvOS)
-                    .listRowBackground(Color.clear)
-                    #else
-                    .listRowBackground(Color.continuumSurface)
-                    #endif
+            if !viewModel.recordings.isEmpty {
+                Section("Scheduled recordings") {
+                    ForEach(viewModel.recordings) { recording in
+                        recordingRow(recording)
+                            #if os(tvOS)
+                            .listRowBackground(Color.clear)
+                            #else
+                            .listRowBackground(Color.continuumSurface)
+                            #endif
+                    }
+                }
+            }
+            Section("Channels") {
+                ForEach(viewModel.channels) { channel in
+                    channelRow(channel)
+                        #if os(tvOS)
+                        .listRowBackground(Color.clear)
+                        #else
+                        .listRowBackground(Color.continuumSurface)
+                        #endif
+                }
             }
         }
         #if os(tvOS)
@@ -132,6 +146,41 @@ struct LiveTVChannelListView: View {
         .scrollContentBackground(.hidden)
         #endif
         .accessibilityIdentifier("livetv-channel-list")
+    }
+
+    @ViewBuilder
+    private func recordingRow(_ recording: LiveTVRecording) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(recording.title)
+                    .font(.continuumBody)
+                    .foregroundStyle(Color.continuumOnSurface)
+                Text("\(recording.status.capitalized) · \(recordingTimeRange(recording))")
+                    .font(.continuumCaption)
+                    .foregroundStyle(Color.continuumSecondaryText)
+            }
+            Spacer(minLength: 8)
+            if recording.status.lowercased() == "scheduled"
+                || recording.status.lowercased() == "pending" {
+                Button(role: .destructive) {
+                    Task { await viewModel.cancelRecording(recording) }
+                } label: {
+                    Label("Cancel", systemImage: "xmark.circle")
+                }
+                #if !os(tvOS)
+                .buttonStyle(.bordered)
+                #endif
+            }
+        }
+        .padding(.vertical, 4)
+        .accessibilityIdentifier("livetv-recording-\(recording.id)")
+    }
+
+    private func recordingTimeRange(_ recording: LiveTVRecording) -> String {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        formatter.dateStyle = .short
+        return "\(formatter.string(from: recording.start)) – \(formatter.string(from: recording.stop))"
     }
 
     @ViewBuilder

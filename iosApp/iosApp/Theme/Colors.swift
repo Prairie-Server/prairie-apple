@@ -1,40 +1,40 @@
 import SwiftUI
 
 extension Color {
-    // MARK: - Core Palette (Plezy OLED Dark)
+    // MARK: - Core Palette (Prairie Dusk)
+    //
+    // Mirrors prairie-server Phase 3 / prairie-smarttv tokens:
+    // deep slate surfaces + amber wheat accent (#e0a84a).
 
-    /// Pure black background (#000000)
-    static let continuumBackground = Color(hex: "#000000")
+    /// Deep slate background (#141820)
+    static let continuumBackground = Color(hex: "#141820")
 
-    /// Barely-visible surface (#0A0A0A)
-    static let continuumSurface = Color(hex: "#0A0A0A")
+    /// Elevated surface (#1c222c)
+    static let continuumSurface = Color(hex: "#1C222C")
 
-    /// Surface variant for containers (#0E0F12)
-    static let continuumSurfaceVariant = Color(hex: "#0E0F12")
+    /// Surface variant for containers (#0e1116 sidebar tone)
+    static let continuumSurfaceVariant = Color(hex: "#0E1116")
 
-    /// Surface for elevated containers like episode cards (#15171C)
-    static let continuumSurfaceElevated = Color(hex: "#15171C")
+    /// Surface for elevated containers (#222B38)
+    static let continuumSurfaceElevated = Color(hex: "#222B38")
 
-    /// Primary interactive color — same as text (monochrome UI)
-    static let continuumPrimary = Color(hex: "#EDEDED")
+    /// Primary interactive / brand accent — amber wheat
+    static let continuumPrimary = Color(hex: "#E0A84A")
 
     /// Kept for backwards compat — same as primary
-    static let continuumPrimaryLight = Color(hex: "#EDEDED")
+    static let continuumPrimaryLight = Color(hex: "#E0A84A")
 
-    /// Primary text color (#EDEDED)
-    static let continuumOnSurface = Color(hex: "#EDEDED")
+    /// Primary text color (#F2EEE6)
+    static let continuumOnSurface = Color(hex: "#F2EEE6")
 
-    /// Accent for enabled control states (toggle tracks, prominent buttons).
-    /// The monochrome palette made an on toggle a white knob on a white
-    /// track; this matches the web client's blue-theme primary.
-    static let continuumAccent = Color(hex: "#78AEFC")
+    /// Accent for enabled control states (toggles, prominent buttons).
+    static let continuumAccent = Color(hex: "#E0A84A")
 
-    /// Orange sampled from the canonical Prairie wordmark artwork. Reserved for
-    /// branded moments so ordinary signed-in controls retain `continuumAccent`.
-    static let continuumBrandOrange = Color(hex: "#FD7403")
+    /// Brand accent for wordmark / first-run moments (same amber as dusk primary).
+    static let continuumBrandOrange = Color(hex: "#E0A84A")
 
-    /// Muted/secondary text — primary at 60% opacity (#99EDEDED)
-    static let continuumSecondaryText = Color(hex: "#99EDEDED")
+    /// Muted/secondary text (#9AA3B2)
+    static let continuumSecondaryText = Color(hex: "#9AA3B2")
 
     /// Error red (#B00020)
     static let continuumError = Color(hex: "#B00020")
@@ -47,32 +47,30 @@ extension Color {
 
     // MARK: - Skyline chrome (guide §4)
 
-    /// Selected-but-unfocused tab/pill capsule fill — `chrome.selected`, white @ 14%
-    static let continuumChromeSelectedFill = Color.white.opacity(0.14)
+    /// Selected-but-unfocused tab/pill capsule fill — warm ink @ 14%
+    static let continuumChromeSelectedFill = Color.continuumOnSurface.opacity(0.14)
 
-    /// Inner border of the selected capsule — white @ 10%
-    static let continuumChromeSelectedBorder = Color.white.opacity(0.10)
+    /// Inner border of the selected capsule
+    static let continuumChromeSelectedBorder = Color.continuumOnSurface.opacity(0.10)
 
-    /// Resting pill/chip fill — `chrome.unfocused-bg`, white @ 7%
-    static let continuumChromeRestingFill = Color.white.opacity(0.07)
+    /// Resting pill/chip fill
+    static let continuumChromeRestingFill = Color.continuumOnSurface.opacity(0.07)
 
-    /// Hairline border on resting pills/chips — white @ 9%
-    static let continuumChromeRestingBorder = Color.white.opacity(0.09)
+    /// Hairline border on resting pills/chips
+    static let continuumChromeRestingBorder = Color.continuumOnSurface.opacity(0.09)
 
-    /// Anchored dropdown panel fill — `glass.strong`, #16171B @ 86% over blur
-    static let continuumGlassStrong = Color(hex: "#16171B").opacity(0.86)
+    /// Anchored dropdown panel fill
+    static let continuumGlassStrong = Color(hex: "#1C222C").opacity(0.92)
 
-    /// Shelf/base dropdown fill — `glass.regular`, black @ 55% over blur.
-    static let continuumGlassRegular = Color.black.opacity(0.55)
+    /// Shelf/base dropdown fill
+    static let continuumGlassRegular = Color(hex: "#141820").opacity(0.72)
 
-    /// Page scrim behind anchored dropdowns — `scrim.dropdown`, black @ 55%
-    static let continuumDropdownScrim = Color.black.opacity(0.55)
+    /// Page scrim behind anchored dropdowns
+    static let continuumDropdownScrim = Color(hex: "#141820").opacity(0.72)
 
     // MARK: - Request status dots
 
-    /// The requests UI keeps chips monochrome; these tint only the small
-    /// status dot (and match the web app's ribbon palette so both clients
-    /// speak one status language). Pending — amber.
+    /// Pending — amber.
     static let requestAmber = Color(hex: "#F59E0B")
 
     /// Approved / queued / downloading — sky.
@@ -86,14 +84,14 @@ extension Color {
 
     // MARK: - Semantic Aliases
 
-    /// Outline/border color — white at 12%
-    static let continuumOutline = Color.white.opacity(0.12)
+    /// Outline/border color
+    static let continuumOutline = Color.continuumOnSurface.opacity(0.12)
 
     /// Overlay for sheets and modals
-    static let continuumOverlay = Color.black.opacity(0.6)
+    static let continuumOverlay = Color(hex: "#141820").opacity(0.72)
 
-    /// Divider/separator line color — white at 12%
-    static let continuumDivider = Color.white.opacity(0.12)
+    /// Divider/separator line color
+    static let continuumDivider = Color.continuumOnSurface.opacity(0.12)
 
     /// Disabled control tint
     static let continuumDisabled = Color(hex: "#4B5563")
