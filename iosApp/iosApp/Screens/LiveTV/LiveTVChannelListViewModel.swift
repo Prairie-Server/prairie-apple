@@ -16,8 +16,11 @@ final class LiveTVChannelListViewModel {
     private(set) var nowNextByChannel: [String: LiveTVNowNext] = [:]
     private(set) var recordings: [LiveTVRecording] = []
     private(set) var recordingMessage: String?
+    private(set) var isRecordingBusy = false
+    private(set) var cancellingRecordingIds: Set<String> = []
 
     private let api: ContinuumAPI
+    private var schedulingProgramIds: Set<String> = []
 
     init(api: ContinuumAPI = .shared) {
         self.api = api
@@ -120,31 +123,42 @@ final class LiveTVChannelListViewModel {
     }
 
     func scheduleRecording(program: LiveTVProgram) async {
+        let programId = program.id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !programId.isEmpty else {
+            recordingMessage = "Program not found"
+            return
+        }
+        guard !schedulingProgramIds.contains(programId) else { return }
+        schedulingProgramIds.insert(programId)
+        isRecordingBusy = true
         recordingMessage = nil
+        defer {
+            schedulingProgramIds.remove(programId)
+            isRecordingBusy = !schedulingProgramIds.isEmpty
+        }
         do {
-            let input = LiveTVScheduleRecordingInput(
-                programId: program.id,
-                channelId: program.channelId,
-                start: program.start,
-                stop: program.stop,
-                title: program.displayTitle
+            _ = try await api.scheduleLiveTVRecording(
+                LiveTVScheduleRecordingInput(programId: programId)
             )
-            _ = try await api.scheduleLiveTVRecording(input)
             recordingMessage = "Recording scheduled"
             await refreshRecordings()
         } catch {
-            recordingMessage = error.localizedDescription
+            recordingMessage = ErrorState(error).message
         }
     }
 
     func cancelRecording(_ recording: LiveTVRecording) async {
+        let id = recording.id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty, !cancellingRecordingIds.contains(id) else { return }
+        cancellingRecordingIds.insert(id)
         recordingMessage = nil
+        defer { cancellingRecordingIds.remove(id) }
         do {
-            try await api.cancelLiveTVRecording(id: recording.id)
+            try await api.cancelLiveTVRecording(id: id)
             recordingMessage = "Recording cancelled"
             await refreshRecordings()
         } catch {
-            recordingMessage = error.localizedDescription
+            recordingMessage = ErrorState(error).message
         }
     }
 

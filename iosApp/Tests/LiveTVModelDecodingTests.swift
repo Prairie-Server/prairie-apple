@@ -142,7 +142,6 @@ final class LiveTVModelDecodingTests: XCTestCase {
         XCTAssertEqual(recording.id, "rec-1")
         XCTAssertEqual(recording.status, "scheduled")
         XCTAssertEqual(recording.title, "Movie Night")
-        XCTAssertNil(recording.path)
     }
 
     func testNowNextMapPicksCurrentAndNext() {
