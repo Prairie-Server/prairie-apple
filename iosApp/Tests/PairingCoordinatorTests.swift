@@ -139,7 +139,7 @@ final class ServerSessionPersistenceTests: XCTestCase {
 
         let registry = ServerRegistry(
             defaults: SharedDefaults(suite: suite, standard: standard),
-            keychain: SharedKeychain(service: "ServerSessionPersistenceTests.\(UUID().uuidString)", accessGroup: nil)
+            keychain: .inMemory(service: "ServerSessionPersistenceTests.\(UUID().uuidString)")
         )
         let serverID = ServerRegistry.serverId(for: "https://home.example")
         registry.addOrUpdate(ServerEntry(

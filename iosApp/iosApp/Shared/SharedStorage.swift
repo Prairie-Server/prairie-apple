@@ -76,7 +76,12 @@ private enum RuntimeConfiguration {
             logger.error("Missing ContinuumKeychainAccessGroup Info.plist value; shared auth tokens may not persist.")
             return nil
         }
-        if group.hasSuffix(".org.prairieserver.prairie.shared") {
+        // Paid-team builds expand to `<TeamID>.org.prairieserver.prairie.shared`.
+        // Unsigned CI (`CODE_SIGNING_ALLOWED=NO`) leaves `$(AppIdentifierPrefix)`
+        // empty, so the plist value is the bare group id — still valid when it
+        // matches the entitlement string used for that build.
+        if group == "org.prairieserver.prairie.shared"
+            || group.hasSuffix(".org.prairieserver.prairie.shared") {
             return group
         }
         logger.error("Unexpected ContinuumKeychainAccessGroup value: \(group, privacy: .public)")
@@ -84,9 +89,14 @@ private enum RuntimeConfiguration {
     }()
 
     static let legacyTeamPrefix: String? = {
+        // Only `<TeamID>.org.prairieserver.prairie.shared` yields a team prefix.
+        // Bare `org.prairieserver.prairie.shared` (unsigned CI) has no TeamID.
+        let marker = "org.prairieserver.prairie.shared"
         if let group = sharedKeychainAccessGroup,
-           let dot = group.firstIndex(of: ".") {
-            return String(group[...dot])
+           group.hasSuffix(marker),
+           group.count > marker.count + 1,
+           group.dropLast(marker.count).hasSuffix(".") {
+            return String(group.dropLast(marker.count)) // e.g. "ABCDE12345."
         }
         logger.error("Could not derive team prefix from ContinuumKeychainAccessGroup; legacy keychain migration will only try the default access group.")
         return nil
@@ -159,6 +169,38 @@ struct SharedDefaults: @unchecked Sendable {
     }
 }
 
+/// Thread-safe in-memory stand-in for `SecItem` used by unit tests.
+///
+/// CI runs PrairieTests with `CODE_SIGNING_ALLOWED=NO`, so real Keychain
+/// writes return `errSecMissingEntitlement` (-34018). Persistence tests
+/// inject one of these per suite instead of hitting the Security framework.
+final class InMemoryKeychainStore: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String: String] = [:]
+
+    private static func storageKey(service: String, account: String, accessGroup: String?) -> String {
+        "\(service)\u{0}\(account)\u{0}\(accessGroup ?? "")"
+    }
+
+    func set(_ value: String, service: String, account: String, accessGroup: String?) {
+        lock.lock()
+        defer { lock.unlock() }
+        values[Self.storageKey(service: service, account: account, accessGroup: accessGroup)] = value
+    }
+
+    func get(service: String, account: String, accessGroup: String?) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return values[Self.storageKey(service: service, account: account, accessGroup: accessGroup)]
+    }
+
+    func delete(service: String, account: String, accessGroup: String?) {
+        lock.lock()
+        defer { lock.unlock() }
+        values.removeValue(forKey: Self.storageKey(service: service, account: account, accessGroup: accessGroup))
+    }
+}
+
 /// Minimal Keychain reader/writer targeted at the shared access group.
 /// Used by both the main app (via `TokenStore`) and the Top Shelf
 /// extension. Items are stored as generic passwords with accessibility
@@ -177,11 +219,24 @@ struct SharedKeychain {
 
     let service: String
     let accessGroup: String?
+    /// When non-nil, all reads/writes go through this store instead of `SecItem`.
+    private let memoryStore: InMemoryKeychainStore?
 
     init(service: String = SharedStorage.keychainService,
-         accessGroup: String? = SharedStorage.keychainAccessGroup) {
+         accessGroup: String? = SharedStorage.keychainAccessGroup,
+         memoryStore: InMemoryKeychainStore? = nil) {
         self.service = service
         self.accessGroup = accessGroup
+        self.memoryStore = memoryStore
+    }
+
+    /// Convenience for unit tests that must not depend on code signing /
+    /// Keychain entitlements.
+    static func inMemory(
+        service: String = "PrairieTests.keychain.\(UUID().uuidString)",
+        accessGroup: String? = nil
+    ) -> SharedKeychain {
+        SharedKeychain(service: service, accessGroup: accessGroup, memoryStore: InMemoryKeychainStore())
     }
 
     /// Returns `true` when the value was successfully written. Callers
@@ -189,6 +244,10 @@ struct SharedKeychain {
     /// a successful re-save) must gate the delete on this return value.
     @discardableResult
     func set(_ value: String, for account: String) -> Bool {
+        if let memoryStore {
+            memoryStore.set(value, service: service, account: account, accessGroup: accessGroup)
+            return true
+        }
         guard let data = value.data(using: .utf8) else {
             Self.logger.error("Failed to encode keychain value for account \(account, privacy: .public).")
             return false
@@ -212,6 +271,9 @@ struct SharedKeychain {
     }
 
     func get(_ account: String) -> String? {
+        if let memoryStore {
+            return memoryStore.get(service: service, account: account, accessGroup: accessGroup)
+        }
         if let found = read(account: account, accessGroup: accessGroup) {
             return found
         }
@@ -250,6 +312,10 @@ struct SharedKeychain {
     }
 
     func delete(_ account: String) {
+        if let memoryStore {
+            memoryStore.delete(service: service, account: account, accessGroup: accessGroup)
+            return
+        }
         let query = baseQuery(account: account)
         SecItemDelete(query as CFDictionary)
     }

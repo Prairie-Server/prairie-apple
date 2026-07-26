@@ -41,11 +41,14 @@ final class PlaybackPrefsModelTests: XCTestCase {
         }
         """)
         XCTAssertEqual(sig.channels, 6)
+        XCTAssertEqual(sig.embeddedTitle, "Atmos")
         XCTAssertTrue(sig.isDefault)
 
+        // Round-trip with the same snake_case strategies HTTPClient uses.
         let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
         let data = try encoder.encode(sig)
-        let again = try JSONDecoder().decode(AudioTrackSignature.self, from: data)
+        let again = try decoder().decode(AudioTrackSignature.self, from: data)
         XCTAssertEqual(again.embeddedTitle, "Atmos")
         XCTAssertTrue(again.isDefault)
     }

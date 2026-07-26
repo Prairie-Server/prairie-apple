@@ -419,7 +419,10 @@ final class PlaybackOriginStreamResumeTests: XCTestCase {
                requestNumber == 2 {
                 let delayedByteCount = 64 * 1024
                 let end = offset + Int64(delayedByteCount) - 1
-                let delayMilliseconds = behavior == .changedEntityChunkFirst ? 0 : 500
+                // Give the client time to observe the changed ETag / cancel
+                // before the body arrives; delay 0 races body bytes into cache
+                // on busy CI runners (flaky originBytesTransferred asserts).
+                let delayMilliseconds = behavior == .changedEntityChunkFirst ? 150 : 500
                 let header = [
                     "HTTP/1.1 206 Partial Content",
                     "Content-Range: bytes \(offset)-\(end)/\(totalBytes)",

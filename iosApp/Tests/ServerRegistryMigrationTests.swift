@@ -16,7 +16,6 @@ final class ServerRegistryMigrationTests: XCTestCase {
 
     private var suiteName: String!
     private var standardName: String!
-    private var keychainService: String!
     private var suite: UserDefaults!
     private var standard: UserDefaults!
     private var keychain: SharedKeychain!
@@ -26,10 +25,10 @@ final class ServerRegistryMigrationTests: XCTestCase {
         super.setUp()
         suiteName = "ServerRegistryMigrationTests.suite.\(UUID().uuidString)"
         standardName = "ServerRegistryMigrationTests.standard.\(UUID().uuidString)"
-        keychainService = "ServerRegistryMigrationTests.keychain.\(UUID().uuidString)"
         suite = UserDefaults(suiteName: suiteName)!
         standard = UserDefaults(suiteName: standardName)!
-        keychain = SharedKeychain(service: keychainService, accessGroup: nil)
+        // In-memory: CI unit tests disable code signing, so SecItem returns -34018.
+        keychain = .inMemory(service: "ServerRegistryMigrationTests.keychain.\(UUID().uuidString)")
         defaults = SharedDefaults(suite: suite, standard: standard)
     }
 
