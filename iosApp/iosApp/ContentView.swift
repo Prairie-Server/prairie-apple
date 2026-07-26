@@ -294,11 +294,12 @@ struct ContentView: View {
             }
 
         case .needsServerSetup:
-            #if os(tvOS)
-            TVServerSetupView(router: router)
-            #else
-            ServerSetupView(router: router)
-            #endif
+            NavigationStack(path: $router.path) {
+                ConnectServerListView(router: router)
+                    .navigationDestination(for: Route.self) { route in
+                        destinationView(for: route)
+                    }
+            }
 
         case .needsLogin:
             NavigationStack(path: $router.path) {
@@ -1097,6 +1098,12 @@ struct MainTabView: View {
             RecommendationsView()
         case .serverList:
             ServerListView()
+        case .serverSetup:
+            #if os(tvOS)
+            TVServerSetupView(router: router)
+            #else
+            ServerSetupView(router: router)
+            #endif
         case .downloads:
             #if os(tvOS)
             EmptyStateView(icon: "questionmark.circle", title: "Unknown", subtitle: nil)
