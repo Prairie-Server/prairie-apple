@@ -64,6 +64,14 @@ final class ServerRegistry {
     /// mutable active-server `serverUrl` mirror after the user adds/switches
     /// servers mid-migration, or legacy tokens can be bound to the wrong host.
     private static let legacySourceUrlKey = "continuumServerRegistry.legacySourceUrl.v1"
+    /// Pre-multi-server Keychain accounts. Keep these in one place so migration
+    /// and discard cannot drift on a typo.
+    private static let legacyAccessTokenAccount = "com.continuum.app.accessToken"
+    private static let legacyRefreshTokenAccount = "com.continuum.app.refreshToken"
+    private static let legacyProfileTokenAccount = "com.continuum.app.profileToken"
+    private static let legacyAccounts = [
+        legacyAccessTokenAccount, legacyRefreshTokenAccount, legacyProfileTokenAccount,
+    ]
     private static let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "com.continuum.app",
         category: "ServerRegistry"
@@ -342,7 +350,7 @@ final class ServerRegistry {
             return Self.serverId(for: pinned) == serverId
         }
         return entry(with: serverId)?.url == defaults.string(forKey: "serverUrl")
-            && keychain.get("com.continuum.app.accessToken") != nil
+            && keychain.get(Self.legacyAccessTokenAccount) != nil
     }
 
     // MARK: - ID derivation
@@ -438,9 +446,9 @@ final class ServerRegistry {
         guard !defaults.bool(forKey: Self.migratedKey) else { return }
 
         let hasLegacyTokens =
-            keychain.get("com.continuum.app.accessToken") != nil
-            || keychain.get("com.continuum.app.refreshToken") != nil
-            || keychain.get("com.continuum.app.profileToken") != nil
+            keychain.get(Self.legacyAccessTokenAccount) != nil
+            || keychain.get(Self.legacyRefreshTokenAccount) != nil
+            || keychain.get(Self.legacyProfileTokenAccount) != nil
 
         // Pin the legacy origin once. Never re-resolve from the mutable
         // active-server `serverUrl` mirror — that can change if the user
@@ -484,9 +492,9 @@ final class ServerRegistry {
         defaults.set(normalized, forKey: Self.legacySourceUrlKey)
 
         let legacyToNew: [(legacy: String, new: String)] = [
-            ("com.continuum.app.accessToken",  TokenStore.accessTokenKey(for: id)),
-            ("com.continuum.app.refreshToken", TokenStore.refreshTokenKey(for: id)),
-            ("com.continuum.app.profileToken", TokenStore.profileTokenKey(for: id)),
+            (Self.legacyAccessTokenAccount,  TokenStore.accessTokenKey(for: id)),
+            (Self.legacyRefreshTokenAccount, TokenStore.refreshTokenKey(for: id)),
+            (Self.legacyProfileTokenAccount, TokenStore.profileTokenKey(for: id)),
         ]
         var tokenMigrationFailed = false
         for (legacy, new) in legacyToNew {
@@ -553,11 +561,7 @@ final class ServerRegistry {
     /// out or removes servers before migration completes.
     func discardLegacyKeychainAccountsIfUnmigrated() {
         guard !defaults.bool(forKey: Self.migratedKey) else { return }
-        for account in [
-            "com.continuum.app.accessToken",
-            "com.continuum.app.refreshToken",
-            "com.continuum.app.profileToken",
-        ] {
+        for account in Self.legacyAccounts {
             keychain.delete(account)
         }
         defaults.removeObject(forKey: Self.legacySourceUrlKey)
