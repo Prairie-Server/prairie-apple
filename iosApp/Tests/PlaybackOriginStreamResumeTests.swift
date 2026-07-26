@@ -655,13 +655,17 @@ final class PlaybackOriginStreamResumeTests: XCTestCase {
 
         stream.start()
         let parked = await waitUntil { stream.diagnosticsSnapshot().parked }
-        XCTAssertTrue(parked)
+        XCTAssertTrue(parked, "expected budget park before origin filled the entity")
         let parkedState = stream.diagnosticsSnapshot()
         XCTAssertGreaterThan(parkedState.writeCursor, 0)
 
-        clock.advance(by: 2)
+        // Leaky post-suspend delivery force-detaches immediately; otherwise
+        // the watchdog needs a manual tick past the grace window.
+        if !stream.diagnosticsSnapshot().detached {
+            clock.advance(by: 2)
+        }
         let detached = await waitUntil { stream.diagnosticsSnapshot().detached }
-        XCTAssertTrue(detached)
+        XCTAssertTrue(detached, "expected deliberate detach after park")
         let detachedState = stream.diagnosticsSnapshot()
         XCTAssertEqual(detachedState.writeCursor, parkedState.writeCursor)
         XCTAssertEqual(detachedState.unproductiveStreak, 0)
@@ -670,8 +674,9 @@ final class PlaybackOriginStreamResumeTests: XCTestCase {
         recorder.mayFill = true
         stream.noteDemand(offset: detachedState.writeCursor, order: 2)
         let reopened = await waitUntil { origin.observedRequests().count >= 2 }
-        XCTAssertTrue(reopened)
+        XCTAssertTrue(reopened, "expected a second origin request after detach-resume")
         let requests = origin.observedRequests()
+        guard requests.count >= 2 else { return }
         XCTAssertEqual(requests[1].range, "bytes=\(detachedState.writeCursor)-")
         XCTAssertEqual(requests[1].ifRange, "\"entity-v1\"")
         XCTAssertTrue(recorder.causes.isEmpty)

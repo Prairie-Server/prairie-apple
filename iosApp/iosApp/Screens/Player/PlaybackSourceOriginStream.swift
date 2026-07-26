@@ -596,6 +596,15 @@ final class PlaybackOriginStream {
     }
 
     private func detachIfParkedPastGrace() {
+        detachParkedConnection(force: false)
+    }
+
+    /// Close a budget-parked connection so the next demand reopens a ranged
+    /// request at `writeCursor`. `force` skips the warm-park grace window —
+    /// used when URLSession still delivers buffered body after `suspend()`,
+    /// which would otherwise keep absorbing bytes until the entity finishes
+    /// and skip deliberate detach/resume entirely.
+    private func detachParkedConnection(force: Bool) {
         let now = clock.now()
         lock.lock()
         guard resumeCapable,
@@ -604,7 +613,7 @@ final class PlaybackOriginStream {
               !cancelled,
               !finished,
               let parkedAt,
-              now.timeIntervalSince(parkedAt) >= PlaybackOriginStreamPolicy.detachAfterSeconds,
+              force || now.timeIntervalSince(parkedAt) >= PlaybackOriginStreamPolicy.detachAfterSeconds,
               let oldTask = task,
               let oldTaskID = currentTaskID else {
             lock.unlock()
@@ -878,6 +887,14 @@ final class PlaybackOriginStream {
             lock.unlock()
             return
         }
+        if parked {
+            // `URLSessionTask.suspend()` is advisory: buffered body can still
+            // arrive here. Absorbing it can finish the entity and skip the
+            // deliberate detach/ranged-resume path the park exists to enable.
+            lock.unlock()
+            detachParkedConnection(force: true)
+            return
+        }
         let gen = generation
         if errorStatusCode != nil {
             if errorBody.count < 4096 {
@@ -1028,6 +1045,7 @@ final class PlaybackOriginStream {
         self.task = nil
         currentTaskID = nil
         expectedCancellationTaskIDs.removeAll()
+        parked = false
         parkedAt = nil
         detached = false
         let reconnect = reconnectTask
