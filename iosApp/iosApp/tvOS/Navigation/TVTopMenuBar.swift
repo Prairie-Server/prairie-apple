@@ -288,7 +288,7 @@ struct TVTopMenuBar: View {
     // MARK: - Clusters
 
     private var wordmark: some View {
-        Text("SILO")
+        Text("PRAIRIE")
             .font(.system(size: ContinuumTheme.Skyline.wordmarkSize, weight: .heavy))
             .tracking(ContinuumTheme.Skyline.wordmarkTracking)
             .foregroundStyle(.white)
