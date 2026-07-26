@@ -248,4 +248,59 @@ final class ServerRegistryMigrationTests: XCTestCase {
         XCTAssertEqual(registry.sortedEntries.map(\.id), ["new", "old"])
         XCTAssertFalse(registry.hasActiveServer)
     }
+
+    func testSwitchAwayDiscardsUnmigratedLegacyTokensPinnedToOtherHost() async {
+        // Mid-migration: pinned legacy origin still holds fixed-name tokens,
+        // but the registry already has a different active server. Switching
+        // away must drop those accounts so they cannot bind to the wrong host.
+        let home = "https://home.example"
+        let other = "https://other.example"
+        let homeId = ServerRegistry.serverId(for: home)
+        let otherId = ServerRegistry.serverId(for: other)
+        let homeEntry = ServerEntry(
+            id: homeId,
+            url: home,
+            fetchedName: "Home",
+            profileId: nil,
+            lastUsedAt: Date(timeIntervalSince1970: 1)
+        )
+        let otherEntry = ServerEntry(
+            id: otherId,
+            url: other,
+            fetchedName: "Other",
+            profileId: nil,
+            lastUsedAt: Date(timeIntervalSince1970: 2)
+        )
+        struct Wire: Codable {
+            var activeServerId: String?
+            var entries: [ServerEntry]
+        }
+        let wireData = try! JSONEncoder().encode(
+            Wire(activeServerId: homeId, entries: [homeEntry, otherEntry])
+        )
+        defaults.set(wireData, forKey: "continuumServerRegistry.v1")
+        defaults.set(home, forKey: "serverUrl")
+        defaults.set(home, forKey: "continuumServerRegistry.legacySourceUrl.v1")
+        defaults.set(false, forKey: "continuumServerRegistry.migrated.v1")
+        XCTAssertTrue(keychain.set("ACCESS-HOME", for: "com.continuum.app.accessToken"))
+        XCTAssertTrue(keychain.set("REFRESH-HOME", for: "com.continuum.app.refreshToken"))
+        XCTAssertTrue(keychain.set("PROFILE-HOME", for: "com.continuum.app.profileToken"))
+
+        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        // Init may complete migration if it can re-key; force the mid-migration
+        // window the switchTo guard protects.
+        defaults.set(false, forKey: "continuumServerRegistry.migrated.v1")
+        defaults.set(home, forKey: "continuumServerRegistry.legacySourceUrl.v1")
+        XCTAssertTrue(keychain.set("ACCESS-HOME", for: "com.continuum.app.accessToken"))
+        XCTAssertTrue(keychain.set("REFRESH-HOME", for: "com.continuum.app.refreshToken"))
+        XCTAssertTrue(keychain.set("PROFILE-HOME", for: "com.continuum.app.profileToken"))
+
+        await registry.switchTo(serverId: otherId)
+
+        XCTAssertNil(keychain.get("com.continuum.app.accessToken"))
+        XCTAssertNil(keychain.get("com.continuum.app.refreshToken"))
+        XCTAssertNil(keychain.get("com.continuum.app.profileToken"))
+        XCTAssertNil(defaults.string(forKey: "continuumServerRegistry.legacySourceUrl.v1"))
+        XCTAssertEqual(registry.activeServerId, otherId)
+    }
 }

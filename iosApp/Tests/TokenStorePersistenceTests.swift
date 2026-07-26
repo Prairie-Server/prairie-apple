@@ -38,6 +38,17 @@ final class TokenStorePersistenceTests: XCTestCase {
         ] {
             keychain.delete(account)
         }
+        for url in [
+            "https://tv.example",
+            "https://a.example",
+            "https://b.example",
+            "https://home.example",
+        ] {
+            let serverId = ServerRegistry.serverId(for: url)
+            keychain.delete(TokenStore.accessTokenKey(for: serverId))
+            keychain.delete(TokenStore.refreshTokenKey(for: serverId))
+            keychain.delete(TokenStore.profileTokenKey(for: serverId))
+        }
         suite.removePersistentDomain(forName: suiteName)
         standard.removePersistentDomain(forName: standardName)
         suite = nil
@@ -60,20 +71,30 @@ final class TokenStorePersistenceTests: XCTestCase {
         await store.setProfileToken("P1")
         await store.setProfileId("profile-9")
 
-        XCTAssertEqual(await store.getAccessToken(), "A1")
-        XCTAssertEqual(await store.getRefreshToken(), "R1")
-        XCTAssertEqual(await store.getProfileToken(), "P1")
-        XCTAssertEqual(await store.getProfileId(), "profile-9")
-        XCTAssertEqual(await store.getServerUrl(), "https://tv.example")
+        let value1 = await store.getAccessToken()
+        XCTAssertEqual(value1, "A1")
+        let value2 = await store.getRefreshToken()
+        XCTAssertEqual(value2, "R1")
+        let value3 = await store.getProfileToken()
+        XCTAssertEqual(value3, "P1")
+        let value4 = await store.getProfileId()
+        XCTAssertEqual(value4, "profile-9")
+        let value5 = await store.getServerUrl()
+        XCTAssertEqual(value5, "https://tv.example")
 
         // Fresh actor + same Keychain/defaults = upgrade relaunch.
         let again = makeStore()
         await again.switchActiveServer(serverId: serverId)
-        XCTAssertEqual(await again.getAccessToken(), "A1")
-        XCTAssertEqual(await again.getRefreshToken(), "R1")
-        XCTAssertEqual(await again.getProfileToken(), "P1")
-        XCTAssertEqual(await again.getProfileId(), "profile-9")
-        XCTAssertEqual(await again.getServerUrl(), "https://tv.example")
+        let value6 = await again.getAccessToken()
+        XCTAssertEqual(value6, "A1")
+        let value7 = await again.getRefreshToken()
+        XCTAssertEqual(value7, "R1")
+        let value8 = await again.getProfileToken()
+        XCTAssertEqual(value8, "P1")
+        let value9 = await again.getProfileId()
+        XCTAssertEqual(value9, "profile-9")
+        let value10 = await again.getServerUrl()
+        XCTAssertEqual(value10, "https://tv.example")
 
         // Top Shelf mirrors use stable account names.
         XCTAssertEqual(keychain.get(SharedStorage.mirroredAccessTokenAccount), "A1")
@@ -91,13 +112,18 @@ final class TokenStorePersistenceTests: XCTestCase {
         await store.switchActiveServer(serverId: b)
         await store.saveTokens(accessToken: "A-B", refreshToken: "R-B")
 
-        XCTAssertEqual(await store.getAccessToken(for: a), "A-A")
-        XCTAssertEqual(await store.getAccessToken(for: b), "A-B")
-        XCTAssertEqual(await store.getAccessToken(), "A-B")
+        let value11 = await store.getAccessToken(for: a)
+        XCTAssertEqual(value11, "A-A")
+        let value12 = await store.getAccessToken(for: b)
+        XCTAssertEqual(value12, "A-B")
+        let value13 = await store.getAccessToken()
+        XCTAssertEqual(value13, "A-B")
 
         await store.deleteTokens(for: b)
-        XCTAssertNil(await store.getAccessToken())
-        XCTAssertEqual(await store.getAccessToken(for: a), "A-A")
+        let value14 = await store.getAccessToken()
+        XCTAssertNil(value14)
+        let value15 = await store.getAccessToken(for: a)
+        XCTAssertEqual(value15, "A-A")
     }
 
     func testClearTokensLeavesOtherServersIntact() async {
@@ -111,8 +137,10 @@ final class TokenStorePersistenceTests: XCTestCase {
         await store.saveTokens(accessToken: "A-B", refreshToken: "R-B")
         await store.clearTokens()
 
-        XCTAssertNil(await store.getAccessToken())
-        XCTAssertEqual(await store.getAccessToken(for: a), "A-A")
+        let value16 = await store.getAccessToken()
+        XCTAssertNil(value16)
+        let value17 = await store.getAccessToken(for: a)
+        XCTAssertEqual(value17, "A-A")
         XCTAssertNil(keychain.get(SharedStorage.mirroredAccessTokenAccount))
     }
 
@@ -133,25 +161,32 @@ final class TokenStorePersistenceTests: XCTestCase {
             expiresAt: Date().addingTimeInterval(600)
         ))
 
-        XCTAssertTrue(await store.hasTemporaryScope())
-        XCTAssertEqual(await store.getAccessToken(), "TEMP")
-        XCTAssertEqual(await store.getServerUrl(), "https://temp.example")
-        XCTAssertEqual(await store.getProfileId(), "temp-profile")
+        let value18 = await store.hasTemporaryScope()
+        XCTAssertTrue(value18)
+        let value19 = await store.getAccessToken()
+        XCTAssertEqual(value19, "TEMP")
+        let value20 = await store.getServerUrl()
+        XCTAssertEqual(value20, "https://temp.example")
+        let value21 = await store.getProfileId()
+        XCTAssertEqual(value21, "temp-profile")
 
         let ended = await store.endTemporaryScope()
         XCTAssertEqual(ended?.accessToken, "TEMP")
-        XCTAssertEqual(await store.getAccessToken(), "PERM")
+        let value22 = await store.getAccessToken()
+        XCTAssertEqual(value22, "PERM")
         XCTAssertEqual(keychain.get(TokenStore.accessTokenKey(for: serverId)), "PERM")
     }
 
     func testHasAccessTokenForActiveServer() async {
         let serverId = ServerRegistry.serverId(for: "https://home.example")
         let store = makeStore()
-        XCTAssertFalse(await store.hasAccessTokenForActiveServer(serverId: serverId))
+        let value23 = await store.hasAccessTokenForActiveServer(serverId: serverId)
+        XCTAssertFalse(value23)
 
         await store.switchActiveServer(serverId: serverId)
         await store.saveTokens(accessToken: "YES", refreshToken: "R")
-        XCTAssertTrue(await store.hasAccessTokenForActiveServer(serverId: serverId))
+        let value24 = await store.hasAccessTokenForActiveServer(serverId: serverId)
+        XCTAssertTrue(value24)
     }
 
     func testKeyDerivationHelpers() {

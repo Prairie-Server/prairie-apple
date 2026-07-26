@@ -18,7 +18,10 @@ final class AuthAndDeviceLoginModelTests: XCTestCase {
     }
 
     private func encode<T: Encodable>(_ value: T) throws -> [String: Any] {
-        let data = try JSONEncoder().encode(value)
+        // Match HTTPClient wire encoding (snake_case) so assertions catch mismatches.
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        let data = try encoder.encode(value)
         return try JSONSerialization.jsonObject(with: data) as! [String: Any]
     }
 
@@ -67,7 +70,8 @@ final class AuthAndDeviceLoginModelTests: XCTestCase {
         let signupDict = try encode(SignupRequest(
             username: "u", email: "e", password: "p", inviteCode: "INV"
         ))
-        XCTAssertEqual(signupDict["inviteCode"] as? String ?? signupDict["invite_code"] as? String, "INV")
+        XCTAssertEqual(signupDict["invite_code"] as? String, "INV")
+        XCTAssertNil(signupDict["inviteCode"])
     }
 
     func testDeviceLoginStartAndPoll() throws {
@@ -142,6 +146,7 @@ final class AuthAndDeviceLoginModelTests: XCTestCase {
         let approve = try encode(DeviceApproveRequest(code: "ABCD"))
         XCTAssertEqual(approve["code"] as? String, "ABCD")
         let poll = try encode(DeviceLoginPollRequest(deviceCode: "dc"))
-        XCTAssertEqual(poll["deviceCode"] as? String ?? poll["device_code"] as? String, "dc")
+        XCTAssertEqual(poll["device_code"] as? String, "dc")
+        XCTAssertNil(poll["deviceCode"])
     }
 }
