@@ -7,6 +7,8 @@ import Nuke
 ///
 /// - Reads from the shared `PosterImageCache` pipeline (persistent memory +
 ///   disk cache)
+/// - Prefers AVIF siblings of canonical `.webp` artwork, then WebP, then PNG
+///   when earlier formats are missing or fail to decode
 /// - Downsamples to the target render size during decode so a 1080×1620
 ///   poster isn't held in memory at full resolution just to draw at 260×390
 /// - Cross-fades in with the same duration as the rest of the app
@@ -19,6 +21,14 @@ struct CachedAsyncImage: View {
     var placeholderStyle: ImagePlaceholderStyle = .surface
 
     @Environment(\.displayScale) private var displayScale
+    @State private var failedCount = 0
+
+    private var candidates: [String] { ArtworkURL.candidates(for: url) }
+
+    private var resolvedURLString: String {
+        guard !candidates.isEmpty else { return url }
+        return candidates[min(failedCount, candidates.count - 1)]
+    }
 
     var body: some View {
         GeometryReader { geometry in
@@ -44,34 +54,44 @@ struct CachedAsyncImage: View {
                         .frame(width: geometry.size.width, height: geometry.size.height)
                         .clipped()
                 } else if state.error != nil {
-                    placeholder(in: geometry.size)
-                        .overlay {
-                            if placeholderStyle.showsErrorIcon {
-                                Image(systemName: "film")
-                                    .foregroundColor(.continuumOnSurface.opacity(0.3))
+                    // Advance AVIF → WebP → PNG once per failed candidate.
+                    if failedCount < candidates.count - 1 {
+                        Color.clear
+                            .onAppear { failedCount += 1 }
+                    } else {
+                        placeholder(in: geometry.size)
+                            .overlay {
+                                if placeholderStyle.showsErrorIcon {
+                                    Image(systemName: "film")
+                                        .foregroundColor(.continuumOnSurface.opacity(0.3))
+                                }
                             }
-                        }
+                    }
                 } else {
                     placeholder(in: geometry.size)
                 }
             }
             .priority(.normal)
             .transition(.opacity)
-            .animation(.easeOut(duration: ContinuumTheme.slowDuration), value: url)
+            .animation(.easeOut(duration: ContinuumTheme.slowDuration), value: resolvedURLString)
+            .id(resolvedURLString)
+        }
+        .onChange(of: url) { _, _ in
+            failedCount = 0
         }
     }
 
     /// Synchronous memory-cache lookup for the unprocessed URL the
     /// prefetchers warm. Cheap dictionary access — safe to call from `body`.
     private func prefetchedImage() -> PlatformImage? {
-        guard let url = URL(string: url) else { return nil }
-        return ImagePipeline.shared.cache[ImageRequest(url: url)]?.image
+        guard let warmedURL = URL(string: resolvedURLString) else { return nil }
+        return ImagePipeline.shared.cache[ImageRequest(url: warmedURL)]?.image
     }
 
     // MARK: - Request construction
 
     private func request(for size: CGSize) -> ImageRequest? {
-        guard let url = URL(string: url) else { return nil }
+        guard let requestURL = URL(string: resolvedURLString) else { return nil }
         // Scale by the native display scale so we ask the decoder for the
         // exact pixel dimensions we render at.
         let pixelSize = CGSize(
@@ -79,7 +99,7 @@ struct CachedAsyncImage: View {
             height: size.height * displayScale
         )
         return ImageRequest(
-            url: url,
+            url: requestURL,
             processors: [
                 ImageProcessors.Resize(size: pixelSize, contentMode: .aspectFill, upscale: false)
             ]

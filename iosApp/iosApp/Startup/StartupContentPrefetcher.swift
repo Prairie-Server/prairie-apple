@@ -501,9 +501,13 @@ enum StartupContentPrefetcher {
 
     private static func normalizedURL(from urlString: String?) -> URL? {
         guard let trimmed = urlString?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !trimmed.isEmpty,
-              let url = URL(string: trimmed),
-              url.scheme != nil else {
+              !trimmed.isEmpty else {
+            return nil
+        }
+        // Warm the AVIF sibling when available so CachedAsyncImage's first
+        // request hits the memory/disk cache.
+        let preferred = ArtworkURL.preferred(trimmed)
+        guard let url = URL(string: preferred), url.scheme != nil else {
             return nil
         }
         return url
