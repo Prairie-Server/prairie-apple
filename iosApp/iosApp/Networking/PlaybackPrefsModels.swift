@@ -95,7 +95,10 @@ struct AudioTrackSignature: Codable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case language, title
-        case embeddedTitle = "embedded_title"
+        // camelCase raw values: HTTPClient uses `.convertFromSnakeCase`, which
+        // rewrites wire `embedded_title` → `embeddedTitle` before CodingKey
+        // matching (same pattern as SubtitleInfo.externalPath / `fileName`).
+        case embeddedTitle
         case codec, layout, channels
         case isDefault = "default"
     }

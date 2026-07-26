@@ -225,6 +225,8 @@ struct LibraryCollectionsWireResponse: Decodable {
             }
             if let u = ungroupedWire, !u.collections.isEmpty {
                 let items = u.collections.map { $0.toModel(kind: .regular) }
+                // Flat compat list includes every collection, grouped or not.
+                flat.append(contentsOf: items)
                 slots.append((
                     order: u.sortOrder ?? .max,
                     section: LibraryCollectionSection(

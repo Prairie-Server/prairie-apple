@@ -266,6 +266,7 @@ final class PlaybackOriginStreamResumeTests: XCTestCase {
         private let lock = NSLock()
         private var connections: [ObjectIdentifier: NWConnection] = [:]
         private var requests: [Request] = []
+        private var delayedBodiesSent = 0
         private(set) var port: UInt16 = 0
 
         init(behavior: ReopenBehavior) throws {
@@ -284,6 +285,18 @@ final class PlaybackOriginStreamResumeTests: XCTestCase {
             lock.lock()
             defer { lock.unlock() }
             return requests
+        }
+
+        var delayedBodiesSentCount: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return delayedBodiesSent
+        }
+
+        private func noteDelayedBodySent() {
+            lock.lock()
+            delayedBodiesSent += 1
+            lock.unlock()
         }
 
         func start() async throws {
@@ -419,7 +432,10 @@ final class PlaybackOriginStreamResumeTests: XCTestCase {
                requestNumber == 2 {
                 let delayedByteCount = 64 * 1024
                 let end = offset + Int64(delayedByteCount) - 1
-                let delayMilliseconds = behavior == .changedEntityChunkFirst ? 0 : 500
+                // Give the client time to observe the changed ETag / cancel
+                // before the body arrives; delay 0 races body bytes into cache
+                // on busy CI runners (flaky originBytesTransferred asserts).
+                let delayMilliseconds = behavior == .changedEntityChunkFirst ? 150 : 500
                 let header = [
                     "HTTP/1.1 206 Partial Content",
                     "Content-Range: bytes \(offset)-\(end)/\(totalBytes)",
@@ -440,7 +456,9 @@ final class PlaybackOriginStreamResumeTests: XCTestCase {
                             content: Data(repeating: 0xCD, count: delayedByteCount),
                             contentContext: .finalMessage,
                             isComplete: true,
-                            completion: .idempotent
+                            completion: .contentProcessed { [weak self] _ in
+                                self?.noteDelayedBodySent()
+                            }
                         )
                     }
                 })
@@ -897,6 +915,11 @@ final class PlaybackOriginStreamResumeTests: XCTestCase {
             recorder.interruptions == [.sourceEntityChanged]
         }
         XCTAssertTrue(interrupted)
+
+        // Ensure the delayed changed-entity body has been delivered (or
+        // attempted) before asserting the cache rejected those bytes.
+        let bodySent = await waitUntil { origin.delayedBodiesSentCount >= 1 }
+        XCTAssertTrue(bodySent)
 
         XCTAssertFalse(cache.contains(offset: farOffset))
         XCTAssertEqual(cache.stats().originBytesTransferred, transferredBeforeChunk)
