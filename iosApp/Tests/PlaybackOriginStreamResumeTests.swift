@@ -924,7 +924,10 @@ final class PlaybackOriginStreamResumeTests: XCTestCase {
         chunkReader.start(url: try XCTUnwrap(proxy.localURL), offset: farOffset)
         defer { chunkReader.cancel() }
         let chunkStarted = await waitUntil { origin.observedRequests().count >= 2 }
-        XCTAssertTrue(chunkStarted, "expected a second origin request for the far-offset chunk")
+        guard chunkStarted else {
+            XCTFail("expected a second origin request for the far-offset chunk")
+            return
+        }
 
         let interrupted = await waitUntil {
             recorder.interruptions == [.sourceEntityChanged]
