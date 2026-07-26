@@ -105,9 +105,9 @@ final class LanDiscoveryTests: XCTestCase {
     func testBuildCandidatesProbesLocalDeviceIP() {
         let candidates = LanDiscovery.buildCandidates(
             LanDiscovery.BuildCandidatesOptions(
-                localIps: ["10.0.0.42"],
                 deepScan: false,
-                maxHostsPerCidr: 4
+                maxHostsPerCidr: 4,
+                localIps: ["10.0.0.42"]
             )
         )
         XCTAssertTrue(candidates.contains(where: { $0.contains("10.0.0.42") }))
