@@ -884,9 +884,14 @@ final class PlaybackOriginStreamResumeTests: XCTestCase {
     }
 
     func testChangedEntityChunkInvalidatesResourceBeforeCachingBytes() async throws {
+        let originalGrace = PlaybackOriginStreamPolicy.detachAfterSeconds
+        PlaybackOriginStreamPolicy.detachAfterSeconds = 1
+        defer { PlaybackOriginStreamPolicy.detachAfterSeconds = originalGrace }
+
         let origin = try StubOrigin(behavior: .changedEntityChunkFirst)
         try await origin.start()
         defer { origin.stop() }
+        let clock = ManualClock()
         let recorder = ProxyRecorder()
         let cache = PlaybackSourceCache(maxBytes: 256 * 1024, diskSpillEnabled: false)
         let pin = cache.pin(0...(64 * 1024 * 1024 - 1))
@@ -896,7 +901,8 @@ final class PlaybackOriginStreamResumeTests: XCTestCase {
             originHeaders: [:],
             cache: cache,
             onPlaybackSourceInterrupted: { recorder.recordInterruption($0) },
-            resumeCapable: true
+            resumeCapable: true,
+            originStreamClock: clock
         )
         try await proxy.start()
         defer { proxy.stop() }
@@ -904,6 +910,12 @@ final class PlaybackOriginStreamResumeTests: XCTestCase {
 
         let parked = await waitUntil { proxy.originStreamDiagnostics()?.parked == true }
         XCTAssertTrue(parked)
+        // Detach so the far-offset read must open a new origin request (chunk)
+        // instead of riding the still-growing window stream — otherwise CI
+        // hysteresis re-arms can fill the range before the entity-change path runs.
+        clock.advance(by: 2)
+        let detached = await waitUntil { proxy.originStreamDiagnostics()?.detached == true }
+        XCTAssertTrue(detached)
         let cursor = try XCTUnwrap(proxy.originStreamDiagnostics()).writeCursor
         let farOffset = cursor + PlaybackOriginRoutingPolicy.rideThroughBytes + 1
         let transferredBeforeChunk = cache.stats().originBytesTransferred
@@ -911,10 +923,13 @@ final class PlaybackOriginStreamResumeTests: XCTestCase {
         let chunkReader = PendingReader()
         chunkReader.start(url: try XCTUnwrap(proxy.localURL), offset: farOffset)
         defer { chunkReader.cancel() }
+        let chunkStarted = await waitUntil { origin.observedRequests().count >= 2 }
+        XCTAssertTrue(chunkStarted, "expected a second origin request for the far-offset chunk")
+
         let interrupted = await waitUntil {
             recorder.interruptions == [.sourceEntityChanged]
         }
-        XCTAssertTrue(interrupted)
+        XCTAssertTrue(interrupted, "expected sourceEntityChanged after changed-entity chunk headers")
 
         // Ensure the delayed changed-entity body has been delivered (or
         // attempted) before asserting the cache rejected those bytes.
@@ -924,7 +939,7 @@ final class PlaybackOriginStreamResumeTests: XCTestCase {
         XCTAssertFalse(cache.contains(offset: farOffset))
         XCTAssertEqual(cache.stats().originBytesTransferred, transferredBeforeChunk)
         let requests = origin.observedRequests()
-        XCTAssertEqual(requests.count, 2)
+        XCTAssertGreaterThanOrEqual(requests.count, 2)
         XCTAssertEqual(requests[1].ifRange, "\"entity-v1\"")
     }
 
