@@ -131,6 +131,7 @@ final class TVLibraryGridViewModel {
     func prefetchPosters(in range: Range<Int>) {
         let urls = items[safe: range]
             .compactMap { $0.posterUrl }
+            .map { ArtworkURL.preferred($0) }
             .compactMap { URL(string: $0) }
         let newURLs = urls.filter { prefetchedPosterURLs.insert($0).inserted }
         guard !newURLs.isEmpty else { return }
@@ -140,6 +141,7 @@ final class TVLibraryGridViewModel {
     func cancelPrefetch(in range: Range<Int>) {
         let urls = items[safe: range]
             .compactMap { $0.posterUrl }
+            .map { ArtworkURL.preferred($0) }
             .compactMap { URL(string: $0) }
         guard !urls.isEmpty else { return }
         urls.forEach { prefetchedPosterURLs.remove($0) }
