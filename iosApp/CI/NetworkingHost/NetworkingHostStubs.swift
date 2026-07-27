@@ -111,7 +111,7 @@ enum SubtitleAIController {
 }
 
 enum LiveTVChannelListViewModel {
-    struct NowNext: Equatable {
+    struct LiveTVNowNext: Equatable {
         let now: LiveTVProgram?
         let next: LiveTVProgram?
     }
@@ -121,12 +121,12 @@ enum LiveTVChannelListViewModel {
     nonisolated static func nowNextMap(
         programs: [LiveTVProgram],
         at now: Date
-    ) -> [String: NowNext] {
+    ) -> [String: LiveTVNowNext] {
         var grouped: [String: [LiveTVProgram]] = [:]
         for program in programs {
             grouped[program.channelId, default: []].append(program)
         }
-        var result: [String: NowNext] = [:]
+        var result: [String: LiveTVNowNext] = [:]
         for (channelId, list) in grouped {
             let sorted = list.sorted { $0.start < $1.start }
             let current = sorted.first { $0.start <= now && now < $0.stop }
@@ -134,9 +134,9 @@ enum LiveTVChannelListViewModel {
             if let current {
                 upcoming = sorted.first { $0.start >= current.stop }
             } else {
-                upcoming = sorted.first { $0.start >= now }
+                upcoming = sorted.first { $0.start > now }
             }
-            result[channelId] = NowNext(now: current, next: upcoming)
+            result[channelId] = LiveTVNowNext(now: current, next: upcoming)
         }
         return result
     }
