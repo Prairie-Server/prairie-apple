@@ -446,6 +446,10 @@ final class ServerRegistryMigrationTests: XCTestCase {
     }
 
     func testSignOutClearsProfileAndTokens() async {
+        // Token deletion goes through TokenStore.shared (process keychain), while
+        // this suite injects an in-memory SharedKeychain into ServerRegistry only.
+        // Assert registry/UserDefaults side effects here; TokenStore itself is
+        // covered by TokenStoreTests.
         let registry = ServerRegistry(defaults: defaults, keychain: keychain)
         let a = ServerRegistry.serverId(for: "https://a.example")
         let b = ServerRegistry.serverId(for: "https://b.example")
@@ -457,20 +461,16 @@ final class ServerRegistryMigrationTests: XCTestCase {
             id: b, url: "https://b.example", fetchedName: "B",
             profileId: "pb", lastUsedAt: Date(timeIntervalSince1970: 1)
         ))
-        XCTAssertTrue(keychain.set("TOK-A", for: TokenStore.accessTokenKey(for: a)))
-        XCTAssertTrue(keychain.set("TOK-B", for: TokenStore.accessTokenKey(for: b)))
         await registry.switchTo(serverId: a)
         XCTAssertEqual(defaults.string(forKey: "profileId"), "pa")
 
         await registry.signOut(serverId: a, purgeCurrentBinding: false)
         XCTAssertNil(registry.entry(with: a)?.profileId)
-        XCTAssertNil(keychain.get(TokenStore.accessTokenKey(for: a)))
         XCTAssertNil(defaults.string(forKey: "profileId"))
         XCTAssertEqual(registry.activeServerId, a, "signOut keeps the entry and active slot")
 
         await registry.signOut(serverId: b, purgeCurrentBinding: true)
         XCTAssertNil(registry.entry(with: b)?.profileId)
-        XCTAssertNil(keychain.get(TokenStore.accessTokenKey(for: b)))
     }
 
     func testSignOutDiscardsPinnedLegacyWhenHostMatches() async {
@@ -517,18 +517,14 @@ final class ServerRegistryMigrationTests: XCTestCase {
             id: newer, url: "https://new.example", fetchedName: "New",
             profileId: "p-new", lastUsedAt: Date(timeIntervalSince1970: 100)
         ))
-        XCTAssertTrue(keychain.set("TOK-OLD", for: TokenStore.accessTokenKey(for: older)))
-        XCTAssertTrue(keychain.set("TOK-NEW", for: TokenStore.accessTokenKey(for: newer)))
         await registry.switchTo(serverId: older)
 
         await registry.remove(serverId: older)
 
         XCTAssertNil(registry.entry(with: older))
-        XCTAssertNil(keychain.get(TokenStore.accessTokenKey(for: older)))
         XCTAssertEqual(registry.activeServerId, newer)
         XCTAssertEqual(defaults.string(forKey: "serverUrl"), "https://new.example")
         XCTAssertEqual(defaults.string(forKey: "profileId"), "p-new")
-        XCTAssertEqual(keychain.get(TokenStore.accessTokenKey(for: newer)), "TOK-NEW")
     }
 
     func testRemoveActiveWithNoFallbackClearsMirrors() async {
@@ -538,7 +534,6 @@ final class ServerRegistryMigrationTests: XCTestCase {
             id: only, url: "https://solo.example", fetchedName: "Solo",
             profileId: "solo", lastUsedAt: Date()
         ))
-        XCTAssertTrue(keychain.set("TOK", for: TokenStore.accessTokenKey(for: only)))
         await registry.switchTo(serverId: only)
 
         await registry.remove(serverId: only)
@@ -547,7 +542,6 @@ final class ServerRegistryMigrationTests: XCTestCase {
         XCTAssertNil(registry.activeServerId)
         XCTAssertNil(defaults.string(forKey: "serverUrl"))
         XCTAssertNil(defaults.string(forKey: "profileId"))
-        XCTAssertNil(keychain.get(TokenStore.accessTokenKey(for: only)))
     }
 
     func testRemoveNonActiveLeavesActiveUntouched() async {
