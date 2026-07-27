@@ -65,25 +65,12 @@ jobs:
         working-directory: iosApp
         run: |
           set -euo pipefail
-          # Build the framework first so compile errors aren't masked by the
-          # test bundle's "Unable to find module 'Prairie'" cascade.
-          # (-derivedDataPath requires -scheme; the CI scheme only builds the
-          # host for the `build` action — tests are test-action only.)
-          xcodebuild build \
-            -project Prairie.xcodeproj \
-            -scheme PrairieNetworkingCI \
-            -destination 'platform=macOS,arch=arm64' \
-            -derivedDataPath DerivedData \
-            CODE_SIGNING_ALLOWED=NO \
-            COMPILER_INDEX_STORE_ENABLE=NO \
-            ONLY_ACTIVE_ARCH=YES
           xcodebuild build-for-testing \
             -project Prairie.xcodeproj \
             -scheme PrairieNetworkingCI \
             -destination 'platform=macOS,arch=arm64' \
             -derivedDataPath DerivedData \
             -enableCodeCoverage YES \
-            -quiet \
             CODE_SIGNING_ALLOWED=NO \
             COMPILER_INDEX_STORE_ENABLE=NO \
             ONLY_ACTIVE_ARCH=YES
