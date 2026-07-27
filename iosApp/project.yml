@@ -313,7 +313,10 @@ targets:
       - path: CI/NetworkingHost
     settings:
       base:
-        PRODUCT_NAME: PrairieNetworkingHost
+        # Product/module must be `Prairie` so shared `@testable import Prairie`
+        # sources work. Target name stays PrairieNetworkingHost to avoid
+        # colliding with the iOS Prairie.app target name.
+        PRODUCT_NAME: Prairie
         PRODUCT_MODULE_NAME: Prairie
         PRODUCT_BUNDLE_IDENTIFIER: org.prairieserver.prairie.networkinghost
         GENERATE_INFOPLIST_FILE: "YES"
@@ -326,6 +329,8 @@ targets:
         ENABLE_TESTABILITY: "YES"
         CODE_SIGNING_ALLOWED: "NO"
         MACOSX_DEPLOYMENT_TARGET: "26.0"
+        DYLIB_INSTALL_NAME_BASE: "@rpath"
+        LD_RUNPATH_SEARCH_PATHS: ["@executable_path/../Frameworks", "@loader_path/Frameworks"]
 
   # Hostless (logic) unit tests against PrairieNetworkingHost — no app host,
   # no iOS simulator.

@@ -121,12 +121,20 @@ if not product_targets:
     print("error: no .app/.framework target found in xccov report", file=sys.stderr)
     sys.exit(1)
 
+# CI framework may be named PrairieNetworkingHost.framework or Prairie.framework
+# (PRODUCT_NAME=Prairie). Prefer NetworkingHost*, then any .framework, then .app.
 networking_hosts = [
     t for t in product_targets
     if "NetworkingHost" in str(t.get("name", ""))
 ]
+frameworks = [
+    t for t in product_targets
+    if str(t.get("name", "")).endswith(".framework")
+]
 if networking_hosts:
     target = max(networking_hosts, key=lambda t: int(t.get("executableLines") or 0))
+elif frameworks:
+    target = max(frameworks, key=lambda t: int(t.get("executableLines") or 0))
 else:
     target = max(product_targets, key=lambda t: int(t.get("executableLines") or 0))
 target_name = target.get("name", "<unknown>")
