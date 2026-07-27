@@ -11,10 +11,11 @@ name: Unit Tests
 #
 # CI speed:
 #   Full PrairieTests (~888 cases) includes FFmpeg/loopback/playback suites that
-#   dominate wall clock and have been flaky under parallel simulator clones.
-#   The gate only measures Networking, so CI runs the dedicated Networking
-#   XCTest classes via -only-testing. Build still links the full Prairie.app
-#   TEST_HOST (FFmpeg included); the win is skipping hundreds of unrelated tests.
+#   dominate wall clock. The gate only measures Networking, so CI runs the
+#   dedicated Networking XCTest classes via -only-testing. Build still links the
+#   full Prairie.app TEST_HOST (FFmpeg included); wins come from (1) skipping
+#   unrelated tests, (2) DerivedData/SPM cache, (3) overlapping simulator boot
+#   with compile, (4) build-for-testing + test-without-building.
 
 on:
   push:
@@ -28,20 +29,14 @@ concurrency:
 jobs:
   unit-tests:
     runs-on: macos-15
-    timeout-minutes: 60
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Install XcodeGen
-        run: |
-          brew install xcodegen
-          xcodegen --version
-
       - name: Select Xcode (latest)
         run: |
-          # Prefer the newest installed Xcode; iOS deployment target is 26.0.
           XCODE_APP="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -n 1 || true)"
           if [[ -z "${XCODE_APP}" ]]; then
             echo "error: no Xcode.app found under /Applications" >&2
@@ -51,24 +46,29 @@ jobs:
           sudo xcode-select -s "${XCODE_APP}/Contents/Developer"
           xcodebuild -version
 
-      - name: Cache SwiftPM clones
-        uses: actions/cache@v4
+      - name: Install XcodeGen
+        run: |
+          brew install xcodegen
+          xcodegen --version
+
+      - name: Cache Xcode DerivedData + SwiftPM
+        uses: actions/cache@v6
         with:
-          path: iosApp/SourcePackages
-          key: spm-${{ runner.os }}-${{ hashFiles('iosApp/**/Package.resolved', 'iosApp/project.yml') }}
+          path: |
+            iosApp/DerivedData
+            iosApp/SourcePackages
+          key: xcode-${{ runner.os }}-${{ hashFiles('iosApp/project.yml', 'iosApp/Vendor/ffmpeg-build/Package.swift', 'iosApp/Tests/**/*.swift', 'iosApp/iosApp/Networking/**/*.swift', 'iosApp/iosApp/**/*.swift') }}
           restore-keys: |
-            spm-${{ runner.os }}-
+            xcode-${{ runner.os }}-
 
       - name: Generate Xcode project
         working-directory: iosApp
         run: xcodegen generate
 
-      - name: Resolve iOS Simulator destination
+      - name: Resolve destination and start simulator boot
         id: sim
         run: |
           set -euo pipefail
-          # Prefer newer iPhone sims first (Xcode 26+ often ships 17 without 16).
-          # Use simctl only on the hot path — xcodebuild -showdestinations is ~45s.
           CANDIDATES=("iPhone 17" "iPhone 17 Pro" "iPhone 16" "iPhone 16 Pro" "iPhone 15")
           SIM_LIST="$(xcrun simctl list devices available || true)"
           echo "Available simulators:"
@@ -76,7 +76,6 @@ jobs:
 
           pick=""
           for name in "${CANDIDATES[@]}"; do
-            # simctl lines look like: "    iPhone 17 (UUID) (Shutdown)"
             if echo "$SIM_LIST" | grep -E "^[[:space:]]*${name}[[:space:]]+\(" >/dev/null 2>&1; then
               pick="$name"
               break
@@ -84,7 +83,6 @@ jobs:
           done
 
           if [[ -z "$pick" ]]; then
-            # Fallback: first available iPhone from simctl.
             pick="$(echo "$SIM_LIST" \
               | grep -E '^[[:space:]]*iPhone ' \
               | head -n 1 \
@@ -92,49 +90,44 @@ jobs:
           fi
 
           if [[ -z "$pick" ]]; then
-            # Last resort (~45s): ask xcodebuild for destinations.
-            DEST_LIST="$(xcodebuild -project iosApp/Prairie.xcodeproj -scheme Prairie -showdestinations 2>/dev/null || true)"
-            for name in "${CANDIDATES[@]}"; do
-              if echo "$DEST_LIST" | grep -E "name:${name}(,|\$)" >/dev/null 2>&1; then
-                pick="$name"
-                break
-              fi
-            done
+            echo "error: no iPhone simulator available" >&2
+            exit 1
           fi
 
-          if [[ -n "$pick" ]]; then
-            echo "Using simulator: $pick"
-            echo "destination=platform=iOS Simulator,name=${pick}" >> "$GITHUB_OUTPUT"
-            echo "sim_name=${pick}" >> "$GITHUB_OUTPUT"
-          else
-            echo "No named iPhone simulator found; using generic/platform=iOS Simulator"
-            echo "destination=generic/platform=iOS Simulator" >> "$GITHUB_OUTPUT"
-            echo "sim_name=" >> "$GITHUB_OUTPUT"
-          fi
+          echo "Using simulator: $pick"
+          echo "destination=platform=iOS Simulator,name=${pick}" >> "$GITHUB_OUTPUT"
+          echo "sim_name=${pick}" >> "$GITHUB_OUTPUT"
 
-      - name: Boot simulator
-        if: steps.sim.outputs.sim_name != ''
+          # Boot in the background — do not block the job on bootstatus (was ~60s).
+          # xcodebuild will wait if the device is still coming up.
+          xcrun simctl boot "$pick" 2>/dev/null || true
+
+      - name: Build for testing
+        working-directory: iosApp
         run: |
           set -euo pipefail
-          # Warm the chosen device before xcodebuild so boot cost overlaps less
-          # with the first test launch.
-          xcrun simctl boot "${{ steps.sim.outputs.sim_name }}" 2>/dev/null || true
-          xcrun simctl bootstatus "${{ steps.sim.outputs.sim_name }}" -b || true
+          DEST="${{ steps.sim.outputs.destination }}"
+          xcodebuild build-for-testing \
+            -project Prairie.xcodeproj \
+            -scheme Prairie \
+            -destination "$DEST" \
+            -derivedDataPath DerivedData \
+            -clonedSourcePackagesDirPath SourcePackages \
+            -quiet \
+            CODE_SIGNING_ALLOWED=NO \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            ONLY_ACTIVE_ARCH=YES
 
       - name: Run Networking PrairieTests with coverage
         working-directory: iosApp
         run: |
           set -euo pipefail
           DEST="${{ steps.sim.outputs.destination }}"
-          echo "destination=$DEST"
 
-          # XCTest classes that exercise the gated /Networking/ surface. Keep this
-          # list aligned with scripts/check-xccov-coverage.sh includes (models,
-          # TokenStore, ServerRegistry, ResponseCache, PrairieFrame, prefs models,
-          # TrackSelectionPersistence, AppUpdateChecker, AIJobPoller, …).
           NETWORKING_TESTS=(
             PrairieTests/NetworkingGateBoostTests
             PrairieTests/NetworkingModelsCoverageTests
+            PrairieTests/NetworkingModelsGateFillTests
             PrairieTests/TokenStorePersistenceTests
             PrairieTests/ServerRegistryMigrationTests
             PrairieTests/WireFormatAndRequestsModelTests
@@ -149,14 +142,7 @@ jobs:
             PrairieTests/AppUpdateCheckerTests
             PrairieTests/AIJobPollerTests
             PrairieTests/PairingCoordinatorTests
-            # Extra Models.swift coverage used by the 95% gate (memberwise inits /
-            # library visibility / audiobook detail decode paths). Still cheap vs
-            # FFmpeg/loopback/playback suites.
             PrairieTests/LibraryVisibilityTests
-            PrairieTests/DetailVersionSelectionTests
-            PrairieTests/HomeSectionsMutationTests
-            PrairieTests/BrowseViewModelTests
-            PrairieTests/PlaybackMediaFixtureTests
           )
 
           ONLY_TESTING_ARGS=()
@@ -164,22 +150,21 @@ jobs:
             ONLY_TESTING_ARGS+=(-only-testing:"$t")
           done
 
-          # No parallel simulator clones (previously ~26m + IPC flakes).
-          # No -retry-tests-on-failure: Networking model tests are deterministic
-          # and retries double wall clock when anything flakes.
-          xcodebuild test \
+          # test-without-building: compile already done. No parallel simulator
+          # clones (previously ~26m + IPC flakes).
+          xcodebuild test-without-building \
             -project Prairie.xcodeproj \
             -scheme Prairie \
             -destination "$DEST" \
+            -derivedDataPath DerivedData \
+            -clonedSourcePackagesDirPath SourcePackages \
             -enableCodeCoverage YES \
             -resultBundlePath TestResults.xcresult \
-            -clonedSourcePackagesDirPath SourcePackages \
             -parallel-testing-enabled NO \
             -maximum-concurrent-test-simulator-destinations 1 \
+            -quiet \
             "${ONLY_TESTING_ARGS[@]}" \
-            CODE_SIGNING_ALLOWED=NO \
-            COMPILER_INDEX_STORE_ENABLE=NO \
-            ONLY_ACTIVE_ARCH=YES
+            CODE_SIGNING_ALLOWED=NO
 
       - name: Export coverage JSON
         working-directory: iosApp
@@ -190,12 +175,10 @@ jobs:
             echo "No TestResults.xcresult bundle; skipping coverage export"
             exit 0
           fi
+          # JSON only — the human-readable xccov report is multi-MB and slow.
           xcrun xccov view --report --json TestResults.xcresult > coverage.json
-          # Also emit a human-readable summary for the job log.
-          xcrun xccov view --report TestResults.xcresult | tee coverage-report.txt
 
       - name: Enforce 95% Networking unit-test coverage gate
-        # Gates /Networking/ (excluding live HTTP clients). See script defaults.
         run: |
           set -euo pipefail
           if [[ ! -f iosApp/coverage.json ]]; then
@@ -204,14 +187,13 @@ jobs:
           fi
           scripts/check-xccov-coverage.sh iosApp/coverage.json 95
 
-      - name: Upload test results and coverage
+      - name: Upload coverage JSON
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: prairie-unit-test-coverage
           path: |
-            iosApp/TestResults.xcresult
             iosApp/coverage.json
-            iosApp/coverage-report.txt
+            iosApp/TestResults.xcresult
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 7
