@@ -168,11 +168,42 @@ final class TokenStorePersistenceTests: XCTestCase {
         XCTAssertEqual(value20, "https://temp.example")
         let value21 = await store.getProfileId()
         XCTAssertEqual(value21, "temp-profile")
+        // Cover temp-scope accessors / mutators the CI gate otherwise misses.
+        let tempScope = await store.getTemporaryScope()
+        XCTAssertEqual(tempScope?.serverId, "temp-server")
+        let activeId = await store.getActiveServerId()
+        XCTAssertEqual(activeId, "temp-server")
+        await store.saveTokens(accessToken: "TEMP2", refreshToken: "TEMP2-R")
+        await store.setProfileToken("TEMP-P2")
+        XCTAssertEqual(await store.getAccessToken(), "TEMP2")
+        XCTAssertEqual(await store.getRefreshToken(), "TEMP2-R")
+        XCTAssertEqual(await store.getProfileToken(), "TEMP-P2")
 
         let ended = await store.endTemporaryScope()
-        XCTAssertEqual(ended?.accessToken, "TEMP")
+        XCTAssertEqual(ended?.accessToken, "TEMP2")
         let value22 = await store.getAccessToken()
         XCTAssertEqual(value22, "PERM")
+        XCTAssertEqual(keychain.get(TokenStore.accessTokenKey(for: serverId)), "PERM")
+    }
+
+    func testTemporaryScopeClearDropsOverrideWithoutTouchingKeychain() async {
+        let serverId = ServerRegistry.serverId(for: "https://home.example")
+        let store = makeStore()
+        await store.switchActiveServer(serverId: serverId)
+        await store.saveTokens(accessToken: "PERM", refreshToken: "PERM-R")
+        await store.beginTemporaryScope(TemporaryAuthScope(
+            serverId: "temp-server",
+            serverURL: "https://temp.example",
+            accessToken: "TEMP",
+            refreshToken: "TEMP-R",
+            profileId: "temp-profile",
+            profileToken: "TEMP-P",
+            controllerDeviceId: "ctrl-1",
+            expiresAt: Date().addingTimeInterval(600)
+        ))
+        await store.clearTokens()
+        XCTAssertFalse(await store.hasTemporaryScope())
+        XCTAssertEqual(await store.getAccessToken(), "PERM")
         XCTAssertEqual(keychain.get(TokenStore.accessTokenKey(for: serverId)), "PERM")
     }
 

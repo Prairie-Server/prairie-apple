@@ -111,13 +111,9 @@ enum SubtitleAIController {
 }
 
 enum LiveTVChannelListViewModel {
-    struct LiveTVNowNext: Equatable {
-        let now: LiveTVProgram?
-        let next: LiveTVProgram?
-    }
-
     /// Copied from the production ViewModel helper so LiveTV model tests keep
     /// exercising program schedule math without pulling SwiftUI list code.
+    /// Uses the top-level `LiveTVNowNext` from `LiveTVModels.swift`.
     nonisolated static func nowNextMap(
         programs: [LiveTVProgram],
         at now: Date

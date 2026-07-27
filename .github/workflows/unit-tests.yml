@@ -1,7 +1,8 @@
 name: Unit Tests
 
-# Runs Networking-scoped tests on the FFmpeg-free PrairieNetworkingHost and
-# enforces a 95% line-coverage gate over unit-testable `/Networking/`.
+# Runs Networking-scoped logic tests on the FFmpeg-free macOS
+# PrairieNetworkingHost framework and enforces a 95% line-coverage gate over
+# unit-testable `/Networking/`.
 #
 # Coverage gate choice:
 #   Default scope is `/Networking/` minus live HTTP / session modules
@@ -11,8 +12,8 @@ name: Unit Tests
 # CI speed:
 #   Full Prairie.app links vendored FFmpeg and dominates wall clock (~5–6m
 #   compile even when tests are scoped). PrairieNetworkingCI builds a thin
-#   host (Networking + SharedStorage stubs, no FFmpeg/Nuke) so cold CI can
-#   target ~2–3 minutes.
+#   macOS framework (no FFmpeg/Nuke, no iOS simulator) so cold CI can target
+#   ~2–3 minutes.
 
 on:
   push:
@@ -26,7 +27,7 @@ concurrency:
 jobs:
   unit-tests:
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -52,56 +53,23 @@ jobs:
         uses: actions/cache@v6
         with:
           path: iosApp/DerivedData
-          key: netci-${{ runner.os }}-${{ hashFiles('iosApp/project.yml', 'iosApp/iosApp/Networking/**/*.swift', 'iosApp/iosApp/Shared/SharedStorage.swift', 'iosApp/iosApp/Shared/AppleDeviceIdentity.swift', 'iosApp/CI/NetworkingHost/**/*.swift', 'iosApp/Tests/Networking*.swift', 'iosApp/Tests/TokenStore*.swift', 'iosApp/Tests/ServerRegistry*.swift', 'iosApp/Tests/WireFormat*.swift', 'iosApp/Tests/AuthAndDevice*.swift', 'iosApp/Tests/ResponseCache*.swift', 'iosApp/Tests/PrairieFrame*.swift', 'iosApp/Tests/TrackSelection*.swift', 'iosApp/Tests/LiveTVModel*.swift', 'iosApp/Tests/AIModel*.swift', 'iosApp/Tests/PlaybackPrefs*.swift', 'iosApp/Tests/SubtitleSearch*.swift', 'iosApp/Tests/AppUpdate*.swift', 'iosApp/Tests/AIJob*.swift', 'iosApp/Tests/LibraryVisibility*.swift') }}
+          key: netci-mac-${{ runner.os }}-${{ hashFiles('iosApp/project.yml', 'iosApp/iosApp/Networking/**/*.swift', 'iosApp/iosApp/Shared/SharedStorage.swift', 'iosApp/iosApp/Shared/AppleDeviceIdentity.swift', 'iosApp/CI/NetworkingHost/**/*.swift', 'iosApp/Tests/Networking*.swift', 'iosApp/Tests/TokenStore*.swift', 'iosApp/Tests/ServerRegistry*.swift', 'iosApp/Tests/WireFormat*.swift', 'iosApp/Tests/AuthAndDevice*.swift', 'iosApp/Tests/ResponseCache*.swift', 'iosApp/Tests/PrairieFrame*.swift', 'iosApp/Tests/TrackSelection*.swift', 'iosApp/Tests/LiveTVModel*.swift', 'iosApp/Tests/AIModel*.swift', 'iosApp/Tests/PlaybackPrefs*.swift', 'iosApp/Tests/SubtitleSearch*.swift', 'iosApp/Tests/AppUpdate*.swift', 'iosApp/Tests/AIJob*.swift', 'iosApp/Tests/LibraryVisibility*.swift') }}
           restore-keys: |
-            netci-${{ runner.os }}-
+            netci-mac-${{ runner.os }}-
+          save-always: true
 
       - name: Generate Xcode project
         working-directory: iosApp
         run: xcodegen generate
 
-      - name: Resolve iOS Simulator destination
-        id: sim
-        run: |
-          set -euo pipefail
-          CANDIDATES=("iPhone 17" "iPhone 17 Pro" "iPhone 16" "iPhone 16 Pro" "iPhone 15")
-          SIM_LIST="$(xcrun simctl list devices available || true)"
-          echo "Available simulators:"
-          echo "$SIM_LIST" | grep -E '^[[:space:]]*iPhone ' || true
-
-          pick=""
-          for name in "${CANDIDATES[@]}"; do
-            if echo "$SIM_LIST" | grep -E "^[[:space:]]*${name}[[:space:]]+\(" >/dev/null 2>&1; then
-              pick="$name"
-              break
-            fi
-          done
-
-          if [[ -z "$pick" ]]; then
-            pick="$(echo "$SIM_LIST" \
-              | grep -E '^[[:space:]]*iPhone ' \
-              | head -n 1 \
-              | sed -E 's/^[[:space:]]*//; s/[[:space:]]*\([^)]*\)[[:space:]]*\([^)]*\)[[:space:]]*$//; s/[[:space:]]+$//')"
-          fi
-
-          if [[ -z "$pick" ]]; then
-            echo "error: no iPhone simulator available" >&2
-            exit 1
-          fi
-
-          echo "Using simulator: $pick"
-          echo "destination=platform=iOS Simulator,name=${pick}" >> "$GITHUB_OUTPUT"
-          xcrun simctl boot "$pick" 2>/dev/null || true
-
-      - name: Build Networking CI host for testing
+      - name: Build Networking CI framework for testing
         working-directory: iosApp
         run: |
           set -euo pipefail
-          DEST="${{ steps.sim.outputs.destination }}"
           xcodebuild build-for-testing \
             -project Prairie.xcodeproj \
             -scheme PrairieNetworkingCI \
-            -destination "$DEST" \
+            -destination 'platform=macOS' \
             -derivedDataPath DerivedData \
             -enableCodeCoverage YES \
             -quiet \
@@ -113,7 +81,6 @@ jobs:
         working-directory: iosApp
         run: |
           set -euo pipefail
-          DEST="${{ steps.sim.outputs.destination }}"
 
           NETWORKING_TESTS=(
             PrairieNetworkingTests/NetworkingGateBoostTests
@@ -143,12 +110,11 @@ jobs:
           xcodebuild test-without-building \
             -project Prairie.xcodeproj \
             -scheme PrairieNetworkingCI \
-            -destination "$DEST" \
+            -destination 'platform=macOS' \
             -derivedDataPath DerivedData \
             -enableCodeCoverage YES \
             -resultBundlePath TestResults.xcresult \
             -parallel-testing-enabled NO \
-            -maximum-concurrent-test-simulator-destinations 1 \
             -quiet \
             "${ONLY_TESTING_ARGS[@]}" \
             CODE_SIGNING_ALLOWED=NO

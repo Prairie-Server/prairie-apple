@@ -277,13 +277,15 @@ targets:
       - sdk: WidgetKit.framework
       - sdk: SwiftUI.framework
 
-  # FFmpeg-free host for Networking coverage CI. Compiles Networking + the
-  # SharedStorage/AppleDeviceIdentity helpers it needs, with thin stubs for
-  # AuthService / DiagnosticsCoordinator. Module name stays `Prairie` so the
-  # existing `@testable import Prairie` Networking tests run unchanged.
+  # FFmpeg-free macOS framework for Networking coverage CI. Compiles the
+  # gated Networking surface + SharedStorage helpers, with thin stubs for
+  # AuthService / DiagnosticsCoordinator / ContinuumAPI. Module name stays
+  # `Prairie` so existing `@testable import Prairie` tests run unchanged.
+  # macOS + no TEST_HOST avoids the iOS simulator boot/app-launch tax that
+  # dominated the previous ~7m Apple CI wall clock.
   PrairieNetworkingHost:
-    type: application
-    platform: iOS
+    type: framework
+    platform: macOS
     sources:
       # Only the gated Networking surface + helpers. Live ContinuumAPI /
       # prefs stores / feature stores pull half the app; CI stubs cover the
@@ -303,6 +305,7 @@ targets:
           - AICapabilities.swift
           - RequestsFeatureStore.swift
           - LiveTVFeatureStore.swift
+          - LAN/FramedJSONSession.swift
       - path: iosApp/Shared/SharedStorage.swift
       - path: iosApp/Shared/AppleDeviceIdentity.swift
       - path: iosApp/Screens/Profiles/ProfileModels.swift
@@ -312,19 +315,23 @@ targets:
       base:
         PRODUCT_NAME: PrairieNetworkingHost
         PRODUCT_MODULE_NAME: Prairie
+        PRODUCT_BUNDLE_IDENTIFIER: org.prairieserver.prairie.networkinghost
         GENERATE_INFOPLIST_FILE: "YES"
         MARKETING_VERSION: "1.0.0"
         CURRENT_PROJECT_VERSION: 1
-        TARGETED_DEVICE_FAMILY: "1,2"
-        SDKROOT: iphoneos
-        SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
+        SDKROOT: macosx
+        SUPPORTED_PLATFORMS: macosx
+        DEFINES_MODULE: "YES"
+        SKIP_INSTALL: "YES"
         ENABLE_TESTABILITY: "YES"
         CODE_SIGNING_ALLOWED: "NO"
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
 
-  # Hostless-style unit tests against PrairieNetworkingHost (no FFmpeg link).
+  # Hostless (logic) unit tests against PrairieNetworkingHost — no app host,
+  # no iOS simulator.
   PrairieNetworkingTests:
     type: bundle.unit-test
-    platform: iOS
+    platform: macOS
     sources:
       - path: Tests
         includes:
@@ -351,10 +358,10 @@ targets:
       base:
         PRODUCT_NAME: PrairieNetworkingTests
         GENERATE_INFOPLIST_FILE: "YES"
-        SDKROOT: iphoneos
-        SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
-        BUNDLE_LOADER: "$(TEST_HOST)"
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/PrairieNetworkingHost.app/PrairieNetworkingHost"
+        SDKROOT: macosx
+        SUPPORTED_PLATFORMS: macosx
+        CODE_SIGNING_ALLOWED: "NO"
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
 
   # Unit-test bundle for the iOS Prairie app. Hosts the XCTest cases under
   # Tests/ and loads the Prairie.app binary so `@testable import Prairie` can
