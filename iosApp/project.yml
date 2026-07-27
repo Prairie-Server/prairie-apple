@@ -277,6 +277,67 @@ targets:
       - sdk: WidgetKit.framework
       - sdk: SwiftUI.framework
 
+  # FFmpeg-free host for Networking coverage CI. Compiles Networking + the
+  # SharedStorage/AppleDeviceIdentity helpers it needs, with thin stubs for
+  # AuthService / DiagnosticsCoordinator. Module name stays `Prairie` so the
+  # existing `@testable import Prairie` Networking tests run unchanged.
+  PrairieNetworkingHost:
+    type: application
+    platform: iOS
+    sources:
+      - path: iosApp/Networking
+      - path: iosApp/Shared/SharedStorage.swift
+      - path: iosApp/Shared/AppleDeviceIdentity.swift
+      - path: iosApp/Screens/Profiles/ProfileModels.swift
+      - path: CI/NetworkingHost
+    settings:
+      base:
+        PRODUCT_NAME: PrairieNetworkingHost
+        PRODUCT_MODULE_NAME: Prairie
+        GENERATE_INFOPLIST_FILE: "YES"
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: 1
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SDKROOT: iphoneos
+        SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
+        ENABLE_TESTABILITY: "YES"
+        CODE_SIGNING_ALLOWED: "NO"
+
+  # Hostless-style unit tests against PrairieNetworkingHost (no FFmpeg link).
+  PrairieNetworkingTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+        includes:
+          - NetworkingGateBoostTests.swift
+          - NetworkingModelsCoverageTests.swift
+          - NetworkingModelsGateFillTests.swift
+          - TokenStorePersistenceTests.swift
+          - ServerRegistryMigrationTests.swift
+          - WireFormatAndRequestsModelTests.swift
+          - AuthAndDeviceLoginModelTests.swift
+          - ResponseCacheTests.swift
+          - PrairieFrameTests.swift
+          - TrackSelectionPersistenceTests.swift
+          - LiveTVModelDecodingTests.swift
+          - AIModelDecodingTests.swift
+          - PlaybackPrefsModelTests.swift
+          - SubtitleSearchModelTests.swift
+          - AppUpdateCheckerTests.swift
+          - AIJobPollerTests.swift
+          - LibraryVisibilityTests.swift
+    dependencies:
+      - target: PrairieNetworkingHost
+    settings:
+      base:
+        PRODUCT_NAME: PrairieNetworkingTests
+        GENERATE_INFOPLIST_FILE: "YES"
+        SDKROOT: iphoneos
+        SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/PrairieNetworkingHost.app/PrairieNetworkingHost"
+
   # Unit-test bundle for the iOS Prairie app. Hosts the XCTest cases under
   # Tests/ and loads the Prairie.app binary so `@testable import Prairie` can
   # reach the app's internal types (policies, codecs, formatting helpers).
@@ -312,6 +373,20 @@ targets:
         SWIFT_OBJC_BRIDGING_HEADER: iosApp/Screens/Player/CoreMedia/PrairiePlayerBridging.h
 
 schemes:
+  # CI-only: Networking coverage gate without linking FFmpeg into Prairie.app.
+  PrairieNetworkingCI:
+    build:
+      targets:
+        PrairieNetworkingHost: all
+        PrairieNetworkingTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - PrairieNetworkingTests
+    analyze:
+      config: Debug
   Prairie:
     build:
       targets:

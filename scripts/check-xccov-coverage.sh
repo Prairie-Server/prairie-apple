@@ -100,7 +100,8 @@ with open(json_path, "r", encoding="utf-8") as f:
     report = json.load(f)
 
 targets = report.get("targets") or []
-# Prefer the main app product PrairieTests loads via TEST_HOST.
+# Prefer the FFmpeg-free Networking CI host when present; otherwise the main
+# Prairie.app product PrairieTests loads via TEST_HOST.
 app_targets = [
     t for t in targets
     if str(t.get("name", "")).endswith(".app")
@@ -113,9 +114,15 @@ if not app_targets:
     print("error: no .app target found in xccov report", file=sys.stderr)
     sys.exit(1)
 
-target = max(app_targets, key=lambda t: int(t.get("executableLines") or 0))
+networking_hosts = [
+    t for t in app_targets
+    if "NetworkingHost" in str(t.get("name", ""))
+]
+if networking_hosts:
+    target = max(networking_hosts, key=lambda t: int(t.get("executableLines") or 0))
+else:
+    target = max(app_targets, key=lambda t: int(t.get("executableLines") or 0))
 target_name = target.get("name", "<unknown>")
-
 overall_exec = int(target.get("executableLines") or 0)
 overall_cov = int(target.get("coveredLines") or 0)
 overall_pct = (100.0 * overall_cov / overall_exec) if overall_exec else 0.0

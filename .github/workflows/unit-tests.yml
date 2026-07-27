@@ -1,24 +1,18 @@
 name: Unit Tests
 
-# Runs a Networking-scoped PrairieTests subset with code coverage and enforces
-# a 95% line-coverage gate.
+# Runs Networking-scoped tests on the FFmpeg-free PrairieNetworkingHost and
+# enforces a 95% line-coverage gate over unit-testable `/Networking/`.
 #
 # Coverage gate choice:
 #   Default scope is `/Networking/` minus live HTTP / session modules
 #   (ContinuumAPI, HTTPClient, store refreshers, FramedJSONSession, …).
-#   That matches AGENTS.md: unit-testable Networking (models, persistence,
-#   frame codecs, response cache). See scripts/check-xccov-coverage.sh.
+#   See scripts/check-xccov-coverage.sh.
 #
 # CI speed:
-#   Full PrairieTests (~888 cases) includes FFmpeg/loopback/playback suites that
-#   dominate wall clock. The gate only measures Networking, so CI runs the
-#   dedicated Networking XCTest classes via -only-testing. Build still links the
-#   full Prairie.app TEST_HOST (FFmpeg included); wins come from (1) skipping
-#   unrelated tests, (2) DerivedData/SPM cache via actions/cache@v6, (3) skipping
-#   bootstatus waits, (4) build-for-testing + test-without-building.
-#   Warm runs (DerivedData hit) target ~2–3 minutes; cold compiles still pay the
-#   FFmpeg-linked app build once to seed the cache. Workflow-only edits keep the
-#   cache key stable so subsequent CI runs exercise the warm path.
+#   Full Prairie.app links vendored FFmpeg and dominates wall clock (~5–6m
+#   compile even when tests are scoped). PrairieNetworkingCI builds a thin
+#   host (Networking + SharedStorage stubs, no FFmpeg/Nuke) so cold CI can
+#   target ~2–3 minutes.
 
 on:
   push:
@@ -32,7 +26,7 @@ concurrency:
 jobs:
   unit-tests:
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -54,15 +48,13 @@ jobs:
           brew install xcodegen
           xcodegen --version
 
-      - name: Cache Xcode DerivedData + SwiftPM
+      - name: Cache Xcode DerivedData
         uses: actions/cache@v6
         with:
-          path: |
-            iosApp/DerivedData
-            iosApp/SourcePackages
-          key: xcode-${{ runner.os }}-${{ hashFiles('iosApp/project.yml', 'iosApp/Vendor/ffmpeg-build/Package.swift', 'iosApp/iosApp/**/*.swift', 'iosApp/Tests/**/*.swift') }}
+          path: iosApp/DerivedData
+          key: netci-${{ runner.os }}-${{ hashFiles('iosApp/project.yml', 'iosApp/iosApp/Networking/**/*.swift', 'iosApp/iosApp/Shared/SharedStorage.swift', 'iosApp/iosApp/Shared/AppleDeviceIdentity.swift', 'iosApp/CI/NetworkingHost/**/*.swift', 'iosApp/Tests/Networking*.swift', 'iosApp/Tests/TokenStore*.swift', 'iosApp/Tests/ServerRegistry*.swift', 'iosApp/Tests/WireFormat*.swift', 'iosApp/Tests/AuthAndDevice*.swift', 'iosApp/Tests/ResponseCache*.swift', 'iosApp/Tests/PrairieFrame*.swift', 'iosApp/Tests/TrackSelection*.swift', 'iosApp/Tests/LiveTVModel*.swift', 'iosApp/Tests/AIModel*.swift', 'iosApp/Tests/PlaybackPrefs*.swift', 'iosApp/Tests/SubtitleSearch*.swift', 'iosApp/Tests/AppUpdate*.swift', 'iosApp/Tests/AIJob*.swift', 'iosApp/Tests/LibraryVisibility*.swift') }}
           restore-keys: |
-            xcode-${{ runner.os }}-
+            netci-${{ runner.os }}-
 
       - name: Generate Xcode project
         working-directory: iosApp
@@ -99,53 +91,48 @@ jobs:
 
           echo "Using simulator: $pick"
           echo "destination=platform=iOS Simulator,name=${pick}" >> "$GITHUB_OUTPUT"
-          # Kick boot without waiting on bootstatus (~60s). xcodebuild waits if needed.
           xcrun simctl boot "$pick" 2>/dev/null || true
 
-      - name: Build for testing
+      - name: Build Networking CI host for testing
         working-directory: iosApp
         run: |
           set -euo pipefail
           DEST="${{ steps.sim.outputs.destination }}"
-          # Coverage instrumentation must be enabled at build-for-testing time;
-          # test-without-building alone yields an empty/broken xccov archive.
           xcodebuild build-for-testing \
             -project Prairie.xcodeproj \
-            -scheme Prairie \
+            -scheme PrairieNetworkingCI \
             -destination "$DEST" \
             -derivedDataPath DerivedData \
-            -clonedSourcePackagesDirPath SourcePackages \
             -enableCodeCoverage YES \
             -quiet \
             CODE_SIGNING_ALLOWED=NO \
             COMPILER_INDEX_STORE_ENABLE=NO \
             ONLY_ACTIVE_ARCH=YES
 
-      - name: Run Networking PrairieTests with coverage
+      - name: Run Networking tests with coverage
         working-directory: iosApp
         run: |
           set -euo pipefail
           DEST="${{ steps.sim.outputs.destination }}"
 
           NETWORKING_TESTS=(
-            PrairieTests/NetworkingGateBoostTests
-            PrairieTests/NetworkingModelsCoverageTests
-            PrairieTests/NetworkingModelsGateFillTests
-            PrairieTests/TokenStorePersistenceTests
-            PrairieTests/ServerRegistryMigrationTests
-            PrairieTests/WireFormatAndRequestsModelTests
-            PrairieTests/AuthAndDeviceLoginModelTests
-            PrairieTests/ResponseCacheTests
-            PrairieTests/PrairieFrameTests
-            PrairieTests/TrackSelectionPersistenceTests
-            PrairieTests/LiveTVModelDecodingTests
-            PrairieTests/AIModelDecodingTests
-            PrairieTests/PlaybackPrefsModelTests
-            PrairieTests/SubtitleSearchModelTests
-            PrairieTests/AppUpdateCheckerTests
-            PrairieTests/AIJobPollerTests
-            PrairieTests/PairingCoordinatorTests
-            PrairieTests/LibraryVisibilityTests
+            PrairieNetworkingTests/NetworkingGateBoostTests
+            PrairieNetworkingTests/NetworkingModelsCoverageTests
+            PrairieNetworkingTests/NetworkingModelsGateFillTests
+            PrairieNetworkingTests/TokenStorePersistenceTests
+            PrairieNetworkingTests/ServerRegistryMigrationTests
+            PrairieNetworkingTests/WireFormatAndRequestsModelTests
+            PrairieNetworkingTests/AuthAndDeviceLoginModelTests
+            PrairieNetworkingTests/ResponseCacheTests
+            PrairieNetworkingTests/PrairieFrameTests
+            PrairieNetworkingTests/TrackSelectionPersistenceTests
+            PrairieNetworkingTests/LiveTVModelDecodingTests
+            PrairieNetworkingTests/AIModelDecodingTests
+            PrairieNetworkingTests/PlaybackPrefsModelTests
+            PrairieNetworkingTests/SubtitleSearchModelTests
+            PrairieNetworkingTests/AppUpdateCheckerTests
+            PrairieNetworkingTests/AIJobPollerTests
+            PrairieNetworkingTests/LibraryVisibilityTests
           )
 
           ONLY_TESTING_ARGS=()
@@ -155,10 +142,9 @@ jobs:
 
           xcodebuild test-without-building \
             -project Prairie.xcodeproj \
-            -scheme Prairie \
+            -scheme PrairieNetworkingCI \
             -destination "$DEST" \
             -derivedDataPath DerivedData \
-            -clonedSourcePackagesDirPath SourcePackages \
             -enableCodeCoverage YES \
             -resultBundlePath TestResults.xcresult \
             -parallel-testing-enabled NO \
