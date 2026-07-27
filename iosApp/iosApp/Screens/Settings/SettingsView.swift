@@ -33,6 +33,7 @@ struct SettingsView: View {
     private var iosBody: some View {
         List {
             accountSection
+            connectionSection
             preferencesSection
             #if os(iOS)
             if diagnosticsModel.shouldShowSettings {
@@ -40,7 +41,6 @@ struct SettingsView: View {
             }
             #endif
             librarySection
-            connectionSection
             aboutSection
             signOutSection
         }
