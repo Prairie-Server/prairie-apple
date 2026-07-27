@@ -149,6 +149,14 @@ jobs:
             PrairieTests/AppUpdateCheckerTests
             PrairieTests/AIJobPollerTests
             PrairieTests/PairingCoordinatorTests
+            # Extra Models.swift coverage used by the 95% gate (memberwise inits /
+            # library visibility / audiobook detail decode paths). Still cheap vs
+            # FFmpeg/loopback/playback suites.
+            PrairieTests/LibraryVisibilityTests
+            PrairieTests/DetailVersionSelectionTests
+            PrairieTests/HomeSectionsMutationTests
+            PrairieTests/BrowseViewModelTests
+            PrairieTests/PlaybackMediaFixtureTests
           )
 
           ONLY_TESTING_ARGS=()
