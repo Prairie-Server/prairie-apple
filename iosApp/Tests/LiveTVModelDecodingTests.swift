@@ -63,6 +63,26 @@ final class LiveTVModelDecodingTests: XCTestCase {
         XCTAssertEqual(channel.displayName, "Local 7")
     }
 
+    func testChannelDisplayFallsBackToNumberWhenLabelsAreBlank() throws {
+        let channel = try decode(LiveTVChannel.self, """
+        {
+          "id": "ch-3",
+          "tuner_id": "tuner-a",
+          "number": "9.2",
+          "number_override": "   ",
+          "callsign": "   ",
+          "name": "   ",
+          "logo_url": "",
+          "hd": false,
+          "enabled": true,
+          "stream_url": "",
+          "guide_station_id": ""
+        }
+        """)
+        XCTAssertEqual(channel.displayNumber, "9.2")
+        XCTAssertEqual(channel.displayName, "9.2")
+    }
+
     func testChannelsResponseDecode() throws {
         let response = try decode(LiveTVChannelsResponse.self, """
         {
@@ -127,6 +147,30 @@ final class LiveTVModelDecodingTests: XCTestCase {
         XCTAssertEqual(session.note, "transcoding")
     }
 
+    func testProgramDisplayTitleAndNowNextDefaults() throws {
+        let program = try decode(LiveTVProgram.self, """
+        {
+          "id": "prog-blank",
+          "channel_id": "ch-1",
+          "series_id": "",
+          "start": "2026-07-25T18:00:00Z",
+          "stop": "2026-07-25T19:00:00Z",
+          "title": "   ",
+          "subtitle": "",
+          "description": "",
+          "genres": [],
+          "image_url": "",
+          "is_new": false,
+          "is_live": true
+        }
+        """)
+        XCTAssertEqual(program.displayTitle, "Untitled")
+
+        let slot = LiveTVNowNext()
+        XCTAssertNil(slot.now)
+        XCTAssertNil(slot.next)
+    }
+
     func testRecordingDecode() throws {
         let recording = try decode(LiveTVRecording.self, """
         {
@@ -142,6 +186,17 @@ final class LiveTVModelDecodingTests: XCTestCase {
         XCTAssertEqual(recording.id, "rec-1")
         XCTAssertEqual(recording.status, "scheduled")
         XCTAssertEqual(recording.title, "Movie Night")
+    }
+
+    func testScheduleRecordingInputEncodesProgramOnly() throws {
+        let input = LiveTVScheduleRecordingInput(programId: "prog-1")
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        let data = try encoder.encode(input)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        XCTAssertEqual(object["program_id"] as? String, "prog-1")
+        XCTAssertEqual(object.count, 1)
     }
 
     func testNowNextMapPicksCurrentAndNext() {
