@@ -15,7 +15,9 @@ name: Unit Tests
 #   dedicated Networking XCTest classes via -only-testing. Build still links the
 #   full Prairie.app TEST_HOST (FFmpeg included); wins come from (1) skipping
 #   unrelated tests, (2) DerivedData/SPM cache, (3) overlapping simulator boot
-#   with compile, (4) build-for-testing + test-without-building.
+#   with setup/compile, (4) build-for-testing + test-without-building.
+#   Warm runs (DerivedData hit) target ~2–3 minutes; cold compiles still pay the
+#   FFmpeg-linked app build once to seed the cache.
 
 on:
   push:
@@ -46,6 +48,41 @@ jobs:
           sudo xcode-select -s "${XCODE_APP}/Contents/Developer"
           xcodebuild -version
 
+      - name: Start simulator boot (background)
+        run: |
+          set -euo pipefail
+          # Resolve + boot while brew/xcodegen/cache run, so we don't serialize
+          # ~30–60s of simulator bring-up ahead of compile.
+          (
+            set -euo pipefail
+            CANDIDATES=("iPhone 17" "iPhone 17 Pro" "iPhone 16" "iPhone 16 Pro" "iPhone 15")
+            SIM_LIST="$(xcrun simctl list devices available || true)"
+            pick=""
+            for name in "${CANDIDATES[@]}"; do
+              if echo "$SIM_LIST" | grep -E "^[[:space:]]*${name}[[:space:]]+\(" >/dev/null 2>&1; then
+                pick="$name"
+                break
+              fi
+            done
+            if [[ -z "$pick" ]]; then
+              pick="$(echo "$SIM_LIST" \
+                | grep -E '^[[:space:]]*iPhone ' \
+                | head -n 1 \
+                | sed -E 's/^[[:space:]]*//; s/[[:space:]]*\([^)]*\)[[:space:]]*\([^)]*\)[[:space:]]*$//; s/[[:space:]]+$//')"
+            fi
+            if [[ -z "$pick" ]]; then
+              echo "error: no iPhone simulator available" >&2
+              exit 1
+            fi
+            echo "destination=platform=iOS Simulator,name=${pick}" > /tmp/prairie-sim.env
+            echo "sim_name=${pick}" >> /tmp/prairie-sim.env
+            echo "Using simulator: $pick"
+            xcrun simctl boot "$pick" 2>/dev/null || true
+            # Soft wait — don't fail the job if bootstatus is slow; xcodebuild waits.
+            xcrun simctl bootstatus "$pick" -b >/tmp/prairie-sim-boot.log 2>&1 || true
+          ) &
+          echo $! > /tmp/prairie-sim-boot.pid
+
       - name: Install XcodeGen
         run: |
           brew install xcodegen
@@ -57,7 +94,9 @@ jobs:
           path: |
             iosApp/DerivedData
             iosApp/SourcePackages
-          key: xcode-${{ runner.os }}-${{ hashFiles('iosApp/project.yml', 'iosApp/Vendor/ffmpeg-build/Package.swift', 'iosApp/Tests/**/*.swift', 'iosApp/iosApp/Networking/**/*.swift', 'iosApp/iosApp/**/*.swift') }}
+          # Broader than networking-only so app/test edits invalidate correctly.
+          # restore-keys still allow a partial hit after small source changes.
+          key: xcode-${{ runner.os }}-${{ hashFiles('iosApp/project.yml', 'iosApp/Vendor/ffmpeg-build/Package.swift', 'iosApp/iosApp/**/*.swift', 'iosApp/Tests/**/*.swift') }}
           restore-keys: |
             xcode-${{ runner.os }}-
 
@@ -65,54 +104,34 @@ jobs:
         working-directory: iosApp
         run: xcodegen generate
 
-      - name: Resolve destination and start simulator boot
+      - name: Await simulator
         id: sim
         run: |
           set -euo pipefail
-          CANDIDATES=("iPhone 17" "iPhone 17 Pro" "iPhone 16" "iPhone 16 Pro" "iPhone 15")
-          SIM_LIST="$(xcrun simctl list devices available || true)"
-          echo "Available simulators:"
-          echo "$SIM_LIST" | grep -E '^[[:space:]]*iPhone ' || true
-
-          pick=""
-          for name in "${CANDIDATES[@]}"; do
-            if echo "$SIM_LIST" | grep -E "^[[:space:]]*${name}[[:space:]]+\(" >/dev/null 2>&1; then
-              pick="$name"
-              break
-            fi
-          done
-
-          if [[ -z "$pick" ]]; then
-            pick="$(echo "$SIM_LIST" \
-              | grep -E '^[[:space:]]*iPhone ' \
-              | head -n 1 \
-              | sed -E 's/^[[:space:]]*//; s/[[:space:]]*\([^)]*\)[[:space:]]*\([^)]*\)[[:space:]]*$//; s/[[:space:]]+$//')"
+          if [[ -f /tmp/prairie-sim-boot.pid ]]; then
+            wait "$(cat /tmp/prairie-sim-boot.pid)" || true
           fi
-
-          if [[ -z "$pick" ]]; then
-            echo "error: no iPhone simulator available" >&2
+          if [[ ! -f /tmp/prairie-sim.env ]]; then
+            echo "error: simulator resolve/boot did not produce /tmp/prairie-sim.env" >&2
             exit 1
           fi
-
-          echo "Using simulator: $pick"
-          echo "destination=platform=iOS Simulator,name=${pick}" >> "$GITHUB_OUTPUT"
-          echo "sim_name=${pick}" >> "$GITHUB_OUTPUT"
-
-          # Boot in the background — do not block the job on bootstatus (was ~60s).
-          # xcodebuild will wait if the device is still coming up.
-          xcrun simctl boot "$pick" 2>/dev/null || true
+          cat /tmp/prairie-sim.env >> "$GITHUB_OUTPUT"
+          cat /tmp/prairie-sim.env
 
       - name: Build for testing
         working-directory: iosApp
         run: |
           set -euo pipefail
           DEST="${{ steps.sim.outputs.destination }}"
+          # Coverage instrumentation must be enabled at build-for-testing time;
+          # test-without-building alone yields an empty/broken xccov archive.
           xcodebuild build-for-testing \
             -project Prairie.xcodeproj \
             -scheme Prairie \
             -destination "$DEST" \
             -derivedDataPath DerivedData \
             -clonedSourcePackagesDirPath SourcePackages \
+            -enableCodeCoverage YES \
             -quiet \
             CODE_SIGNING_ALLOWED=NO \
             COMPILER_INDEX_STORE_ENABLE=NO \
@@ -150,8 +169,6 @@ jobs:
             ONLY_TESTING_ARGS+=(-only-testing:"$t")
           done
 
-          # test-without-building: compile already done. No parallel simulator
-          # clones (previously ~26m + IPC flakes).
           xcodebuild test-without-building \
             -project Prairie.xcodeproj \
             -scheme Prairie \
@@ -175,7 +192,6 @@ jobs:
             echo "No TestResults.xcresult bundle; skipping coverage export"
             exit 0
           fi
-          # JSON only — the human-readable xccov report is multi-MB and slow.
           xcrun xccov view --report --json TestResults.xcresult > coverage.json
 
       - name: Enforce 95% Networking unit-test coverage gate
