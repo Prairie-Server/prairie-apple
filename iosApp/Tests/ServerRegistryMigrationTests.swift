@@ -395,4 +395,293 @@ final class ServerRegistryMigrationTests: XCTestCase {
         XCTAssertNil(defaults.string(forKey: "continuumServerRegistry.legacySourceUrl.v1"))
         XCTAssertEqual(registry.activeServerId, otherId)
     }
+
+    func testSwitchToUnknownIdIsNoOp() async {
+        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        let id = ServerRegistry.serverId(for: "https://only.example")
+        registry.addOrUpdate(ServerEntry(
+            id: id,
+            url: "https://only.example",
+            fetchedName: "Only",
+            profileId: "p1",
+            lastUsedAt: Date()
+        ))
+        await registry.switchTo(serverId: id)
+        XCTAssertEqual(registry.activeServerId, id)
+        XCTAssertEqual(registry.activeServerUrl, "https://only.example")
+        XCTAssertEqual(registry.activeProfileId, "p1")
+        XCTAssertTrue(registry.hasActiveServer)
+
+        await registry.switchTo(serverId: "missing-id")
+        XCTAssertEqual(registry.activeServerId, id)
+    }
+
+    func testAddOrUpdateWithoutPreservingProfileAndEmptyFetchedName() {
+        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        let id = ServerRegistry.serverId(for: "https://home.example")
+        registry.addOrUpdate(ServerEntry(
+            id: id,
+            url: "https://home.example",
+            fetchedName: "Home",
+            profileId: "keep-me",
+            lastUsedAt: Date()
+        ))
+        registry.addOrUpdate(
+            ServerEntry(
+                id: id,
+                url: "https://home.example",
+                fetchedName: "",
+                profileId: nil,
+                lastUsedAt: Date()
+            ),
+            preservingProfile: false
+        )
+        XCTAssertNil(registry.entry(with: id)?.profileId)
+        XCTAssertEqual(registry.entry(with: id)?.fetchedName, "Home")
+
+        registry.updateFetchedName(for: id, fetchedName: "")
+        XCTAssertEqual(registry.entry(with: id)?.fetchedName, "Home")
+        registry.updateFetchedName(for: "missing", fetchedName: "Nope")
+        registry.setProfileId("x", for: "missing")
+    }
+
+    func testSignOutClearsProfileAndTokens() async {
+        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        let a = ServerRegistry.serverId(for: "https://a.example")
+        let b = ServerRegistry.serverId(for: "https://b.example")
+        registry.addOrUpdate(ServerEntry(
+            id: a, url: "https://a.example", fetchedName: "A",
+            profileId: "pa", lastUsedAt: Date(timeIntervalSince1970: 2)
+        ))
+        registry.addOrUpdate(ServerEntry(
+            id: b, url: "https://b.example", fetchedName: "B",
+            profileId: "pb", lastUsedAt: Date(timeIntervalSince1970: 1)
+        ))
+        XCTAssertTrue(keychain.set("TOK-A", for: TokenStore.accessTokenKey(for: a)))
+        XCTAssertTrue(keychain.set("TOK-B", for: TokenStore.accessTokenKey(for: b)))
+        await registry.switchTo(serverId: a)
+        XCTAssertEqual(defaults.string(forKey: "profileId"), "pa")
+
+        await registry.signOut(serverId: a, purgeCurrentBinding: false)
+        XCTAssertNil(registry.entry(with: a)?.profileId)
+        XCTAssertNil(keychain.get(TokenStore.accessTokenKey(for: a)))
+        XCTAssertNil(defaults.string(forKey: "profileId"))
+        XCTAssertEqual(registry.activeServerId, a, "signOut keeps the entry and active slot")
+
+        await registry.signOut(serverId: b, purgeCurrentBinding: true)
+        XCTAssertNil(registry.entry(with: b)?.profileId)
+        XCTAssertNil(keychain.get(TokenStore.accessTokenKey(for: b)))
+    }
+
+    func testSignOutDiscardsPinnedLegacyWhenHostMatches() async {
+        let home = "https://home.example"
+        let homeId = ServerRegistry.serverId(for: home)
+        let entry = ServerEntry(
+            id: homeId, url: home, fetchedName: "Home",
+            profileId: "p", lastUsedAt: Date()
+        )
+        struct Wire: Codable {
+            var activeServerId: String?
+            var entries: [ServerEntry]
+        }
+        defaults.set(
+            try! JSONEncoder().encode(Wire(activeServerId: homeId, entries: [entry])),
+            forKey: "continuumServerRegistry.v1"
+        )
+        defaults.set(home, forKey: "serverUrl")
+        defaults.set("p", forKey: "profileId")
+        defaults.set(false, forKey: "continuumServerRegistry.migrated.v1")
+        defaults.set(home, forKey: "continuumServerRegistry.legacySourceUrl.v1")
+        XCTAssertTrue(keychain.set("LEGACY", for: "com.continuum.app.accessToken"))
+
+        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        // Force mid-migration window after init may have completed re-key.
+        defaults.set(false, forKey: "continuumServerRegistry.migrated.v1")
+        defaults.set(home, forKey: "continuumServerRegistry.legacySourceUrl.v1")
+        XCTAssertTrue(keychain.set("LEGACY", for: "com.continuum.app.accessToken"))
+
+        await registry.signOut(serverId: homeId, purgeCurrentBinding: false)
+        XCTAssertNil(keychain.get("com.continuum.app.accessToken"))
+        XCTAssertNil(defaults.string(forKey: "continuumServerRegistry.legacySourceUrl.v1"))
+    }
+
+    func testRemoveActiveFallsBackToMostRecentlyUsed() async {
+        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        let older = ServerRegistry.serverId(for: "https://old.example")
+        let newer = ServerRegistry.serverId(for: "https://new.example")
+        registry.addOrUpdate(ServerEntry(
+            id: older, url: "https://old.example", fetchedName: "Old",
+            profileId: "p-old", lastUsedAt: Date(timeIntervalSince1970: 1)
+        ))
+        registry.addOrUpdate(ServerEntry(
+            id: newer, url: "https://new.example", fetchedName: "New",
+            profileId: "p-new", lastUsedAt: Date(timeIntervalSince1970: 100)
+        ))
+        XCTAssertTrue(keychain.set("TOK-OLD", for: TokenStore.accessTokenKey(for: older)))
+        XCTAssertTrue(keychain.set("TOK-NEW", for: TokenStore.accessTokenKey(for: newer)))
+        await registry.switchTo(serverId: older)
+
+        await registry.remove(serverId: older)
+
+        XCTAssertNil(registry.entry(with: older))
+        XCTAssertNil(keychain.get(TokenStore.accessTokenKey(for: older)))
+        XCTAssertEqual(registry.activeServerId, newer)
+        XCTAssertEqual(defaults.string(forKey: "serverUrl"), "https://new.example")
+        XCTAssertEqual(defaults.string(forKey: "profileId"), "p-new")
+        XCTAssertEqual(keychain.get(TokenStore.accessTokenKey(for: newer)), "TOK-NEW")
+    }
+
+    func testRemoveActiveWithNoFallbackClearsMirrors() async {
+        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        let only = ServerRegistry.serverId(for: "https://solo.example")
+        registry.addOrUpdate(ServerEntry(
+            id: only, url: "https://solo.example", fetchedName: "Solo",
+            profileId: "solo", lastUsedAt: Date()
+        ))
+        XCTAssertTrue(keychain.set("TOK", for: TokenStore.accessTokenKey(for: only)))
+        await registry.switchTo(serverId: only)
+
+        await registry.remove(serverId: only)
+
+        XCTAssertTrue(registry.entries.isEmpty)
+        XCTAssertNil(registry.activeServerId)
+        XCTAssertNil(defaults.string(forKey: "serverUrl"))
+        XCTAssertNil(defaults.string(forKey: "profileId"))
+        XCTAssertNil(keychain.get(TokenStore.accessTokenKey(for: only)))
+    }
+
+    func testRemoveNonActiveLeavesActiveUntouched() async {
+        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        let keep = ServerRegistry.serverId(for: "https://keep.example")
+        let drop = ServerRegistry.serverId(for: "https://drop.example")
+        registry.addOrUpdate(ServerEntry(
+            id: keep, url: "https://keep.example", fetchedName: "Keep",
+            profileId: "pk", lastUsedAt: Date(timeIntervalSince1970: 2)
+        ))
+        registry.addOrUpdate(ServerEntry(
+            id: drop, url: "https://drop.example", fetchedName: "Drop",
+            profileId: "pd", lastUsedAt: Date(timeIntervalSince1970: 1)
+        ))
+        await registry.switchTo(serverId: keep)
+
+        await registry.remove(serverId: drop)
+
+        XCTAssertEqual(registry.activeServerId, keep)
+        XCTAssertEqual(defaults.string(forKey: "serverUrl"), "https://keep.example")
+        XCTAssertNil(registry.entry(with: drop))
+    }
+
+    func testRemoveActiveFallbackWithoutProfileClearsProfileMirror() async {
+        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        let active = ServerRegistry.serverId(for: "https://active.example")
+        let fallback = ServerRegistry.serverId(for: "https://fallback.example")
+        registry.addOrUpdate(ServerEntry(
+            id: active, url: "https://active.example", fetchedName: "Active",
+            profileId: "pa", lastUsedAt: Date(timeIntervalSince1970: 2)
+        ))
+        registry.addOrUpdate(ServerEntry(
+            id: fallback, url: "https://fallback.example", fetchedName: "Fallback",
+            profileId: nil, lastUsedAt: Date(timeIntervalSince1970: 1)
+        ))
+        await registry.switchTo(serverId: active)
+        XCTAssertEqual(defaults.string(forKey: "profileId"), "pa")
+
+        await registry.remove(serverId: active)
+
+        XCTAssertEqual(registry.activeServerId, fallback)
+        XCTAssertEqual(defaults.string(forKey: "serverUrl"), "https://fallback.example")
+        XCTAssertNil(defaults.string(forKey: "profileId"))
+    }
+
+    func testLoadSeedsSuiteFromStandardFallback() {
+        let id = ServerRegistry.serverId(for: "https://seed.example")
+        let entry = ServerEntry(
+            id: id,
+            url: "https://seed.example",
+            fetchedName: "Seed",
+            profileId: "seed-p",
+            lastUsedAt: Date(timeIntervalSince1970: 42)
+        )
+        struct Wire: Codable {
+            var activeServerId: String?
+            var entries: [ServerEntry]
+        }
+        let data = try! JSONEncoder().encode(Wire(activeServerId: id, entries: [entry]))
+        // Only standard has the registry blob — suite is empty so load()
+        // must re-persist for Top Shelf / App Group consumers.
+        standard.set(data, forKey: "continuumServerRegistry.v1")
+        standard.set(true, forKey: "continuumServerRegistry.migrated.v1")
+        XCTAssertNil(suite.data(forKey: "continuumServerRegistry.v1"))
+
+        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        XCTAssertEqual(registry.activeServerId, id)
+        XCTAssertEqual(registry.activeProfileId, "seed-p")
+        XCTAssertNotNil(suite.data(forKey: "continuumServerRegistry.v1"))
+        XCTAssertEqual(defaults.string(forKey: SharedStorage.serverUrlKey), "https://seed.example")
+        XCTAssertEqual(defaults.string(forKey: SharedStorage.profileIdKey), "seed-p")
+    }
+
+    func testLoadCorruptRegistryStartsEmpty() {
+        standard.set(Data("not-json".utf8), forKey: "continuumServerRegistry.v1")
+        standard.set(true, forKey: "continuumServerRegistry.migrated.v1")
+        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        XCTAssertTrue(registry.entries.isEmpty)
+        XCTAssertNil(registry.activeServerId)
+    }
+
+    func testDiscardLegacyNoOpWhenAlreadyMigrated() {
+        defaults.set(true, forKey: "continuumServerRegistry.migrated.v1")
+        XCTAssertTrue(keychain.set("KEEP", for: "com.continuum.app.accessToken"))
+        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        registry.discardLegacyKeychainAccountsIfUnmigrated()
+        XCTAssertEqual(keychain.get("com.continuum.app.accessToken"), "KEEP")
+    }
+
+    func testDisplayNameEmptyFetchedNameFallsBackToURL() {
+        var entry = ServerEntry(
+            id: "x",
+            url: "https://x.example",
+            fetchedName: "",
+            profileId: nil,
+            lastUsedAt: Date()
+        )
+        XCTAssertEqual(entry.displayName, "https://x.example")
+        entry.fetchedName = "Named"
+        XCTAssertEqual(entry.displayName, "Named")
+    }
+
+    func testSortedEntriesPutsActiveFirst() async {
+        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        let older = ServerRegistry.serverId(for: "https://older.example")
+        let newer = ServerRegistry.serverId(for: "https://newer.example")
+        registry.addOrUpdate(ServerEntry(
+            id: older, url: "https://older.example", fetchedName: "Older",
+            profileId: nil, lastUsedAt: Date(timeIntervalSince1970: 1)
+        ))
+        registry.addOrUpdate(ServerEntry(
+            id: newer, url: "https://newer.example", fetchedName: "Newer",
+            profileId: nil, lastUsedAt: Date(timeIntervalSince1970: 100)
+        ))
+        await registry.switchTo(serverId: older)
+        XCTAssertEqual(registry.sortedEntries.map(\.id), [older, newer])
+    }
+
+    func testSwitchToClearsProfileMirrorWhenEntryHasNone() async {
+        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        let withProfile = ServerRegistry.serverId(for: "https://with.example")
+        let without = ServerRegistry.serverId(for: "https://without.example")
+        registry.addOrUpdate(ServerEntry(
+            id: withProfile, url: "https://with.example", fetchedName: "With",
+            profileId: "p", lastUsedAt: Date(timeIntervalSince1970: 2)
+        ))
+        registry.addOrUpdate(ServerEntry(
+            id: without, url: "https://without.example", fetchedName: "Without",
+            profileId: nil, lastUsedAt: Date(timeIntervalSince1970: 1)
+        ))
+        await registry.switchTo(serverId: withProfile)
+        XCTAssertEqual(defaults.string(forKey: "profileId"), "p")
+        await registry.switchTo(serverId: without)
+        XCTAssertNil(defaults.string(forKey: "profileId"))
+        XCTAssertEqual(registry.activeServerUrl, "https://without.example")
+    }
 }
