@@ -1,12 +1,20 @@
 name: Unit Tests
 
-# Runs PrairieTests with code coverage and enforces a 95% line-coverage gate.
+# Runs a Networking-scoped PrairieTests subset with code coverage and enforces
+# a 95% line-coverage gate.
 #
 # Coverage gate choice:
 #   Default scope is `/Networking/` minus live HTTP / session modules
 #   (ContinuumAPI, HTTPClient, store refreshers, FramedJSONSession, …).
 #   That matches AGENTS.md: unit-testable Networking (models, persistence,
 #   frame codecs, response cache). See scripts/check-xccov-coverage.sh.
+#
+# CI speed:
+#   Full PrairieTests (~888 cases) includes FFmpeg/loopback/playback suites that
+#   dominate wall clock and have been flaky under parallel simulator clones.
+#   The gate only measures Networking, so CI runs the dedicated Networking
+#   XCTest classes via -only-testing. Build still links the full Prairie.app
+#   TEST_HOST (FFmpeg included); the win is skipping hundreds of unrelated tests.
 
 on:
   push:
@@ -20,7 +28,7 @@ concurrency:
 jobs:
   unit-tests:
     runs-on: macos-15
-    timeout-minutes: 90
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
@@ -42,6 +50,14 @@ jobs:
           echo "Using ${XCODE_APP}"
           sudo xcode-select -s "${XCODE_APP}/Contents/Developer"
           xcodebuild -version
+
+      - name: Cache SwiftPM clones
+        uses: actions/cache@v4
+        with:
+          path: iosApp/SourcePackages
+          key: spm-${{ runner.os }}-${{ hashFiles('iosApp/**/Package.resolved', 'iosApp/project.yml') }}
+          restore-keys: |
+            spm-${{ runner.os }}-
 
       - name: Generate Xcode project
         working-directory: iosApp
@@ -89,26 +105,73 @@ jobs:
           if [[ -n "$pick" ]]; then
             echo "Using simulator: $pick"
             echo "destination=platform=iOS Simulator,name=${pick}" >> "$GITHUB_OUTPUT"
+            echo "sim_name=${pick}" >> "$GITHUB_OUTPUT"
           else
             echo "No named iPhone simulator found; using generic/platform=iOS Simulator"
             echo "destination=generic/platform=iOS Simulator" >> "$GITHUB_OUTPUT"
+            echo "sim_name=" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Run PrairieTests with coverage
+      - name: Boot simulator
+        if: steps.sim.outputs.sim_name != ''
+        run: |
+          set -euo pipefail
+          # Warm the chosen device before xcodebuild so boot cost overlaps less
+          # with the first test launch.
+          xcrun simctl boot "${{ steps.sim.outputs.sim_name }}" 2>/dev/null || true
+          xcrun simctl bootstatus "${{ steps.sim.outputs.sim_name }}" -b || true
+
+      - name: Run Networking PrairieTests with coverage
         working-directory: iosApp
         run: |
           set -euo pipefail
           DEST="${{ steps.sim.outputs.destination }}"
           echo "destination=$DEST"
+
+          # XCTest classes that exercise the gated /Networking/ surface. Keep this
+          # list aligned with scripts/check-xccov-coverage.sh includes (models,
+          # TokenStore, ServerRegistry, ResponseCache, PrairieFrame, prefs models,
+          # TrackSelectionPersistence, AppUpdateChecker, AIJobPoller, …).
+          NETWORKING_TESTS=(
+            PrairieTests/NetworkingGateBoostTests
+            PrairieTests/NetworkingModelsCoverageTests
+            PrairieTests/TokenStorePersistenceTests
+            PrairieTests/ServerRegistryMigrationTests
+            PrairieTests/WireFormatAndRequestsModelTests
+            PrairieTests/AuthAndDeviceLoginModelTests
+            PrairieTests/ResponseCacheTests
+            PrairieTests/PrairieFrameTests
+            PrairieTests/TrackSelectionPersistenceTests
+            PrairieTests/LiveTVModelDecodingTests
+            PrairieTests/AIModelDecodingTests
+            PrairieTests/PlaybackPrefsModelTests
+            PrairieTests/SubtitleSearchModelTests
+            PrairieTests/AppUpdateCheckerTests
+            PrairieTests/AIJobPollerTests
+            PrairieTests/PairingCoordinatorTests
+          )
+
+          ONLY_TESTING_ARGS=()
+          for t in "${NETWORKING_TESTS[@]}"; do
+            ONLY_TESTING_ARGS+=(-only-testing:"$t")
+          done
+
+          # No parallel simulator clones (previously ~26m + IPC flakes).
+          # No -retry-tests-on-failure: Networking model tests are deterministic
+          # and retries double wall clock when anything flakes.
           xcodebuild test \
             -project Prairie.xcodeproj \
             -scheme Prairie \
             -destination "$DEST" \
             -enableCodeCoverage YES \
             -resultBundlePath TestResults.xcresult \
-            -retry-tests-on-failure \
-            -test-iterations 2 \
-            CODE_SIGNING_ALLOWED=NO
+            -clonedSourcePackagesDirPath SourcePackages \
+            -parallel-testing-enabled NO \
+            -maximum-concurrent-test-simulator-destinations 1 \
+            "${ONLY_TESTING_ARGS[@]}" \
+            CODE_SIGNING_ALLOWED=NO \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            ONLY_ACTIVE_ARCH=YES
 
       - name: Export coverage JSON
         working-directory: iosApp
