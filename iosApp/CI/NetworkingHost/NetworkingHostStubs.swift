@@ -136,5 +136,16 @@ enum LiveTVChannelListViewModel {
         }
         return result
     }
+
+    /// Guide rows omit programmes that have already ended (`stop <= date`).
+    nonisolated static func activeOrUpcomingPrograms(
+        _ programs: [LiveTVProgram],
+        channelId: String,
+        at date: Date
+    ) -> [LiveTVProgram] {
+        programs
+            .filter { $0.channelId == channelId && $0.stop > date }
+            .sorted { $0.start < $1.start }
+    }
 }
 
