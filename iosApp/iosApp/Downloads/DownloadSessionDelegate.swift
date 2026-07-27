@@ -205,6 +205,7 @@ enum DownloadAuthHeaders {
         request.setValue(device.id, forHTTPHeaderField: "X-Prairie-Device-Id")
         request.setValue(device.name, forHTTPHeaderField: "X-Prairie-Device-Name")
         request.setValue(device.platform, forHTTPHeaderField: "X-Prairie-Device-Platform")
+        request.setValue(ImageFormats.headerValue, forHTTPHeaderField: "X-Prairie-Image-Formats")
         return request
     }
 }
