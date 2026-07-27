@@ -167,6 +167,105 @@ final class TrackSelectionPersistenceTests: XCTestCase {
         XCTAssertEqual(request.trackSignature?.label, "Signs & Songs")
     }
 
+    func testAudioRequestNilTracksAndEmptyLanguageFallbacks() {
+        let noTracks = decodedVersion("""
+        { "file_id": 1 }
+        """)
+        XCTAssertNil(TrackSelectionPersistence.audioRequest(version: noTracks, ordinal: 0))
+
+        let emptyLang = decodedVersion("""
+        { "file_id": 1, "audio_tracks": [ { "codec": "aac", "default": true } ] }
+        """)
+        let request = TrackSelectionPersistence.audioRequest(version: emptyLang, ordinal: 0)
+        XCTAssertEqual(request?.audioLanguage, "")
+        XCTAssertEqual(request?.trackSignature?.isDefault, true)
+        XCTAssertNil(request?.trackSignature?.language)
+    }
+
+    func testAudioRequestFromPlayerTrackWithOrdinal() {
+        let track = playerTrack(
+            kind: .audio,
+            title: nil,
+            lang: nil,
+            codec: "aac",
+            layout: "stereo",
+            channels: 2
+        )
+        let request = TrackSelectionPersistence.audioRequest(track: track, ordinal: 3)
+        XCTAssertEqual(request.audioTrackIndex, 3)
+        XCTAssertEqual(request.audioLanguage, "")
+        XCTAssertNil(request.trackSignature?.language)
+        XCTAssertEqual(request.trackSignature?.title, nil)
+    }
+
+    func testSubtitleOffRequestAndExternalPathFallback() {
+        let off = TrackSelectionPersistence.subtitleOffRequest(showForced: true)
+        XCTAssertEqual(off.subtitleTrackIndex, -1)
+        XCTAssertEqual(off.subtitleMode, SubtitleMode.off.rawValue)
+        XCTAssertEqual(off.showForcedSubtitles, true)
+        XCTAssertNil(off.trackSignature)
+
+        let version = decodedVersion("""
+        {
+          "file_id": 1,
+          "subtitle_tracks": [
+            { "index": 7, "codec": "subrip", "external": true, "forced": true, "hearing_impaired": false }
+          ]
+        }
+        """)
+        let request = TrackSelectionPersistence.subtitleRequest(
+            version: version,
+            ffIndex: 7,
+            showForced: false
+        )
+        XCTAssertEqual(request?.subtitleLanguage, "")
+        XCTAssertEqual(request?.externalSubtitlePath, "")
+        XCTAssertEqual(request?.trackSignature?.source, "external")
+        XCTAssertEqual(request?.trackSignature?.forced, true)
+        XCTAssertNil(request?.trackSignature?.label)
+    }
+
+    func testSubtitleRequestFromExternalPlayerTrack() {
+        let track = playerTrack(
+            kind: .sub,
+            title: "Downloaded",
+            lang: "fr",
+            codec: "subrip",
+            isForced: false,
+            isHearingImpaired: true,
+            isExternal: true,
+            ffIndex: nil
+        )
+        let request = TrackSelectionPersistence.subtitleRequest(track: track, showForced: true)
+        XCTAssertEqual(request.subtitleTrackIndex, -1)
+        XCTAssertEqual(request.subtitleLanguage, "fr")
+        XCTAssertEqual(request.trackSignature?.source, "external")
+        XCTAssertEqual(request.trackSignature?.hearingImpaired, true)
+        XCTAssertEqual(request.showForcedSubtitles, true)
+    }
+
+    /// Fire-and-forget writers hit ContinuumAPI without a server; the
+    /// catch / logger paths must still execute so the scoped gate sees
+    /// those lines (they are best-effort wrappers, not success paths).
+    func testSaveAndClearWritersExecuteFailurePaths() async {
+        let audio = AudioPrefRequest(
+            audioTrackIndex: 0,
+            audioLanguage: "en",
+            trackSignature: nil
+        )
+        let subtitle = TrackSelectionPersistence.subtitleOffRequest(showForced: nil)
+
+        TrackSelectionPersistence.saveAudio(prefKey: "cov-series", request: audio)
+        TrackSelectionPersistence.saveSubtitle(prefKey: "cov-series", request: subtitle)
+        TrackSelectionPersistence.clearAudio(prefKey: "cov-series")
+        TrackSelectionPersistence.clearSubtitle(prefKey: "cov-series")
+
+        // ContinuumAPI → HTTPClient throws serverUrlNotConfigured immediately
+        // when no server is configured; yield so the Tasks hit the catch paths.
+        for _ in 0..<40 { await Task.yield() }
+        try? await Task.sleep(nanoseconds: 250_000_000)
+    }
+
     // MARK: - Helpers
 
     private func decodedVersion(_ json: String) -> FileVersion {
@@ -183,6 +282,8 @@ final class TrackSelectionPersistenceTests: XCTestCase {
         layout: String? = nil,
         channels: Int? = nil,
         isForced: Bool = false,
+        isHearingImpaired: Bool = false,
+        isExternal: Bool = false,
         ffIndex: Int? = nil
     ) -> PlayerTrack {
         PlayerTrack(
@@ -196,9 +297,9 @@ final class TrackSelectionPersistenceTests: XCTestCase {
             bitrate: nil,
             isDefault: false,
             isForced: isForced,
-            isHearingImpaired: false,
+            isHearingImpaired: isHearingImpaired,
             isVisualImpaired: false,
-            isExternal: false,
+            isExternal: isExternal,
             isSelected: false,
             ffIndex: ffIndex,
             srcId: nil

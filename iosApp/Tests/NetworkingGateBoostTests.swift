@@ -217,4 +217,150 @@ final class NetworkingGateBoostTests: XCTestCase {
         XCTAssertFalse(library.isMovieLibrary)
         XCTAssertTrue(library.isSupportedLibrary)
     }
+
+    func testDeviceLoginStartRequestDefaultPropertyInits() throws {
+        // Memberwise init with omitted optionals exercises the default
+        // property initializers gated in DeviceLoginModels.swift.
+        let request = DeviceLoginStartRequest(
+            deviceName: "Apple TV",
+            devicePlatform: "tvOS"
+        )
+        let dict = try encodeSnake(request)
+        XCTAssertEqual(dict["device_name"] as? String, "Apple TV")
+        XCTAssertNil(dict["client_purpose"])
+        XCTAssertNil(dict["temporary"])
+
+        let approve = DeviceApproveRequest(code: "ABCD")
+        let approveDict = try encodeSnake(approve)
+        XCTAssertEqual(approveDict["code"] as? String, "ABCD")
+
+        let lookup = try decode(DeviceLookupResponse.self, """
+        {
+          "match_code": "99",
+          "device_name": "Living Room",
+          "device_platform": "tvOS",
+          "status": "pending",
+          "client_purpose": "pair",
+          "temporary": false
+        }
+        """)
+        XCTAssertEqual(lookup.matchCode, "99")
+        XCTAssertEqual(lookup.clientPurpose, "pair")
+        XCTAssertEqual(lookup.temporary, false)
+    }
+
+    func testPlaybackSessionAndCollectionsModelGaps() throws {
+        let session = try decode(PlaybackSessionResponse.self, """
+        {
+          "session_id": "sess-1",
+          "play_method": "direct",
+          "stream_url": "https://ex/stream",
+          "subtitle_urls": [
+            { "index": 1, "language": "en", "url": "https://ex/sub.vtt" }
+          ]
+        }
+        """)
+        XCTAssertEqual(session.sessionId, "sess-1")
+        XCTAssertEqual(session.position, 0)
+        XCTAssertEqual(session.timelineOffsetSeconds, 0)
+        XCTAssertEqual(session.subtitleUrls?.first?.id, 1)
+
+        let memberwise = MediaItemUserState(played: true, isFavorite: true, inWatchlist: false)
+        XCTAssertTrue(memberwise.played)
+        XCTAssertTrue(memberwise.isFavorite)
+
+        let sync = SyncProgressItem(
+            mediaItemId: "m1",
+            position: 12.5,
+            duration: 100,
+            forceOverwrite: true,
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )
+        XCTAssertEqual(sync.mediaItemId, "m1")
+        XCTAssertEqual(sync.forceOverwrite, true)
+
+        let collections = CollectionsResponse(collections: [], groups: nil)
+        XCTAssertEqual(collections.collections?.count, 0)
+        XCTAssertNil(collections.groups)
+
+        let decodedCollections = try decode(CollectionsResponse.self, """
+        { "collections": [], "groups": [] }
+        """)
+        XCTAssertEqual(decodedCollections.collections?.count, 0)
+
+        var body = UpdateUserCollectionGroupBody(groupId: "g1")
+        var encoded = try encodeSnake(body)
+        XCTAssertEqual(encoded["group_id"] as? String, "g1")
+        body = UpdateUserCollectionGroupBody(groupId: nil)
+        let data = try JSONEncoder().encode(body)
+        let nilDict = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        // encodeNil keeps the key present as JSON null.
+        XCTAssertTrue(nilDict.keys.contains("groupId") || nilDict.keys.contains("group_id"))
+    }
+
+    func testAudiobookRelatedAndSeasonUserDataDecode() throws {
+        let related = try decode(AudiobookRelatedContent.self, """
+        {
+          "also_by_author": [
+            { "content_id": "a1", "title": "Book A" }
+          ]
+        }
+        """)
+        XCTAssertEqual(related.alsoByAuthor.first?.id, "a1")
+        XCTAssertTrue(related.similar.isEmpty)
+
+        let series = try decode(AudiobookSeriesGroup.self, """
+        { "name": "Saga" }
+        """)
+        XCTAssertEqual(series.name, "Saga")
+        XCTAssertTrue(series.entries.isEmpty)
+
+        let season = try decode(Season.self, """
+        {
+          "content_id": "s1",
+          "season_number": 1,
+          "title": "One",
+          "user_data": { "watched_count": 2, "unplayed_count": 3 }
+        }
+        """)
+        XCTAssertEqual(season.id, "s1")
+        XCTAssertEqual(season.userData?.played, false)
+        XCTAssertEqual(season.userData?.watchedCount, 2)
+
+        let seasons = try decode([Season].self, """
+        [
+          { "content_id": "sa", "season_number": 1, "title": "B", "episode_count": 1 },
+          { "content_id": "sb", "season_number": 1, "title": "A", "episode_count": 1 },
+          { "content_id": "sc", "season_number": 1, "title": "A", "episode_count": 1 }
+        ]
+        """)
+        // Same season number → title, then contentId tie-break.
+        XCTAssertEqual(seasons.sortedForDisplay().map(\.contentId), ["sb", "sc", "sa"])
+
+        let sectionItem = try decode(SectionItem.self, """
+        { "content_id": "ab1", "type": "audiobook", "title": "Listen" }
+        """)
+        XCTAssertEqual(sectionItem.id, "ab1")
+        XCTAssertTrue(sectionItem.isAudiobook)
+
+        let mixed = try decode(Library.self, """
+        { "id": 9, "name": "Mixed", "type": "mixed" }
+        """)
+        XCTAssertTrue(mixed.isMixedLibrary)
+
+        let video = try decode(VideoTrack.self, """
+        { "codec": "hevc", "width": 1920, "height": 1080 }
+        """)
+        XCTAssertEqual(video.id, 0)
+
+        let person = try decode(AudiobookPerson.self, """
+        { "name": "Narrator" }
+        """)
+        XCTAssertEqual(person.id, "Narrator")
+
+        let narration = try decode(AudiobookNarration.self, """
+        { "content_id": "n1", "title": "Read", "narrators": ["Ada"] }
+        """)
+        XCTAssertEqual(narration.id, "n1")
+    }
 }
