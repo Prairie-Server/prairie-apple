@@ -52,7 +52,7 @@ Apple tests use XCTest under `iosApp/Tests/`. Do not add tests for small changes
 
 ViewInspector (`https://github.com/nalexn/ViewInspector`) is linked to the `PrairieTests` target only (see `iosApp/project.yml`). Use it sparingly for high-risk SwiftUI screens where empty/loading/error affordances must not regress — for example Live TV channel list states — not as a default for every view. Prefer decoder and pure-logic unit tests for Networking and ViewModel code.
 
-CI enforces a 75% line-coverage gate over unit-testable `/Networking/` code via
+CI enforces a 90% line-coverage gate over unit-testable `/Networking/` code via
 `scripts/check-xccov-coverage.sh` (not overall app UI coverage). The default
 include is `/Networking/`; live HTTP / session modules that need a real server
 (ContinuumAPI, HTTPClient, ContinuumAI, DiagnosticsAPI, ConnectionMonitor,
