@@ -328,7 +328,9 @@ targets:
         SKIP_INSTALL: "YES"
         ENABLE_TESTABILITY: "YES"
         CODE_SIGNING_ALLOWED: "NO"
-        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        # GHA macos-15 runners are still on macOS 15.x; keep this CI-only
+        # target runnable there even though the app ships with macOS 26 SDK.
+        MACOSX_DEPLOYMENT_TARGET: "15.0"
         DYLIB_INSTALL_NAME_BASE: "@rpath"
         LD_RUNPATH_SEARCH_PATHS: ["@executable_path/../Frameworks", "@loader_path/Frameworks"]
 
@@ -366,7 +368,7 @@ targets:
         SDKROOT: macosx
         SUPPORTED_PLATFORMS: macosx
         CODE_SIGNING_ALLOWED: "NO"
-        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        MACOSX_DEPLOYMENT_TARGET: "15.0"
 
   # Unit-test bundle for the iOS Prairie app. Hosts the XCTest cases under
   # Tests/ and loads the Prairie.app binary so `@testable import Prairie` can
