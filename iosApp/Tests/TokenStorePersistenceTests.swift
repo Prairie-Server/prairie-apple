@@ -175,9 +175,12 @@ final class TokenStorePersistenceTests: XCTestCase {
         XCTAssertEqual(activeId, "temp-server")
         await store.saveTokens(accessToken: "TEMP2", refreshToken: "TEMP2-R")
         await store.setProfileToken("TEMP-P2")
-        XCTAssertEqual(await store.getAccessToken(), "TEMP2")
-        XCTAssertEqual(await store.getRefreshToken(), "TEMP2-R")
-        XCTAssertEqual(await store.getProfileToken(), "TEMP-P2")
+        let tempAccess = await store.getAccessToken()
+        XCTAssertEqual(tempAccess, "TEMP2")
+        let tempRefresh = await store.getRefreshToken()
+        XCTAssertEqual(tempRefresh, "TEMP2-R")
+        let tempProfile = await store.getProfileToken()
+        XCTAssertEqual(tempProfile, "TEMP-P2")
 
         let ended = await store.endTemporaryScope()
         XCTAssertEqual(ended?.accessToken, "TEMP2")
@@ -202,8 +205,10 @@ final class TokenStorePersistenceTests: XCTestCase {
             expiresAt: Date().addingTimeInterval(600)
         ))
         await store.clearTokens()
-        XCTAssertFalse(await store.hasTemporaryScope())
-        XCTAssertEqual(await store.getAccessToken(), "PERM")
+        let stillScoped = await store.hasTemporaryScope()
+        XCTAssertFalse(stillScoped)
+        let restored = await store.getAccessToken()
+        XCTAssertEqual(restored, "PERM")
         XCTAssertEqual(keychain.get(TokenStore.accessTokenKey(for: serverId)), "PERM")
     }
 
