@@ -56,7 +56,6 @@ jobs:
           key: netci-mac-${{ runner.os }}-${{ hashFiles('iosApp/project.yml', 'iosApp/iosApp/Networking/**/*.swift', 'iosApp/iosApp/Shared/SharedStorage.swift', 'iosApp/iosApp/Shared/AppleDeviceIdentity.swift', 'iosApp/CI/NetworkingHost/**/*.swift', 'iosApp/Tests/Networking*.swift', 'iosApp/Tests/TokenStore*.swift', 'iosApp/Tests/ServerRegistry*.swift', 'iosApp/Tests/WireFormat*.swift', 'iosApp/Tests/AuthAndDevice*.swift', 'iosApp/Tests/ResponseCache*.swift', 'iosApp/Tests/PrairieFrame*.swift', 'iosApp/Tests/TrackSelection*.swift', 'iosApp/Tests/LiveTVModel*.swift', 'iosApp/Tests/AIModel*.swift', 'iosApp/Tests/PlaybackPrefs*.swift', 'iosApp/Tests/SubtitleSearch*.swift', 'iosApp/Tests/AppUpdate*.swift', 'iosApp/Tests/AIJob*.swift', 'iosApp/Tests/LibraryVisibility*.swift') }}
           restore-keys: |
             netci-mac-${{ runner.os }}-
-          save-always: true
 
       - name: Generate Xcode project
         working-directory: iosApp
@@ -66,10 +65,21 @@ jobs:
         working-directory: iosApp
         run: |
           set -euo pipefail
+          # Build the framework first so compile errors aren't masked by the
+          # test bundle's "Unable to find module 'Prairie'" cascade.
+          xcodebuild build \
+            -project Prairie.xcodeproj \
+            -target PrairieNetworkingHost \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath DerivedData \
+            -enableCodeCoverage YES \
+            CODE_SIGNING_ALLOWED=NO \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            ONLY_ACTIVE_ARCH=YES
           xcodebuild build-for-testing \
             -project Prairie.xcodeproj \
             -scheme PrairieNetworkingCI \
-            -destination 'platform=macOS' \
+            -destination 'platform=macOS,arch=arm64' \
             -derivedDataPath DerivedData \
             -enableCodeCoverage YES \
             -quiet \
@@ -110,7 +120,7 @@ jobs:
           xcodebuild test-without-building \
             -project Prairie.xcodeproj \
             -scheme PrairieNetworkingCI \
-            -destination 'platform=macOS' \
+            -destination 'platform=macOS,arch=arm64' \
             -derivedDataPath DerivedData \
             -enableCodeCoverage YES \
             -resultBundlePath TestResults.xcresult \
