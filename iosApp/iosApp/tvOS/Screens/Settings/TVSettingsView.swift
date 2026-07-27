@@ -122,7 +122,7 @@ struct TVSettingsView: View {
 
             signOutRow
 
-            Text("Prairie \(Self.versionString)")
+            Text("Prairie \(viewModel.appVersionDisplay)")
                 .font(.system(size: 16, weight: .medium, design: .monospaced))
                 .tracking(1)
                 .foregroundColor(.continuumSecondaryText.opacity(0.7))
@@ -315,7 +315,41 @@ struct TVSettingsView: View {
 
             TVSettingsSectionHeader("ABOUT")
 
-            TVSettingsInfoRow(title: "App Version", value: Self.versionString)
+            TVSettingsInfoRow(title: "App Version", value: viewModel.appVersionDisplay)
+            TVSettingsInfoRow(title: "Update status", value: viewModel.appUpdateStatus.statusLabel)
+            if let latest = viewModel.appUpdateStatus.latestVersionLabel {
+                TVSettingsInfoRow(title: "Latest version", value: latest)
+            }
+            if let changelogURL = viewModel.appUpdateStatus.changelogURL {
+                Link(destination: changelogURL) {
+                    HStack(spacing: 16) {
+                        Image(systemName: "doc.text")
+                            .font(.system(size: 22, weight: .medium))
+                        Text("Changelog")
+                            .font(.system(size: 26))
+                        Spacer(minLength: 0)
+                        Image(systemName: "arrow.up.right")
+                            .font(.system(size: 18, weight: .semibold))
+                            .opacity(0.55)
+                    }
+                }
+                .buttonStyle(TVSettingsPaneRowStyle())
+            }
+            if let releaseURL = viewModel.appUpdateStatus.releaseURL {
+                Link(destination: releaseURL) {
+                    HStack(spacing: 16) {
+                        Image(systemName: "arrow.down.app")
+                            .font(.system(size: 22, weight: .medium))
+                        Text("View update")
+                            .font(.system(size: 26))
+                        Spacer(minLength: 0)
+                        Image(systemName: "arrow.up.right")
+                            .font(.system(size: 18, weight: .semibold))
+                            .opacity(0.55)
+                    }
+                }
+                .buttonStyle(TVSettingsPaneRowStyle())
+            }
 
         }
     }
@@ -332,17 +366,6 @@ struct TVSettingsView: View {
         TVSettingsCategory.allCases.filter { category in
             category != .diagnostics || diagnosticsModel.shouldShowSettings
         }
-    }
-
-    private static var versionString: String {
-        let info = Bundle.main.infoDictionary
-        let version = info?["CFBundleShortVersionString"] as? String ?? "1.0.0"
-        guard let build = info?["CFBundleVersion"] as? String,
-              !build.isEmpty,
-              build != version else {
-            return version
-        }
-        return "\(version) (\(build))"
     }
 }
 

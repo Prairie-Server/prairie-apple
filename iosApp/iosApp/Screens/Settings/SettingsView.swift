@@ -17,6 +17,9 @@ struct SettingsView: View {
     @State private var navPrefs = AppNavPreferences.shared
     @State private var diagnosticsModel = DiagnosticsViewModel()
     #endif
+    #if !os(tvOS)
+    @State private var appUpdateStatus: AppUpdateStatus = .checking
+    #endif
 
     var body: some View {
         #if os(tvOS)
@@ -276,7 +279,8 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - About
+    #if !os(tvOS)
+    private var versionString: String { AppUpdateChecker.displayVersionString() }
 
     private var aboutSection: some View {
         Section("About") {
@@ -287,15 +291,38 @@ struct SettingsView: View {
                 Text("Version")
                     .foregroundStyle(Color.continuumOnSurface)
             }
+            LabeledContent {
+                Text(appUpdateStatus.statusLabel)
+                    .foregroundStyle(Color.continuumSecondaryText)
+            } label: {
+                Text("Update status")
+                    .foregroundStyle(Color.continuumOnSurface)
+            }
+            if let latest = appUpdateStatus.latestVersionLabel {
+                LabeledContent {
+                    Text(latest)
+                        .foregroundStyle(Color.continuumSecondaryText)
+                } label: {
+                    Text("Latest version")
+                        .foregroundStyle(Color.continuumOnSurface)
+                }
+            }
+            if let changelogURL = appUpdateStatus.changelogURL {
+                Link(destination: changelogURL) {
+                    Text("Changelog")
+                        .foregroundStyle(Color.continuumOnSurface)
+                }
+            }
+            if let releaseURL = appUpdateStatus.releaseURL {
+                Link(destination: releaseURL) {
+                    Text("View update")
+                        .foregroundStyle(Color.continuumOnSurface)
+                }
+            }
         }
-    }
-
-    private var versionString: String {
-        let short = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
-        if let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String, build != short {
-            return "\(short) (\(build))"
+        .task {
+            appUpdateStatus = await AppUpdateChecker.check()
         }
-        return short
     }
 
     // MARK: - Sign Out

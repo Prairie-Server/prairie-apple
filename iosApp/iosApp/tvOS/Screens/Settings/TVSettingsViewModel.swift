@@ -71,6 +71,10 @@ final class TVSettingsViewModel {
     private var isSavingMetadataLanguage = false
     private var pendingMetadataLanguageValue: String?
 
+    // App version / update status (GitHub Releases for prairie-apple).
+    var appVersionDisplay: String = AppUpdateChecker.displayVersionString()
+    var appUpdateStatus: AppUpdateStatus = .checking
+
     enum PrefSaveState: Equatable {
         case saving
         case saved
@@ -131,6 +135,13 @@ final class TVSettingsViewModel {
         }
 
         projectActiveProfileIntoEditor()
+        await refreshAppUpdateStatus()
+    }
+
+    func refreshAppUpdateStatus() async {
+        appVersionDisplay = AppUpdateChecker.displayVersionString()
+        appUpdateStatus = .checking
+        appUpdateStatus = await AppUpdateChecker.check()
     }
 
     func saveSubtitleSizePreference() {
