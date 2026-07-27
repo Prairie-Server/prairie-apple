@@ -52,19 +52,14 @@ jobs:
         run: |
           set -euo pipefail
           # Prefer newer iPhone sims first (Xcode 26+ often ships 17 without 16).
+          # Use simctl only on the hot path — xcodebuild -showdestinations is ~45s.
           CANDIDATES=("iPhone 17" "iPhone 17 Pro" "iPhone 16" "iPhone 16 Pro" "iPhone 15")
-          DEST_LIST="$(xcodebuild -project iosApp/Prairie.xcodeproj -scheme Prairie -showdestinations 2>/dev/null || true)"
           SIM_LIST="$(xcrun simctl list devices available || true)"
           echo "Available simulators:"
           echo "$SIM_LIST" | grep -E '^[[:space:]]*iPhone ' || true
 
           pick=""
           for name in "${CANDIDATES[@]}"; do
-            # Match exact device name tokens from xcodebuild destinations.
-            if echo "$DEST_LIST" | grep -E "name:${name}(,|\$)" >/dev/null 2>&1; then
-              pick="$name"
-              break
-            fi
             # simctl lines look like: "    iPhone 17 (UUID) (Shutdown)"
             if echo "$SIM_LIST" | grep -E "^[[:space:]]*${name}[[:space:]]+\(" >/dev/null 2>&1; then
               pick="$name"
@@ -73,11 +68,22 @@ jobs:
           done
 
           if [[ -z "$pick" ]]; then
-            # Last resort: first available iPhone line from simctl.
+            # Fallback: first available iPhone from simctl.
             pick="$(echo "$SIM_LIST" \
               | grep -E '^[[:space:]]*iPhone ' \
               | head -n 1 \
               | sed -E 's/^[[:space:]]*//; s/[[:space:]]*\([^)]*\)[[:space:]]*\([^)]*\)[[:space:]]*$//; s/[[:space:]]+$//')"
+          fi
+
+          if [[ -z "$pick" ]]; then
+            # Last resort (~45s): ask xcodebuild for destinations.
+            DEST_LIST="$(xcodebuild -project iosApp/Prairie.xcodeproj -scheme Prairie -showdestinations 2>/dev/null || true)"
+            for name in "${CANDIDATES[@]}"; do
+              if echo "$DEST_LIST" | grep -E "name:${name}(,|\$)" >/dev/null 2>&1; then
+                pick="$name"
+                break
+              fi
+            done
           fi
 
           if [[ -n "$pick" ]]; then
