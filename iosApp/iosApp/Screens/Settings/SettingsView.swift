@@ -261,6 +261,16 @@ struct SettingsView: View {
 
     private var connectionSection: some View {
         Section {
+            NavigationLink {
+                QuickConnectView()
+            } label: {
+                SettingsRowLabel(
+                    title: "Quick Connect",
+                    systemImage: "qrcode.viewfinder",
+                    color: .green
+                )
+            }
+
             Button {
                 router.navigate(to: .serverList)
             } label: {
