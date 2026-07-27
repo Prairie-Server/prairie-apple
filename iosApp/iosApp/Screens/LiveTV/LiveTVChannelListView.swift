@@ -67,11 +67,11 @@ struct LiveTVChannelListView: View {
                 titleVisibility: .visible,
                 presenting: recordingPendingCancel
             ) { recording in
-                Button("Cancel recording", role: .destructive) {
+                Button("Cancel recording", systemImage: "xmark.circle", role: .destructive) {
                     Task { await viewModel.cancelRecording(recording) }
                     recordingPendingCancel = nil
                 }
-                Button("Keep", role: .cancel) {
+                Button("Keep", systemImage: "checkmark", role: .cancel) {
                     recordingPendingCancel = nil
                 }
             } message: { recording in

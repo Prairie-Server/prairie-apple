@@ -135,7 +135,7 @@ private struct ItemDetailPhoneContent: View {
                     resumePosition: choice.resumePosition
                 )
             }
-            Button("Stream from Server") {
+            Button("Stream from Server", systemImage: "antenna.radiowaves.left.and.right") {
                 presentStreamingPlayer(
                     contentId: choice.contentId,
                     fileId: choice.fileId,
@@ -145,7 +145,7 @@ private struct ItemDetailPhoneContent: View {
                     resumePosition: choice.resumePosition
                 )
             }
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", systemImage: "xmark", role: .cancel) {}
         } message: { _ in
             Text("Play the copy saved on this device, or stream from the server.")
         }
@@ -159,7 +159,7 @@ private struct ItemDetailPhoneContent: View {
         ) { request in
             // Reachability state can be stale (e.g. the server just came
             // back), so always leave an escape hatch to attempt the stream.
-            Button("Try Anyway") {
+            Button("Try Anyway", systemImage: "arrow.clockwise") {
                 Task { await ConnectionMonitor.shared.probeServer() }
                 presentStreamingPlayer(
                     contentId: request.contentId,
@@ -170,7 +170,7 @@ private struct ItemDetailPhoneContent: View {
                     resumePosition: request.resumePosition
                 )
             }
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", systemImage: "xmark", role: .cancel) {}
         } message: { _ in
             Text(ConnectionMonitor.shared.isDeviceOnline
                 ? "Streaming needs a connection to your server, which isn't responding right now. Downloaded titles can still be played."

@@ -93,10 +93,10 @@ struct DownloadsSettingsView: View {
             isPresented: $showDeleteAllConfirm,
             titleVisibility: .visible
         ) {
-            Button("Remove All", role: .destructive) {
+            Button("Remove All", systemImage: "trash", role: .destructive) {
                 manager.deleteDownloads(ids: manager.records.map(\.id))
             }
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", systemImage: "xmark", role: .cancel) {}
         }
     }
 }

@@ -1147,7 +1147,7 @@ struct MainTabView: View {
     private var settingsPlaceholder: some View {
         List {
             Section {
-                Button("Switch Profile") {
+                Button("Switch Profile", systemImage: "person.crop.circle") {
                     AuthService.shared.profileId = nil
                     router.showProfileSelection()
                 }
@@ -1155,7 +1155,7 @@ struct MainTabView: View {
             }
 
             Section {
-                Button("Sign Out") {
+                Button("Sign Out", systemImage: "rectangle.portrait.and.arrow.right") {
                     router.signOutAndReset()
                 }
                 .foregroundColor(.continuumError)

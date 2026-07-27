@@ -162,7 +162,7 @@ struct PINEntryView: View {
     }
 
     private var cancelButton: some View {
-        Button("Cancel", action: cancel)
+        Button("Cancel", systemImage: "xmark", action: cancel)
             .prairieTextButton()
     }
 

@@ -438,7 +438,7 @@ struct SubtitleTranslateMenu: View {
             .continuumNavigationTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { onDismiss() }
+                    Button("Done", systemImage: "checkmark") { onDismiss() }
                 }
             }
             .task { await controller.refreshQuota() }

@@ -36,11 +36,11 @@ struct DownloadReclaimSheet: View {
             #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
+                    Button("Done", systemImage: "checkmark") { dismiss() }
                 }
                 if !records.isEmpty {
                     ToolbarItem(placement: .primaryAction) {
-                        Button(allSelected ? "Deselect All" : "Select All") { toggleAll() }
+                        Button(allSelected ? "Deselect All" : "Select All", systemImage: allSelected ? "arrow.counterclockwise" : "checkmark.circle") { toggleAll() }
                     }
                 }
             }
@@ -128,7 +128,7 @@ struct DownloadReclaimSheet: View {
                 .buttonStyle(.plain)
                 .disabled(selected.isEmpty)
 
-                Button("Not now") { dismiss() }
+                Button("Not now", systemImage: "xmark") { dismiss() }
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(.continuumOnSurface)
                     .frame(maxWidth: .infinity)

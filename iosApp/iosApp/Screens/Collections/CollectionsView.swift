@@ -190,7 +190,7 @@ struct CollectionsView: View {
                 TextField("Collection name", text: $viewModel.newCollectionName)
                     .textFieldStyle(ContinuumTextFieldStyle())
 
-                Button("Create Collection") {
+                Button("Create Collection", systemImage: "plus") {
                     Task { await viewModel.createCollection() }
                 }
                 .prairiePrimaryButton()
@@ -204,7 +204,7 @@ struct CollectionsView: View {
             .continuumNavigationTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
+                    Button("Cancel", systemImage: "xmark") {
                         viewModel.showCreateSheet = false
                     }
                     .foregroundColor(.continuumSecondaryText)
@@ -232,11 +232,11 @@ private struct GroupActionSheet: View {
                 .continuumNavigationTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { dismiss() }
+                        Button("Cancel", systemImage: "xmark") { dismiss() }
                             .foregroundColor(.continuumSecondaryText)
                     }
                     ToolbarItem(placement: .confirmationAction) {
-                        Button(confirmLabel) { Task { await confirm() } }
+                        Button(confirmLabel, systemImage: confirmSystemImage) { Task { await confirm() } }
                             .foregroundColor(.continuumPrimary)
                             .disabled(!canConfirm)
                     }
@@ -348,6 +348,15 @@ private struct GroupActionSheet: View {
         case .rename: return "Save"
         case .delete: return "Delete"
         case .move: return "Move"
+        }
+    }
+
+    private var confirmSystemImage: String {
+        switch action {
+        case .create: return "plus"
+        case .rename: return "square.and.arrow.down"
+        case .delete: return "trash"
+        case .move: return "folder"
         }
     }
 

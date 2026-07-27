@@ -39,11 +39,11 @@ struct TVDiagnosticsPendingReportScreen: View {
                 Spacer()
 
                 HStack(spacing: 18) {
-                    Button("Cancel", action: dismiss.callAsFunction)
+                    Button("Cancel", systemImage: "xmark", action: dismiss.callAsFunction)
                         .buttonStyle(TVSettingsPaneRowStyle())
                         .focused($focusedAction, equals: .cancel)
 
-                    Button("Send Report") {
+                    Button("Send Report", systemImage: "paperplane.fill") {
                         Task {
                             await model.send(report)
                             dismiss()
@@ -53,7 +53,7 @@ struct TVDiagnosticsPendingReportScreen: View {
                     .disabled(!model.featureState.isUploadAvailable || model.isWorking)
                     .focused($focusedAction, equals: .send)
 
-                    Button("Delete Report") { showDeleteConfirmation = true }
+                    Button("Delete Report", systemImage: "trash") { showDeleteConfirmation = true }
                         .buttonStyle(TVSettingsPaneRowStyle(isDestructive: true))
                         .disabled(model.isWorking)
                         .focused($focusedAction, equals: .delete)

@@ -20,7 +20,7 @@ struct QuickConnectView: View {
                         }
                     }
 
-                Button("Continue") {
+                Button("Continue", systemImage: "arrow.right") {
                     Task { await viewModel.lookupDevice() }
                 }
                 .disabled(!viewModel.canLookup || viewModel.phase == .loading)
@@ -67,11 +67,11 @@ struct QuickConnectView: View {
 
             if case .ready = viewModel.phase {
                 Section {
-                    Button("Approve sign-in") {
+                    Button("Approve sign-in", systemImage: "checkmark") {
                         Task { await viewModel.approve() }
                     }
                     .disabled(!viewModel.canDecide)
-                    Button("Deny", role: .destructive) {
+                    Button("Deny", systemImage: "xmark", role: .destructive) {
                         Task { await viewModel.deny() }
                     }
                     .disabled(!viewModel.canDecide)
@@ -81,7 +81,7 @@ struct QuickConnectView: View {
             if case let .completed(approved) = viewModel.phase {
                 Section {
                     Text(approved ? "Approved. Finish sign-in on the other device." : "This sign-in request was denied.")
-                    Button("Enter another code") {
+                    Button("Enter another code", systemImage: "arrow.counterclockwise") {
                         viewModel.reset()
                     }
                 }

@@ -76,19 +76,26 @@ struct LoginView: View {
                 Button {
                     signIn()
                 } label: {
-                    Text(viewModel.isLoading ? "Signing in…" : "Sign in")
+                    Label(
+                        viewModel.isLoading ? "Signing in…" : "Sign in",
+                        systemImage: "rectangle.portrait.and.arrow.right"
+                    )
                 }
                 .buttonStyle(AuroraPrimaryButtonStyle(isLoading: viewModel.isLoading))
                 .disabled(viewModel.isLoading)
                 .padding(.top, 4)
 
                 if viewModel.signupEnabled {
-                    Button("Create an account") { router.navigate(to: .signup) }
+                    Button("Create an account", systemImage: "person.badge.plus") {
+                        router.navigate(to: .signup)
+                    }
                         .buttonStyle(AuroraGhostButtonStyle())
                         .frame(maxWidth: .infinity)
                 }
 
-                Button("Use a different server") { router.resetToServerSetup() }
+                Button("Use a different server", systemImage: "server.rack") {
+                    router.resetToServerSetup()
+                }
                     .buttonStyle(AuroraGhostButtonStyle())
                     .frame(maxWidth: .infinity)
                 .disabled(viewModel.isLoading)

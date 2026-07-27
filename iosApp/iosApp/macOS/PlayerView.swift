@@ -204,12 +204,12 @@ struct PlayerView: View {
                 .frame(maxWidth: 520)
 
             HStack(spacing: 12) {
-                Button("Retry") {
+                Button("Retry", systemImage: "arrow.clockwise") {
                     viewModel.retry()
                 }
                 .buttonStyle(.borderedProminent)
 
-                Button("Close") {
+                Button("Close", systemImage: "xmark") {
                     dismiss()
                 }
                 .keyboardShortcut(.cancelAction)

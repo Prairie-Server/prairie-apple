@@ -228,7 +228,7 @@ struct CreateProfileView: View {
 
             ChildProfileRow(isOn: $isChild)
 
-            Button("Create Profile") {
+            Button("Create Profile", systemImage: "person.badge.plus") {
                 guard !isLoading else { return }
                 Task { await createProfile() }
             }
@@ -333,7 +333,7 @@ struct CreateProfileView: View {
                         }
                         .tint(.continuumAccent)
 
-                        Button("Create Profile") {
+                        Button("Create Profile", systemImage: "person.badge.plus") {
                             Task { await createProfile() }
                         }
                         .prairiePrimaryButton(isLoading: isLoading)
@@ -345,7 +345,7 @@ struct CreateProfileView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel", systemImage: "xmark") { dismiss() }
                         .foregroundColor(.continuumPrimary)
                 }
             }

@@ -192,9 +192,9 @@ extension View {
         onRestart: @escaping () -> Void
     ) -> some View {
         alert("Continue Watching?", isPresented: isPresented) {
-            Button("Resume", action: onResume)
-            Button("Play from Beginning", action: onRestart)
-            Button("Cancel", role: .cancel) {}
+            Button("Resume", systemImage: "play.fill", action: onResume)
+            Button("Play from Beginning", systemImage: "backward.end.fill", action: onRestart)
+            Button("Cancel", systemImage: "xmark", role: .cancel) {}
         } message: {
             Text("You stopped at \(timestamp).")
         }

@@ -15,8 +15,10 @@ struct DiagnosticsPromptSheet: View {
                 }
 
                 Section {
-                    NavigationLink("View Report") {
+                    NavigationLink {
                         DiagnosticsPromptReviewView(prompt: prompt, model: model)
+                    } label: {
+                        Label("View Report", systemImage: "eye")
                     }
 
                     Button("Send", systemImage: "paperplane.fill") {
@@ -24,7 +26,7 @@ struct DiagnosticsPromptSheet: View {
                     }
                     .disabled(model.isWorking)
 
-                    Button("Always Send", systemImage: "checkmark.shield.fill") {
+                    Button("Always Send", systemImage: "paperplane.circle.fill") {
                         showAlwaysConfirmation = true
                     }
                     .disabled(model.isWorking)
@@ -41,7 +43,7 @@ struct DiagnosticsPromptSheet: View {
                         Text("This report and future crash reports for this server account will be sent automatically.")
                     }
 
-                    Button("Don't Send", role: .cancel, action: model.declinePrompt)
+                    Button("Don't Send", systemImage: "nosign", role: .cancel, action: model.declinePrompt)
                         .disabled(model.isWorking)
                 }
 

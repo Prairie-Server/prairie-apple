@@ -152,7 +152,7 @@ struct MediaRow: View {
             Spacer()
 
             if let onSeeAll {
-                Button("See All") {
+                Button("See All", systemImage: "chevron.right") {
                     onSeeAll()
                 }
                 .font(.continuumCaption)

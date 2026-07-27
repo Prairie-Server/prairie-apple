@@ -291,14 +291,14 @@ struct DownloadsView: View {
     private var toolbarContent: some ToolbarContent {
         if isSelecting {
             ToolbarItem(placement: .navigation) {
-                Button(allSelected ? "Clear" : "Select All") { toggleSelectAll() }
+                Button(allSelected ? "Clear" : "Select All", systemImage: allSelected ? "arrow.counterclockwise" : "checkmark.circle") { toggleSelectAll() }
             }
             ToolbarItem(placement: .primaryAction) {
-                Button("Done") { exitSelectMode() }
+                Button("Done", systemImage: "checkmark") { exitSelectMode() }
             }
         } else if !listItems.isEmpty {
             ToolbarItem(placement: .primaryAction) {
-                Button("Select") { isSelecting = true }
+                Button("Select", systemImage: "checkmark.circle") { isSelecting = true }
             }
         }
     }

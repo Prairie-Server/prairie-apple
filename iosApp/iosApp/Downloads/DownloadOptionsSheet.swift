@@ -96,10 +96,10 @@ struct DownloadOptionsSheet: View {
             .background(Color.continuumBackground)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel", systemImage: "xmark") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Download") {
+                    Button("Download", systemImage: "arrow.down.circle") {
                         onStart(DownloadRequestOptions(fileId: fileId, quality: quality))
                         dismiss()
                     }

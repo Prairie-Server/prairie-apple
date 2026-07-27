@@ -107,7 +107,7 @@ struct EditProfileView: View {
                         }
 
                         // Save button
-                        Button("Save Changes") {
+                        Button("Save Changes", systemImage: "square.and.arrow.down") {
                             Task { await saveProfile() }
                         }
                         .prairiePrimaryButton(isLoading: isLoading)
@@ -118,7 +118,7 @@ struct EditProfileView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel", systemImage: "xmark") { dismiss() }
                         .foregroundColor(.continuumPrimary)
                 }
             }
