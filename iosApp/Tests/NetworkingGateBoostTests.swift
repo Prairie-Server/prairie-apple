@@ -2,7 +2,7 @@
 //  NetworkingGateBoostTests.swift
 //  PrairieTests
 //
-//  Extra Networking unit coverage toward the 90% scoped xccov gate
+//  Extra Networking unit coverage toward the 95% scoped xccov gate
 //  (models / persistence helpers / cache keys — not live HTTP clients).
 //
 

@@ -6,7 +6,7 @@
 #
 # Default path filter is `/Networking/` — the unit-testable Networking surface
 # AGENTS.md describes. Live HTTP / session modules that need a real server (or
-# heavy URLSession mocking) are excluded from the default scope so the 90%
+# heavy URLSession mocking) are excluded from the default scope so the 95%
 # gate stays enforceable while still covering models, persistence, stores that
 # are pure-logic, and frame codecs. Pass explicit path substrings to replace
 # the default include list (excludes still apply unless XCCOV_NO_EXCLUDES=1).
@@ -17,7 +17,7 @@
 #   XCCOV_NO_EXCLUDES=1  — disable excludes (gate truly all matched paths)
 #
 # Example:
-#   check-xccov-coverage.sh coverage.json 90 /Networking/AIModels.swift
+#   check-xccov-coverage.sh coverage.json 95 /Networking/AIModels.swift
 
 # Exit codes:
 #   0 — coverage meets or exceeds min_percent
