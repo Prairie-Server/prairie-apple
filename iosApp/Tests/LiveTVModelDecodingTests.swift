@@ -164,6 +164,19 @@ final class LiveTVModelDecodingTests: XCTestCase {
         XCTAssertFalse(session.isHLS)
     }
 
+    func testSessionStartMpegtsTransportWithLiveHlsBridgeIsHLS() throws {
+        let session = try decode(LiveTVSessionStartResponse.self, """
+        {
+          "session_id": "sess-bridge",
+          "playback_ticket": "ticket-bridge",
+          "hls_url": "/api/v1/livetv/live-hls/ticket-bridge/index.m3u8",
+          "stream_url": "/api/v1/livetv/sessions/sess-bridge/stream",
+          "transport": "mpegts"
+        }
+        """)
+        XCTAssertTrue(session.isHLS)
+    }
+
     func testSessionStartInfersHLSFromManifestSuffix() throws {
         let session = try decode(LiveTVSessionStartResponse.self, """
         {
@@ -182,6 +195,31 @@ final class LiveTVModelDecodingTests: XCTestCase {
             serverBaseURL: "https://server.test"
         )
         XCTAssertEqual(url?.absoluteString, "https://server.test/api/v1/livetv/sessions/s1/stream")
+    }
+
+    func testLiveTVURLResolverAppendsTokenAndProfileIdForSameOrigin() throws {
+        let url = try XCTUnwrap(LiveTVURLResolver.resolve(
+            "/api/v1/livetv/live-hls/t1/index.m3u8",
+            serverBaseURL: "https://server.test",
+            accessToken: "access-tok",
+            profileId: "profile-1"
+        ))
+        let components = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false))
+        XCTAssertEqual(components.host, "server.test")
+        XCTAssertEqual(components.path, "/api/v1/livetv/live-hls/t1/index.m3u8")
+        let query = Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value) })
+        XCTAssertEqual(query["token"], "access-tok")
+        XCTAssertEqual(query["profile_id"], "profile-1")
+    }
+
+    func testLiveTVURLResolverDoesNotAttachAuthToCrossOriginURLs() {
+        let url = LiveTVURLResolver.resolve(
+            "https://cdn.test/live/index.m3u8",
+            serverBaseURL: "https://server.test",
+            accessToken: "access-tok",
+            profileId: "profile-1"
+        )
+        XCTAssertEqual(url?.absoluteString, "https://cdn.test/live/index.m3u8")
     }
 
     func testLiveTVURLResolverPrefixesBarePathsWithApiV1() {

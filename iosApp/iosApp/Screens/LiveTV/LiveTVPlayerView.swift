@@ -1,8 +1,8 @@
 import SwiftUI
 import AVKit
 
-/// Live player: AVPlayer over an authenticated HLS session URL. MPEG-TS
-/// sessions show an explanatory error because AVPlayer cannot play them.
+/// Live player: AVPlayer over an authenticated HLS session URL. Query params
+/// on the manifest keep segment fetches authed; headers cover the first fetch.
 /// Releases the server-side tuner session on dismiss.
 struct LiveTVPlayerView: View {
     let session: LiveTVPlayerSession
@@ -11,21 +11,22 @@ struct LiveTVPlayerView: View {
     @State private var player: AVPlayer?
     @State private var playbackError: String?
     @State private var didRelease = false
+    @State private var itemStatusObservation: NSKeyValueObservation?
 
     var body: some View {
         ZStack(alignment: .topLeading) {
             Color.black.ignoresSafeArea()
 
-            if !session.isHLS {
-                unsupportedTransportView
-            } else if let playbackError {
+            if let playbackError {
                 playbackErrorView(playbackError)
             } else if let player {
                 VideoPlayer(player: player)
                     .ignoresSafeArea()
-            } else {
+            } else if shouldAttemptPlayback {
                 ProgressView()
                     .tint(.white)
+            } else {
+                playbackErrorView("Live stream URL missing")
             }
 
             Button {
@@ -40,21 +41,20 @@ struct LiveTVPlayerView: View {
             .accessibilityLabel("Close live TV")
         }
         .task {
-            guard session.isHLS else { return }
-            await startHLSPlayback()
+            await startPlaybackIfPossible()
         }
         .onDisappear {
+            itemStatusObservation?.invalidate()
+            itemStatusObservation = nil
             releaseSessionIfNeeded()
             player?.pause()
             player = nil
         }
     }
 
-    private var unsupportedTransportView: some View {
-        playbackErrorView(
-            "Live MPEG-TS playback isn't supported on Apple devices. "
-                + "Ask your server admin to enable HLS transcoding for Live TV."
-        )
+    /// Attempt playback whenever the session exposes a stream URL.
+    private var shouldAttemptPlayback: Bool {
+        session.streamURL != nil
     }
 
     private func playbackErrorView(_ message: String) -> some View {
@@ -72,7 +72,7 @@ struct LiveTVPlayerView: View {
         .accessibilityIdentifier("livetv-player-error")
     }
 
-    private func startHLSPlayback() async {
+    private func startPlaybackIfPossible() async {
         guard let url = session.streamURL else {
             playbackError = "Live stream URL missing"
             return
@@ -85,6 +85,12 @@ struct LiveTVPlayerView: View {
         }
         let asset = AVURLAsset(url: url, options: options)
         let item = AVPlayerItem(asset: asset)
+        itemStatusObservation = item.observe(\.status, options: [.initial, .new]) { item, _ in
+            guard item.status == .failed else { return }
+            Task { @MainActor in
+                playbackError = item.error?.localizedDescription ?? "Unable to play live stream"
+            }
+        }
         let av = AVPlayer(playerItem: item)
         player = av
         av.play()

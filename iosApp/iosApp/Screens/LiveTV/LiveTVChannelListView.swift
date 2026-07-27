@@ -553,8 +553,15 @@ struct LiveTVChannelListView: View {
             }
 
             let serverUrl = await ContinuumAPI.shared.currentServerUrl()
-            let resolved = LiveTVURLResolver.resolve(raw, serverBaseURL: serverUrl)
-            if session.isHLS, resolved == nil {
+            let accessToken = await TokenStore.shared.getAccessToken()
+            let profileId = await TokenStore.shared.getProfileId()
+            let resolved = LiveTVURLResolver.resolve(
+                raw,
+                serverBaseURL: serverUrl,
+                accessToken: accessToken,
+                profileId: profileId
+            )
+            guard resolved != nil else {
                 await viewModel.releaseSession(session.sessionId)
                 viewModel.setStatusMessage("Live stream URL missing")
                 return
