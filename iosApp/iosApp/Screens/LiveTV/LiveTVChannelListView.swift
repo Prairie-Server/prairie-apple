@@ -279,6 +279,8 @@ struct LiveTVChannelListView: View {
     }
 
     private func guideProgramCard(_ program: LiveTVProgram) -> some View {
+        let canRecord = program.stop > Date()
+            && !program.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         VStack(alignment: .leading, spacing: 6) {
             Text(program.displayTitle)
                 .font(.continuumCaption)
@@ -287,7 +289,7 @@ struct LiveTVChannelListView: View {
             Text(timeRange(program))
                 .font(.continuumCaption)
                 .foregroundStyle(Color.continuumSecondaryText)
-            if !program.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if canRecord {
                 Button {
                     Task { await viewModel.scheduleRecording(program: program) }
                 } label: {

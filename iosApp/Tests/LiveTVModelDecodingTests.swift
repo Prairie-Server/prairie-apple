@@ -324,4 +324,34 @@ final class LiveTVModelDecodingTests: XCTestCase {
         XCTAssertEqual(map["ch"]?.now?.id, "a")
         XCTAssertEqual(map["ch"]?.next?.id, "b")
     }
+
+    func testProgramsForChannelOmitsEnded() {
+        let cal = ISO8601DateFormatter()
+        cal.formatOptions = [.withInternetDateTime]
+        let t0 = cal.date(from: "2026-07-25T18:00:00Z")!
+        let t1 = cal.date(from: "2026-07-25T19:00:00Z")!
+        let t2 = cal.date(from: "2026-07-25T20:00:00Z")!
+        let now = cal.date(from: "2026-07-25T19:15:00Z")!
+
+        let programs = [
+            LiveTVProgram(
+                id: "ended", channelId: "ch", sourceId: nil, seriesId: "",
+                externalId: nil, start: t0, stop: t1, title: "Ended",
+                subtitle: "", description: "", season: nil, episode: nil,
+                genres: [], imageUrl: "", isNew: false, isLive: false
+            ),
+            LiveTVProgram(
+                id: "airing", channelId: "ch", sourceId: nil, seriesId: "",
+                externalId: nil, start: t1, stop: t2, title: "Airing",
+                subtitle: "", description: "", season: nil, episode: nil,
+                genres: [], imageUrl: "", isNew: false, isLive: false
+            ),
+        ]
+        let visible = LiveTVChannelListViewModel.activeOrUpcomingPrograms(
+            programs,
+            channelId: "ch",
+            at: now
+        )
+        XCTAssertEqual(visible.map(\.id), ["airing"])
+    }
 }

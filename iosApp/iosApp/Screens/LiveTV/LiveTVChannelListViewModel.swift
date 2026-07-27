@@ -59,9 +59,18 @@ final class LiveTVChannelListViewModel {
         }
     }
 
-    func programs(for channelId: String) -> [LiveTVProgram] {
+    func programs(for channelId: String, at date: Date = Date()) -> [LiveTVProgram] {
+        Self.activeOrUpcomingPrograms(programs, channelId: channelId, at: date)
+    }
+
+    /// Guide rows omit programmes that have already ended (`stop <= date`).
+    nonisolated static func activeOrUpcomingPrograms(
+        _ programs: [LiveTVProgram],
+        channelId: String,
+        at date: Date
+    ) -> [LiveTVProgram] {
         programs
-            .filter { $0.channelId == channelId }
+            .filter { $0.channelId == channelId && $0.stop > date }
             .sorted { $0.start < $1.start }
     }
 
@@ -102,7 +111,8 @@ final class LiveTVChannelListViewModel {
             return
         }
         let now = Date()
-        let start = now.addingTimeInterval(-30 * 60)
+        // Start at now — still-airing shows that began earlier are returned by overlap.
+        let start = now
         let end = now.addingTimeInterval(6 * 60 * 60)
         do {
             let guide = try await api.liveTVGuide(
@@ -155,6 +165,10 @@ final class LiveTVChannelListViewModel {
         let programId = program.id.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !programId.isEmpty else {
             recordingMessage = "Program not found"
+            return
+        }
+        guard program.stop > Date() else {
+            recordingMessage = "Program already ended"
             return
         }
         guard !schedulingProgramIds.contains(programId) else { return }
