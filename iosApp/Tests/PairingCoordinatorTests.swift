@@ -88,6 +88,10 @@ private final class FakePairingAPI: PairingDeviceAuthorizing, @unchecked Sendabl
         if let approveError { throw approveError }
         approvedCodes.append(userCode)
     }
+
+    func deny(serverURL: String, bearer: String, userCode: String) async throws {
+        if let approveError { throw approveError }
+    }
 }
 
 // MARK: - Helpers

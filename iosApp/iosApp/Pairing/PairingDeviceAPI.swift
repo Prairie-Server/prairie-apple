@@ -8,6 +8,7 @@ protocol PairingDeviceAuthorizing: Sendable {
     func poll(serverURL: String, deviceCode: String) async throws -> DeviceLoginPollResponse
     func lookup(serverURL: String, bearer: String, userCode: String) async throws -> DeviceLookupResponse
     func approve(serverURL: String, bearer: String, userCode: String) async throws
+    func deny(serverURL: String, bearer: String, userCode: String) async throws
 }
 
 /// Device-authorization calls issued against an EXPLICIT server base URL,
@@ -96,6 +97,11 @@ struct PairingDeviceAPI: PairingDeviceAuthorizing {
 
     func approve(serverURL: String, bearer: String, userCode: String) async throws {
         let _: EmptyResponse = try await post(serverURL, "/api/v1/auth/device/approve",
+                                              bearer: bearer, body: DeviceApproveRequest(code: userCode))
+    }
+
+    func deny(serverURL: String, bearer: String, userCode: String) async throws {
+        let _: EmptyResponse = try await post(serverURL, "/api/v1/auth/device/deny",
                                               bearer: bearer, body: DeviceApproveRequest(code: userCode))
     }
 

@@ -64,13 +64,14 @@ struct DeviceApproveRequest: Codable {
 }
 
 /// Response from GET /api/v1/auth/device?code=<userCode>. All optional: we
-/// only need the authoritative match code and a display name. Confirm field
-/// names against prairie-server (see Step 1).
+/// only need the authoritative match code and a display name.
 struct DeviceLookupResponse: Codable {
     let matchCode: String?
     let deviceName: String?
     let devicePlatform: String?
     let status: String?
+    var userCode: String? = nil
+    var ipAddressHint: String? = nil
     var clientPurpose: String? = nil
     var temporary: Bool? = nil
 }
