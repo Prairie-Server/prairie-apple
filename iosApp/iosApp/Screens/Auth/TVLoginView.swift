@@ -184,7 +184,7 @@ struct TVLoginView: View {
                 Button {
                     router.resetToServerSetup()
                 } label: {
-                    Text("Use another server")
+                    Label("Use another server", systemImage: "server.rack")
                 }
                 .buttonStyle(AuroraGhostButtonStyle())
                 .focused($focusedField, equals: .changeServer)
@@ -357,7 +357,10 @@ struct TVLoginView: View {
                     guard !loginVM.isLoading else { return }
                     Task { await loginVM.login(router: router) }
                 } label: {
-                    Text(loginVM.isLoading ? "Signing in…" : "Sign in")
+                    Label(
+                        loginVM.isLoading ? "Signing in…" : "Sign in",
+                        systemImage: "rectangle.portrait.and.arrow.right"
+                    )
                 }
                 .buttonStyle(AuroraPrimaryButtonStyle(isLoading: loginVM.isLoading))
                 .focused($focusedField, equals: .signIn)
@@ -379,7 +382,7 @@ struct TVLoginView: View {
                     Button {
                         router.resetToServerSetup()
                     } label: {
-                        Text("Use another server")
+                        Label("Use another server", systemImage: "server.rack")
                     }
                     .buttonStyle(AuroraGhostButtonStyle())
                     .focused($focusedField, equals: .changeServer)

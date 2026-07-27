@@ -51,10 +51,10 @@ struct ServerListView: View {
                 ),
                 presenting: removeTarget
             ) { entry in
-                Button("Remove", role: .destructive) {
+                Button("Remove", systemImage: "trash", role: .destructive) {
                     remove(entry)
                 }
-                Button("Cancel", role: .cancel) { removeTarget = nil }
+                Button("Cancel", systemImage: "xmark", role: .cancel) { removeTarget = nil }
             } message: { entry in
                 Text("Sign-in credentials for \(entry.displayName) will be forgotten on this device.")
             }

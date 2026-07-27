@@ -105,8 +105,8 @@ struct CompanionPairingCard: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.top, 6)
-            primaryButton("Set Up") { setUp() }.padding(.top, 22)
-            tertiaryButton("Not Now") { dismiss() }.padding(.top, 4)
+            primaryButton("Set Up", systemImage: "gearshape") { setUp() }.padding(.top, 22)
+            tertiaryButton("Not Now", systemImage: "xmark") { dismiss() }.padding(.top, 4)
         }
     }
 
@@ -116,7 +116,7 @@ struct CompanionPairingCard: View {
             VStack(spacing: 8) {
                 ForEach(servers) { server in serverRow(server) }
             }
-            primaryButton("Continue") {
+            primaryButton("Continue", systemImage: "arrow.right") {
                 let chosen = servers.filter { selection.contains($0.id) }
                 Task { await coordinator?.pushSelected(chosen) }
             }
@@ -172,9 +172,9 @@ struct CompanionPairingCard: View {
                 .font(.continuumCaption)
                 .foregroundStyle(.secondary)
                 .padding(.top, 4)
-            primaryButton("Yes, this matches") { Task { await coordinator?.confirmMatch() } }
+            primaryButton("Yes, this matches", systemImage: "checkmark") { Task { await coordinator?.confirmMatch() } }
                 .padding(.top, 22)
-            tertiaryButton("Doesn’t match") { Task { await coordinator?.declineMatch() } }
+            tertiaryButton("Doesn’t match", systemImage: "xmark") { Task { await coordinator?.declineMatch() } }
                 .padding(.top, 4)
         }
     }
@@ -196,10 +196,10 @@ struct CompanionPairingCard: View {
                     .padding(.top, 4)
             }
             if signedIn.isEmpty {
-                primaryButton("Try Again") { retry() }.padding(.top, 22)
-                tertiaryButton("Close") { dismiss() }.padding(.top, 4)
+                primaryButton("Try Again", systemImage: "arrow.clockwise") { retry() }.padding(.top, 22)
+                tertiaryButton("Close", systemImage: "xmark") { dismiss() }.padding(.top, 4)
             } else {
-                primaryButton("Done") { dismiss() }.padding(.top, 22)
+                primaryButton("Done", systemImage: "checkmark") { dismiss() }.padding(.top, 22)
             }
         }
     }
@@ -213,8 +213,8 @@ struct CompanionPairingCard: View {
             Text(message)
                 .font(.continuumBody)
                 .multilineTextAlignment(.center)
-            primaryButton("Try Again") { retry() }.padding(.top, 22)
-            tertiaryButton("Close") { dismiss() }.padding(.top, 4)
+            primaryButton("Try Again", systemImage: "arrow.clockwise") { retry() }.padding(.top, 22)
+            tertiaryButton("Close", systemImage: "xmark") { dismiss() }.padding(.top, 4)
         }
     }
 
@@ -255,25 +255,51 @@ struct CompanionPairingCard: View {
         .padding(.vertical, 8)
     }
 
-    private func primaryButton(_ title: String, action: @escaping () -> Void) -> some View {
+    private func primaryButton(
+        _ title: String,
+        systemImage: String? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
-            Text(title).font(.continuumHeadline).frame(maxWidth: .infinity).padding(.vertical, 6)
+            Group {
+                if let systemImage {
+                    Label(title, systemImage: systemImage)
+                } else {
+                    Text(title)
+                }
+            }
+            .font(.continuumHeadline)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
         }
         .buttonStyle(.borderedProminent)
         .controlSize(.large)
         .tint(accent)
     }
 
-    private func tertiaryButton(_ title: String, action: @escaping () -> Void) -> some View {
+    private func tertiaryButton(
+        _ title: String,
+        systemImage: String? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
-            Text(title).font(.continuumBody).frame(maxWidth: .infinity).padding(.vertical, 8)
+            Group {
+                if let systemImage {
+                    Label(title, systemImage: systemImage)
+                } else {
+                    Text(title)
+                }
+            }
+            .font(.continuumBody)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
         }
         .buttonStyle(.plain)
         .foregroundStyle(accent)
     }
 
     private func cancelButton() -> some View {
-        tertiaryButton("Cancel") {
+        tertiaryButton("Cancel", systemImage: "xmark") {
             Task { [coordinator] in await coordinator?.cancel() }
             dismiss()
         }

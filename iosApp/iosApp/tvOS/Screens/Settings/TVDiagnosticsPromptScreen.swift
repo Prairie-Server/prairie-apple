@@ -62,26 +62,26 @@ struct TVDiagnosticsPromptScreen: View {
         .frame(maxHeight: 560)
     }
 
-    private var actionButtons: some View {
+            private var actionButtons: some View {
         HStack(spacing: 18) {
-            Button("Don't Send", action: model.declinePrompt)
+            Button("Don't Send", systemImage: "nosign", action: model.declinePrompt)
                 .buttonStyle(TVSettingsPaneRowStyle())
                 .focused($focusedAction, equals: .dontSend)
 
-            Button(isReviewing ? "Back" : "View Report") {
+            Button(isReviewing ? "Back" : "View Report", systemImage: isReviewing ? "chevron.backward" : "eye") {
                 isReviewing.toggle()
                 focusedAction = .dontSend
             }
             .buttonStyle(TVSettingsPaneRowStyle())
             .focused($focusedAction, equals: .review)
 
-            Button("Send") {
+            Button("Send", systemImage: "paperplane.fill") {
                 Task { await model.sendPrompt(always: false) }
             }
             .buttonStyle(TVSettingsPaneRowStyle())
             .focused($focusedAction, equals: .send)
 
-            Button("Always Send") {
+            Button("Always Send", systemImage: "paperplane.circle.fill") {
                 showAlwaysConfirmation = true
             }
             .buttonStyle(TVSettingsPaneRowStyle())

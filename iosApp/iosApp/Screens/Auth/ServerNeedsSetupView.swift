@@ -94,12 +94,15 @@ struct ServerNeedsSetupView: View {
                 .disabled(setupURL == nil)
 
                 Button(action: retry) {
-                    Text(isChecking ? "Checking…" : "Check again")
+                    Label(
+                        isChecking ? "Checking…" : "Check again",
+                        systemImage: "arrow.clockwise"
+                    )
                 }
                 .buttonStyle(AuroraGhostButtonStyle())
                 .disabled(isChecking)
 
-                Button("Change server") { router.resetToServerSetup() }
+                Button("Change server", systemImage: "server.rack") { router.resetToServerSetup() }
                     .buttonStyle(AuroraGhostButtonStyle())
                     .frame(maxWidth: .infinity)
             }

@@ -185,10 +185,10 @@ struct TVMainTabView: View {
                     switchToServer(entry)
                 }
             }
-            Button("Add Server…") {
+            Button("Add Server…", systemImage: "plus.rectangle.on.folder") {
                 router.navigate(to: .serverSetup)
             }
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", systemImage: "xmark", role: .cancel) {}
         } message: {
             Text("Choose a saved server to switch to.")
         }

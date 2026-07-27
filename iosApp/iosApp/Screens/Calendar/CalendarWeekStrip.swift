@@ -111,7 +111,7 @@ struct CalendarWeekStrip: View {
                 .accessibilityLabel("Next week")
 
             if !isCurrentWeek {
-                Button("Today", action: onToday)
+                Button("Today", systemImage: "calendar", action: onToday)
                     .font(todayFont)
                     .foregroundColor(isFocused(.today) ? .continuumBackground : .continuumOnSurface)
                     .buttonStyle(.continuumFlat)

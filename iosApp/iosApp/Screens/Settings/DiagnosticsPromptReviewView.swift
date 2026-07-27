@@ -19,7 +19,7 @@ struct DiagnosticsPromptReviewView: View {
                 }
                 .disabled(model.isWorking)
 
-                Button("Always Send", systemImage: "checkmark.shield.fill") {
+                Button("Always Send", systemImage: "paperplane.circle.fill") {
                     showAlwaysConfirmation = true
                 }
                 .disabled(model.isWorking)
@@ -36,7 +36,7 @@ struct DiagnosticsPromptReviewView: View {
                     Text("These reports and future crash reports for this server account will be sent automatically.")
                 }
 
-                Button("Don't Send", role: .cancel, action: model.declinePrompt)
+                Button("Don't Send", systemImage: "nosign", role: .cancel, action: model.declinePrompt)
                     .disabled(model.isWorking)
             }
         }

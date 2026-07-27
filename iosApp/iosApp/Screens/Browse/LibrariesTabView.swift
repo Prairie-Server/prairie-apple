@@ -282,11 +282,11 @@ private struct LibraryPickerSheet: View {
                 .toolbar {
                     #if os(macOS)
                     ToolbarItem {
-                        Button("Done") { dismiss() }
+                        Button("Done", systemImage: "checkmark") { dismiss() }
                     }
                     #else
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button("Done") { dismiss() }
+                        Button("Done", systemImage: "checkmark") { dismiss() }
                     }
                     #endif
                 }

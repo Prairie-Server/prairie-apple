@@ -36,7 +36,7 @@ struct FilterView: View {
             .continuumNavigationTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Reset") { draft.resetFilters() }
+                    Button("Reset", systemImage: "arrow.counterclockwise") { draft.resetFilters() }
                         .foregroundColor(.continuumSecondaryText)
                         .disabled(!draft.canResetFilters)
                 }
@@ -289,7 +289,7 @@ private struct FacetValuePicker: View {
         .toolbar {
             if !draft.selectedValues(facet).isEmpty {
                 ToolbarItem(placement: .primaryAction) {
-                    Button("Clear") { draft.clear(facet) }
+                    Button("Clear", systemImage: "arrow.counterclockwise") { draft.clear(facet) }
                         .foregroundColor(.continuumSecondaryText)
                 }
             }

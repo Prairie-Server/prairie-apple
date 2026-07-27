@@ -63,10 +63,10 @@ struct SettingsView: View {
             #endif
         }
         .alert("Sign Out", isPresented: $showSignOutConfirm) {
-            Button("Sign Out", role: .destructive) {
+            Button("Sign Out", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive) {
                 router.signOutAndReset()
             }
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", systemImage: "xmark", role: .cancel) {}
         } message: {
             Text("Are you sure you want to sign out?")
         }

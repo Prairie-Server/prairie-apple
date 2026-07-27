@@ -112,7 +112,7 @@ struct CalendarView: View {
                     .foregroundColor(.continuumOnSurface)
 
                 if !viewModel.isCurrentWeek {
-                    Button("Today") { returnToToday(proxy: proxy) }
+                    Button("Today", systemImage: "calendar") { returnToToday(proxy: proxy) }
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundColor(.continuumOnSurface)
                         .buttonStyle(.plain)
@@ -294,7 +294,7 @@ struct CalendarView: View {
                 .padding(.horizontal, ContinuumTheme.largePadding)
 
             if viewModel.filter != .everything {
-                Button("Show Everything") {
+                Button("Show Everything", systemImage: "line.3.horizontal.decrease.circle") {
                     viewModel.select(filter: .everything)
                 }
                 .prairiePrimaryButton()
@@ -305,7 +305,7 @@ struct CalendarView: View {
                 // bar so d-pad down from it doesn't dead-end (see
                 // RecommendationsView's empty state).
                 #if os(tvOS)
-                Button("Refresh") {
+                Button("Refresh", systemImage: "arrow.clockwise") {
                     Task { await viewModel.refresh() }
                 }
                 .buttonStyle(ContinuumPrimaryButtonStyle())

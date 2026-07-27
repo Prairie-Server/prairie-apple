@@ -173,7 +173,7 @@ struct PlaybackSettingsView: View {
 
     private var resetSection: some View {
         Section {
-            Button("Reset Playback Overrides", role: .destructive) {
+            Button("Reset Playback Overrides", systemImage: "arrow.counterclockwise", role: .destructive) {
                 Task { await viewModel.resetPlaybackDeviceSettings() }
             }
         } footer: {

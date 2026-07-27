@@ -73,13 +73,16 @@ struct SignupView: View {
                 Button {
                     createAccount()
                 } label: {
-                    Text(viewModel.isLoading ? "Creating…" : "Create account")
+                    Label(
+                        viewModel.isLoading ? "Creating…" : "Create account",
+                        systemImage: "person.badge.plus"
+                    )
                 }
                 .buttonStyle(AuroraPrimaryButtonStyle(isLoading: viewModel.isLoading))
                 .disabled(viewModel.isLoading)
                 .padding(.top, 4)
 
-                Button("Back to sign in") { router.goBack() }
+                Button("Back to sign in", systemImage: "chevron.backward") { router.goBack() }
                     .buttonStyle(AuroraGhostButtonStyle())
                     .frame(maxWidth: .infinity)
                     .disabled(viewModel.isLoading)

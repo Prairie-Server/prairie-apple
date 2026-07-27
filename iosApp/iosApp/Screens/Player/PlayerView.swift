@@ -525,13 +525,13 @@ struct PlayerView: View {
                 .padding(.horizontal)
 
             HStack(spacing: 16) {
-                Button("Retry") {
+                Button("Retry", systemImage: "arrow.clockwise") {
                     viewModel.retry()
                 }
                 .prairiePrimaryButton()
                 .frame(minWidth: 140)
 
-                Button("Go Back") { dismissPlayer() }
+                Button("Go Back", systemImage: "chevron.backward") { dismissPlayer() }
                     .prairiePrimaryButton()
                     .frame(minWidth: 140)
             }

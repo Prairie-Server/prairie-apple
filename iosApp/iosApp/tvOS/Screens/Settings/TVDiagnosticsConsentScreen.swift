@@ -19,19 +19,19 @@ struct TVDiagnosticsConsentScreen: View {
                     .font(.system(size: 24))
                     .foregroundStyle(Color.continuumSecondaryText)
 
-                Button("Cancel", action: dismiss.callAsFunction)
+                Button("Cancel", systemImage: "xmark", action: dismiss.callAsFunction)
                     .buttonStyle(TVSettingsPaneRowStyle())
                     .focused($focusedAction, equals: .cancel)
 
-                Button("Ask") { select(.ask) }
+                Button("Ask", systemImage: "questionmark.circle") { select(.ask) }
                     .buttonStyle(TVSettingsPaneRowStyle())
                     .focused($focusedAction, equals: .ask)
 
-                Button("Always") { proposedMode = .always }
+                Button("Always", systemImage: "paperplane.circle.fill") { proposedMode = .always }
                     .buttonStyle(TVSettingsPaneRowStyle())
                     .focused($focusedAction, equals: .always)
 
-                Button("Never") { proposedMode = .never }
+                Button("Never", systemImage: "nosign") { proposedMode = .never }
                     .buttonStyle(TVSettingsPaneRowStyle(isDestructive: true))
                     .focused($focusedAction, equals: .never)
             }

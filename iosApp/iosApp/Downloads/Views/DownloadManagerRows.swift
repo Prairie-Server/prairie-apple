@@ -30,8 +30,8 @@ struct DownloadActiveRow: View {
             isPresented: $confirmingCancel,
             titleVisibility: .visible
         ) {
-            Button("Discard Download", role: .destructive, action: onCancel)
-            Button("Keep Download", role: .cancel) {}
+            Button("Discard Download", systemImage: "trash", role: .destructive, action: onCancel)
+            Button("Keep Download", systemImage: "checkmark", role: .cancel) {}
         }
     }
 

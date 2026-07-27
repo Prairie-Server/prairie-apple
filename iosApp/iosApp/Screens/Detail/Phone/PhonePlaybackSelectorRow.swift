@@ -268,12 +268,12 @@ private struct PhonePlaybackSelectorSheet: View {
             .toolbar {
                 #if os(macOS)
                 ToolbarItem {
-                    Button("Done") { dismiss() }
+                    Button("Done", systemImage: "checkmark") { dismiss() }
                         .tint(.continuumOnSurface)
                 }
                 #else
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
+                    Button("Done", systemImage: "checkmark") { dismiss() }
                         .tint(.continuumOnSurface)
                 }
                 #endif

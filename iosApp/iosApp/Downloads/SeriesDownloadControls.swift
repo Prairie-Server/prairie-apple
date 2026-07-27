@@ -148,7 +148,7 @@ private struct SeriesDownloadOptionsSheet: View {
             .background(Color.continuumBackground)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel", systemImage: "xmark") { dismiss() }
                 }
             }
         }
@@ -275,10 +275,10 @@ struct SeriesMonitorSheet: View {
             #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel", systemImage: "xmark") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save", action: save)
+                    Button("Save", systemImage: "square.and.arrow.down", action: save)
                         .disabled(isSaving || (mode == .specificSeasons && selectedSeasons.isEmpty))
                 }
             }

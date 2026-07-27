@@ -23,10 +23,10 @@ struct TVSubtitleSettingsPane: View {
             pickerSheet(for: kind)
         }
         .alert("Reset Custom Appearance?", isPresented: $showResetConfirmation) {
-            Button("Reset", role: .destructive) {
+            Button("Reset", systemImage: "arrow.counterclockwise", role: .destructive) {
                 Task { await viewModel.resetSubtitleAppearance() }
             }
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", systemImage: "xmark", role: .cancel) {}
         } message: {
             Text("This restores all custom subtitle appearance options to their defaults.")
         }
@@ -163,7 +163,7 @@ struct TVSubtitleSettingsPane: View {
             pickerRow("Position", options: TVSettingsOptions.position,
                       selection: viewModel.subtitleAppearance.position.rawValue, kind: .position)
 
-            Button("Reset Custom Appearance", role: .destructive) {
+            Button("Reset Custom Appearance", systemImage: "arrow.counterclockwise", role: .destructive) {
                 guard viewModel.subtitleUsesDeviceAppearanceOverride else { return }
                 showResetConfirmation = true
             }

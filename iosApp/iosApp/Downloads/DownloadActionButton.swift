@@ -128,8 +128,8 @@ struct DownloadActionButton: View {
                 isPresented: $confirmingCancel,
                 titleVisibility: .visible
             ) {
-                Button("Discard Download", role: .destructive, action: cancel)
-                Button("Keep Download", role: .cancel) {}
+                Button("Discard Download", systemImage: "trash", role: .destructive, action: cancel)
+                Button("Keep Download", systemImage: "checkmark", role: .cancel) {}
             }
             .confirmationDialog(
                 "\(largeDownloadWarning ?? "") Download anyway?",
@@ -139,11 +139,11 @@ struct DownloadActionButton: View {
                 ),
                 titleVisibility: .visible
             ) {
-                Button("Download Anyway", action: startWithDefaults)
+                Button("Download Anyway", systemImage: "arrow.down.circle", action: startWithDefaults)
                 if style == .regular {
-                    Button("Choose Options…") { showOptions = true }
+                    Button("Choose Options…", systemImage: "slider.horizontal.3") { showOptions = true }
                 }
-                Button("Cancel", role: .cancel) {}
+                Button("Cancel", systemImage: "xmark", role: .cancel) {}
             }
     }
 

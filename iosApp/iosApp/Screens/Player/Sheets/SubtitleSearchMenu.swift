@@ -472,7 +472,7 @@ struct SubtitleSearchMenu: View {
             Text("This can take up to half a minute.")
                 .font(.system(size: 17))
                 .foregroundStyle(.white.opacity(0.5))
-            Button("Cancel") { backToLanguages() }
+            Button("Cancel", systemImage: "xmark") { backToLanguages() }
                 .buttonStyle(.bordered)
         }
         .padding(.horizontal, 12)
@@ -488,10 +488,10 @@ struct SubtitleSearchMenu: View {
                 .foregroundStyle(.white.opacity(0.7))
             HStack(spacing: 12) {
                 if let language = searchedLanguage {
-                    Button("Try Again") { search(language: language) }
+                    Button("Try Again", systemImage: "arrow.clockwise") { search(language: language) }
                         .buttonStyle(.bordered)
                 }
-                Button("Back") { backToLanguages() }
+                Button("Back", systemImage: "chevron.backward") { backToLanguages() }
                     .buttonStyle(.bordered)
             }
         }
@@ -526,7 +526,7 @@ struct SubtitleSearchMenu: View {
                         Text("This can take up to half a minute.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
-                        Button("Cancel") { backToLanguages() }
+                        Button("Cancel", systemImage: "xmark") { backToLanguages() }
                             .buttonStyle(.bordered)
                             .padding(.top, 4)
                     }
@@ -537,10 +537,10 @@ struct SubtitleSearchMenu: View {
                             .foregroundStyle(.secondary)
                         HStack(spacing: 12) {
                             if let language = searchedLanguage {
-                                Button("Try Again") { search(language: language) }
+                                Button("Try Again", systemImage: "arrow.clockwise") { search(language: language) }
                                     .buttonStyle(.bordered)
                             }
-                            Button("Back") { backToLanguages() }
+                            Button("Back", systemImage: "chevron.backward") { backToLanguages() }
                                 .buttonStyle(.bordered)
                         }
                     }
@@ -556,11 +556,11 @@ struct SubtitleSearchMenu: View {
             .continuumNavigationTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { onDismiss() }
+                    Button("Done", systemImage: "checkmark") { onDismiss() }
                 }
                 if phase == .results {
                     ToolbarItem(placement: .primaryAction) {
-                        Button("Language") { backToLanguages() }
+                        Button("Language", systemImage: "globe") { backToLanguages() }
                             .disabled(downloadingId != nil)
                     }
                 }
@@ -627,7 +627,7 @@ struct SubtitleSearchMenu: View {
                 Section {
                     Text(emptyResultsText)
                         .foregroundStyle(.secondary)
-                    Button("Choose another language") { backToLanguages() }
+                    Button("Choose another language", systemImage: "globe") { backToLanguages() }
                 }
             } else {
                 Section(searchedLanguage.map { displayName($0) } ?? "Results") {

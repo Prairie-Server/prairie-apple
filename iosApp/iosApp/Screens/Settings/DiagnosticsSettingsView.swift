@@ -98,7 +98,7 @@ struct DiagnosticsSettingsView: View {
                         DiagnosticsPendingReportRow(report: report)
                     }
                     .swipeActions {
-                        Button("Delete", role: .destructive) {
+                        Button("Delete", systemImage: "trash", role: .destructive) {
                             Task { await model.delete(report) }
                         }
                     }
