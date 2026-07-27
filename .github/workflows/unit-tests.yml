@@ -67,9 +67,11 @@ jobs:
           set -euo pipefail
           # Build the framework first so compile errors aren't masked by the
           # test bundle's "Unable to find module 'Prairie'" cascade.
+          # (-derivedDataPath requires -scheme; the CI scheme only builds the
+          # host for the `build` action — tests are test-action only.)
           xcodebuild build \
             -project Prairie.xcodeproj \
-            -target PrairieNetworkingHost \
+            -scheme PrairieNetworkingCI \
             -destination 'platform=macOS,arch=arm64' \
             -derivedDataPath DerivedData \
             -enableCodeCoverage YES \
