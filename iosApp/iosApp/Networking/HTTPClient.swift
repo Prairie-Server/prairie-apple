@@ -136,16 +136,37 @@ actor HTTPClient {
         parts: [HTTPMultipartPart],
         timeout: HTTPTimeout = .extended
     ) async throws -> T {
-        let data = try await sendMultipartRaw(method: "POST", path: path, parts: parts, timeout: timeout)
-        if data.isEmpty, let empty = EmptyResponse.empty as? T {
-            return empty
-        }
-        do {
-            return try decoder.decode(T.self, from: data)
-        } catch {
-            Self.logDecodingFailure(type: String(describing: T.self), path: path, error: error, data: data)
-            throw HTTPError.decodingFailed(type: String(describing: T.self), underlying: error)
-        }
+        let boundary = "PrairieDiagnostics-\(UUID().uuidString)"
+        return try await sendRawBody(
+            method: "POST",
+            path: path,
+            body: Self.multipartBody(parts: parts, boundary: boundary),
+            contentType: "multipart/form-data; boundary=\(boundary)",
+            timeout: timeout
+        )
+    }
+
+    /// POST a pre-encoded body verbatim. Exists for callers whose payload
+    /// cannot go through `JSONEncoder` — e.g. diagnostics chunked-upload init,
+    /// which embeds an already-serialized manifest byte-for-byte (re-encoding
+    /// could reorder keys and break the server's manifest equality check).
+    func postRaw<T: Decodable>(
+        _ path: String,
+        body: Data,
+        contentType: String,
+        timeout: HTTPTimeout = .standard
+    ) async throws -> T {
+        try await sendRawBody(method: "POST", path: path, body: body, contentType: contentType, timeout: timeout)
+    }
+
+    /// PUT a raw binary body (e.g. one diagnostics bundle chunk).
+    func putRaw<T: Decodable>(
+        _ path: String,
+        body: Data,
+        contentType: String,
+        timeout: HTTPTimeout = .extended
+    ) async throws -> T {
+        try await sendRawBody(method: "PUT", path: path, body: body, contentType: contentType, timeout: timeout)
     }
 
     func put<T: Decodable>(
@@ -297,19 +318,41 @@ actor HTTPClient {
         quietStatuses: Set<Int> = [],
         timeout: HTTPTimeout = .standard
     ) async throws -> Data {
+        try await performWithAuthRetry(
+            method: method,
+            path: path,
+            quietStatuses: quietStatuses,
+            timeout: timeout
+        ) { serverUrl in
+            try self.buildRequest(
+                serverUrl: serverUrl,
+                method: method,
+                path: path,
+                query: query,
+                body: body
+            )
+        }
+    }
+
+    /// Shared server-URL/auth/401-refresh/success skeleton for every request
+    /// shape. `makeRequest` builds a fresh, unauthenticated request per
+    /// attempt; auth headers are attached here so the retry after a token
+    /// refresh carries the new token while keeping the caller's body and
+    /// Content-Type intact.
+    private func performWithAuthRetry(
+        method: String,
+        path: String,
+        quietStatuses: Set<Int> = [],
+        timeout: HTTPTimeout,
+        makeRequest: (String) throws -> URLRequest
+    ) async throws -> Data {
         let serverUrl = await tokenStore.getServerUrl()
         guard !serverUrl.isEmpty else {
             throw HTTPError.serverUrlNotConfigured
         }
 
         let tokenBeforeRequest = await tokenStore.getAccessToken()
-        var request = try buildRequest(
-            serverUrl: serverUrl,
-            method: method,
-            path: path,
-            query: query,
-            body: body
-        )
+        var request = try makeRequest(serverUrl)
         await attachAuthHeaders(&request, accessToken: tokenBeforeRequest)
 
         let (data, response) = try await perform(request: request, timeout: timeout)
@@ -319,13 +362,7 @@ actor HTTPClient {
             if refreshed {
                 // Rebuild the request so headers reflect the new access token.
                 let refreshedToken = await tokenStore.getAccessToken()
-                var retry = try buildRequest(
-                    serverUrl: serverUrl,
-                    method: method,
-                    path: path,
-                    query: query,
-                    body: body
-                )
+                var retry = try makeRequest(serverUrl)
                 await attachAuthHeaders(&retry, accessToken: refreshedToken)
                 let (retryData, retryResponse) = try await perform(request: retry, timeout: timeout)
                 try ensureSuccess(retryData, retryResponse, method: method, quietStatuses: quietStatuses)
@@ -337,55 +374,50 @@ actor HTTPClient {
         return data
     }
 
-    private func sendMultipartRaw(
+    private func sendRawBody<T: Decodable>(
         method: String,
         path: String,
-        parts: [HTTPMultipartPart],
-        timeout: HTTPTimeout = .extended
-    ) async throws -> Data {
-        let serverUrl = await tokenStore.getServerUrl()
-        guard !serverUrl.isEmpty else {
-            throw HTTPError.serverUrlNotConfigured
-        }
-
-        let authStateBeforeRequest = await tokenStore.getAccessToken()
-        let boundary = "PrairieDiagnostics-\(UUID().uuidString)"
-        let body = Self.multipartBody(parts: parts, boundary: boundary)
-        var request = try buildRequest(
-            serverUrl: serverUrl,
+        body: Data,
+        contentType: String,
+        timeout: HTTPTimeout
+    ) async throws -> T {
+        let data = try await sendRawBodyData(
             method: method,
             path: path,
-            query: [:],
-            body: Optional<String>.none
+            body: body,
+            contentType: contentType,
+            timeout: timeout
         )
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        request.httpBody = body
-        await attachAuthHeaders(&request, accessToken: authStateBeforeRequest)
-
-        let (data, response) = try await perform(request: request, timeout: timeout)
-
-        if response.statusCode == 401, shouldAttemptRefresh(path: path) {
-            let refreshed = await refreshTokens(tokenAtRequestTime: authStateBeforeRequest)
-            if refreshed {
-                let refreshedAuthState = await tokenStore.getAccessToken()
-                var retry = try buildRequest(
-                    serverUrl: serverUrl,
-                    method: method,
-                    path: path,
-                    query: [:],
-                    body: Optional<String>.none
-                )
-                retry.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-                retry.httpBody = body
-                await attachAuthHeaders(&retry, accessToken: refreshedAuthState)
-                let (retryData, retryResponse) = try await perform(request: retry, timeout: timeout)
-                try ensureSuccess(retryData, retryResponse, method: method)
-                return retryData
-            }
+        if data.isEmpty, let empty = EmptyResponse.empty as? T {
+            return empty
         }
+        do {
+            return try decoder.decode(T.self, from: data)
+        } catch {
+            Self.logDecodingFailure(type: String(describing: T.self), path: path, error: error, data: data)
+            throw HTTPError.decodingFailed(type: String(describing: T.self), underlying: error)
+        }
+    }
 
-        try ensureSuccess(data, response, method: method)
-        return data
+    private func sendRawBodyData(
+        method: String,
+        path: String,
+        body: Data,
+        contentType: String,
+        timeout: HTTPTimeout
+    ) async throws -> Data {
+        try await performWithAuthRetry(method: method, path: path, timeout: timeout) { serverUrl in
+            var request = try self.buildRequest(
+                serverUrl: serverUrl,
+                method: method,
+                path: path,
+                query: [:],
+                body: Optional<String>.none
+            )
+            request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+            request.httpBody = body
+            return request
+        }
     }
 
     // MARK: - Request building
