@@ -44,6 +44,9 @@ enum LanDiscovery {
         var extraCidrs: [String] = []
         var deepScan: Bool = false
         var maxHostsPerCidr: Int = 254
+        /// Hostnames to probe for cross-subnet discovery (resolved via unicast DNS A records).
+        /// These are probed on the existing candidate ports using `/api/v1/health`.
+        var baseHosts: [String] = []
         /// Device IPv4s when the platform can expose them.
         var localIps: [String] = []
     }
@@ -167,7 +170,8 @@ enum LanDiscovery {
         var out: [String] = []
         var seen = Set<String>()
 
-        for host in ["prairie.local", "prairie"] {
+        let hostsToProbe = ["prairie.local", "prairie"] + options.baseHosts
+        for host in hostsToProbe {
             urlsForHost(host, ports: defaultPorts, seen: &seen, out: &out)
         }
         for ip in options.localIps {
@@ -294,6 +298,7 @@ actor LanDiscoveryScanner {
         var concurrency: Int = 24
         var timeoutMs: Int = 400
         var localIps: [String]? = nil
+        var baseHosts: [String] = []
     }
 
     private let session: URLSession
@@ -324,7 +329,8 @@ actor LanDiscoveryScanner {
                 extraCidrs: options.extraCidrs,
                 deepScan: options.deepScan,
                 maxHostsPerCidr: options.maxHostsPerCidr,
-                localIps: localIps
+                localIps: localIps,
+                baseHosts: options.baseHosts
             )
         )
 

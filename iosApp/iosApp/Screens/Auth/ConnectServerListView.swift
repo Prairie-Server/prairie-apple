@@ -411,6 +411,28 @@ final class ConnectServerListViewModel {
     private var scanTask: Task<Void, Never>?
     private let scanner = LanDiscoveryScanner()
 
+    private func discoveryBaseHosts() -> [String] {
+        var out: [String] = []
+        var seen = Set<String>()
+
+        func push(host: String?) {
+            guard let host, !host.isEmpty else { return }
+            let key = host.lowercased()
+            guard !seen.contains(key) else { return }
+            seen.insert(key)
+            out.append(host)
+        }
+
+        for entry in ServerRegistry.shared.entries {
+            push(host: URL(string: entry.url)?.host)
+        }
+
+        let last = SharedStorage.suite.string(forKey: SharedStorage.serverUrlKey)
+        push(host: URL(string: last ?? "")?.host)
+
+        return out
+    }
+
     func startAutoScanIfNeeded() async {
         guard !didAutoScan else { return }
         didAutoScan = true
@@ -442,7 +464,7 @@ final class ConnectServerListViewModel {
         }
 
         var hits = await scanner.run(
-            options: LanDiscoveryScanner.ScanOptions(deepScan: false),
+            options: LanDiscoveryScanner.ScanOptions(deepScan: false, baseHosts: discoveryBaseHosts()),
             onHit: { [weak self] next in
                 Task { @MainActor in
                     self?.discovered = next
@@ -460,7 +482,7 @@ final class ConnectServerListViewModel {
         if includeDeep {
             statusText = "Deep LAN scan…"
             let deepHits = await scanner.run(
-                options: LanDiscoveryScanner.ScanOptions(deepScan: true),
+                options: LanDiscoveryScanner.ScanOptions(deepScan: true, baseHosts: discoveryBaseHosts()),
                 onHit: { [weak self] next in
                     Task { @MainActor in
                         guard let self else { return }

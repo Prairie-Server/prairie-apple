@@ -67,6 +67,19 @@ final class LanDiscoveryTests: XCTestCase {
         XCTAssertFalse(joined.contains("/System/Info"))
     }
 
+    func testBuildCandidatesIncludesConfiguredBaseHosts() {
+        let candidates = LanDiscovery.buildCandidates(
+            LanDiscovery.BuildCandidatesOptions(
+                extraCidrs: [],
+                deepScan: false,
+                maxHostsPerCidr: 16,
+                baseHosts: ["prairie.lan"]
+            )
+        )
+        let joined = candidates.joined(separator: ",")
+        XCTAssertTrue(joined.contains("prairie.lan"))
+    }
+
     func testDeepScanExpandsSlash24OnListenPortOnly() {
         let deep = LanDiscovery.buildCandidates(
             LanDiscovery.BuildCandidatesOptions(
