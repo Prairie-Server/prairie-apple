@@ -87,7 +87,49 @@ struct LiveTVSessionStartResponse: Codable, Hashable {
     let playbackTicket: String
     let hlsUrl: String
     let streamUrl: String?
+    let transport: String?
     let note: String?
+
+    /// Preferred client playback URL (`hls_url`, then `stream_url`).
+    var playableURLString: String {
+        let primary = hlsUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !primary.isEmpty { return primary }
+        return streamUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    /// Whether AVPlayer should treat the session as HLS. Explicit `transport`
+    /// wins; otherwise infer from the playable URL suffix.
+    var isHLS: Bool {
+        let normalized = transport?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+        if normalized == "hls" { return true }
+        if normalized == "mpegts" { return false }
+        return playableURLString.lowercased().contains(".m3u8")
+    }
+}
+
+/// Turns server-supplied Live TV stream paths into absolute URLs.
+enum LiveTVURLResolver {
+    /// Mirrors `PlayerViewModel.resolveServerUrl` / `AudioPlayerViewModel.resolvedStreamURL`.
+    nonisolated static func resolve(_ raw: String, serverBaseURL: String) -> URL? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") {
+            return URL(string: trimmed)
+        }
+
+        let base = serverBaseURL
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !base.isEmpty else { return nil }
+
+        let relativePath = trimmed.hasPrefix("/") ? trimmed : "/\(trimmed)"
+        let urlString = relativePath.hasPrefix("/api/")
+            ? "\(base)\(relativePath)"
+            : "\(base)/api/v1\(relativePath)"
+        return URL(string: urlString)
+    }
 }
 
 struct LiveTVSession: Codable, Hashable, Identifiable {

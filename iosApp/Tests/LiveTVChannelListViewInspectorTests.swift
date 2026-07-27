@@ -64,6 +64,8 @@ final class LiveTVChannelListViewInspectorTests: XCTestCase {
         let view = host(LiveTVChannelListView(
             viewModel: .preview(state: .loaded, channels: [channel])
         ))
+        let channelsTab = try view.inspect().find(viewWithAccessibilityIdentifier: "livetv-tab-channels")
+        try channelsTab.button().tap()
         let list = try view.inspect().find(viewWithAccessibilityIdentifier: "livetv-channel-list")
         XCTAssertNotNil(list)
         let name = try view.inspect().find(text: "KXYZ-HD")

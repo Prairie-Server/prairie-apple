@@ -138,13 +138,66 @@ final class LiveTVModelDecodingTests: XCTestCase {
           "playback_ticket": "ticket-1",
           "hls_url": "https://server.test/livetv/sess-1/index.m3u8",
           "stream_url": "http://hdhr/auto/v4.1",
+          "transport": "hls",
           "note": "transcoding"
         }
         """)
         XCTAssertEqual(session.sessionId, "sess-1")
         XCTAssertEqual(session.playbackTicket, "ticket-1")
-        XCTAssertTrue(session.hlsUrl.contains("index.m3u8"))
+        XCTAssertEqual(session.playableURLString, "https://server.test/livetv/sess-1/index.m3u8")
+        XCTAssertTrue(session.isHLS)
+        XCTAssertEqual(session.transport, "hls")
         XCTAssertEqual(session.note, "transcoding")
+    }
+
+    func testSessionStartMpegtsTransportAndPlayableURLFallback() throws {
+        let session = try decode(LiveTVSessionStartResponse.self, """
+        {
+          "session_id": "sess-2",
+          "playback_ticket": "ticket-2",
+          "hls_url": "",
+          "stream_url": "/api/v1/livetv/sessions/sess-2/stream",
+          "transport": "mpegts"
+        }
+        """)
+        XCTAssertEqual(session.playableURLString, "/api/v1/livetv/sessions/sess-2/stream")
+        XCTAssertFalse(session.isHLS)
+    }
+
+    func testSessionStartInfersHLSFromManifestSuffix() throws {
+        let session = try decode(LiveTVSessionStartResponse.self, """
+        {
+          "session_id": "sess-3",
+          "playback_ticket": "ticket-3",
+          "hls_url": "/api/v1/livetv/sessions/sess-3/index.m3u8",
+          "stream_url": "/api/v1/livetv/sessions/sess-3/index.m3u8"
+        }
+        """)
+        XCTAssertTrue(session.isHLS)
+    }
+
+    func testLiveTVURLResolverResolvesRelativeAPIPaths() {
+        let url = LiveTVURLResolver.resolve(
+            "/api/v1/livetv/sessions/s1/stream",
+            serverBaseURL: "https://server.test"
+        )
+        XCTAssertEqual(url?.absoluteString, "https://server.test/api/v1/livetv/sessions/s1/stream")
+    }
+
+    func testLiveTVURLResolverPrefixesBarePathsWithApiV1() {
+        let url = LiveTVURLResolver.resolve(
+            "livetv/sessions/s1/stream",
+            serverBaseURL: "https://server.test/"
+        )
+        XCTAssertEqual(url?.absoluteString, "https://server.test/api/v1/livetv/sessions/s1/stream")
+    }
+
+    func testLiveTVURLResolverPassesThroughAbsoluteURLs() {
+        let url = LiveTVURLResolver.resolve(
+            "https://cdn.test/live/index.m3u8",
+            serverBaseURL: "https://server.test"
+        )
+        XCTAssertEqual(url?.absoluteString, "https://cdn.test/live/index.m3u8")
     }
 
     func testProgramDisplayTitleAndNowNextDefaults() throws {

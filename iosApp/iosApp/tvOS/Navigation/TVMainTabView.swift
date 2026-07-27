@@ -168,8 +168,9 @@ struct TVMainTabView: View {
             LiveTVPlayerView(
                 session: LiveTVPlayerSession(
                     sessionId: session.sessionId,
-                    hlsURL: session.hlsURL,
-                    title: session.title
+                    streamURL: session.streamURL,
+                    title: session.title,
+                    isHLS: session.isHLS
                 )
             ) {
                 router.presentedLivePlayer = nil

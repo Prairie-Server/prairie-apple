@@ -13,6 +13,7 @@ final class LiveTVChannelListViewModel {
 
     private(set) var loadState: LoadState = .idle
     private(set) var channels: [LiveTVChannel] = []
+    private(set) var programs: [LiveTVProgram] = []
     private(set) var nowNextByChannel: [String: LiveTVNowNext] = [:]
     private(set) var recordings: [LiveTVRecording] = []
     private(set) var recordingMessage: String?
@@ -39,6 +40,33 @@ final class LiveTVChannelListViewModel {
     var error: ErrorState? {
         if case .failed(let state) = loadState { return state }
         return nil
+    }
+
+    var scheduledRecordings: [LiveTVRecording] {
+        recordings.filter {
+            let status = $0.status.lowercased()
+            return status == "scheduled" || status == "recording" || status == "pending"
+        }
+    }
+
+    var historyRecordings: [LiveTVRecording] {
+        recordings.filter {
+            let status = $0.status.lowercased()
+            return status != "scheduled"
+                && status != "recording"
+                && status != "pending"
+                && status != "cancelled"
+        }
+    }
+
+    func programs(for channelId: String) -> [LiveTVProgram] {
+        programs
+            .filter { $0.channelId == channelId }
+            .sorted { $0.start < $1.start }
+    }
+
+    func channel(for id: String) -> LiveTVChannel? {
+        channels.first { $0.id == id }
     }
 
     func load() async {
@@ -82,6 +110,7 @@ final class LiveTVChannelListViewModel {
                 start: start,
                 end: end
             )
+            programs = guide.programs.sorted { $0.start < $1.start }
             nowNextByChannel = Self.nowNextMap(programs: guide.programs, at: now)
         } catch {
             // Guide is best-effort; channel list remains usable without it.
