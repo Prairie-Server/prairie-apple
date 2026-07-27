@@ -34,12 +34,14 @@ final class AICapabilities {
 final class RequestsFeatureStore {
     static let shared = RequestsFeatureStore()
     func reset() {}
+    func refresh() async {}
 }
 
 @MainActor
 final class LiveTVFeatureStore {
     static let shared = LiveTVFeatureStore()
     func reset() {}
+    func refresh() async {}
 }
 
 @MainActor
@@ -61,6 +63,20 @@ struct SidecarSubtitleDescriptor: Hashable {
     var source: String
     var forced: Bool
     var url: URL
+}
+
+enum HTTPError: Error {
+    case http(Int, String?)
+}
+
+/// Enough of ContinuumAPI for TrackSelectionPersistence fire-and-forget writers.
+actor ContinuumAPI {
+    static let shared = ContinuumAPI()
+
+    func setAudioPref(seriesId: String, body: AudioPrefRequest) async throws {}
+    func setSubtitlePref(seriesId: String, body: SubtitlePrefRequest) async throws {}
+    func deleteAudioPref(seriesId: String) async throws {}
+    func deleteSubtitlePref(seriesId: String) async throws {}
 }
 
 /// Enough of HTTPClient for ServerRegistry + unit-test JSON decoding.
