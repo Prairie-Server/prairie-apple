@@ -285,10 +285,27 @@ targets:
     type: application
     platform: iOS
     sources:
+      # Only the gated Networking surface + helpers. Live ContinuumAPI /
+      # prefs stores / feature stores pull half the app; CI stubs cover the
+      # few symbols ServerRegistry still calls.
       - path: iosApp/Networking
+        excludes:
+          - ContinuumAPI.swift
+          - ContinuumAPI+LiveTV.swift
+          - ContinuumAPI+Requests.swift
+          - ContinuumAI.swift
+          - OverlayPrefsStore.swift
+          - PlaybackPrefsStore.swift
+          - ProfilePrefsStore.swift
+          - ConnectionMonitor.swift
+          - DiagnosticsAPI.swift
+          - AICapabilities.swift
+          - RequestsFeatureStore.swift
+          - LiveTVFeatureStore.swift
       - path: iosApp/Shared/SharedStorage.swift
       - path: iosApp/Shared/AppleDeviceIdentity.swift
       - path: iosApp/Screens/Profiles/ProfileModels.swift
+      - path: iosApp/Screens/Player/PlayerTrack.swift
       - path: CI/NetworkingHost
     settings:
       base:
