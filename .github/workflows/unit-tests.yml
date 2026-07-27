@@ -1,6 +1,6 @@
 name: Unit Tests
 
-# Runs PrairieTests with code coverage and enforces a 75% line-coverage gate.
+# Runs PrairieTests with code coverage and enforces a 90% line-coverage gate.
 #
 # Coverage gate choice:
 #   Default scope is `/Networking/` minus live HTTP / session modules
@@ -24,7 +24,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install XcodeGen
         run: |
@@ -117,19 +117,19 @@ jobs:
           # Also emit a human-readable summary for the job log.
           xcrun xccov view --report TestResults.xcresult | tee coverage-report.txt
 
-      - name: Enforce 75% Networking unit-test coverage gate
+      - name: Enforce 90% Networking unit-test coverage gate
         # Gates /Networking/ (excluding live HTTP clients). See script defaults.
         run: |
           set -euo pipefail
           if [[ ! -f iosApp/coverage.json ]]; then
-            echo "error: coverage.json missing; cannot enforce 75% gate" >&2
+            echo "error: coverage.json missing; cannot enforce 90% gate" >&2
             exit 1
           fi
-          scripts/check-xccov-coverage.sh iosApp/coverage.json 75
+          scripts/check-xccov-coverage.sh iosApp/coverage.json 90
 
       - name: Upload test results and coverage
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: prairie-unit-test-coverage
           path: |
