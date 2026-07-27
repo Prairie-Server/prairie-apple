@@ -294,6 +294,7 @@ targets:
           - ContinuumAPI+LiveTV.swift
           - ContinuumAPI+Requests.swift
           - ContinuumAI.swift
+          - HTTPClient.swift
           - OverlayPrefsStore.swift
           - PlaybackPrefsStore.swift
           - ProfilePrefsStore.swift
