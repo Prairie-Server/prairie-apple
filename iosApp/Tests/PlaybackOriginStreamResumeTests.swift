@@ -635,6 +635,24 @@ final class PlaybackOriginStreamResumeTests: XCTestCase {
         return predicate()
     }
 
+    /// Budget park can force-detach immediately when URLSession still delivers
+    /// buffered body after `suspend()`, so `parked` may be too brief to observe.
+    /// Wait for either state, then tick the manual clock only if still parked.
+    private func waitUntilDetachedAfterBudgetPark(
+        _ snapshot: @escaping () -> PlaybackOriginStream.DiagnosticsSnapshot?,
+        clock: ManualClock
+    ) async -> Bool {
+        let stopped = await waitUntil {
+            guard let state = snapshot() else { return false }
+            return state.parked || state.detached
+        }
+        guard stopped else { return false }
+        if snapshot()?.detached != true {
+            clock.advance(by: 2)
+        }
+        return await waitUntil { snapshot()?.detached == true }
+    }
+
     func testParkDetachesAndDemandReopensExactRangeWithIfRange() async throws {
         let originalGrace = PlaybackOriginStreamPolicy.detachAfterSeconds
         PlaybackOriginStreamPolicy.detachAfterSeconds = 1
@@ -654,20 +672,20 @@ final class PlaybackOriginStreamResumeTests: XCTestCase {
         defer { stream.cancel() }
 
         stream.start()
-        let parked = await waitUntil { stream.diagnosticsSnapshot().parked }
-        XCTAssertTrue(parked, "expected budget park before origin filled the entity")
-        let parkedState = stream.diagnosticsSnapshot()
-        XCTAssertGreaterThan(parkedState.writeCursor, 0)
-
-        // Leaky post-suspend delivery force-detaches immediately; otherwise
-        // the watchdog needs a manual tick past the grace window.
-        if !stream.diagnosticsSnapshot().detached {
-            clock.advance(by: 2)
+        let stopped = await waitUntil {
+            let state = stream.diagnosticsSnapshot()
+            return state.parked || state.detached
         }
-        let detached = await waitUntil { stream.diagnosticsSnapshot().detached }
+        XCTAssertTrue(stopped, "expected budget park or immediate force-detach")
+        let cursorAtStop = stream.diagnosticsSnapshot().writeCursor
+        XCTAssertGreaterThan(cursorAtStop, 0)
+        let detached = await waitUntilDetachedAfterBudgetPark(
+            { stream.diagnosticsSnapshot() },
+            clock: clock
+        )
         XCTAssertTrue(detached, "expected deliberate detach after park")
         let detachedState = stream.diagnosticsSnapshot()
-        XCTAssertEqual(detachedState.writeCursor, parkedState.writeCursor)
+        XCTAssertEqual(detachedState.writeCursor, cursorAtStop)
         XCTAssertEqual(detachedState.unproductiveStreak, 0)
         XCTAssertTrue(recorder.causes.isEmpty)
 
@@ -701,10 +719,10 @@ final class PlaybackOriginStreamResumeTests: XCTestCase {
         defer { stream.cancel() }
 
         stream.start()
-        let parked = await waitUntil { stream.diagnosticsSnapshot().parked }
-        XCTAssertTrue(parked)
-        clock.advance(by: 2)
-        let detached = await waitUntil { stream.diagnosticsSnapshot().detached }
+        let detached = await waitUntilDetachedAfterBudgetPark(
+            { stream.diagnosticsSnapshot() },
+            clock: clock
+        )
         XCTAssertTrue(detached)
         XCTAssertEqual(stream.diagnosticsSnapshot().unproductiveStreak, 0)
         XCTAssertTrue(recorder.causes.isEmpty)
@@ -761,10 +779,10 @@ final class PlaybackOriginStreamResumeTests: XCTestCase {
         defer { stream.cancel() }
 
         stream.start()
-        let parked = await waitUntil { stream.diagnosticsSnapshot().parked }
-        XCTAssertTrue(parked)
-        clock.advance(by: 2)
-        let detached = await waitUntil { stream.diagnosticsSnapshot().detached }
+        let detached = await waitUntilDetachedAfterBudgetPark(
+            { stream.diagnosticsSnapshot() },
+            clock: clock
+        )
         XCTAssertTrue(detached)
         let cursor = stream.diagnosticsSnapshot().writeCursor
         let storedBeforeReopen = recorder.storedBytes
@@ -807,10 +825,10 @@ final class PlaybackOriginStreamResumeTests: XCTestCase {
         defer { proxy.stop() }
         proxy.startPrefetch(at: 0)
 
-        let parked = await waitUntil { proxy.originStreamDiagnostics()?.parked == true }
-        XCTAssertTrue(parked)
-        clock.advance(by: 2)
-        let detached = await waitUntil { proxy.originStreamDiagnostics()?.detached == true }
+        let detached = await waitUntilDetachedAfterBudgetPark(
+            { proxy.originStreamDiagnostics() },
+            clock: clock
+        )
         XCTAssertTrue(detached)
         let cursor = try XCTUnwrap(proxy.originStreamDiagnostics()).writeCursor
         let transferredBeforeReopen = cache.stats().originBytesTransferred
@@ -858,10 +876,10 @@ final class PlaybackOriginStreamResumeTests: XCTestCase {
         defer { proxy.stop() }
         proxy.startPrefetch(at: 0)
 
-        let parked = await waitUntil { proxy.originStreamDiagnostics()?.parked == true }
-        XCTAssertTrue(parked)
-        clock.advance(by: 2)
-        let detached = await waitUntil { proxy.originStreamDiagnostics()?.detached == true }
+        let detached = await waitUntilDetachedAfterBudgetPark(
+            { proxy.originStreamDiagnostics() },
+            clock: clock
+        )
         XCTAssertTrue(detached)
         let cursor = try XCTUnwrap(proxy.originStreamDiagnostics()).writeCursor
         let farOffset = cursor + PlaybackOriginRoutingPolicy.rideThroughBytes + 1
@@ -913,13 +931,12 @@ final class PlaybackOriginStreamResumeTests: XCTestCase {
         defer { proxy.stop() }
         proxy.startPrefetch(at: 0)
 
-        let parked = await waitUntil { proxy.originStreamDiagnostics()?.parked == true }
-        XCTAssertTrue(parked)
-        // Detach so the far-offset read must open a new origin request (chunk)
-        // instead of riding the still-growing window stream — otherwise CI
-        // hysteresis re-arms can fill the range before the entity-change path runs.
-        clock.advance(by: 2)
-        let detached = await waitUntil { proxy.originStreamDiagnostics()?.detached == true }
+        // Detach (or accept immediate force-detach from leaky post-suspend
+        // delivery) so the far-offset read must open a new origin request.
+        let detached = await waitUntilDetachedAfterBudgetPark(
+            { proxy.originStreamDiagnostics() },
+            clock: clock
+        )
         XCTAssertTrue(detached)
         let cursor = try XCTUnwrap(proxy.originStreamDiagnostics()).writeCursor
         let farOffset = cursor + PlaybackOriginRoutingPolicy.rideThroughBytes + 1
@@ -1057,8 +1074,11 @@ final class PlaybackOriginStreamResumeTests: XCTestCase {
         defer { proxy.stop() }
         proxy.startPrefetch(at: 0)
 
-        let parked = await waitUntil { proxy.originStreamDiagnostics()?.parked == true }
-        XCTAssertTrue(parked)
+        let stopped = await waitUntil {
+            guard let state = proxy.originStreamDiagnostics() else { return false }
+            return state.parked || state.detached
+        }
+        XCTAssertTrue(stopped)
         let cursor = try XCTUnwrap(proxy.originStreamDiagnostics()).writeCursor
         let farOffset = cursor + PlaybackOriginRoutingPolicy.rideThroughBytes + 1
         let reader = ExactReader()
@@ -1187,10 +1207,10 @@ final class PlaybackOriginStreamResumeTests: XCTestCase {
         defer { stream.cancel() }
 
         stream.start()
-        let parked = await waitUntil { stream.diagnosticsSnapshot().parked }
-        XCTAssertTrue(parked)
-        clock.advance(by: 2)
-        let detached = await waitUntil { stream.diagnosticsSnapshot().detached }
+        let detached = await waitUntilDetachedAfterBudgetPark(
+            { stream.diagnosticsSnapshot() },
+            clock: clock
+        )
         XCTAssertTrue(detached)
         let cursor = stream.diagnosticsSnapshot().writeCursor
 
@@ -1226,10 +1246,10 @@ final class PlaybackOriginStreamResumeTests: XCTestCase {
         defer { stream.cancel() }
 
         stream.start()
-        let parked = await waitUntil { stream.diagnosticsSnapshot().parked }
-        XCTAssertTrue(parked)
-        clock.advance(by: 2)
-        let detached = await waitUntil { stream.diagnosticsSnapshot().detached }
+        let detached = await waitUntilDetachedAfterBudgetPark(
+            { stream.diagnosticsSnapshot() },
+            clock: clock
+        )
         XCTAssertTrue(detached)
         let cursor = stream.diagnosticsSnapshot().writeCursor
         let storedBeforeReopen = recorder.storedBytes
@@ -1263,10 +1283,10 @@ final class PlaybackOriginStreamResumeTests: XCTestCase {
         defer { stream.cancel() }
 
         stream.start()
-        let parked = await waitUntil { stream.diagnosticsSnapshot().parked }
-        XCTAssertTrue(parked)
-        clock.advance(by: 2)
-        let detached = await waitUntil { stream.diagnosticsSnapshot().detached }
+        let detached = await waitUntilDetachedAfterBudgetPark(
+            { stream.diagnosticsSnapshot() },
+            clock: clock
+        )
         XCTAssertTrue(detached)
         let cursor = stream.diagnosticsSnapshot().writeCursor
         let storedBeforeReopen = recorder.storedBytes
@@ -1357,10 +1377,10 @@ final class PlaybackOriginStreamResumeTests: XCTestCase {
         defer { stream.cancel() }
 
         stream.start()
-        let parked = await waitUntil { stream.diagnosticsSnapshot().parked }
-        XCTAssertTrue(parked)
-        clock.advance(by: 2)
-        let detached = await waitUntil { stream.diagnosticsSnapshot().detached }
+        let detached = await waitUntilDetachedAfterBudgetPark(
+            { stream.diagnosticsSnapshot() },
+            clock: clock
+        )
         XCTAssertTrue(detached)
         let cursor = stream.diagnosticsSnapshot().writeCursor
         let storedBeforeReopen = recorder.storedBytes
@@ -1393,10 +1413,10 @@ final class PlaybackOriginStreamResumeTests: XCTestCase {
         defer { stream.cancel() }
 
         stream.start()
-        let parked = await waitUntil { stream.diagnosticsSnapshot().parked }
-        XCTAssertTrue(parked)
-        clock.advance(by: 2)
-        let detached = await waitUntil { stream.diagnosticsSnapshot().detached }
+        let detached = await waitUntilDetachedAfterBudgetPark(
+            { stream.diagnosticsSnapshot() },
+            clock: clock
+        )
         XCTAssertTrue(detached)
         let cursor = stream.diagnosticsSnapshot().writeCursor
         let storedBeforeReopen = recorder.storedBytes
@@ -1429,10 +1449,10 @@ final class PlaybackOriginStreamResumeTests: XCTestCase {
         defer { stream.cancel() }
 
         stream.start()
-        let parked = await waitUntil { stream.diagnosticsSnapshot().parked }
-        XCTAssertTrue(parked)
-        clock.advance(by: 2)
-        let detached = await waitUntil { stream.diagnosticsSnapshot().detached }
+        let detached = await waitUntilDetachedAfterBudgetPark(
+            { stream.diagnosticsSnapshot() },
+            clock: clock
+        )
         XCTAssertTrue(detached)
         let cursor = stream.diagnosticsSnapshot().writeCursor
         let storedBeforeReopen = recorder.storedBytes

@@ -891,8 +891,11 @@ final class PlaybackOriginStream {
             // `URLSessionTask.suspend()` is advisory: buffered body can still
             // arrive here. Absorbing it can finish the entity and skip the
             // deliberate detach/ranged-resume path the park exists to enable.
+            let canDetach = resumeCapable
             lock.unlock()
-            detachParkedConnection(force: true)
+            if canDetach {
+                detachParkedConnection(force: true)
+            }
             return
         }
         let gen = generation
