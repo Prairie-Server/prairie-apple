@@ -1,7 +1,8 @@
 import Foundation
 
 /// Artwork URL helpers mirroring prairie-server `internal/artworkkey` / web `artworkUrl.ts`.
-/// Canonical cache keys stay `.webp`; clients try AVIF → WebP → PNG for older devices.
+/// Canonical cache keys stay `.webp`; clients pick the best sibling immediately using
+/// `ImageFormats` instead of AVIF-first trial-and-error.
 enum ArtworkURL {
     /// AVIF sibling of a canonical `.webp` URL/path. Non-WebP inputs return `nil`.
     /// Query/fragment are preserved for signed CDN URLs.
@@ -14,20 +15,29 @@ enum ArtworkURL {
         webPFormatSibling(of: urlString, ext: "png")
     }
 
-    /// Ordered load candidates: AVIF → WebP → PNG when the input is WebP.
+    /// Ordered load candidates using the process `ImageFormats` preference list.
     static func candidates(for urlString: String) -> [String] {
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
+        let byFormat: [String: String] = [
+            ImageFormats.webp: trimmed,
+            ImageFormats.avif: webPAVIFSibling(of: trimmed) ?? "",
+            ImageFormats.png: webPPNGSibling(of: trimmed) ?? "",
+        ]
         var out: [String] = []
-        if let avif = webPAVIFSibling(of: trimmed) { out.append(avif) }
-        out.append(trimmed)
-        if let png = webPPNGSibling(of: trimmed) { out.append(png) }
+        var seen = Set<String>()
+        for format in ImageFormats.preferred {
+            let url = byFormat[format]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !url.isEmpty, seen.insert(url).inserted else { continue }
+            out.append(url)
+        }
+        if out.isEmpty { out.append(trimmed) }
         return out
     }
 
-    /// Prefer the AVIF sibling when one can be derived; otherwise the original URL.
+    /// Best immediate artwork URL for this device without codec probing.
     static func preferred(_ urlString: String) -> String {
-        webPAVIFSibling(of: urlString) ?? urlString
+        candidates(for: urlString).first ?? urlString
     }
 
     private static func webPFormatSibling(of urlString: String, ext: String) -> String? {

@@ -2,6 +2,11 @@ import XCTest
 @testable import Prairie
 
 final class ArtworkURLTests: XCTestCase {
+    override func tearDown() {
+        ImageFormats.resetForTests()
+        super.tearDown()
+    }
+
     func testRewritesWebPObjectKeysToAVIF() {
         XCTAssertEqual(
             ArtworkURL.webPAVIFSibling(of: "library/1/poster/original.abc123.webp"),
@@ -39,21 +44,35 @@ final class ArtworkURLTests: XCTestCase {
         XCTAssertNil(ArtworkURL.webPAVIFSibling(of: "   "))
     }
 
-    func testCandidatesOrderAVIFWebPPNG() {
+    func testCandidatesFollowConfiguredPreference() {
+        ImageFormats.configure(["avif", "webp", "png"])
         XCTAssertEqual(
             ArtworkURL.candidates(for: "poster.webp"),
             ["poster.avif", "poster.webp", "poster.png"]
+        )
+        ImageFormats.configure(["webp", "png"])
+        XCTAssertEqual(
+            ArtworkURL.candidates(for: "poster.webp"),
+            ["poster.webp", "poster.png"]
         )
         XCTAssertEqual(ArtworkURL.candidates(for: "poster.jpg"), ["poster.jpg"])
     }
 
     func testPreferredFallsBackToOriginal() {
+        ImageFormats.configure(["avif", "webp", "png"])
         XCTAssertEqual(ArtworkURL.preferred("poster.jpg"), "poster.jpg")
         XCTAssertEqual(ArtworkURL.preferred("poster.webp"), "poster.avif")
+        ImageFormats.configure(["webp", "png"])
+        XCTAssertEqual(ArtworkURL.preferred("poster.webp"), "poster.webp")
     }
 
     func testExtensionMatchIsCaseInsensitive() {
         XCTAssertEqual(ArtworkURL.webPAVIFSibling(of: "poster.WEBP"), "poster.avif")
         XCTAssertEqual(ArtworkURL.webPPNGSibling(of: "poster.WEBP"), "poster.png")
+    }
+
+    func testImageFormatsHeaderValue() {
+        ImageFormats.configure(["avif", "webp", "png"])
+        XCTAssertEqual(ImageFormats.headerValue, "avif,webp,png")
     }
 }
