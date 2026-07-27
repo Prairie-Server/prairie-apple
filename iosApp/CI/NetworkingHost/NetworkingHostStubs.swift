@@ -105,3 +105,40 @@ actor HTTPClient {
 
     func cancelInFlightRequests() async {}
 }
+
+enum SubtitleAIController {
+    static func trackKey(for jobId: String) -> String { "ai-\(jobId)" }
+}
+
+enum LiveTVChannelListViewModel {
+    struct NowNext: Equatable {
+        let now: LiveTVProgram?
+        let next: LiveTVProgram?
+    }
+
+    /// Copied from the production ViewModel helper so LiveTV model tests keep
+    /// exercising program schedule math without pulling SwiftUI list code.
+    nonisolated static func nowNextMap(
+        programs: [LiveTVProgram],
+        at now: Date
+    ) -> [String: NowNext] {
+        var grouped: [String: [LiveTVProgram]] = [:]
+        for program in programs {
+            grouped[program.channelId, default: []].append(program)
+        }
+        var result: [String: NowNext] = [:]
+        for (channelId, list) in grouped {
+            let sorted = list.sorted { $0.start < $1.start }
+            let current = sorted.first { $0.start <= now && now < $0.stop }
+            let upcoming: LiveTVProgram?
+            if let current {
+                upcoming = sorted.first { $0.start >= current.stop }
+            } else {
+                upcoming = sorted.first { $0.start >= now }
+            }
+            result[channelId] = NowNext(now: current, next: upcoming)
+        }
+        return result
+    }
+}
+
