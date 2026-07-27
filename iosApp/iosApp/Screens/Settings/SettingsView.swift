@@ -279,7 +279,6 @@ struct SettingsView: View {
         }
     }
 
-    #if !os(tvOS)
     private var versionString: String { AppUpdateChecker.displayVersionString() }
 
     private var aboutSection: some View {
