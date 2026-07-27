@@ -17,7 +17,8 @@ name: Unit Tests
 #   unrelated tests, (2) DerivedData/SPM cache via actions/cache@v6, (3) skipping
 #   bootstatus waits, (4) build-for-testing + test-without-building.
 #   Warm runs (DerivedData hit) target ~2–3 minutes; cold compiles still pay the
-#   FFmpeg-linked app build once to seed the cache.
+#   FFmpeg-linked app build once to seed the cache. Workflow-only edits keep the
+#   cache key stable so subsequent CI runs exercise the warm path.
 
 on:
   push:
