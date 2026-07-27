@@ -5,6 +5,7 @@ import AVKit
 struct LiveTVChannelListView: View {
     @State private var viewModel: LiveTVChannelListViewModel
     @State private var startingChannelId: String?
+    @State private var recordingPendingCancel: LiveTVRecording?
     @Environment(AppRouter.self) private var router
 
     /// Active focus hand-down token from `TVMainTabView`. When this changes
@@ -56,6 +57,25 @@ struct LiveTVChannelListView: View {
                         .padding(.bottom, 24)
                         .accessibilityIdentifier("livetv-recording-message")
                 }
+            }
+            .confirmationDialog(
+                "Cancel this recording?",
+                isPresented: Binding(
+                    get: { recordingPendingCancel != nil },
+                    set: { if !$0 { recordingPendingCancel = nil } }
+                ),
+                titleVisibility: .visible,
+                presenting: recordingPendingCancel
+            ) { recording in
+                Button("Cancel recording", role: .destructive) {
+                    Task { await viewModel.cancelRecording(recording) }
+                    recordingPendingCancel = nil
+                }
+                Button("Keep", role: .cancel) {
+                    recordingPendingCancel = nil
+                }
+            } message: { recording in
+                Text(recording.title)
             }
             #if os(tvOS)
             .onAppear { applyFocusRequest(focusRequest) }
@@ -162,11 +182,17 @@ struct LiveTVChannelListView: View {
             Spacer(minLength: 8)
             if recording.status.lowercased() == "scheduled"
                 || recording.status.lowercased() == "pending" {
+                let normalizedId = recording.id.trimmingCharacters(in: .whitespacesAndNewlines)
                 Button(role: .destructive) {
-                    Task { await viewModel.cancelRecording(recording) }
+                    recordingPendingCancel = recording
                 } label: {
-                    Label("Cancel", systemImage: "xmark.circle")
+                    if viewModel.cancellingRecordingIds.contains(normalizedId) {
+                        ProgressView()
+                    } else {
+                        Label("Cancel", systemImage: "xmark.circle")
+                    }
                 }
+                .disabled(viewModel.cancellingRecordingIds.contains(normalizedId))
                 #if !os(tvOS)
                 .buttonStyle(.bordered)
                 #endif
@@ -253,12 +279,13 @@ struct LiveTVChannelListView: View {
                     .foregroundStyle(Color.continuumSecondaryText)
             }
             Spacer(minLength: 8)
-            if allowRecord {
+            if allowRecord, !program.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Button {
                     Task { await viewModel.scheduleRecording(program: program) }
                 } label: {
                     Label("Record", systemImage: "record.circle")
                 }
+                .disabled(viewModel.isRecordingBusy)
                 #if !os(tvOS)
                 .buttonStyle(.bordered)
                 #endif

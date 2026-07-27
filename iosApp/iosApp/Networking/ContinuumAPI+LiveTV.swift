@@ -40,17 +40,17 @@ extension ContinuumAPI {
     }
 
     func liveTVProgram(id: String) async throws -> LiveTVProgram {
-        try await http.get("/api/v1/livetv/programs/\(id)")
+        try await http.get("/api/v1/livetv/programs/\(try Self.encodePathSegment(id))")
     }
 
     /// Start a tuner session for live HLS playback.
     func startLiveTVSession(channelId: String) async throws -> LiveTVSessionStartResponse {
-        try await http.post("/api/v1/livetv/channels/\(channelId)/session")
+        try await http.post("/api/v1/livetv/channels/\(try Self.encodePathSegment(channelId))/session")
     }
 
     /// Release a live session (frees the tuner). Prefer calling on player dismiss.
     func releaseLiveTVSession(sessionId: String) async throws {
-        try await http.delete("/api/v1/livetv/sessions/\(sessionId)")
+        try await http.delete("/api/v1/livetv/sessions/\(try Self.encodePathSegment(sessionId))")
     }
 
     func liveTVRecordings(status: String? = nil) async throws -> [LiveTVRecording] {
@@ -70,6 +70,17 @@ extension ContinuumAPI {
     }
 
     func cancelLiveTVRecording(id: String) async throws {
-        try await http.delete("/api/v1/livetv/recordings/\(id)")
+        try await http.delete("/api/v1/livetv/recordings/\(try Self.encodePathSegment(id))")
+    }
+
+    /// Percent-encode a single path segment; reject empty ids and `/` / `..`.
+    private static func encodePathSegment(_ raw: String) throws -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.contains("/"), !trimmed.contains("..") else {
+            throw APIError.invalidPathParameter(name: "id", value: raw)
+        }
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        return trimmed.addingPercentEncoding(withAllowedCharacters: allowed) ?? trimmed
     }
 }

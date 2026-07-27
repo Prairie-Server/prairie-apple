@@ -118,19 +118,15 @@ struct LiveTVRecording: Codable, Hashable, Identifiable {
     let channelId: String
     let seriesRuleId: String?
     let status: String
-    let path: String?
+    // Server may return a filesystem `path`; intentionally not decoded into UI models.
     let libraryItemId: String?
     let start: Date
     let stop: Date
     let title: String
-    let lastError: String?
 }
 
-/// Body for `POST /api/v1/livetv/recordings`.
+/// Body for guide-based `POST /api/v1/livetv/recordings`.
+/// Server resolves channel/window/title from `program_id` — do not over-post.
 struct LiveTVScheduleRecordingInput: Encodable {
-    let programId: String?
-    let channelId: String
-    let start: Date
-    let stop: Date
-    let title: String
+    let programId: String
 }
