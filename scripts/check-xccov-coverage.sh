@@ -100,22 +100,44 @@ with open(json_path, "r", encoding="utf-8") as f:
     report = json.load(f)
 
 targets = report.get("targets") or []
-# Prefer the main app product PrairieTests loads via TEST_HOST.
-app_targets = [
-    t for t in targets
-    if str(t.get("name", "")).endswith(".app")
-    and "Prairie" in str(t.get("name", ""))
-    and "Tests" not in str(t.get("name", ""))
-]
-if not app_targets:
-    app_targets = [t for t in targets if str(t.get("name", "")).endswith(".app")]
-if not app_targets:
-    print("error: no .app target found in xccov report", file=sys.stderr)
+# Prefer the FFmpeg-free Networking CI framework/host when present; otherwise
+# the main Prairie.app product PrairieTests loads via TEST_HOST.
+def is_product(t):
+    name = str(t.get("name", ""))
+    return (
+        (name.endswith(".app") or name.endswith(".framework"))
+        and "Prairie" in name
+        and "Tests" not in name
+    )
+
+product_targets = [t for t in targets if is_product(t)]
+if not product_targets:
+    product_targets = [
+        t for t in targets
+        if str(t.get("name", "")).endswith(".app")
+        or str(t.get("name", "")).endswith(".framework")
+    ]
+if not product_targets:
+    print("error: no .app/.framework target found in xccov report", file=sys.stderr)
     sys.exit(1)
 
-target = max(app_targets, key=lambda t: int(t.get("executableLines") or 0))
+# CI framework may be named PrairieNetworkingHost.framework or Prairie.framework
+# (PRODUCT_NAME=Prairie). Prefer NetworkingHost*, then any .framework, then .app.
+networking_hosts = [
+    t for t in product_targets
+    if "NetworkingHost" in str(t.get("name", ""))
+]
+frameworks = [
+    t for t in product_targets
+    if str(t.get("name", "")).endswith(".framework")
+]
+if networking_hosts:
+    target = max(networking_hosts, key=lambda t: int(t.get("executableLines") or 0))
+elif frameworks:
+    target = max(frameworks, key=lambda t: int(t.get("executableLines") or 0))
+else:
+    target = max(product_targets, key=lambda t: int(t.get("executableLines") or 0))
 target_name = target.get("name", "<unknown>")
-
 overall_exec = int(target.get("executableLines") or 0)
 overall_cov = int(target.get("coveredLines") or 0)
 overall_pct = (100.0 * overall_cov / overall_exec) if overall_exec else 0.0
