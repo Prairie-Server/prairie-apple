@@ -1,9 +1,27 @@
 import SwiftUI
 import AVKit
 
-/// Live TV tab: channel list with now/next EPG and one-tap record / play.
+private enum LiveTVTab: String, CaseIterable, Identifiable {
+    case guide
+    case channels
+    case recordings
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .guide: return "Guide"
+        case .channels: return "Channels"
+        case .recordings: return "My recordings"
+        }
+    }
+}
+
+/// Live TV tab: guide grid, channel lineup, and recordings.
 struct LiveTVChannelListView: View {
     @State private var viewModel: LiveTVChannelListViewModel
+    @State private var selectedTab: LiveTVTab = .guide
+    @State private var channelFilter = ""
     @State private var startingChannelId: String?
     @State private var recordingPendingCancel: LiveTVRecording?
     @Environment(AppRouter.self) private var router
@@ -80,6 +98,7 @@ struct LiveTVChannelListView: View {
             #if os(tvOS)
             .onAppear { applyFocusRequest(focusRequest) }
             .onChange(of: focusRequest) { _, request in applyFocusRequest(request) }
+            .onChange(of: selectedTab) { _, _ in applyFocusRequest(focusRequest) }
             .onChange(of: viewModel.channels.map(\.id)) { _, _ in
                 applyFocusRequest(focusRequest)
             }
@@ -130,26 +149,176 @@ struct LiveTVChannelListView: View {
             }
             #endif
         } else {
-            channelList
+            VStack(spacing: 0) {
+                tabSelector
+                tabContent
+            }
         }
     }
 
-    private var channelList: some View {
-        List {
-            if !viewModel.recordings.isEmpty {
-                Section("Scheduled recordings") {
-                    ForEach(viewModel.recordings) { recording in
-                        recordingRow(recording)
-                            #if os(tvOS)
-                            .listRowBackground(Color.clear)
-                            #else
-                            .listRowBackground(Color.continuumSurface)
-                            #endif
+    private var tabSelector: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(LiveTVTab.allCases) { tab in
+                    Button {
+                        withAnimation(.easeInOut(duration: ContinuumTheme.normalDuration)) {
+                            selectedTab = tab
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text(tab.title)
+                            if tab == .recordings, !viewModel.scheduledRecordings.isEmpty {
+                                Text("\(viewModel.scheduledRecordings.count)")
+                                    .font(.continuumCaption)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Color.continuumSurfaceElevated)
+                                    .clipShape(Capsule())
+                            }
+                        }
+                        .font(.continuumCaption)
+                        .fontWeight(selectedTab == tab ? .semibold : .regular)
+                        .foregroundColor(selectedTab == tab ? Color.continuumBackground : .continuumSecondaryText)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(
+                            Capsule()
+                                .fill(selectedTab == tab ? Color.continuumOnSurface : Color.continuumSurfaceElevated)
+                        )
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("livetv-tab-\(tab.rawValue)")
                 }
             }
+            .padding(.horizontal, ContinuumTheme.padding)
+            .padding(.vertical, ContinuumTheme.smallPadding)
+        }
+    }
+
+    @ViewBuilder
+    private var tabContent: some View {
+        switch selectedTab {
+        case .guide:
+            guideTab
+        case .channels:
+            channelsTab
+        case .recordings:
+            recordingsTab
+        }
+    }
+
+    private var guideTab: some View {
+        List {
+            ForEach(viewModel.channels) { channel in
+                guideChannelSection(channel)
+                    #if os(tvOS)
+                    .listRowBackground(Color.clear)
+                    #else
+                    .listRowBackground(Color.continuumSurface)
+                    #endif
+            }
+        }
+        #if os(tvOS)
+        .listStyle(.plain)
+        #else
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        #endif
+        .accessibilityIdentifier("livetv-guide")
+    }
+
+    @ViewBuilder
+    private func guideChannelSection(_ channel: LiveTVChannel) -> some View {
+        Section {
+            let programs = viewModel.programs(for: channel.id)
+            if programs.isEmpty {
+                Text("No guide data")
+                    .font(.continuumCaption)
+                    .foregroundStyle(Color.continuumSecondaryText)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(programs) { program in
+                            guideProgramCard(program)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        } header: {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(channel.displayNumber)
+                    .font(.continuumHeadline)
+                Text(channel.displayName)
+                    .font(.continuumBody)
+                Spacer(minLength: 8)
+                Button {
+                    Task { await play(channel) }
+                } label: {
+                    if startingChannelId == channel.id {
+                        ProgressView()
+                    } else {
+                        Label("Watch", systemImage: "play.fill")
+                    }
+                }
+                .disabled(startingChannelId != nil)
+                #if os(tvOS)
+                .focused($focusedChannelId, equals: channel.id)
+                .onMoveCommand { direction in
+                    if direction == .up,
+                       channel.id == viewModel.channels.first?.id {
+                        onTopMenuFocusRequest?()
+                    }
+                }
+                #else
+                .buttonStyle(.borderedProminent)
+                .tint(Color.continuumAccent)
+                #endif
+            }
+        }
+    }
+
+    private func guideProgramCard(_ program: LiveTVProgram) -> some View {
+        let canRecord = program.stop > Date()
+            && !program.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        VStack(alignment: .leading, spacing: 6) {
+            Text(program.displayTitle)
+                .font(.continuumCaption)
+                .foregroundStyle(Color.continuumOnSurface)
+                .lineLimit(2)
+            Text(timeRange(program))
+                .font(.continuumCaption)
+                .foregroundStyle(Color.continuumSecondaryText)
+            if canRecord {
+                Button {
+                    Task { await viewModel.scheduleRecording(program: program) }
+                } label: {
+                    Label("Record", systemImage: "record.circle")
+                        .font(.continuumCaption)
+                }
+                .disabled(viewModel.isRecordingBusy)
+                #if !os(tvOS)
+                .buttonStyle(.bordered)
+                #endif
+            }
+        }
+        .frame(width: 160, alignment: .leading)
+        .padding(10)
+        .background(Color.continuumSurfaceElevated)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private var channelsTab: some View {
+        List {
+            #if !os(tvOS)
+            Section {
+                TextField("Filter channels…", text: $channelFilter)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+            }
+            #endif
             Section("Channels") {
-                ForEach(viewModel.channels) { channel in
+                ForEach(filteredChannels) { channel in
                     channelRow(channel)
                         #if os(tvOS)
                         .listRowBackground(Color.clear)
@@ -168,6 +337,61 @@ struct LiveTVChannelListView: View {
         .accessibilityIdentifier("livetv-channel-list")
     }
 
+    private var filteredChannels: [LiveTVChannel] {
+        let query = channelFilter.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return viewModel.channels }
+        return viewModel.channels.filter { channel in
+            let haystack = "\(channel.displayNumber) \(channel.callsign) \(channel.name)".lowercased()
+            return haystack.contains(query)
+        }
+    }
+
+    private var recordingsTab: some View {
+        List {
+            recordingsSection(
+                title: "Scheduled & in progress",
+                emptyMessage: "Nothing scheduled yet. Pick a programme from the guide or channel list.",
+                recordings: viewModel.scheduledRecordings
+            )
+            recordingsSection(
+                title: "History",
+                emptyMessage: "Completed and failed recordings will show up here.",
+                recordings: viewModel.historyRecordings
+            )
+        }
+        #if os(tvOS)
+        .listStyle(.plain)
+        #else
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        #endif
+        .accessibilityIdentifier("livetv-recordings")
+    }
+
+    @ViewBuilder
+    private func recordingsSection(
+        title: String,
+        emptyMessage: String,
+        recordings: [LiveTVRecording]
+    ) -> some View {
+        Section(title) {
+            if recordings.isEmpty {
+                Text(emptyMessage)
+                    .font(.continuumCaption)
+                    .foregroundStyle(Color.continuumSecondaryText)
+            } else {
+                ForEach(recordings) { recording in
+                    recordingRow(recording)
+                        #if os(tvOS)
+                        .listRowBackground(Color.clear)
+                        #else
+                        .listRowBackground(Color.continuumSurface)
+                        #endif
+                }
+            }
+        }
+    }
+
     @ViewBuilder
     private func recordingRow(_ recording: LiveTVRecording) -> some View {
         HStack(alignment: .center, spacing: 10) {
@@ -175,12 +399,24 @@ struct LiveTVChannelListView: View {
                 Text(recording.title)
                     .font(.continuumBody)
                     .foregroundStyle(Color.continuumOnSurface)
-                Text("\(recording.status.capitalized) · \(recordingTimeRange(recording))")
+                let channelLabel = viewModel.channel(for: recording.channelId)?.displayName
+                    ?? recording.channelId
+                Text("\(recording.status.capitalized) · \(channelLabel) · \(recordingTimeRange(recording))")
                     .font(.continuumCaption)
                     .foregroundStyle(Color.continuumSecondaryText)
             }
             Spacer(minLength: 8)
-            if recording.status.lowercased() == "scheduled"
+            if let contentId = playableLibraryItemId(from: recording) {
+                Button {
+                    router.presentPlayer(contentId: contentId)
+                } label: {
+                    Label("Play", systemImage: "play.fill")
+                }
+                #if !os(tvOS)
+                .buttonStyle(.borderedProminent)
+                .tint(Color.continuumAccent)
+                #endif
+            } else if recording.status.lowercased() == "scheduled"
                 || recording.status.lowercased() == "pending" {
                 let normalizedId = recording.id.trimmingCharacters(in: .whitespacesAndNewlines)
                 Button(role: .destructive) {
@@ -200,6 +436,12 @@ struct LiveTVChannelListView: View {
         }
         .padding(.vertical, 4)
         .accessibilityIdentifier("livetv-recording-\(recording.id)")
+    }
+
+    private func playableLibraryItemId(from recording: LiveTVRecording) -> String? {
+        guard recording.status.lowercased() == "completed" else { return nil }
+        let id = recording.libraryItemId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return id.isEmpty ? nil : id
     }
 
     private func recordingTimeRange(_ recording: LiveTVRecording) -> String {
@@ -243,7 +485,7 @@ struct LiveTVChannelListView: View {
                 .focused($focusedChannelId, equals: channel.id)
                 .onMoveCommand { direction in
                     if direction == .up,
-                       channel.id == viewModel.channels.first?.id {
+                       channel.id == filteredChannels.first?.id {
                         onTopMenuFocusRequest?()
                     }
                 }
@@ -305,18 +547,39 @@ struct LiveTVChannelListView: View {
         defer { startingChannelId = nil }
         do {
             let session = try await viewModel.startSession(for: channel)
-            guard let url = URL(string: session.hlsUrl), !session.hlsUrl.isEmpty else {
-                // Session was reserved but never handed to the player; free
-                // the tuner so dismissal cleanup isn't required to run.
+            let raw = session.playableURLString
+            guard !raw.isEmpty else {
                 await viewModel.releaseSession(session.sessionId)
                 viewModel.setStatusMessage("Live stream URL missing")
                 return
             }
+
+            let serverUrl = await ContinuumAPI.shared.currentServerUrl()
+            let accessToken = await TokenStore.shared.getAccessToken()
+            let profileId = await TokenStore.shared.getProfileId()
+            let resolved = LiveTVURLResolver.resolve(
+                raw,
+                serverBaseURL: serverUrl,
+                accessToken: accessToken,
+                profileId: profileId
+            )
+            guard resolved != nil else {
+                await viewModel.releaseSession(session.sessionId)
+                viewModel.setStatusMessage("Live stream URL missing")
+                return
+            }
+
             router.presentLivePlayer(
                 sessionId: session.sessionId,
-                hlsURL: url,
-                title: channel.displayName
+                streamURL: resolved,
+                title: channel.displayName,
+                isHLS: session.isHLS
             )
+
+            if let note = session.note?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !note.isEmpty {
+                viewModel.setStatusMessage(note)
+            }
         } catch {
             viewModel.setStatusMessage(error.localizedDescription)
         }
@@ -327,7 +590,8 @@ struct LiveTVChannelListView: View {
 
     private func applyFocusRequest(_ request: Int) {
         guard request > 0 else { return }
-        if let first = viewModel.channels.first?.id {
+        let focusChannels = selectedTab == .channels ? filteredChannels : viewModel.channels
+        if let first = focusChannels.first?.id {
             focusedChannelId = first
         } else if viewModel.isLoading
             || viewModel.loadState == .idle
@@ -337,12 +601,4 @@ struct LiveTVChannelListView: View {
         }
     }
     #endif
-}
-
-/// Identifiable hand-off into the live HLS player.
-struct LiveTVPlayerSession: Identifiable, Hashable {
-    let id = UUID()
-    let sessionId: String
-    let hlsURL: URL
-    let title: String
 }

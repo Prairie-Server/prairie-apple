@@ -138,13 +138,104 @@ final class LiveTVModelDecodingTests: XCTestCase {
           "playback_ticket": "ticket-1",
           "hls_url": "https://server.test/livetv/sess-1/index.m3u8",
           "stream_url": "http://hdhr/auto/v4.1",
+          "transport": "hls",
           "note": "transcoding"
         }
         """)
         XCTAssertEqual(session.sessionId, "sess-1")
         XCTAssertEqual(session.playbackTicket, "ticket-1")
-        XCTAssertTrue(session.hlsUrl.contains("index.m3u8"))
+        XCTAssertEqual(session.playableURLString, "https://server.test/livetv/sess-1/index.m3u8")
+        XCTAssertTrue(session.isHLS)
+        XCTAssertEqual(session.transport, "hls")
         XCTAssertEqual(session.note, "transcoding")
+    }
+
+    func testSessionStartMpegtsTransportAndPlayableURLFallback() throws {
+        let session = try decode(LiveTVSessionStartResponse.self, """
+        {
+          "session_id": "sess-2",
+          "playback_ticket": "ticket-2",
+          "hls_url": "",
+          "stream_url": "/api/v1/livetv/sessions/sess-2/stream",
+          "transport": "mpegts"
+        }
+        """)
+        XCTAssertEqual(session.playableURLString, "/api/v1/livetv/sessions/sess-2/stream")
+        XCTAssertFalse(session.isHLS)
+    }
+
+    func testSessionStartMpegtsTransportWithLiveHlsBridgeIsHLS() throws {
+        let session = try decode(LiveTVSessionStartResponse.self, """
+        {
+          "session_id": "sess-bridge",
+          "playback_ticket": "ticket-bridge",
+          "hls_url": "/api/v1/livetv/live-hls/ticket-bridge/index.m3u8",
+          "stream_url": "/api/v1/livetv/sessions/sess-bridge/stream",
+          "transport": "mpegts"
+        }
+        """)
+        XCTAssertTrue(session.isHLS)
+    }
+
+    func testSessionStartInfersHLSFromManifestSuffix() throws {
+        let session = try decode(LiveTVSessionStartResponse.self, """
+        {
+          "session_id": "sess-3",
+          "playback_ticket": "ticket-3",
+          "hls_url": "/api/v1/livetv/sessions/sess-3/index.m3u8",
+          "stream_url": "/api/v1/livetv/sessions/sess-3/index.m3u8"
+        }
+        """)
+        XCTAssertTrue(session.isHLS)
+    }
+
+    func testLiveTVURLResolverResolvesRelativeAPIPaths() {
+        let url = LiveTVURLResolver.resolve(
+            "/api/v1/livetv/sessions/s1/stream",
+            serverBaseURL: "https://server.test"
+        )
+        XCTAssertEqual(url?.absoluteString, "https://server.test/api/v1/livetv/sessions/s1/stream")
+    }
+
+    func testLiveTVURLResolverAppendsTokenAndProfileIdForSameOrigin() throws {
+        let url = try XCTUnwrap(LiveTVURLResolver.resolve(
+            "/api/v1/livetv/live-hls/t1/index.m3u8",
+            serverBaseURL: "https://server.test",
+            accessToken: "access-tok",
+            profileId: "profile-1"
+        ))
+        let components = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false))
+        XCTAssertEqual(components.host, "server.test")
+        XCTAssertEqual(components.path, "/api/v1/livetv/live-hls/t1/index.m3u8")
+        let query = Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value) })
+        XCTAssertEqual(query["token"], "access-tok")
+        XCTAssertEqual(query["profile_id"], "profile-1")
+    }
+
+    func testLiveTVURLResolverDoesNotAttachAuthToCrossOriginURLs() {
+        let url = LiveTVURLResolver.resolve(
+            "https://cdn.test/live/index.m3u8",
+            serverBaseURL: "https://server.test",
+            accessToken: "access-tok",
+            profileId: "profile-1"
+        )
+        XCTAssertEqual(url?.absoluteString, "https://cdn.test/live/index.m3u8")
+    }
+
+    func testLiveTVURLResolverPrefixesBarePathsWithApiV1() {
+        let url = LiveTVURLResolver.resolve(
+            "livetv/sessions/s1/stream",
+            serverBaseURL: "https://server.test/"
+        )
+        XCTAssertEqual(url?.absoluteString, "https://server.test/api/v1/livetv/sessions/s1/stream")
+    }
+
+    func testLiveTVURLResolverPassesThroughAbsoluteURLs() {
+        let url = LiveTVURLResolver.resolve(
+            "https://cdn.test/live/index.m3u8",
+            serverBaseURL: "https://server.test"
+        )
+        XCTAssertEqual(url?.absoluteString, "https://cdn.test/live/index.m3u8")
     }
 
     func testProgramDisplayTitleAndNowNextDefaults() throws {
@@ -232,5 +323,35 @@ final class LiveTVModelDecodingTests: XCTestCase {
         let map = LiveTVChannelListViewModel.nowNextMap(programs: programs, at: now)
         XCTAssertEqual(map["ch"]?.now?.id, "a")
         XCTAssertEqual(map["ch"]?.next?.id, "b")
+    }
+
+    func testProgramsForChannelOmitsEnded() {
+        let cal = ISO8601DateFormatter()
+        cal.formatOptions = [.withInternetDateTime]
+        let t0 = cal.date(from: "2026-07-25T18:00:00Z")!
+        let t1 = cal.date(from: "2026-07-25T19:00:00Z")!
+        let t2 = cal.date(from: "2026-07-25T20:00:00Z")!
+        let now = cal.date(from: "2026-07-25T19:15:00Z")!
+
+        let programs = [
+            LiveTVProgram(
+                id: "ended", channelId: "ch", sourceId: nil, seriesId: "",
+                externalId: nil, start: t0, stop: t1, title: "Ended",
+                subtitle: "", description: "", season: nil, episode: nil,
+                genres: [], imageUrl: "", isNew: false, isLive: false
+            ),
+            LiveTVProgram(
+                id: "airing", channelId: "ch", sourceId: nil, seriesId: "",
+                externalId: nil, start: t1, stop: t2, title: "Airing",
+                subtitle: "", description: "", season: nil, episode: nil,
+                genres: [], imageUrl: "", isNew: false, isLive: false
+            ),
+        ]
+        let visible = LiveTVChannelListViewModel.activeOrUpcomingPrograms(
+            programs,
+            channelId: "ch",
+            at: now
+        )
+        XCTAssertEqual(visible.map(\.id), ["airing"])
     }
 }

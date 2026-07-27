@@ -87,7 +87,101 @@ struct LiveTVSessionStartResponse: Codable, Hashable {
     let playbackTicket: String
     let hlsUrl: String
     let streamUrl: String?
+    let transport: String?
     let note: String?
+
+    /// Preferred client playback URL (`hls_url`, then `stream_url`).
+    var playableURLString: String {
+        let primary = hlsUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !primary.isEmpty { return primary }
+        return streamUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    /// Whether AVPlayer should treat the session as HLS. Explicit `transport=hls`
+    /// wins; remuxed `live-hls` / `.m3u8` URLs count even when transport says
+    /// `mpegts` (server bridge always serves HLS to native clients).
+    var isHLS: Bool {
+        let normalized = transport?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+        if normalized == "hls" { return true }
+        let url = playableURLString.lowercased()
+        if url.contains(".m3u8") || url.contains("live-hls") { return true }
+        if normalized == "mpegts" { return false }
+        return false
+    }
+}
+
+/// Turns server-supplied Live TV stream paths into absolute URLs.
+enum LiveTVURLResolver {
+    /// Mirrors SmartTV `resolveLivePlaybackUrl` / `buildStreamUrl`: resolve
+    /// against the active server, then attach `token` + `profile_id` query
+    /// params for same-origin streams so AVPlayer segment fetches stay authed.
+    nonisolated static func resolve(
+        _ raw: String,
+        serverBaseURL: String,
+        accessToken: String? = nil,
+        profileId: String? = nil
+    ) -> URL? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let resolved: URL?
+        if trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") {
+            resolved = URL(string: trimmed)
+        } else {
+            let base = serverBaseURL
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            guard !base.isEmpty else { return nil }
+
+            let relativePath = trimmed.hasPrefix("/") ? trimmed : "/\(trimmed)"
+            let urlString = relativePath.hasPrefix("/api/")
+                ? "\(base)\(relativePath)"
+                : "\(base)/api/v1\(relativePath)"
+            resolved = URL(string: urlString)
+        }
+
+        guard let resolved else { return nil }
+        guard isSameServerOrigin(serverBaseURL: serverBaseURL, candidate: resolved) else {
+            return resolved
+        }
+        return appendAuthQuery(to: resolved, accessToken: accessToken, profileId: profileId)
+    }
+
+    nonisolated private static func isSameServerOrigin(serverBaseURL: String, candidate: URL) -> Bool {
+        let trimmed = serverBaseURL
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let server = URL(string: trimmed) else { return false }
+        guard let serverHost = server.host, let candidateHost = candidate.host else { return false }
+        return server.scheme == candidate.scheme && serverHost == candidateHost
+    }
+
+    nonisolated private static func appendAuthQuery(
+        to url: URL,
+        accessToken: String?,
+        profileId: String?
+    ) -> URL {
+        let token = accessToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let profile = profileId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !token.isEmpty || !profile.isEmpty else { return url }
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url
+        }
+
+        var items = components.queryItems ?? []
+        if !token.isEmpty {
+            items.removeAll { $0.name == "token" }
+            items.append(URLQueryItem(name: "token", value: token))
+        }
+        if !profile.isEmpty {
+            items.removeAll { $0.name == "profile_id" }
+            items.append(URLQueryItem(name: "profile_id", value: profile))
+        }
+        components.queryItems = items.isEmpty ? nil : items
+        return components.url ?? url
+    }
 }
 
 struct LiveTVSession: Codable, Hashable, Identifiable {

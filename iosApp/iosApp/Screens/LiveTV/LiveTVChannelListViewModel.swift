@@ -13,6 +13,7 @@ final class LiveTVChannelListViewModel {
 
     private(set) var loadState: LoadState = .idle
     private(set) var channels: [LiveTVChannel] = []
+    private(set) var programs: [LiveTVProgram] = []
     private(set) var nowNextByChannel: [String: LiveTVNowNext] = [:]
     private(set) var recordings: [LiveTVRecording] = []
     private(set) var recordingMessage: String?
@@ -39,6 +40,42 @@ final class LiveTVChannelListViewModel {
     var error: ErrorState? {
         if case .failed(let state) = loadState { return state }
         return nil
+    }
+
+    var scheduledRecordings: [LiveTVRecording] {
+        recordings.filter {
+            let status = $0.status.lowercased()
+            return status == "scheduled" || status == "recording" || status == "pending"
+        }
+    }
+
+    var historyRecordings: [LiveTVRecording] {
+        recordings.filter {
+            let status = $0.status.lowercased()
+            return status != "scheduled"
+                && status != "recording"
+                && status != "pending"
+                && status != "cancelled"
+        }
+    }
+
+    func programs(for channelId: String, at date: Date = Date()) -> [LiveTVProgram] {
+        Self.activeOrUpcomingPrograms(programs, channelId: channelId, at: date)
+    }
+
+    /// Guide rows omit programmes that have already ended (`stop <= date`).
+    nonisolated static func activeOrUpcomingPrograms(
+        _ programs: [LiveTVProgram],
+        channelId: String,
+        at date: Date
+    ) -> [LiveTVProgram] {
+        programs
+            .filter { $0.channelId == channelId && $0.stop > date }
+            .sorted { $0.start < $1.start }
+    }
+
+    func channel(for id: String) -> LiveTVChannel? {
+        channels.first { $0.id == id }
     }
 
     func load() async {
@@ -74,7 +111,8 @@ final class LiveTVChannelListViewModel {
             return
         }
         let now = Date()
-        let start = now.addingTimeInterval(-30 * 60)
+        // Start at now — still-airing shows that began earlier are returned by overlap.
+        let start = now
         let end = now.addingTimeInterval(6 * 60 * 60)
         do {
             let guide = try await api.liveTVGuide(
@@ -82,6 +120,7 @@ final class LiveTVChannelListViewModel {
                 start: start,
                 end: end
             )
+            programs = guide.programs.sorted { $0.start < $1.start }
             nowNextByChannel = Self.nowNextMap(programs: guide.programs, at: now)
         } catch {
             // Guide is best-effort; channel list remains usable without it.
@@ -126,6 +165,10 @@ final class LiveTVChannelListViewModel {
         let programId = program.id.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !programId.isEmpty else {
             recordingMessage = "Program not found"
+            return
+        }
+        guard program.stop > Date() else {
+            recordingMessage = "Program already ended"
             return
         }
         guard !schedulingProgramIds.contains(programId) else { return }
