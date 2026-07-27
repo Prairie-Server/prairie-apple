@@ -182,16 +182,17 @@ struct LiveTVChannelListView: View {
             Spacer(minLength: 8)
             if recording.status.lowercased() == "scheduled"
                 || recording.status.lowercased() == "pending" {
+                let normalizedId = recording.id.trimmingCharacters(in: .whitespacesAndNewlines)
                 Button(role: .destructive) {
                     recordingPendingCancel = recording
                 } label: {
-                    if viewModel.cancellingRecordingIds.contains(recording.id) {
+                    if viewModel.cancellingRecordingIds.contains(normalizedId) {
                         ProgressView()
                     } else {
                         Label("Cancel", systemImage: "xmark.circle")
                     }
                 }
-                .disabled(viewModel.cancellingRecordingIds.contains(recording.id))
+                .disabled(viewModel.cancellingRecordingIds.contains(normalizedId))
                 #if !os(tvOS)
                 .buttonStyle(.bordered)
                 #endif
