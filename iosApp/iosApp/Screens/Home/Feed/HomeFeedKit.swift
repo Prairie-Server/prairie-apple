@@ -122,78 +122,6 @@ enum HomeFeedMeta {
         item.type.lowercased() == "episode" ? (item.seriesTitle ?? item.title) : item.title
     }
 
-    /// At most one short badge, and only for formats worth bragging about.
-    ///
-    /// The shipping build stamps `480P` and `AAC` onto every single tile —
-    /// the most visually dominant element on Home, communicating nothing a
-    /// viewer acts on. The first pass at this replaced them with `4K` +
-    /// `DOLBY VISION`, which on a library where nearly everything is 4K DV
-    /// is exactly as noisy and exactly as uninformative: a badge every tile
-    /// carries is not a badge, it's a texture.
-    ///
-    /// So: one badge, ranked rarest-signal-first, kept to a few characters.
-    /// Rows that trade card size for density (the poster wall) pass
-    /// `showsBadges: false` and drop them entirely.
-    static func notableBadges(for item: SectionItem, limit: Int = 1) -> [String] {
-        guard let summary = item.overlaySummary else { return [] }
-        var badges: [String] = []
-
-        // Dolby Vision outranks plain HDR outranks resolution: a viewer who
-        // cares about picture quality learns more from the former.
-        if let hdr = summary.hdr?.uppercased(), !hdr.isEmpty {
-            if hdr.contains("DOLBY") || hdr.contains("DV") {
-                badges.append("DV")
-            } else {
-                badges.append("HDR")
-            }
-        }
-
-        if let resolution = summary.resolution?.uppercased() {
-            if resolution == "8K" {
-                badges.append("8K")
-            } else if resolution == "4K" || resolution == "2160P" {
-                badges.append("4K")
-            }
-        }
-
-        // Only explicit Atmos — TrueHD is merely the usual carrier and says
-        // nothing about object-based audio, so badging it would lie.
-        if let audio = summary.audio?.uppercased(), audio.contains("ATMOS") {
-            badges.append("ATMOS")
-        }
-
-        return Array(badges.prefix(max(0, limit)))
-    }
-}
-
-// MARK: - Quality badges
-
-/// Restrained badge strip. Renders nothing at all for ordinary files.
-struct QualityBadges: View {
-    let badges: [String]
-
-    var body: some View {
-        if !badges.isEmpty {
-            HStack(spacing: 4) {
-                ForEach(badges, id: \.self) { badge in
-                    Text(badge)
-                        .font(.system(size: 8, weight: .heavy))
-                        .tracking(0.5)
-                        .foregroundStyle(.white.opacity(0.95))
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 2)
-                        .background(
-                            RoundedRectangle(cornerRadius: 3)
-                                .fill(.black.opacity(0.55))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 3)
-                                        .stroke(.white.opacity(0.28), lineWidth: 0.5)
-                                )
-                        )
-                }
-            }
-        }
-    }
 }
 
 // MARK: - Navigation
@@ -345,13 +273,12 @@ private struct HomeWatchedCheck: View {
 // MARK: - Poster card
 
 /// Poster card with the shipping card's flaws corrected: true 2:3 artwork,
-/// a single-line title, the year folded onto the caption line instead of
-/// occupying its own, and no technical badge noise.
+/// a single-line title and the year folded onto the caption line instead of
+/// occupying its own. Card overlays remain shared with the rest of the app.
 struct HomePosterCard: View {
     let item: SectionItem
     var width: CGFloat = HomeFeedMetrics.posterWidth
     var showsCaption: Bool = true
-    var showsBadges: Bool = true
     /// Draws the resume rail across the bottom of the artwork.
     var showsProgress: Bool = false
     /// Audiobook covers are square; stretching one into a 2:3 poster crops
@@ -411,14 +338,24 @@ struct HomePosterCard: View {
             RoundedRectangle(cornerRadius: HomeFeedMetrics.posterRadius, style: .continuous)
                 .stroke(.white.opacity(0.08), lineWidth: 0.5)
         )
-        .overlay(alignment: .topLeading) {
-            // `overlayStore.enabled` is the server/admin kill switch for card
-            // overlays. These badges are a curated subset rather than the full
-            // configured overlay set, but they are still overlays — honouring
-            // the switch keeps "turn overlays off" meaning what it says.
-            if showsBadges, overlayStore.enabled {
-                QualityBadges(badges: HomeFeedMeta.notableBadges(for: item))
-                    .padding(6)
+        .overlay {
+            // Home uses the same renderer and resolved profile preferences as
+            // Browse, For You, Watchlist, and Favorites. Keep this below the
+            // episode/progress/watched affordances so those controls retain
+            // their established corner priority.
+            if overlayStore.enabled {
+                CardOverlays(
+                    data: OverlayData.from(item),
+                    prefs: overlayStore.prefs,
+                    variant: .poster
+                )
+                .frame(width: width, height: height)
+                .clipShape(
+                    RoundedRectangle(
+                        cornerRadius: HomeFeedMetrics.posterRadius,
+                        style: .continuous
+                    )
+                )
             }
         }
         .overlay(alignment: .bottomLeading) {
@@ -486,6 +423,7 @@ struct HomeStillCard: View {
 
     /// Optimistic watched state, shared with the menu — see `HomePosterCard`.
     @State private var playedOverride: Bool?
+    @EnvironmentObject private var overlayStore: OverlayPrefsStore
 
     private var isPlayed: Bool { playedOverride ?? (item.userState?.played == true) }
 
@@ -539,6 +477,21 @@ struct HomeStillCard: View {
             .frame(height: height * 0.6)
             .frame(maxHeight: .infinity, alignment: .bottom)
             .allowsHitTesting(false)
+
+            if overlayStore.enabled {
+                CardOverlays(
+                    data: OverlayData.from(item),
+                    prefs: overlayStore.prefs,
+                    variant: .wide
+                )
+                .frame(width: width, height: height)
+                .clipShape(
+                    RoundedRectangle(
+                        cornerRadius: HomeFeedMetrics.stillRadius,
+                        style: .continuous
+                    )
+                )
+            }
 
             if let progress = HomeFeedMeta.progress(for: item) {
                 ProgressBar(value: progress)

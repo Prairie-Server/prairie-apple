@@ -10,9 +10,6 @@ struct HomeFeedRow: View {
     var cardSpacing: CGFloat = HomeFeedMetrics.cardSpacing
     /// Forces poster shape even for episode-bearing rows.
     var forcesPosters: Bool = false
-    /// Quality badges. Off for dense rows, where a badge covers a third of
-    /// the artwork and density is the whole point.
-    var showsBadges: Bool = true
     /// Long-press actions, forwarded to every card in the row.
     var onRemoveFromContinueWatching: ((SectionItem) -> Void)? = nil
     var onSetWatched: ((SectionItem, Bool) async -> Bool)? = nil
@@ -33,18 +30,6 @@ struct HomeFeedRow: View {
         guard !forcesPosters, !isAudiobookRow else { return false }
         if isResume { return true }
         return section.sectionType.lowercased().contains("next") && hasEpisodes
-    }
-
-    /// A badge every card in the row carries is not a badge, it's a texture.
-    /// On a library that is uniformly 4K Dolby Vision, stamping `DV` on all
-    /// twelve tiles says exactly as much as stamping nothing — which is how
-    /// the shipping build ended up with `480P` on everything. So the row only
-    /// badges when its items actually differ, and the detail page carries the
-    /// full spec line regardless.
-    private var badgesAreInformative: Bool {
-        guard showsBadges else { return false }
-        let stamped = section.items.map { HomeFeedMeta.notableBadges(for: $0).joined() }
-        return Set(stamped).count > 1
     }
 
     private var isAudiobookRow: Bool {
@@ -72,7 +57,6 @@ struct HomeFeedRow: View {
                             HomePosterCard(
                                 item: item,
                                 width: posterWidth,
-                                showsBadges: badgesAreInformative,
                                 showsProgress: isResume,
                                 aspect: isAudiobookRow ? .square : .poster,
                                 episodeBadge: episodeBadge(for: item),
