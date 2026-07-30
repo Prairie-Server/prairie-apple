@@ -38,16 +38,25 @@ struct TVSubtitleSettingsPane: View {
     private var profileSection: some View {
         TVSettingsSectionHeader("PROFILE")
 
-        TVSettingsPickerRow(
-            title: "Language",
-            value: TVSettingsOptions.label(for: viewModel.editorSubtitleLanguage, in: TVSettingsOptions.subtitleLanguage)
-        ) { activePicker = .language }
-        .focused(detailFocus, equals: .top)
+        if viewModel.settingsServerUpgradeRequired {
+            TVSettingsPickerRow(
+                title: "Language",
+                value: TVSettingsOptions.label(for: viewModel.editorSubtitleLanguage, in: TVSettingsOptions.subtitleLanguage)
+            ) { activePicker = .language }
+            .disabled(true)
+        } else {
+            TVSettingsPickerRow(
+                title: "Language",
+                value: TVSettingsOptions.label(for: viewModel.editorSubtitleLanguage, in: TVSettingsOptions.subtitleLanguage)
+            ) { activePicker = .language }
+            .focused(detailFocus, equals: .top)
+        }
 
         TVSettingsPickerRow(
             title: "Behavior",
             value: TVSettingsOptions.label(for: viewModel.editorSubtitleMode, in: TVSettingsOptions.subtitleMode)
         ) { activePicker = .mode }
+        .disabled(viewModel.settingsServerUpgradeRequired)
 
         TVSettingsToggleRow(
             title: "Show Forced Subtitles",
@@ -56,8 +65,16 @@ struct TVSubtitleSettingsPane: View {
             viewModel.editorShowForcedSubtitles =
                 viewModel.editorShowForcedSubtitles == "on" ? "off" : "on"
         }
+        .disabled(viewModel.settingsServerUpgradeRequired)
 
-        TVSettingsFooter("Used to pick a matching track when one is available. Forced subtitles cover foreign-language dialogue even when subtitles are off or set to auto.")
+        if viewModel.settingsServerUpgradeRequired {
+            TVSettingsWarningFooter(ProfilePrefsEditor.serverUpgradeMessage)
+        } else {
+            TVSettingsFooter("Used to pick a matching track when one is available. Forced subtitles cover foreign-language dialogue even when subtitles are off or set to auto.")
+            if let overrideMessage = viewModel.prefs.subtitleProfileOverrideMessage {
+                TVSettingsFooter("Override active — \(overrideMessage)")
+            }
+        }
         prefSaveFooter
     }
 
@@ -69,6 +86,7 @@ struct TVSubtitleSettingsPane: View {
             title: "Metadata Language",
             value: TVSettingsOptions.label(for: viewModel.editorPreferredMetadataLanguage, in: TVSettingsOptions.metadataLanguage)
         ) { activePicker = .metadataLanguage }
+        .disabled(viewModel.settingsServerUpgradeRequired)
 
         TVSettingsFooter("Translates descriptions and taglines into your preferred language when available. Titles are never translated.")
     }
@@ -86,12 +104,23 @@ struct TVSubtitleSettingsPane: View {
             TVSettingsFooter("Low contrast — dark text without a box or outline can be hard to read.")
         }
 
-        TVSettingsToggleRow(
-            title: "Match Device Settings",
-            isOn: viewModel.subtitleMatchesSystemAppearance
-        ) {
-            let enabled = !viewModel.subtitleMatchesSystemAppearance
-            Task { await viewModel.setSubtitleMatchesSystemAppearance(enabled) }
+        if viewModel.settingsServerUpgradeRequired {
+            TVSettingsToggleRow(
+                title: "Match Device Settings",
+                isOn: viewModel.subtitleMatchesSystemAppearance
+            ) {
+                let enabled = !viewModel.subtitleMatchesSystemAppearance
+                Task { await viewModel.setSubtitleMatchesSystemAppearance(enabled) }
+            }
+            .focused(detailFocus, equals: .top)
+        } else {
+            TVSettingsToggleRow(
+                title: "Match Device Settings",
+                isOn: viewModel.subtitleMatchesSystemAppearance
+            ) {
+                let enabled = !viewModel.subtitleMatchesSystemAppearance
+                Task { await viewModel.setSubtitleMatchesSystemAppearance(enabled) }
+            }
         }
 
         TVSettingsToggleRow(
@@ -187,18 +216,17 @@ struct TVSubtitleSettingsPane: View {
 
     @ViewBuilder
     private var prefSaveFooter: some View {
-        if let state = viewModel.prefSaveState {
+        if let state = viewModel.prefSaveState,
+           !(viewModel.settingsServerUpgradeRequired && state == .serverUpgradeRequired) {
             switch state {
             case .saving:
                 TVSettingsFooter("Saving…")
             case .saved:
                 TVSettingsFooter("Saved")
             case .failed(let err):
-                Text("Couldn't save: \(err)")
-                    .font(.system(size: 19))
-                    .foregroundStyle(.red)
-                    .padding(.horizontal, 24)
-                    .padding(.top, 4)
+                TVSettingsWarningFooter("Couldn't save: \(err)")
+            case .serverUpgradeRequired:
+                TVSettingsWarningFooter(ProfilePrefsEditor.serverUpgradeMessage)
             }
         }
     }

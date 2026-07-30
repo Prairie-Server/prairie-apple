@@ -63,6 +63,7 @@ struct SubtitleSettingsView: View {
             Text("Translates descriptions and taglines into your preferred language when available. Titles are never translated.")
                 .foregroundStyle(Color.continuumSecondaryText)
         }
+        .disabled(viewModel.settingsServerUpgradeRequired)
         .listRowBackground(Color.continuumSurfaceElevated)
     }
 
@@ -110,13 +111,24 @@ struct SubtitleSettingsView: View {
                 .foregroundStyle(Color.continuumSecondaryText)
         } footer: {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Used to pick a matching track when one is available. Forced subtitles cover foreign-language dialogue even when subtitles are off or set to auto.")
-                if let state = viewModel.prefSaveState {
+                if viewModel.settingsServerUpgradeRequired {
+                    Text(ProfilePrefsEditor.serverUpgradeMessage)
+                        .foregroundStyle(Color.continuumError)
+                } else {
+                    Text("Used to pick a matching track when one is available. Forced subtitles cover foreign-language dialogue even when subtitles are off or set to auto.")
+                    if let overrideMessage = viewModel.prefs.subtitleProfileOverrideMessage {
+                        Text("Override active — \(overrideMessage)")
+                            .foregroundStyle(Color.continuumWarning)
+                    }
+                }
+                if let state = viewModel.prefSaveState,
+                   !(viewModel.settingsServerUpgradeRequired && state == .serverUpgradeRequired) {
                     saveStateView(state)
                 }
             }
             .foregroundStyle(Color.continuumSecondaryText)
         }
+        .disabled(viewModel.settingsServerUpgradeRequired)
         .listRowBackground(Color.continuumSurfaceElevated)
     }
 
@@ -357,6 +369,9 @@ struct SubtitleSettingsView: View {
             Text("Saved")
         case .failed(let message):
             Text("Couldn't save: \(message)")
+                .foregroundStyle(Color.continuumError)
+        case .serverUpgradeRequired:
+            Text(ProfilePrefsEditor.serverUpgradeMessage)
                 .foregroundStyle(Color.continuumError)
         }
     }
