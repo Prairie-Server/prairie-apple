@@ -814,6 +814,23 @@ struct VersionChapter: Codable, Hashable {
     let thumbnailThumbhash: String?
 }
 
+/// Sprite-sheet metadata for seek scrubbing, matching prairie-server
+/// `VersionTrickplay` / web `PlayerTrickplay`.
+struct VersionTrickplay: Codable, Hashable, Equatable {
+    var intervalSeconds: Double
+    var width: Int
+    var height: Int
+    var tileColumns: Int
+    var tileRows: Int
+    var thumbnailCount: Int
+    var sheets: [VersionTrickplaySheet]
+}
+
+struct VersionTrickplaySheet: Codable, Hashable, Equatable {
+    var index: Int
+    var url: String
+}
+
 struct VideoTrack: Codable, Identifiable, Hashable {
     let index: Int?
     let codec: String?
