@@ -718,11 +718,21 @@ enum SettingsAPIError: Error, Equatable, Sendable {
         guard let httpError = error as? HTTPError else {
             return .transport(description: String(describing: error))
         }
-        guard case .http(let status, _) = httpError else {
-            return .transport(description: httpError.description)
+        // PrairieNetworkingHost stubs `HTTPError` as `.http(Int, String?)`
+        // without LocalizedError / serverErrorCode helpers. Bind status+body
+        // from the case and parse the Prairie `{error,message}` envelope here
+        // so this file compiles in both the app and the FFmpeg-free CI host.
+        guard case .http(let status, let body) = httpError else {
+            return .transport(description: String(describing: httpError))
         }
-        let code = httpError.serverErrorCode
-        let message = httpError.errorDescription
+        let envelope = parseErrorEnvelope(body)
+        let code = envelope?.error
+        // Mirror HTTPError.errorDescription for `.http`: prefer the envelope
+        // message, otherwise a status fallback (never nil for an HTTP response).
+        let message: String = {
+            if let raw = envelope?.message, !raw.isEmpty { return raw }
+            return "Server returned status \(status)"
+        }()
         switch (status, code) {
         case (404, "unknown_setting"):
             return .unknownSetting(key: key ?? "")
@@ -735,12 +745,26 @@ enum SettingsAPIError: Error, Equatable, Sendable {
         case (400, "scope_not_allowed"):
             return .scopeNotAllowed(key: key ?? "", scope: scope ?? .other(""))
         case (400, "invalid_value"):
-            return .invalidValue(message: message ?? "")
+            return .invalidValue(message: message)
         case (409, "mutation_id_conflict"):
             return .mutationIdConflict
         default:
             return .server(status: status, code: code, message: message)
         }
+    }
+
+    /// `{error, message}` envelope mirrored from Prairie's HTTP error bodies.
+    private struct ErrorEnvelope: Decodable {
+        let error: String?
+        let message: String?
+    }
+
+    private static func parseErrorEnvelope(_ body: String?) -> ErrorEnvelope? {
+        guard let body, !body.isEmpty,
+              let data = body.data(using: .utf8),
+              let parsed = try? JSONDecoder().decode(ErrorEnvelope.self, from: data)
+        else { return nil }
+        return parsed
     }
 }
 
