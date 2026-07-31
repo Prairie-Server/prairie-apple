@@ -163,7 +163,7 @@ struct SettingsView: View {
                     title: "Playback",
                     systemImage: "play.fill",
                     color: .blue,
-                    value: ApplePlaybackQuality.displayName(for: viewModel.preferredQuality)
+                    value: viewModel.preferredQualityLabel
                 )
             }
 
