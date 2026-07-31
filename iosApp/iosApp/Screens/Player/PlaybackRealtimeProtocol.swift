@@ -316,6 +316,28 @@ struct PlaybackRealtimeMarkersUpdatedPayload: Equatable {
     }
 }
 
+struct PlaybackRealtimeChapterThumbnailReadyPayload: Equatable {
+    let sessionId: String?
+    let fileId: Int
+    let chapterIndex: Int
+    let thumbnailURL: String
+    let thumbnailThumbhash: String?
+
+    init?(payload: PlaybackRealtimePayload) {
+        guard let fileId = payload.int(forKeys: "file_id", "fileId"),
+              let chapterIndex = payload.int(forKeys: "chapter_index", "chapterIndex"),
+              let thumbnailURL = payload.string(forKeys: "thumbnail_url", "thumbnailUrl"),
+              !thumbnailURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        self.sessionId = payload.string(forKeys: "session_id", "sessionId")
+        self.fileId = fileId
+        self.chapterIndex = chapterIndex
+        self.thumbnailURL = thumbnailURL
+        self.thumbnailThumbhash = payload.string(forKeys: "thumbnail_thumbhash", "thumbnailThumbhash")
+    }
+}
+
 enum PlaybackRealtimeMarkerRangeUpdate: Equatable {
     case unchanged
     case clear

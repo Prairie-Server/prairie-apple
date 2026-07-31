@@ -75,4 +75,53 @@ final class ArtworkURLTests: XCTestCase {
         ImageFormats.configure(["avif", "webp", "png"])
         XCTAssertEqual(ImageFormats.headerValue, "avif,webp,png")
     }
+
+    func testWidthVariantRewritesPrairieSignedArtwork() {
+        let signed = "/artwork/tmdb/movies/550/poster/w500.rev.webp?expires=123&sig=abc"
+        XCTAssertEqual(
+            ArtworkURL.widthVariant(of: signed, width: 200),
+            "/artwork/tmdb/movies/550/poster/w200.rev.webp?expires=123&sig=abc"
+        )
+        XCTAssertEqual(
+            ArtworkURL.widthVariant(of: signed, width: 300),
+            "/artwork/tmdb/movies/550/poster/w300.rev.webp?expires=123&sig=abc"
+        )
+    }
+
+    func testWidthVariantSkipsThirdPartySignaturesAndSignedOriginal() {
+        XCTAssertNil(
+            ArtworkURL.widthVariant(
+                of: "https://cdn.example.com/art/w300.webp?X-Amz-Signature=abc",
+                width: 500
+            )
+        )
+        XCTAssertNil(
+            ArtworkURL.widthVariant(
+                of: "/artwork/tmdb/movies/550/poster/original.rev.webp?expires=123&sig=abc",
+                width: 300
+            )
+        )
+    }
+
+    func testPreferredPosterWidthMatchesCardPixelBudget() {
+        // iOS poster card 120pt @2x → 240px → w300
+        XCTAssertEqual(ArtworkURL.preferredPosterWidth(forPixels: 240), 300)
+        // tvOS poster card 260pt @1x → 260px → w300
+        XCTAssertEqual(ArtworkURL.preferredPosterWidth(forPixels: 260), 300)
+        // tvOS @2x → 520px → w500
+        XCTAssertEqual(ArtworkURL.preferredPosterWidth(forPixels: 520), 500)
+        XCTAssertEqual(ArtworkURL.preferredPosterWidth(forPixels: 120), 200)
+    }
+
+    func testCandidatesApplyWidthBeforeFormat() {
+        ImageFormats.configure(["webp", "png"])
+        let signed = "/artwork/tmdb/movies/550/poster/w500.rev.webp?expires=123&sig=abc"
+        XCTAssertEqual(
+            ArtworkURL.candidates(for: signed, targetWidthPoints: 120, scale: 2),
+            [
+                "/artwork/tmdb/movies/550/poster/w300.rev.webp?expires=123&sig=abc",
+                "/artwork/tmdb/movies/550/poster/w300.rev.png?expires=123&sig=abc",
+            ]
+        )
+    }
 }

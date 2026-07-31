@@ -72,6 +72,11 @@ struct MobilePlayerControls: View {
             if viewModel.showIntroSkip {
                 introSkipPill
             }
+            if viewModel.showStatsForNerds {
+                statsForNerdsOverlay
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+            }
         }
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
@@ -398,8 +403,11 @@ struct MobilePlayerControls: View {
                 if viewModel.isScrubbing {
                     scrubPreviewBubble
                         .position(
-                            x: min(max(width * progress, 80), max(width - 80, 80)),
-                            y: -36
+                            x: min(max(width * progress, 96), max(width - 96, 96)),
+                            y: viewModel.trickplay != nil
+                                || viewModel.chapterThumbnailURL(at: viewModel.scrubPreviewTime) != nil
+                                ? -110
+                                : -36
                         )
                         .transition(.opacity)
                         .allowsHitTesting(false)
@@ -429,31 +437,20 @@ struct MobilePlayerControls: View {
         return min(max(end, 0), 1)
     }
 
-    /// Floating time + chapter readout pinned above the touch point while
-    /// scrubbing. Presentation-only: reads the same `scrubPreviewTime` the
-    /// seek machinery already maintains.
+    /// Floating time + chapter + trickplay readout pinned above the touch
+    /// point while scrubbing. Presentation-only: reads the same
+    /// `scrubPreviewTime` the seek machinery already maintains.
     private var scrubPreviewBubble: some View {
-        VStack(spacing: 2) {
-            Text(PlayerTimeFormatter.formatHMS(viewModel.scrubPreviewTime))
-                .font(.system(size: 19, weight: .bold))
-                .foregroundStyle(.white)
-                .monospacedDigit()
-            if let chapter = chapterTitle(at: viewModel.scrubPreviewTime) {
-                Text(chapter)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.65))
-                    .lineLimit(1)
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 7)
-        .prairieGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .fixedSize()
+        ScrubPreviewBubble(
+            time: viewModel.scrubPreviewTime,
+            trickplay: viewModel.trickplay,
+            chapterThumbnailURL: viewModel.chapterThumbnailURL(at: viewModel.scrubPreviewTime),
+            chapterTitle: viewModel.chapterTitle(at: viewModel.scrubPreviewTime)
+        )
     }
 
     private func chapterTitle(at time: Double) -> String? {
-        guard let chapter = viewModel.chapters.last(where: { $0.time <= time }) else { return nil }
-        return chapter.title ?? "Chapter \(chapter.index + 1)"
+        viewModel.chapterTitle(at: time)
     }
 
     @ViewBuilder
@@ -511,6 +508,16 @@ struct MobilePlayerControls: View {
                 activeSheet = .settings
             }
             .accessibilityLabel("Playback Settings")
+
+            controlButton(
+                systemName: viewModel.showStatsForNerds
+                    ? "chart.bar.doc.horizontal.fill"
+                    : "chart.bar.doc.horizontal"
+            ) {
+                viewModel.toggleStatsForNerds()
+            }
+            .accessibilityLabel("Stats for nerds")
+            .accessibilityAddTraits(viewModel.showStatsForNerds ? [.isSelected] : [])
         }
     }
 
@@ -920,6 +927,25 @@ struct MobilePlayerControls: View {
         }
         .animation(.easeOut(duration: 0.2), value: viewModel.showControls)
         .transition(.opacity)
+    }
+
+    private var statsForNerdsOverlay: some View {
+        VStack {
+            HStack {
+                PlaybackStatsPanel(stats: viewModel.playbackStats)
+                    .padding(12)
+                    .frame(maxWidth: 420, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color.black.opacity(0.72))
+                    )
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 56)
+            Spacer(minLength: 0)
+        }
+        .allowsHitTesting(false)
     }
 
     // MARK: - Helpers
