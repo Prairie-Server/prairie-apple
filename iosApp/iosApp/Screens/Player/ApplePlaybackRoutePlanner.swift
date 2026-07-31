@@ -1024,7 +1024,8 @@ private extension ApplePlaybackRoutePlanner {
                 PlayerChapterInfo(
                     index: chapter.index,
                     title: chapter.title,
-                    time: chapter.startSeconds
+                    time: chapter.startSeconds,
+                    thumbnailURL: chapter.thumbnailUrl
                 )
             }
     }

@@ -23,7 +23,13 @@ struct CachedAsyncImage: View {
     @Environment(\.displayScale) private var displayScale
     @State private var failedCount = 0
 
-    private var candidates: [String] { ArtworkURL.candidates(for: url) }
+    private var candidates: [String] {
+        ArtworkURL.candidates(
+            for: url,
+            targetWidthPoints: targetSize?.width,
+            scale: displayScale
+        )
+    }
 
     private var resolvedURLString: String {
         guard !candidates.isEmpty else { return url }

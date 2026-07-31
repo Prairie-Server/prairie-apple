@@ -33,7 +33,7 @@ struct TVPlayerInfoHUD: View {
         var title: String {
             switch self {
             case .info:      return "Info"
-            case .stats:     return "Stats"
+            case .stats:     return "Stats for nerds"
             case .video:     return "Video"
             case .audio:     return "Audio"
             case .subtitles: return "Subtitles"
@@ -650,7 +650,7 @@ private struct StatsPane: View {
 
     var body: some View {
         HUDScrollablePane(
-            accessibilityLabel: "Playback stats",
+            accessibilityLabel: "Stats for nerds",
             scrollTargetIDs: scrollTargetIDs,
             isAtTop: $isAtTop,
             onMoveToTabs: onMoveToTabs

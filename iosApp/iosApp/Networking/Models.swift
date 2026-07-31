@@ -683,6 +683,8 @@ struct FileVersion: Codable, Identifiable, Hashable {
     let audioTracks: [AudioTrack]?
     let subtitleTracks: [SubtitleTrack]?
     let chapters: [VersionChapter]?
+    /// Interval sprite-sheet metadata for seek scrubbing, when generated.
+    let trickplay: VersionTrickplay?
     let intro: TimeRange?
     let credits: TimeRange?
     let presentationKind: String?
@@ -718,6 +720,7 @@ struct FileVersion: Codable, Identifiable, Hashable {
         audioTracks: [AudioTrack]?,
         subtitleTracks: [SubtitleTrack]?,
         chapters: [VersionChapter]?,
+        trickplay: VersionTrickplay? = nil,
         intro: TimeRange? = nil,
         credits: TimeRange? = nil,
         presentationKind: String? = nil,
@@ -744,6 +747,7 @@ struct FileVersion: Codable, Identifiable, Hashable {
         self.audioTracks = audioTracks
         self.subtitleTracks = subtitleTracks
         self.chapters = chapters
+        self.trickplay = trickplay
         self.intro = intro
         self.credits = credits
         self.presentationKind = presentationKind
@@ -773,6 +777,7 @@ struct FileVersion: Codable, Identifiable, Hashable {
         audioTracks = try c.decodeIfPresent([AudioTrack].self, forKey: .audioTracks)
         subtitleTracks = try c.decodeIfPresent([SubtitleTrack].self, forKey: .subtitleTracks)
         chapters = try c.decodeIfPresent([VersionChapter].self, forKey: .chapters)
+        trickplay = try c.decodeIfPresent(VersionTrickplay.self, forKey: .trickplay)
         intro = try c.decodeIfPresent(TimeRange.self, forKey: .intro)
         credits = try c.decodeIfPresent(TimeRange.self, forKey: .credits)
         presentationKind = try c.decodeIfPresent(String.self, forKey: .presentationKind)
@@ -807,6 +812,23 @@ struct VersionChapter: Codable, Hashable {
     let source: String?
     let thumbnailUrl: String?
     let thumbnailThumbhash: String?
+}
+
+/// Sprite-sheet metadata for seek scrubbing, matching prairie-server
+/// `VersionTrickplay` / web `PlayerTrickplay`.
+struct VersionTrickplay: Codable, Hashable, Equatable {
+    var intervalSeconds: Double
+    var width: Int
+    var height: Int
+    var tileColumns: Int
+    var tileRows: Int
+    var thumbnailCount: Int
+    var sheets: [VersionTrickplaySheet]
+}
+
+struct VersionTrickplaySheet: Codable, Hashable, Equatable {
+    var index: Int
+    var url: String
 }
 
 struct VideoTrack: Codable, Identifiable, Hashable {

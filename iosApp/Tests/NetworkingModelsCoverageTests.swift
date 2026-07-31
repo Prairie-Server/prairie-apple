@@ -201,13 +201,26 @@ final class NetworkingModelsCoverageTests: XCTestCase {
           ],
           "subtitle_tracks": [
             { "index": 1, "language": "en", "codec": "subrip" }
-          ]
+          ],
+          "trickplay": {
+            "interval_seconds": 10,
+            "width": 320,
+            "height": 180,
+            "tile_columns": 10,
+            "tile_rows": 10,
+            "thumbnail_count": 12,
+            "sheets": [
+              { "index": 0, "url": "https://cdn.example.com/0.webp" }
+            ]
+          }
         }
         """)
         XCTAssertEqual(version.fileId, 3)
         XCTAssertEqual(version.editionDisplayLabel, "Extended")
         XCTAssertEqual(version.audioTracks?.count, 1)
         XCTAssertEqual(version.subtitleTracks?.first?.language, "en")
+        XCTAssertEqual(version.trickplay?.thumbnailCount, 12)
+        XCTAssertEqual(version.trickplay?.sheets.first?.url, "https://cdn.example.com/0.webp")
 
         let stats = try decode(AdminStats.self, """
         {
