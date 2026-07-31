@@ -296,11 +296,13 @@ targets:
           - ContinuumAPI.swift
           - ContinuumAPI+LiveTV.swift
           - ContinuumAPI+Requests.swift
+          - ContinuumAPI+Settings.swift
           - ContinuumAI.swift
           - HTTPClient.swift
           - OverlayPrefsStore.swift
           - PlaybackPrefsStore.swift
           - ProfilePrefsStore.swift
+          - ProfileSettingsWriter.swift
           - ConnectionMonitor.swift
           - DiagnosticsAPI.swift
           - AICapabilities.swift
