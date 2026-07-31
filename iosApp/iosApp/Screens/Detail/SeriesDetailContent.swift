@@ -80,30 +80,74 @@ struct SeriesDetailContent<BelowOverview: View>: View {
 
     @ViewBuilder
     private var actionStack: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 16) {
             if let nextUp = nextUpEpisode {
-                PhonePrimaryPillButton(
+                PhoneRefinedPlayButton(
                     icon: "play.fill",
                     title: playButtonLabel(for: nextUp),
-                    action: { handlePlayTap(for: nextUp) },
-                    fullWidth: true
+                    action: { handlePlayTap(for: nextUp) }
                 )
             }
-            circleRow
-            if nextUpEpisode != nil, let effectiveNextUpVersion {
-                PhonePlaybackSelectorRow(
-                    versions: nextUpVersions,
-                    currentVersion: effectiveNextUpVersion,
-                    selectedVersionFileId: selectedNextUpFileId,
-                    selectedAudioTrackIndex: selectedNextUpAudioTrackIndex,
-                    selectedSubtitleTrackIndex: selectedNextUpSubtitleTrackIndex,
-                    onSelectVersion: onSelectNextUpVersion,
-                    onSelectAudioTrack: onSelectNextUpAudioTrack,
-                    onSelectSubtitleTrack: onSelectNextUpSubtitleTrack
+
+            PhoneLabeledActionRow {
+                PhoneLabeledAction(
+                    icon: "heart",
+                    iconActive: "heart.fill",
+                    isActive: isFavorite,
+                    label: "Favorite",
+                    accessibilityLabelOverride: isFavorite
+                        ? "Remove from Favorites" : "Add to Favorites",
+                    action: onToggleFavorite
                 )
+                PhoneLabeledAction(
+                    icon: "bookmark",
+                    iconActive: "bookmark.fill",
+                    isActive: inWatchlist,
+                    label: "Watchlist",
+                    accessibilityLabelOverride: inWatchlist
+                        ? "Remove from Watchlist" : "Add to Watchlist",
+                    action: onToggleWatchlist
+                )
+                PhoneLabeledAction(
+                    icon: "checkmark.circle",
+                    iconActive: "checkmark.circle.fill",
+                    isActive: isWatched,
+                    label: isWatched ? "Watched" : "Mark Seen",
+                    accessibilityLabelOverride: isWatched
+                        ? "Mark Series Unwatched" : "Mark Series Watched",
+                    action: onToggleWatched
+                )
+                if DownloadManager.shared.downloadsEnabled {
+                    // Season downloads and future-episode monitoring live
+                    // behind this control; without it the series page has no
+                    // download entry point at all.
+                    SeriesDownloadMenuButton(
+                        detail: detail,
+                        seasons: seasons,
+                        selectedSeason: selectedSeason,
+                        style: .labeled
+                    )
+                }
+            }
+
+            if nextUpEpisode != nil, let effectiveNextUpVersion {
+                nextUpSelectors(for: effectiveNextUpVersion)
             }
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private func nextUpSelectors(for version: FileVersion) -> some View {
+        PhonePlaybackSelectorRow(
+            versions: nextUpVersions,
+            currentVersion: version,
+            selectedVersionFileId: selectedNextUpFileId,
+            selectedAudioTrackIndex: selectedNextUpAudioTrackIndex,
+            selectedSubtitleTrackIndex: selectedNextUpSubtitleTrackIndex,
+            onSelectVersion: onSelectNextUpVersion,
+            onSelectAudioTrack: onSelectNextUpAudioTrack,
+            onSelectSubtitleTrack: onSelectNextUpSubtitleTrack
+        )
     }
 
     private func handlePlayTap(for episode: EpisodeListItem) {
@@ -113,43 +157,6 @@ struct SeriesDetailContent<BelowOverview: View>: View {
             onPlayEpisode(episode.contentId, selectedFileId(for: episode), false)
         }
     }
-
-    private var circleRow: some View {
-        HStack(spacing: 14) {
-            PhoneCircleActionButton(
-                icon: "heart",
-                iconActive: "heart.fill",
-                isActive: isFavorite,
-                accessibilityLabel: isFavorite ? "Remove from favorites" : "Add to favorites",
-                action: onToggleFavorite
-            )
-
-            PhoneCircleActionButton(
-                icon: "bookmark",
-                iconActive: "bookmark.fill",
-                isActive: inWatchlist,
-                accessibilityLabel: inWatchlist ? "Remove from watchlist" : "Add to watchlist",
-                action: onToggleWatchlist
-            )
-
-            PhoneCircleActionButton(
-                icon: "checkmark.circle",
-                iconActive: "checkmark.circle.fill",
-                isActive: isWatched,
-                accessibilityLabel: isWatched ? "Mark Series Unwatched" : "Mark Series Watched",
-                action: onToggleWatched
-            )
-
-            if DownloadManager.shared.downloadsEnabled {
-                SeriesDownloadMenuButton(
-                    detail: detail,
-                    seasons: seasons,
-                    selectedSeason: selectedSeason
-                )
-            }
-        }
-    }
-
     /// Next-up episode for the series Play button: prefer one in
     /// progress, then the first unwatched in the selected season,
     /// then fall back to the first episode we have.

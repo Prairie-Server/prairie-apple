@@ -12,22 +12,32 @@ struct TVSettingsOption: Identifiable, Hashable {
 
 /// Canonical option sets shared by the tvOS settings sub-screens.
 enum TVSettingsOptions {
-    static let quality: [TVSettingsOption] =
-        ApplePlaybackQuality.settingsOptions.map { option in
-            .init(id: option.id, label: option.labelWithBitrate)
-        }
+    /// Tag for the "stored pair matches no preset" entry. Not a preset id, so
+    /// selecting it is a no-op rather than a write.
+    static let customQualityId = "__custom__"
 
-    static let audioLanguage: [TVSettingsOption] = [
-        .init(id: "", label: "Default"),
-        .init(id: "en", label: "English"),
-        .init(id: "es", label: "Spanish"),
-        .init(id: "fr", label: "French"),
-        .init(id: "de", label: "German"),
-        .init(id: "it", label: "Italian"),
-        .init(id: "pt", label: "Portuguese"),
-        .init(id: "ja", label: "Japanese"),
-        .init(id: "ko", label: "Korean"),
-    ]
+    /// The shared cross-client quality presets, optionally led by a
+    /// description of a stored pair no preset covers.
+    ///
+    /// These are the settings vocabulary, not the in-player switcher's finer
+    /// ladder: what is stored is a (resolution, bitrate) pair, so the two
+    /// tables can label it differently without either reinterpreting it.
+    static func quality(including customLabel: String? = nil) -> [TVSettingsOption] {
+        let presets = PrairieQualityPresets.all.map {
+            TVSettingsOption(id: $0.id, label: $0.label)
+        }
+        guard let customLabel else { return presets }
+        return [.init(id: customQualityId, label: customLabel)] + presets
+    }
+
+    static func audioLanguage(_ languages: [PlaybackLanguageOption]) -> [TVSettingsOption] {
+        languageOptions(
+            languages,
+            key: .playbackAudioLanguage,
+            unsetID: "",
+            fallbackUnsetLabel: "No preference"
+        )
+    }
 
     static let nextUpPrompt: [TVSettingsOption] = [
         .init(id: "0", label: "At end"),
@@ -37,13 +47,35 @@ enum TVSettingsOptions {
         .init(id: "120", label: "2 minutes before end"),
     ]
 
-    static let subtitleLanguage: [TVSettingsOption] =
-        [.init(id: PlaybackPrefSentinel.none, label: "None")]
-            + PlaybackLanguageOption.all.map { .init(id: $0.code, label: $0.label) }
+    static func subtitleLanguage(_ languages: [PlaybackLanguageOption]) -> [TVSettingsOption] {
+        languageOptions(
+            languages,
+            key: .playbackSubtitleLanguage,
+            unsetID: PlaybackPrefSentinel.none,
+            fallbackUnsetLabel: "None"
+        )
+    }
 
-    static let metadataLanguage: [TVSettingsOption] =
-        [.init(id: PlaybackPrefSentinel.none, label: "Library Default")]
-            + PlaybackLanguageOption.all.map { .init(id: $0.code, label: $0.label) }
+    static func metadataLanguage(_ languages: [PlaybackLanguageOption]) -> [TVSettingsOption] {
+        languageOptions(
+            languages,
+            key: .catalogMetadataLanguage,
+            unsetID: PlaybackPrefSentinel.none,
+            fallbackUnsetLabel: "Library default"
+        )
+    }
+
+    private static func languageOptions(
+        _ languages: [PlaybackLanguageOption],
+        key: SettingKey,
+        unsetID: String,
+        fallbackUnsetLabel: String
+    ) -> [TVSettingsOption] {
+        let unsetLabel = SettingPresentationMetadata.definitions[key]?.unsetLabel
+            ?? fallbackUnsetLabel
+        return [.init(id: unsetID, label: unsetLabel)]
+            + languages.map { .init(id: $0.code, label: $0.label) }
+    }
 
     static let subtitleMode: [TVSettingsOption] =
         SubtitleMode.allCases.map { .init(id: $0.rawValue, label: $0.displayLabel) }
@@ -347,6 +379,28 @@ struct TVSettingsFooter: View {
             .padding(.horizontal, 24)
             .padding(.top, 4)
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Semantic warning caption used for server and persistence failures.
+struct TVSettingsWarningFooter: View {
+    let text: String
+
+    init(_ text: String) { self.text = text }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .accessibilityHidden(true)
+            Text(text)
+        }
+        .font(.body)
+        .foregroundColor(.continuumError)
+        .padding(.horizontal, 24)
+        .padding(.top, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Warning: \(text)")
     }
 }
 
