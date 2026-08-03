@@ -55,6 +55,7 @@ struct TVSeriesDetailView<BelowSynopsis: View>: View {
     /// site (which owns the view model) and rendered under the synopsis.
     @ViewBuilder let belowSynopsis: () -> BelowSynopsis
 
+    @Environment(\.resetFocus) private var resetFocus
     @Namespace private var detailFocusNamespace
     @FocusState private var playFocused: Bool
     /// True while focus sits anywhere inside the season chip row. Used to
@@ -67,12 +68,11 @@ struct TVSeriesDetailView<BelowSynopsis: View>: View {
     /// (Play / Start Over / circle buttons). Backing up into it restores the
     /// page-entry framing by scrolling the hero back to the top.
     @FocusState private var actionRowFocused: Bool
-    /// Season whose next-up Play button has already auto-claimed focus. Keyed on
-    /// the season (not a bare Bool) so we auto-focus Play once per season: the
-    /// first async next-up resolve AND an in-place season switch — same view
-    /// instance, `selectedSeason` mutates — both re-focus Play, while never
-    /// yanking focus back within the same season once the viewer moves on.
-    @State private var autoFocusedSeasonKey: String?
+    /// Reevaluate the page-entry default only once, after the asynchronously
+    /// supplied Play button has joined the laid-out focus graph. A later season
+    /// selection is user navigation and must not pull focus away from its chip.
+    @State private var didResetInitialPlayFocus = false
+    @State private var initialFocusSeasonKey: String?
 
     var body: some View {
         ScrollViewReader { scrollProxy in
@@ -98,9 +98,15 @@ struct TVSeriesDetailView<BelowSynopsis: View>: View {
             .ignoresSafeArea()
             .focusScope(detailFocusNamespace)
             .defaultFocus($playFocused, true, priority: .userInitiated)
-            .onChange(of: selectedSeason?.contentId) { _, newValue in
-                guard newValue != nil else { return }
-                claimInitialPlayFocus()
+            .onChange(of: selectedSeason?.contentId, initial: true) { _, seasonKey in
+                guard let seasonKey else { return }
+                if initialFocusSeasonKey == nil {
+                    initialFocusSeasonKey = seasonKey
+                } else if initialFocusSeasonKey != seasonKey {
+                    // Choosing another season is explicit navigation. Consume
+                    // the entry one-shot even if its Play button never arrived.
+                    didResetInitialPlayFocus = true
+                }
             }
             .detailFocusScroll(
                 proxy: scrollProxy,
@@ -182,7 +188,12 @@ struct TVSeriesDetailView<BelowSynopsis: View>: View {
                     action: { onPlayEpisode(nextUp.contentId, selectedFileId(for: nextUp), false) },
                     focused: $playFocused
                 )
-                .onAppear(perform: claimInitialPlayFocus)
+                .onGeometryChange(for: Bool.self) { proxy in
+                    proxy.size.width > 0 && proxy.size.height > 0
+                } action: { isLaidOut in
+                    guard isLaidOut else { return }
+                    resetInitialPlayFocus()
+                }
                 if nextUp.userData?.isInProgress == true {
                     TVSecondaryPillButton(
                         icon: "backward.end.fill",
@@ -246,11 +257,15 @@ struct TVSeriesDetailView<BelowSynopsis: View>: View {
         }
     }
 
-    private func claimInitialPlayFocus() {
+    private func resetInitialPlayFocus() {
+        guard !didResetInitialPlayFocus else { return }
         guard let seasonKey = selectedSeason?.contentId else { return }
-        guard autoFocusedSeasonKey != seasonKey else { return }
-        autoFocusedSeasonKey = seasonKey
-        playFocused = true
+        if initialFocusSeasonKey == nil {
+            initialFocusSeasonKey = seasonKey
+        }
+        guard initialFocusSeasonKey == seasonKey else { return }
+        didResetInitialPlayFocus = true
+        resetFocus(in: detailFocusNamespace)
     }
 
     /// Best "Play" target for the series: an in-progress episode if there

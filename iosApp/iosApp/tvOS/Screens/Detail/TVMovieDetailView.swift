@@ -55,6 +55,7 @@ struct TVMovieDetailView<BelowSynopsis: View>: View {
     /// site (which owns the view model) and rendered under the synopsis.
     @ViewBuilder let belowSynopsis: () -> BelowSynopsis
 
+    @Environment(\.resetFocus) private var resetFocus
     @Namespace private var detailFocusNamespace
     @FocusState private var playFocused: Bool
     /// True while focus sits anywhere inside the season chip row — drives the
@@ -63,11 +64,10 @@ struct TVMovieDetailView<BelowSynopsis: View>: View {
     /// True while focus sits anywhere in the hero's primary action row —
     /// drives the scroll back to the page-entry (hero at top) framing.
     @FocusState private var actionRowFocused: Bool
-    /// `defaultFocus` participates in focus evaluation, but a detail page can
-    /// inherit the synopsis focus when it is pushed from a card. Claim Play
-    /// once when the real button mounts so cache-hit and freshly-loaded pages
-    /// have the same entry focus without stealing it again later.
-    @State private var didClaimInitialPlayFocus = false
+    /// The first default-focus evaluation can run before the pushed page's
+    /// button is registered, leaving focus on the geometrically higher
+    /// synopsis. Reevaluate the scoped default once Play has been laid out.
+    @State private var didResetInitialPlayFocus = false
 
     // Plain constants (not `static`) — the generic BelowSynopsis parameter
     // forbids static stored properties on this type.
@@ -166,7 +166,12 @@ struct TVMovieDetailView<BelowSynopsis: View>: View {
                 action: { onPlay(false) },
                 focused: $playFocused
             )
-            .onAppear(perform: claimInitialPlayFocus)
+            .onGeometryChange(for: Bool.self) { proxy in
+                proxy.size.width > 0 && proxy.size.height > 0
+            } action: { isLaidOut in
+                guard isLaidOut else { return }
+                resetInitialPlayFocus()
+            }
 
             if hasResumeProgress {
                 TVSecondaryPillButton(
@@ -216,10 +221,10 @@ struct TVMovieDetailView<BelowSynopsis: View>: View {
         .focusSection()
     }
 
-    private func claimInitialPlayFocus() {
-        guard !didClaimInitialPlayFocus else { return }
-        didClaimInitialPlayFocus = true
-        playFocused = true
+    private func resetInitialPlayFocus() {
+        guard !didResetInitialPlayFocus else { return }
+        didResetInitialPlayFocus = true
+        resetFocus(in: detailFocusNamespace)
     }
 
     // MARK: - More menu
