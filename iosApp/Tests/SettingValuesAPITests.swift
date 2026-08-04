@@ -228,6 +228,21 @@ final class SettingValuesAPITests: XCTestCase {
         XCTAssertNil(fromDefault.storedValue)
     }
 
+    func testProfileClientEnvelopeKeepsTheResolvedFamily() throws {
+        let effective = try SettingsWireCoding.makeDecoder()
+            .decode(EffectiveSettingValue.self, from: Data("""
+            {"key":"ui.card_presentation",
+             "value":{"poster_size":"large","caption":"artwork"},
+             "source":"profile_client","scope":"profile_client",
+             "profile_id":"p1","client_family":"tv"}
+            """.utf8))
+
+        XCTAssertEqual(effective.source, .scope(.profileClient))
+        XCTAssertEqual(effective.scope, .profileClient)
+        XCTAssertEqual(effective.clientFamily, "tv")
+        XCTAssertEqual(effective.storedAt, .profileClient)
+    }
+
     func testConstrainedValueKeepsTheAuthoredChoice() throws {
         // Mirrors a conformance case: policy caps a 4K preference at 1080p,
         // and the authored value is reported so the UI can say "capped" rather
@@ -289,6 +304,7 @@ final class SettingValuesAPITests: XCTestCase {
     func testScopeIdentitiesCarryTheirIdsInTheQuery() {
         XCTAssertEqual(SettingScopeIdentity.account.queryItems, ["scope": "account"])
         XCTAssertEqual(SettingScopeIdentity.profile.queryItems, ["scope": "profile"])
+        XCTAssertEqual(SettingScopeIdentity.profileClient.queryItems, ["scope": "profile_client"])
         // The device half comes from the X-Silo-Device-Id header the client
         // already attaches, never the query — sending it twice is the bug.
         XCTAssertEqual(SettingScopeIdentity.profileDevice.queryItems, ["scope": "profile_device"])
@@ -316,6 +332,10 @@ final class SettingValuesAPITests: XCTestCase {
         XCTAssertEqual(capabilities.definitionCount, 48)
         XCTAssertTrue(capabilities.supportsBatchedEffective)
         XCTAssertTrue(capabilities.supportsIdempotentWrites)
+        XCTAssertFalse(
+            capabilities.supportsAtomicShortcuts,
+            "a missing revision-5 feature flag must decode fail-closed"
+        )
         XCTAssertEqual(capabilities.contractIsAheadOfServer, SettingKey.revision > 1)
     }
 
@@ -448,6 +468,7 @@ final class SettingValuesAPITests: XCTestCase {
         }
         XCTAssertEqual(capabilities.revision, SettingKey.revision)
         XCTAssertTrue(capabilities.supportsIdempotentWrites)
+        XCTAssertTrue(capabilities.supportsAtomicShortcuts)
     }
 
     func testGetContractCapabilitiesRequiresTheServersRevisionToBeCurrent() async throws {
@@ -482,6 +503,10 @@ final class SettingValuesAPITests: XCTestCase {
         // profile header, which the client previously never sent.
         XCTAssertEqual(recorded.header("X-Profile-Id"), Self.stubProfileId)
         XCTAssertEqual(recorded.header("X-Silo-Device-Id")?.isEmpty, false)
+        XCTAssertEqual(
+            recorded.header("X-Silo-Client-Family"),
+            AppleDeviceIdentity.current.clientFamily
+        )
         // And the body must carry the value's keys verbatim.
         let body = String(data: recorded.body ?? Data(), encoding: .utf8) ?? ""
         XCTAssertTrue(body.contains("\"fontSize\""), "body must keep camelCase value keys: \(body)")
@@ -506,6 +531,1847 @@ final class SettingValuesAPITests: XCTestCase {
             "profile-captured-with-write",
             "the queued profile must override a newer session header"
         )
+    }
+
+    func testCapturedSettingsRequestRefusesToFollowANewActiveIdentity() async throws {
+        SettingsStubProtocol.reset(mode: .normal)
+        let suiteName = "settings-identity-race-\(UUID().uuidString)"
+        let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        addTeardownBlock {
+            UserDefaults().removePersistentDomain(forName: suiteName)
+        }
+        let tokenStore = TokenStore(
+            keychain: SharedKeychain(
+                service: "SettingValuesIdentityTests.\(UUID().uuidString)",
+                accessGroup: nil
+            ),
+            defaults: SharedDefaults(suite: suite, standard: suite)
+        )
+        await tokenStore.switchActiveServer(serverId: "server-a")
+        await tokenStore.setServerUrl("http://settings-test.invalid")
+        await tokenStore.setProfileId("profile-a")
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [SettingsStubProtocol.self]
+        let http = HTTPClient(session: URLSession(configuration: config), tokenStore: tokenStore)
+        let captured = HTTPRequestIdentity(
+            serverId: "server-a",
+            serverURL: "http://settings-test.invalid",
+            profileId: "profile-a",
+            clientFamily: "mobile"
+        )
+
+        await tokenStore.switchActiveServer(serverId: "server-b")
+        await tokenStore.setServerUrl("http://server-b.invalid")
+        await tokenStore.setProfileId("profile-b")
+
+        do {
+            _ = try await http.requestData(
+                method: "GET",
+                path: "/api/v1/settings/contract/capabilities",
+                requestIdentity: captured
+            )
+            XCTFail("a captured server/profile request must fail rather than follow the new session")
+        } catch HTTPError.requestIdentityChanged {
+            // Expected: no URL request was built or sent.
+        }
+        XCTAssertNil(SettingsStubProtocol.state().lastRequest)
+    }
+
+    func testConcurrentScopedUnauthorizedResponsesShareOneRotatingRefresh() async throws {
+        SettingsStubProtocol.reset(mode: .concurrentScopedRefresh)
+        let suiteName = "settings-refresh-single-flight-\(UUID().uuidString)"
+        let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        addTeardownBlock {
+            UserDefaults().removePersistentDomain(forName: suiteName)
+        }
+        let tokenStore = TokenStore(
+            keychain: SharedKeychain(
+                service: "SettingValuesRefreshSingleFlightTests.\(UUID().uuidString)",
+                accessGroup: nil
+            ),
+            defaults: SharedDefaults(suite: suite, standard: suite)
+        )
+        let identity = HTTPRequestIdentity(
+            serverId: "server-a",
+            serverURL: "http://settings-test.invalid",
+            profileId: "profile-a",
+            clientFamily: "mobile"
+        )
+        await tokenStore.switchActiveServer(serverId: identity.serverId)
+        await tokenStore.setServerUrl(identity.serverURL)
+        await tokenStore.setProfileId(identity.profileId)
+        await tokenStore.saveTokens(accessToken: "fake", refreshToken: "dummy")
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [SettingsStubProtocol.self]
+        let http = HTTPClient(session: URLSession(configuration: config), tokenStore: tokenStore)
+        async let first = http.requestData(
+            method: "GET",
+            path: "/api/v1/settings/contract/capabilities",
+            requestIdentity: identity
+        )
+        async let second = http.requestData(
+            method: "GET",
+            path: "/api/v1/settings/contract/capabilities",
+            requestIdentity: identity
+        )
+
+        let (firstResponse, secondResponse) = try await (first, second)
+
+        XCTAssertEqual(firstResponse.statusCode, 200)
+        XCTAssertEqual(secondResponse.statusCode, 200)
+        let state = SettingsStubProtocol.state()
+        XCTAssertEqual(state.requestCounts["/api/v1/auth/refresh"], 1)
+        XCTAssertEqual(state.requestCounts["/api/v1/settings/contract/capabilities"], 4)
+        let accessToken = await tokenStore.getAccessToken()
+        let refreshToken = await tokenStore.getRefreshToken()
+        XCTAssertEqual(accessToken, "placeholder")
+        XCTAssertEqual(refreshToken, "redacted")
+    }
+
+    func testScopedAndOrdinaryUnauthorizedResponsesShareAccountRefreshFlight() async throws {
+        SettingsStubProtocol.reset(mode: .mixedRefreshScopedWins)
+        let suiteName = "settings-refresh-mixed-flight-\(UUID().uuidString)"
+        let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        addTeardownBlock {
+            UserDefaults().removePersistentDomain(forName: suiteName)
+        }
+        let tokenStore = TokenStore(
+            keychain: SharedKeychain(
+                service: "SettingValuesMixedRefreshTests.\(UUID().uuidString)",
+                accessGroup: nil
+            ),
+            defaults: SharedDefaults(suite: suite, standard: suite)
+        )
+        let identity = HTTPRequestIdentity(
+            serverId: "server-a",
+            serverURL: "http://settings-test.invalid",
+            profileId: "profile-a",
+            clientFamily: "mobile"
+        )
+        await tokenStore.switchActiveServer(serverId: identity.serverId)
+        await tokenStore.setServerUrl(identity.serverURL)
+        await tokenStore.setProfileId(identity.profileId)
+        await tokenStore.saveTokens(accessToken: "fake", refreshToken: "dummy")
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [SettingsStubProtocol.self]
+        let http = HTTPClient(session: URLSession(configuration: config), tokenStore: tokenStore)
+        let sessionExpiredCount = LockedCounter()
+        let observer = NotificationCenter.default.addObserver(
+            forName: .continuumSessionExpired,
+            object: nil,
+            queue: nil
+        ) { _ in
+            sessionExpiredCount.increment()
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        async let scoped = http.requestData(
+            method: "GET",
+            path: "/api/v1/settings/contract/capabilities",
+            headers: ["X-Test-Refresh-Flow": "scoped"],
+            requestIdentity: identity
+        )
+        async let ordinary = http.requestData(
+            method: "GET",
+            path: "/api/v1/settings/contract/capabilities",
+            headers: ["X-Test-Refresh-Flow": "ordinary"]
+        )
+
+        let (scopedResponse, ordinaryResponse) = try await (scoped, ordinary)
+
+        XCTAssertEqual(scopedResponse.statusCode, 200)
+        XCTAssertEqual(ordinaryResponse.statusCode, 200)
+        let state = SettingsStubProtocol.state()
+        XCTAssertEqual(state.requestCounts["/api/v1/auth/refresh"], 1)
+        XCTAssertEqual(state.requestCounts["/api/v1/settings/contract/capabilities"], 4)
+        let accessToken = await tokenStore.getAccessToken()
+        let refreshToken = await tokenStore.getRefreshToken()
+        XCTAssertEqual(accessToken, "placeholder")
+        XCTAssertEqual(refreshToken, "redacted")
+        XCTAssertEqual(sessionExpiredCount.value, 0)
+    }
+
+    func testFailedScopedRefreshExpiresOrdinaryJoinerWithoutAnonymousRetry() async throws {
+        SettingsStubProtocol.reset(mode: .mixedRefreshScopedFailure)
+        let suiteName = "settings-refresh-mixed-failure-\(UUID().uuidString)"
+        let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        addTeardownBlock {
+            UserDefaults().removePersistentDomain(forName: suiteName)
+        }
+        let tokenStore = TokenStore(
+            keychain: SharedKeychain(
+                service: "SettingValuesMixedRefreshFailureTests.\(UUID().uuidString)",
+                accessGroup: nil
+            ),
+            defaults: SharedDefaults(suite: suite, standard: suite)
+        )
+        let identity = HTTPRequestIdentity(
+            serverId: "server-a",
+            serverURL: "http://settings-test.invalid",
+            profileId: "profile-a",
+            clientFamily: "mobile"
+        )
+        await tokenStore.switchActiveServer(serverId: identity.serverId)
+        await tokenStore.setServerUrl(identity.serverURL)
+        await tokenStore.setProfileId(identity.profileId)
+        await tokenStore.saveTokens(accessToken: "fake", refreshToken: "dummy")
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [SettingsStubProtocol.self]
+        let ordinaryJoinCount = LockedCounter()
+        let http = HTTPClient(
+            session: URLSession(configuration: config),
+            tokenStore: tokenStore,
+            refreshFlightJoinObserver: { kind in
+                if case .ordinary = kind {
+                    ordinaryJoinCount.increment()
+                }
+            }
+        )
+        let sessionExpiredCount = LockedCounter()
+        let observer = NotificationCenter.default.addObserver(
+            forName: .continuumSessionExpired,
+            object: nil,
+            queue: nil
+        ) { _ in
+            sessionExpiredCount.increment()
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        async let scoped: HTTPRawResponse = http.requestData(
+            method: "GET",
+            path: "/api/v1/settings/contract/capabilities",
+            headers: ["X-Test-Refresh-Flow": "scoped"],
+            requestIdentity: identity
+        )
+        async let ordinary: HTTPRawResponse = http.requestData(
+            method: "GET",
+            path: "/api/v1/settings/contract/capabilities",
+            headers: ["X-Test-Refresh-Flow": "ordinary"]
+        )
+
+        defer { SettingsStubProtocol.releaseMixedRefresh() }
+        guard await waitForCounter(ordinaryJoinCount, atLeast: 1) else {
+            return XCTFail("the ordinary 401 never joined the scoped-owned refresh flight")
+        }
+        SettingsStubProtocol.releaseMixedRefresh()
+
+        do {
+            _ = try await ordinary
+            XCTFail("The ordinary joiner must fail when the shared refresh is rejected")
+        } catch {
+            XCTAssertEqual((error as? HTTPError)?.statusCode, 401)
+        }
+        do {
+            _ = try await scoped
+            XCTFail("The scoped owner must fail when its refresh is rejected")
+        } catch {
+            XCTAssertEqual((error as? HTTPError)?.statusCode, 401)
+        }
+
+        let state = SettingsStubProtocol.state()
+        XCTAssertEqual(state.requestCounts["/api/v1/auth/refresh"], 1)
+        XCTAssertEqual(state.requestCounts["/api/v1/settings/contract/capabilities"], 2)
+        let accessToken = await tokenStore.getAccessToken()
+        let refreshToken = await tokenStore.getRefreshToken()
+        XCTAssertNil(accessToken)
+        XCTAssertNil(refreshToken)
+        XCTAssertEqual(sessionExpiredCount.value, 1)
+    }
+
+    func testTransientScopedRefreshFailurePreservesCredentialsWithoutExpiryAndCanRetry() async throws {
+        let harness = try await makeRefreshHarness(testName: "TransientRefresh")
+        let sessionExpiredCount = LockedCounter()
+        let observer = NotificationCenter.default.addObserver(
+            forName: .continuumSessionExpired,
+            object: nil,
+            queue: nil
+        ) { _ in
+            sessionExpiredCount.increment()
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        for status in [429, 503] {
+            SettingsStubProtocol.reset(mode: .mixedRefreshScopedTransientFailure(status: status))
+            async let scoped: HTTPRawResponse = harness.http.requestData(
+                method: "GET",
+                path: "/api/v1/settings/contract/capabilities",
+                headers: ["X-Test-Refresh-Flow": "scoped"],
+                requestIdentity: harness.identity
+            )
+            async let ordinary: HTTPRawResponse = harness.http.requestData(
+                method: "GET",
+                path: "/api/v1/settings/contract/capabilities",
+                headers: ["X-Test-Refresh-Flow": "ordinary"]
+            )
+
+            do {
+                _ = try await ordinary
+                XCTFail("The ordinary joiner must keep the original 401 after refresh HTTP \(status)")
+            } catch {
+                XCTAssertEqual((error as? HTTPError)?.statusCode, 401)
+            }
+            do {
+                _ = try await scoped
+                XCTFail("The scoped owner must keep the original 401 after refresh HTTP \(status)")
+            } catch {
+                XCTAssertEqual((error as? HTTPError)?.statusCode, 401)
+            }
+
+            let state = SettingsStubProtocol.state()
+            XCTAssertEqual(state.requestCounts["/api/v1/auth/refresh"], 1)
+            XCTAssertEqual(state.requestCounts["/api/v1/settings/contract/capabilities"], 2)
+            let accessToken = await harness.tokenStore.getAccessToken()
+            let refreshToken = await harness.tokenStore.getRefreshToken()
+            XCTAssertEqual(accessToken, "fake", "HTTP \(status) must preserve the access token")
+            XCTAssertEqual(refreshToken, "dummy", "HTTP \(status) must preserve the refresh token")
+            XCTAssertEqual(sessionExpiredCount.value, 0)
+        }
+
+        // A later 401 wave must be able to submit the preserved refresh token
+        // and rotate the account credentials normally.
+        SettingsStubProtocol.reset(mode: .mixedRefreshScopedWins)
+        let retried = try await harness.http.requestData(
+            method: "GET",
+            path: "/api/v1/settings/contract/capabilities",
+            headers: ["X-Test-Refresh-Flow": "scoped"],
+            requestIdentity: harness.identity
+        )
+        XCTAssertEqual(retried.statusCode, 200)
+        let accessToken = await harness.tokenStore.getAccessToken()
+        let refreshToken = await harness.tokenStore.getRefreshToken()
+        XCTAssertEqual(accessToken, "placeholder")
+        XCTAssertEqual(refreshToken, "redacted")
+        XCTAssertEqual(sessionExpiredCount.value, 0)
+    }
+
+    func testMalformedSuccessfulScopedRefreshDoesNotMarkServerUnreachable() async throws {
+        SettingsStubProtocol.reset(mode: .mixedRefreshScopedMalformedSuccess)
+        let harness = try await makeRefreshHarness(testName: "MalformedRefresh")
+        let sessionExpiredCount = LockedCounter()
+        let observer = NotificationCenter.default.addObserver(
+            forName: .continuumSessionExpired,
+            object: nil,
+            queue: nil
+        ) { _ in
+            sessionExpiredCount.increment()
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        await MainActor.run {
+            ConnectionMonitor.shared.noteServerResponded()
+        }
+
+        async let scoped: HTTPRawResponse = harness.http.requestData(
+            method: "GET",
+            path: "/api/v1/settings/contract/capabilities",
+            headers: ["X-Test-Refresh-Flow": "scoped"],
+            requestIdentity: harness.identity
+        )
+        async let ordinary: HTTPRawResponse = harness.http.requestData(
+            method: "GET",
+            path: "/api/v1/settings/contract/capabilities",
+            headers: ["X-Test-Refresh-Flow": "ordinary"]
+        )
+
+        do {
+            _ = try await ordinary
+            XCTFail("The ordinary joiner must keep the original 401 when refresh decoding fails")
+        } catch {
+            XCTAssertEqual((error as? HTTPError)?.statusCode, 401)
+        }
+        do {
+            _ = try await scoped
+            XCTFail("The scoped owner must keep the original 401 when refresh decoding fails")
+        } catch {
+            XCTAssertEqual((error as? HTTPError)?.statusCode, 401)
+        }
+
+        let markedUnreachable = await MainActor.run {
+            if case .unreachable = ConnectionMonitor.shared.serverStatus {
+                return true
+            }
+            return false
+        }
+        XCTAssertFalse(markedUnreachable, "a malformed HTTP 200 is not a transport failure")
+        let accessToken = await harness.tokenStore.getAccessToken()
+        let refreshToken = await harness.tokenStore.getRefreshToken()
+        XCTAssertEqual(accessToken, "fake")
+        XCTAssertEqual(refreshToken, "dummy")
+        XCTAssertEqual(sessionExpiredCount.value, 0)
+    }
+
+    func testRefreshFailureClassifierMatchesAndroid() {
+        for status in [400, 401, 403] {
+            XCTAssertTrue(
+                HTTPClient.shouldInvalidateSessionAfterRefreshFailure(status),
+                "HTTP \(status) is a terminal refresh rejection"
+            )
+        }
+        for status in [408, 429, 500, 502, 503, 504] {
+            XCTAssertFalse(
+                HTTPClient.shouldInvalidateSessionAfterRefreshFailure(status),
+                "HTTP \(status) must remain retryable"
+            )
+        }
+    }
+
+    func testOrdinaryUnauthorizedResponseCannotRefreshAccountSelectedAfterRequestWasSent() async throws {
+        SettingsStubProtocol.reset(mode: .ordinaryUnauthorizedDelayed)
+        let harness = try await makeRefreshHarness(testName: "UnauthorizedServerSwitch")
+
+        let requestTask = Task {
+            try await harness.http.requestData(
+                method: "GET",
+                path: "/api/v1/settings/contract/capabilities"
+            )
+        }
+        guard await waitForPendingOrdinaryUnauthorized() else {
+            SettingsStubProtocol.releaseOrdinaryUnauthorized()
+            return XCTFail("ordinary request did not reach the delayed 401")
+        }
+
+        // Keep the same origin so only the captured server-account ID can
+        // prevent B's token from being treated as a successful refresh of A.
+        await harness.tokenStore.switchActiveServer(serverId: "server-b")
+        await harness.tokenStore.setServerUrl(harness.identity.serverURL)
+        await harness.tokenStore.setProfileId("profile-b")
+        await harness.tokenStore.saveTokens(
+            accessToken: "example",
+            refreshToken: "sample"
+        )
+        SettingsStubProtocol.releaseOrdinaryUnauthorized()
+
+        do {
+            _ = try await requestTask.value
+            XCTFail("the server-A 401 must not refresh or retry under server B")
+        } catch {
+            XCTAssertEqual((error as? HTTPError)?.statusCode, 401)
+        }
+        let accessToken = await harness.tokenStore.getAccessToken()
+        let refreshToken = await harness.tokenStore.getRefreshToken()
+        XCTAssertEqual(accessToken, "example")
+        XCTAssertEqual(refreshToken, "sample")
+        let state = SettingsStubProtocol.state()
+        XCTAssertEqual(state.requestCounts["/api/v1/auth/refresh"] ?? 0, 0)
+        XCTAssertEqual(state.requestCounts["/api/v1/settings/contract/capabilities"], 1)
+    }
+
+    func testOrdinaryUnauthorizedResponseCannotRefreshSameServerSessionInstalledAfterLogout() async throws {
+        SettingsStubProtocol.reset(mode: .ordinaryUnauthorizedDelayed)
+        let harness = try await makeRefreshHarness(testName: "UnauthorizedSameServerRelogin")
+
+        let requestTask = Task {
+            try await harness.http.requestData(
+                method: "GET",
+                path: "/api/v1/settings/contract/capabilities"
+            )
+        }
+        guard await waitForPendingOrdinaryUnauthorized() else {
+            SettingsStubProtocol.releaseOrdinaryUnauthorized()
+            return XCTFail("ordinary request did not reach the delayed 401")
+        }
+
+        await harness.tokenStore.clearTokens()
+        await harness.tokenStore.saveTokens(
+            accessToken: "placeholder",
+            refreshToken: "redacted"
+        )
+        await harness.tokenStore.setProfileId(harness.identity.profileId)
+        SettingsStubProtocol.releaseOrdinaryUnauthorized()
+
+        do {
+            _ = try await requestTask.value
+            XCTFail("the previous login epoch must not refresh or retry as a same-server replacement")
+        } catch {
+            XCTAssertEqual((error as? HTTPError)?.statusCode, 401)
+        }
+        let accessToken = await harness.tokenStore.getAccessToken()
+        let refreshToken = await harness.tokenStore.getRefreshToken()
+        XCTAssertEqual(accessToken, "placeholder")
+        XCTAssertEqual(refreshToken, "redacted")
+        let state = SettingsStubProtocol.state()
+        XCTAssertEqual(state.requestCounts["/api/v1/auth/refresh"] ?? 0, 0)
+        XCTAssertEqual(state.requestCounts["/api/v1/settings/contract/capabilities"], 1)
+    }
+
+    func testScopedUnauthorizedResponseCannotRefreshSameServerSessionInstalledAfterLogout() async throws {
+        SettingsStubProtocol.reset(mode: .ordinaryUnauthorizedDelayed)
+        let harness = try await makeRefreshHarness(testName: "ScopedUnauthorizedSameServerRelogin")
+
+        let requestTask = Task {
+            try await harness.http.requestData(
+                method: "GET",
+                path: "/api/v1/settings/contract/capabilities",
+                requestIdentity: harness.identity
+            )
+        }
+        guard await waitForPendingOrdinaryUnauthorized() else {
+            SettingsStubProtocol.releaseOrdinaryUnauthorized()
+            return XCTFail("scoped request did not reach the delayed 401")
+        }
+
+        await harness.tokenStore.clearTokens()
+        await harness.tokenStore.saveTokens(
+            accessToken: "placeholder",
+            refreshToken: "redacted"
+        )
+        await harness.tokenStore.setProfileId(harness.identity.profileId)
+        SettingsStubProtocol.releaseOrdinaryUnauthorized()
+
+        do {
+            _ = try await requestTask.value
+            XCTFail("the scoped request must not refresh or retry as a same-server replacement epoch")
+        } catch {
+            XCTAssertEqual((error as? HTTPError)?.statusCode, 401)
+        }
+        let accessToken = await harness.tokenStore.getAccessToken()
+        let refreshToken = await harness.tokenStore.getRefreshToken()
+        XCTAssertEqual(accessToken, "placeholder")
+        XCTAssertEqual(refreshToken, "redacted")
+        let state = SettingsStubProtocol.state()
+        XCTAssertEqual(state.requestCounts["/api/v1/auth/refresh"] ?? 0, 0)
+        XCTAssertEqual(state.requestCounts["/api/v1/settings/contract/capabilities"], 1)
+    }
+
+    func testOrdinaryUnauthorizedResponseCannotRetryAfterProfileSwitch() async throws {
+        SettingsStubProtocol.reset(mode: .ordinaryUnauthorizedDelayed)
+        let harness = try await makeRefreshHarness(testName: "UnauthorizedProfileSwitch")
+        await harness.tokenStore.setProfileToken("decoy-token")
+
+        let requestTask = Task {
+            try await harness.http.requestData(
+                method: "GET",
+                path: "/api/v1/settings/contract/capabilities"
+            )
+        }
+        guard await waitForPendingOrdinaryUnauthorized() else {
+            SettingsStubProtocol.releaseOrdinaryUnauthorized()
+            return XCTFail("ordinary request did not reach the delayed 401")
+        }
+
+        await harness.tokenStore.setProfileId("profile-b")
+        await harness.tokenStore.setProfileToken("gateway-token")
+        SettingsStubProtocol.releaseOrdinaryUnauthorized()
+
+        do {
+            _ = try await requestTask.value
+            XCTFail("the profile-A request must not refresh or retry as profile B")
+        } catch {
+            XCTAssertEqual((error as? HTTPError)?.statusCode, 401)
+        }
+        let state = SettingsStubProtocol.state()
+        XCTAssertEqual(state.requestCounts["/api/v1/auth/refresh"] ?? 0, 0)
+        XCTAssertEqual(state.requestCounts["/api/v1/settings/contract/capabilities"], 1)
+        XCTAssertEqual(state.lastRequest?.header("X-Profile-Id"), "profile-a")
+        XCTAssertEqual(state.lastRequest?.header("X-Profile-Token"), "decoy-token")
+    }
+
+    func testOrdinaryUnauthorizedResponseCannotCrossFromPersistentIntoTemporaryCredentials() async throws {
+        SettingsStubProtocol.reset(mode: .ordinaryUnauthorizedDelayed)
+        let harness = try await makeRefreshHarness(testName: "PersistentToTemporary")
+        await harness.tokenStore.setProfileToken("test-auth-token")
+
+        let requestTask = Task {
+            try await harness.http.requestData(
+                method: "GET",
+                path: "/api/v1/settings/contract/capabilities"
+            )
+        }
+        guard await waitForPendingOrdinaryUnauthorized() else {
+            SettingsStubProtocol.releaseOrdinaryUnauthorized()
+            return XCTFail("persistent request did not reach the delayed 401")
+        }
+
+        let temporary = TemporaryAuthScope(
+            serverId: harness.identity.serverId,
+            serverURL: harness.identity.serverURL,
+            accessToken: "example",
+            refreshToken: "sample",
+            profileId: harness.identity.profileId,
+            profileToken: "test-auth-token",
+            controllerDeviceId: "controller",
+            expiresAt: Date().addingTimeInterval(60)
+        )
+        await harness.tokenStore.beginTemporaryScope(temporary)
+        SettingsStubProtocol.releaseOrdinaryUnauthorized()
+
+        do {
+            _ = try await requestTask.value
+            XCTFail("a persistent 401 must not consume the same-account temporary overlay")
+        } catch {
+            XCTAssertEqual((error as? HTTPError)?.statusCode, 401)
+        }
+        let current = await harness.tokenStore.getTemporaryScope()
+        XCTAssertEqual(current?.credentialGenerationID, temporary.credentialGenerationID)
+        XCTAssertEqual(current?.accessToken, "example")
+        XCTAssertEqual(current?.refreshToken, "sample")
+        let state = SettingsStubProtocol.state()
+        XCTAssertEqual(state.requestCounts["/api/v1/auth/refresh"] ?? 0, 0)
+        XCTAssertEqual(state.requestCounts["/api/v1/settings/contract/capabilities"], 1)
+    }
+
+    func testOrdinaryUnauthorizedResponseCannotCrossFromTemporaryIntoPersistentCredentials() async throws {
+        SettingsStubProtocol.reset(mode: .ordinaryUnauthorizedDelayed)
+        let harness = try await makeRefreshHarness(testName: "TemporaryToPersistent")
+        await harness.tokenStore.setProfileToken("test-auth-token")
+        let temporary = TemporaryAuthScope(
+            serverId: harness.identity.serverId,
+            serverURL: harness.identity.serverURL,
+            accessToken: "example",
+            refreshToken: "sample",
+            profileId: harness.identity.profileId,
+            profileToken: "test-auth-token",
+            controllerDeviceId: "controller",
+            expiresAt: Date().addingTimeInterval(60)
+        )
+        await harness.tokenStore.beginTemporaryScope(temporary)
+
+        let requestTask = Task {
+            try await harness.http.requestData(
+                method: "GET",
+                path: "/api/v1/settings/contract/capabilities"
+            )
+        }
+        guard await waitForPendingOrdinaryUnauthorized() else {
+            SettingsStubProtocol.releaseOrdinaryUnauthorized()
+            return XCTFail("temporary request did not reach the delayed 401")
+        }
+
+        _ = await harness.tokenStore.endTemporaryScope()
+        SettingsStubProtocol.releaseOrdinaryUnauthorized()
+
+        do {
+            _ = try await requestTask.value
+            XCTFail("a temporary 401 must not fall through to the persistent account")
+        } catch {
+            XCTAssertEqual((error as? HTTPError)?.statusCode, 401)
+        }
+        let accessToken = await harness.tokenStore.getAccessToken()
+        let refreshToken = await harness.tokenStore.getRefreshToken()
+        XCTAssertEqual(accessToken, "fake")
+        XCTAssertEqual(refreshToken, "dummy")
+        let state = SettingsStubProtocol.state()
+        XCTAssertEqual(state.requestCounts["/api/v1/auth/refresh"] ?? 0, 0)
+        XCTAssertEqual(state.requestCounts["/api/v1/settings/contract/capabilities"], 1)
+    }
+
+    func testRejectedTemporaryGenerationRefreshesAndExpiresOnlyOnce() async throws {
+        SettingsStubProtocol.reset(mode: .temporaryRefreshRejected)
+        let harness = try await makeRefreshHarness(testName: "RejectedTemporaryGeneration")
+        let temporary = TemporaryAuthScope(
+            serverId: harness.identity.serverId,
+            serverURL: harness.identity.serverURL,
+            accessToken: "example",
+            refreshToken: "sample",
+            profileId: harness.identity.profileId,
+            profileToken: "decoy-token",
+            controllerDeviceId: "controller",
+            expiresAt: Date().addingTimeInterval(60)
+        )
+        await harness.tokenStore.beginTemporaryScope(temporary)
+        let expiryCount = LockedCounter()
+        let expiryEvents = LockedSessionExpiryEvents()
+        let observer = NotificationCenter.default.addObserver(
+            forName: .temporaryRemoteAuthExpired,
+            object: nil,
+            queue: nil
+        ) { notification in
+            expiryCount.increment()
+            if let event = notification.object as? SessionExpiryEvent {
+                expiryEvents.append(event)
+            }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        for wave in 1...2 {
+            do {
+                _ = try await harness.http.requestData(
+                    method: "GET",
+                    path: "/api/v1/settings/contract/capabilities"
+                )
+                XCTFail("temporary 401 wave \(wave) must remain unauthorized")
+            } catch {
+                XCTAssertEqual((error as? HTTPError)?.statusCode, 401)
+            }
+        }
+
+        let state = SettingsStubProtocol.state()
+        XCTAssertEqual(state.requestCounts["/api/v1/auth/refresh"], 1)
+        XCTAssertEqual(state.requestCounts["/api/v1/settings/contract/capabilities"], 2)
+        XCTAssertEqual(expiryCount.value, 1)
+        let current = await harness.tokenStore.getTemporaryScope()
+        XCTAssertEqual(current?.credentialGenerationID, temporary.credentialGenerationID)
+        XCTAssertEqual(current?.accessToken, "example")
+        XCTAssertEqual(current?.refreshToken, "sample")
+        XCTAssertEqual(expiryEvents.values, [SessionExpiryEvent(
+            account: RefreshAccountIdentity(
+                serverId: temporary.serverId,
+                serverURL: temporary.serverURL,
+                credentialGenerationID: temporary.credentialGenerationID
+            ),
+            disposition: .temporarySessionExpired
+        )])
+    }
+
+    func testRejectedTemporaryScopedRefreshPostsTemporaryExpiryNotification() async throws {
+        SettingsStubProtocol.reset(mode: .temporaryRefreshRejected)
+        let harness = try await makeRefreshHarness(testName: "RejectedTemporaryScopedGeneration")
+        let temporary = TemporaryAuthScope(
+            serverId: harness.identity.serverId,
+            serverURL: harness.identity.serverURL,
+            accessToken: "example",
+            refreshToken: "sample",
+            profileId: harness.identity.profileId,
+            profileToken: "decoy-token",
+            controllerDeviceId: "controller",
+            expiresAt: Date().addingTimeInterval(60)
+        )
+        await harness.tokenStore.beginTemporaryScope(temporary)
+        let temporaryExpiryCount = LockedCounter()
+        let persistentExpiryCount = LockedCounter()
+        let expiryEvents = LockedSessionExpiryEvents()
+        let temporaryObserver = NotificationCenter.default.addObserver(
+            forName: .temporaryRemoteAuthExpired,
+            object: nil,
+            queue: nil
+        ) { notification in
+            temporaryExpiryCount.increment()
+            if let event = notification.object as? SessionExpiryEvent {
+                expiryEvents.append(event)
+            }
+        }
+        let persistentObserver = NotificationCenter.default.addObserver(
+            forName: .continuumSessionExpired,
+            object: nil,
+            queue: nil
+        ) { _ in
+            persistentExpiryCount.increment()
+        }
+        defer {
+            NotificationCenter.default.removeObserver(temporaryObserver)
+            NotificationCenter.default.removeObserver(persistentObserver)
+        }
+
+        do {
+            _ = try await harness.http.requestData(
+                method: "GET",
+                path: "/api/v1/settings/contract/capabilities",
+                requestIdentity: harness.identity
+            )
+            XCTFail("the scoped temporary request must remain unauthorized")
+        } catch {
+            XCTAssertEqual((error as? HTTPError)?.statusCode, 401)
+        }
+
+        let state = SettingsStubProtocol.state()
+        XCTAssertEqual(state.requestCounts["/api/v1/auth/refresh"], 1)
+        XCTAssertEqual(state.requestCounts["/api/v1/settings/contract/capabilities"], 1)
+        XCTAssertEqual(temporaryExpiryCount.value, 1)
+        XCTAssertEqual(persistentExpiryCount.value, 0)
+        XCTAssertEqual(expiryEvents.values, [SessionExpiryEvent(
+            account: RefreshAccountIdentity(
+                serverId: temporary.serverId,
+                serverURL: temporary.serverURL,
+                credentialGenerationID: temporary.credentialGenerationID
+            ),
+            disposition: .temporarySessionExpired
+        )])
+    }
+
+    func testSuccessfulTemporaryScopedRefreshRotatesOnlyTemporaryGeneration() async throws {
+        SettingsStubProtocol.reset(mode: .mixedRefreshScopedWins)
+        let harness = try await makeRefreshHarness(testName: "SuccessfulTemporaryScopedGeneration")
+        let temporary = TemporaryAuthScope(
+            serverId: harness.identity.serverId,
+            serverURL: harness.identity.serverURL,
+            accessToken: "example",
+            refreshToken: "sample",
+            profileId: harness.identity.profileId,
+            profileToken: "decoy-token",
+            controllerDeviceId: "controller",
+            expiresAt: Date().addingTimeInterval(60)
+        )
+        await harness.tokenStore.beginTemporaryScope(temporary)
+
+        let response = try await harness.http.requestData(
+            method: "GET",
+            path: "/api/v1/settings/contract/capabilities",
+            headers: ["X-Test-Refresh-Flow": "scoped"],
+            requestIdentity: harness.identity
+        )
+
+        XCTAssertEqual(response.statusCode, 200)
+        let activeScope = await harness.tokenStore.getTemporaryScope()
+        XCTAssertEqual(activeScope?.credentialGenerationID, temporary.credentialGenerationID)
+        XCTAssertEqual(activeScope?.accessToken, "placeholder")
+        XCTAssertEqual(activeScope?.refreshToken, "redacted")
+        _ = await harness.tokenStore.endTemporaryScope(
+            expectedGenerationID: temporary.credentialGenerationID
+        )
+        let persistentAccess = await harness.tokenStore.getAccessToken()
+        let persistentRefresh = await harness.tokenStore.getRefreshToken()
+        XCTAssertEqual(persistentAccess, "fake")
+        XCTAssertEqual(persistentRefresh, "dummy")
+        let state = SettingsStubProtocol.state()
+        XCTAssertEqual(state.requestCounts["/api/v1/auth/refresh"], 1)
+        XCTAssertEqual(state.requestCounts["/api/v1/settings/contract/capabilities"], 2)
+    }
+
+    func testPersistentExpiryEventIsRejectedAfterSameServerSessionReplacement() async throws {
+        SettingsStubProtocol.reset(mode: .normal)
+        let harness = try await makeRefreshHarness(testName: "PersistentExpiryEpoch")
+        let accountValue = await harness.tokenStore.refreshAccountIdentity()
+        let account = try XCTUnwrap(accountValue)
+        let capturedValue = await harness.tokenStore.captureRefreshCredential(expected: account)
+        let captured = try XCTUnwrap(capturedValue)
+        let dispositionValue = await harness.tokenStore.invalidateRejectedRefresh(captured)
+        let disposition = try XCTUnwrap(dispositionValue)
+        let event = SessionExpiryEvent(account: account, disposition: disposition)
+
+        XCTAssertEqual(disposition, .persistentSessionCleared)
+        let consumableBeforeReplacement = await harness.tokenStore.shouldConsumeSessionExpiryEvent(event)
+        XCTAssertTrue(consumableBeforeReplacement)
+
+        await harness.tokenStore.saveTokens(
+            accessToken: "placeholder",
+            refreshToken: "redacted"
+        )
+        await harness.tokenStore.setProfileId(harness.identity.profileId)
+
+        let consumableAfterReplacement = await harness.tokenStore.shouldConsumeSessionExpiryEvent(event)
+        XCTAssertFalse(
+            consumableAfterReplacement,
+            "a queued rejection from the prior epoch must not sign out a same-server replacement"
+        )
+    }
+
+    func testTemporaryExpiryTeardownCannotRemoveReplacementAfterConsumerValidation() async throws {
+        SettingsStubProtocol.reset(mode: .normal)
+        let harness = try await makeRefreshHarness(testName: "TemporaryExpiryReplacement")
+        let rejected = TemporaryAuthScope(
+            serverId: harness.identity.serverId,
+            serverURL: harness.identity.serverURL,
+            accessToken: "fake",
+            refreshToken: "dummy",
+            profileId: harness.identity.profileId,
+            profileToken: "gateway-token",
+            controllerDeviceId: "controller-a",
+            expiresAt: Date().addingTimeInterval(60)
+        )
+        await harness.tokenStore.beginTemporaryScope(rejected)
+        let accountValue = await harness.tokenStore.refreshAccountIdentity()
+        let account = try XCTUnwrap(accountValue)
+        let capturedValue = await harness.tokenStore.captureRefreshCredential(expected: account)
+        let captured = try XCTUnwrap(capturedValue)
+        let dispositionValue = await harness.tokenStore.invalidateRejectedRefresh(captured)
+        let disposition = try XCTUnwrap(dispositionValue)
+        let event = SessionExpiryEvent(account: account, disposition: disposition)
+
+        XCTAssertEqual(disposition, .temporarySessionExpired)
+        let consumableBeforeReplacement = await harness.tokenStore.shouldConsumeSessionExpiryEvent(event)
+        XCTAssertTrue(consumableBeforeReplacement)
+
+        // Model replacement after ContentView consumed the event but before
+        // player cleanup completed and the TV identity manager reached its
+        // destructive scope-removal step.
+        let replacement = TemporaryAuthScope(
+            serverId: rejected.serverId,
+            serverURL: rejected.serverURL,
+            accessToken: "placeholder",
+            refreshToken: "redacted",
+            profileId: rejected.profileId,
+            profileToken: "test-token-placeholder",
+            controllerDeviceId: "controller-b",
+            expiresAt: Date().addingTimeInterval(120)
+        )
+        await harness.tokenStore.beginTemporaryScope(replacement)
+
+        let endResult = await harness.tokenStore.endTemporaryScope(
+            expectedGenerationID: rejected.credentialGenerationID
+        )
+        XCTAssertEqual(
+            endResult,
+            .differentGeneration(
+                activeGenerationID: replacement.credentialGenerationID
+            )
+        )
+        let currentScope = await harness.tokenStore.getTemporaryScope()
+        let consumableAfterReplacement = await harness.tokenStore.shouldConsumeSessionExpiryEvent(event)
+        XCTAssertEqual(currentScope, replacement)
+        XCTAssertFalse(consumableAfterReplacement)
+    }
+
+    func testTemporaryScopeTeardownDistinguishesAbsenceFromReplacementGeneration() async throws {
+        SettingsStubProtocol.reset(mode: .normal)
+        let harness = try await makeRefreshHarness(testName: "TemporaryScopeEndResult")
+        let ending = TemporaryAuthScope(
+            serverId: harness.identity.serverId,
+            serverURL: harness.identity.serverURL,
+            accessToken: "ending-access",
+            refreshToken: "ending-refresh",
+            profileId: harness.identity.profileId,
+            profileToken: "ending-profile",
+            controllerDeviceId: "controller-a",
+            expiresAt: Date().addingTimeInterval(60)
+        )
+        await harness.tokenStore.beginTemporaryScope(ending)
+
+        await harness.tokenStore.clearTokens()
+        let absentResult = await harness.tokenStore.endTemporaryScope(
+            expectedGenerationID: ending.credentialGenerationID
+        )
+        XCTAssertEqual(absentResult, .alreadyAbsent)
+
+        let replacement = TemporaryAuthScope(
+            serverId: ending.serverId,
+            serverURL: ending.serverURL,
+            accessToken: "replacement-access",
+            refreshToken: "replacement-refresh",
+            profileId: ending.profileId,
+            profileToken: "replacement-profile",
+            controllerDeviceId: "controller-b",
+            expiresAt: Date().addingTimeInterval(120)
+        )
+        await harness.tokenStore.beginTemporaryScope(replacement)
+
+        let replacementResult = await harness.tokenStore.endTemporaryScope(
+            expectedGenerationID: ending.credentialGenerationID
+        )
+        let currentScope = await harness.tokenStore.getTemporaryScope()
+        XCTAssertEqual(
+            replacementResult,
+            .differentGeneration(
+                activeGenerationID: replacement.credentialGenerationID
+            )
+        )
+        XCTAssertEqual(currentScope, replacement)
+    }
+
+    func testRemotePlaybackEndPolicyAcceptsExpectedGenerationWhenScopeIsAlreadyAbsent() {
+        let endingGenerationID = UUID()
+        let replacementGenerationID = UUID()
+
+        XCTAssertEqual(
+            RemotePlaybackIdentityEndPolicy.endingGenerationID(
+                activeIdentityGenerationID: endingGenerationID,
+                scopeGenerationID: nil,
+                expectedGenerationID: endingGenerationID
+            ),
+            endingGenerationID,
+            "delayed cleanup must clear a matching identity after its scope was already removed"
+        )
+        XCTAssertNil(
+            RemotePlaybackIdentityEndPolicy.endingGenerationID(
+                activeIdentityGenerationID: endingGenerationID,
+                scopeGenerationID: replacementGenerationID,
+                expectedGenerationID: endingGenerationID
+            ),
+            "a replacement scope must remain protected"
+        )
+        XCTAssertNil(
+            RemotePlaybackIdentityEndPolicy.endingGenerationID(
+                activeIdentityGenerationID: replacementGenerationID,
+                scopeGenerationID: nil,
+                expectedGenerationID: endingGenerationID
+            ),
+            "a replacement manager identity must remain protected"
+        )
+    }
+
+    func testSignOutAuthorizationAllowsIncompleteLocalStateAndRefusesTemporaryOwner() {
+        let account = RefreshAccountIdentity(
+            serverId: "server-a",
+            serverURL: "http://settings-test.invalid",
+            credentialGenerationID: UUID()
+        )
+        let persistentAuth = CapturedOrdinaryRequestAuth(
+            account: account,
+            credentialOwner: .persistentServer(serverId: account.serverId),
+            accessToken: "persistent-access",
+            profileId: "profile-a",
+            profileToken: "persistent-profile"
+        )
+        let temporaryAuth = CapturedOrdinaryRequestAuth(
+            account: account,
+            credentialOwner: .temporary,
+            accessToken: "temporary-access",
+            profileId: "profile-a",
+            profileToken: "temporary-profile"
+        )
+
+        XCTAssertEqual(
+            AuthService.signOutAuthorization(
+                activeServerId: account.serverId,
+                capturedAuth: persistentAuth
+            ),
+            .allowed(account: account)
+        )
+        XCTAssertEqual(
+            AuthService.signOutAuthorization(
+                activeServerId: account.serverId,
+                capturedAuth: nil
+            ),
+            .allowed(account: nil),
+            "an incomplete URL/defaults mirror must not strand local credentials"
+        )
+        XCTAssertEqual(
+            AuthService.signOutAuthorization(
+                activeServerId: account.serverId,
+                capturedAuth: temporaryAuth
+            ),
+            .refused,
+            "the temporary identity owner must be torn down before persistent sign-out"
+        )
+        XCTAssertEqual(
+            AuthService.signOutAuthorization(
+                activeServerId: "server-b",
+                capturedAuth: persistentAuth
+            ),
+            .refused,
+            "a stale capture must not clear another active server"
+        )
+    }
+
+    func testReplacementCancellationWaitsForOldEndBeforeStartingNewGenerationRequest() async throws {
+        SettingsStubProtocol.reset(mode: .normal)
+        let harness = try await makeRefreshHarness(testName: "SerializedIdentityCancellation")
+        let barrier = SerializedCancellationPassBarrier()
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [SettingsStubProtocol.self]
+        let http = HTTPClient(
+            session: URLSession(configuration: config),
+            tokenStore: harness.tokenStore,
+            cancellationPassBarrier: { await barrier.enter() }
+        )
+
+        // Model an old end already enumerating URLSession work when a
+        // replacement activation begins its own cancellation pass.
+        let oldEnd = Task { await http.cancelInFlightRequests() }
+        guard await waitForCancellationPass(barrier, count: 1) else {
+            return XCTFail("old-generation cancellation pass did not start")
+        }
+        let replacement = Task {
+            await http.cancelInFlightRequests()
+            return try await http.requestData(
+                method: "GET",
+                path: "/api/v1/settings/contract/capabilities"
+            )
+        }
+
+        try? await Task.sleep(for: .milliseconds(50))
+        let overlappingPassCount = await barrier.entryCount
+        XCTAssertEqual(
+            overlappingPassCount,
+            1,
+            "replacement cancellation must queue instead of overlapping the old enumeration"
+        )
+        XCTAssertEqual(
+            SettingsStubProtocol.state().requestCounts["/api/v1/settings/contract/capabilities"] ?? 0,
+            0,
+            "replacement work must not start while an old cancellation can still enumerate it"
+        )
+
+        await barrier.release(pass: 1)
+        await oldEnd.value
+        guard await waitForCancellationPass(barrier, count: 2) else {
+            return XCTFail("replacement cancellation pass did not start after the old pass")
+        }
+        XCTAssertEqual(
+            SettingsStubProtocol.state().requestCounts["/api/v1/settings/contract/capabilities"] ?? 0,
+            0
+        )
+        await barrier.release(pass: 2)
+
+        let response = try await replacement.value
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(
+            SettingsStubProtocol.state().requestCounts["/api/v1/settings/contract/capabilities"],
+            1
+        )
+    }
+
+    func testScopedRefreshCannotRetryAsSameServerReplacementInstalledAfterRefresh() async throws {
+        SettingsStubProtocol.reset(mode: .mixedRefreshScopedWins)
+        let harness = try await makeRefreshHarness(testName: "ScopedPostRefreshReplacement")
+        let barrier = SerializedCancellationPassBarrier()
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [SettingsStubProtocol.self]
+        let http = HTTPClient(
+            session: URLSession(configuration: config),
+            tokenStore: harness.tokenStore,
+            scopedRefreshRetryBarrier: { await barrier.enter() }
+        )
+
+        let request = Task {
+            try await http.requestData(
+                method: "GET",
+                path: "/api/v1/settings/contract/capabilities",
+                headers: ["X-Test-Refresh-Flow": "scoped"],
+                requestIdentity: harness.identity
+            )
+        }
+        guard await waitForCancellationPass(barrier, count: 1) else {
+            return XCTFail("scoped request did not reach its post-refresh retry boundary")
+        }
+        await harness.tokenStore.clearTokens()
+        await harness.tokenStore.saveTokens(
+            accessToken: "placeholder",
+            refreshToken: "redacted"
+        )
+        await harness.tokenStore.setProfileId(harness.identity.profileId)
+        await barrier.release(pass: 1)
+
+        do {
+            _ = try await request.value
+            XCTFail("the prior epoch must not retry under a same-server replacement")
+        } catch {
+            XCTAssertEqual((error as? HTTPError)?.statusCode, 401)
+        }
+        let replacementAccess = await harness.tokenStore.getAccessToken()
+        let replacementRefresh = await harness.tokenStore.getRefreshToken()
+        XCTAssertEqual(replacementAccess, "placeholder")
+        XCTAssertEqual(replacementRefresh, "redacted")
+        let state = SettingsStubProtocol.state()
+        XCTAssertEqual(state.requestCounts["/api/v1/auth/refresh"], 1)
+        XCTAssertEqual(state.requestCounts["/api/v1/settings/contract/capabilities"], 1)
+    }
+
+    func testCancelledTemporaryReplacementRestoresPriorOwnerGeneration() async throws {
+        SettingsStubProtocol.reset(mode: .normal)
+        let harness = try await makeRefreshHarness(testName: "TemporaryActivationRollback")
+        let previous = TemporaryAuthScope(
+            serverId: harness.identity.serverId,
+            serverURL: harness.identity.serverURL,
+            accessToken: "fake",
+            refreshToken: "dummy",
+            profileId: harness.identity.profileId,
+            profileToken: "decoy-token",
+            controllerDeviceId: "controller-a",
+            expiresAt: Date().addingTimeInterval(60)
+        )
+        let replacement = TemporaryAuthScope(
+            serverId: previous.serverId,
+            serverURL: previous.serverURL,
+            accessToken: "placeholder",
+            refreshToken: "redacted",
+            profileId: previous.profileId,
+            profileToken: "test-token-placeholder",
+            controllerDeviceId: "controller-b",
+            expiresAt: Date().addingTimeInterval(120)
+        )
+        await harness.tokenStore.beginTemporaryScope(previous)
+        let barrier = SerializedCancellationPassBarrier()
+
+        let activation = Task {
+            let displaced = await harness.tokenStore.beginTemporaryScope(replacement)
+            await barrier.enter()
+            guard !Task.isCancelled else {
+                return await harness.tokenStore.restoreTemporaryScope(
+                    displaced,
+                    replacingGenerationID: replacement.credentialGenerationID
+                )
+            }
+            return false
+        }
+        guard await waitForCancellationPass(barrier, count: 1) else {
+            return XCTFail("replacement was not installed before cancellation")
+        }
+        activation.cancel()
+        await barrier.release(pass: 1)
+        let restored = await activation.value
+        let restoredScope = await harness.tokenStore.getTemporaryScope()
+        let restoredAccount = await harness.tokenStore.refreshAccountIdentity()
+        XCTAssertTrue(restored)
+        XCTAssertEqual(restoredScope, previous)
+        XCTAssertEqual(
+            restoredAccount?.credentialGenerationID,
+            previous.credentialGenerationID,
+            "TokenStore must remain aligned with the manager's prior active generation"
+        )
+    }
+
+    func testRequestStartingBetweenCancellationSessionSnapshotsIsRejected() async throws {
+        SettingsStubProtocol.reset(mode: .normal)
+        let harness = try await makeRefreshHarness(testName: "CancellationSnapshotGate")
+        let barrier = SerializedCancellationPassBarrier()
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [SettingsStubProtocol.self]
+        let http = HTTPClient(
+            session: URLSession(configuration: config),
+            tokenStore: harness.tokenStore,
+            cancellationSessionBarrier: { index in
+                if index == 1 { await barrier.enter() }
+            }
+        )
+
+        let cancellation = Task { await http.cancelInFlightRequests() }
+        guard await waitForCancellationPass(barrier, count: 1) else {
+            return XCTFail("cancellation did not pause between session snapshots")
+        }
+        do {
+            _ = try await http.requestData(
+                method: "GET",
+                path: "/api/v1/settings/contract/capabilities"
+            )
+            XCTFail("dispatch must remain closed between cancellation snapshots")
+        } catch HTTPError.requestIdentityChanged {
+            // Expected.
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+        XCTAssertEqual(
+            SettingsStubProtocol.state().requestCounts["/api/v1/settings/contract/capabilities"] ?? 0,
+            0
+        )
+        await barrier.release(pass: 1)
+        await cancellation.value
+    }
+
+    func testPublishedServerHydrationWaitsUntilCancellationAndTransitionAreOpen() async throws {
+        SettingsStubProtocol.reset(mode: .normal)
+        let harness = try await makeRefreshHarness(testName: "PublishedServerHydrationGate")
+        let cancellationBarrier = SerializedCancellationPassBarrier()
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [SettingsStubProtocol.self]
+        let http = HTTPClient(
+            session: URLSession(configuration: config),
+            tokenStore: harness.tokenStore,
+            cancellationPassBarrier: { await cancellationBarrier.enter() }
+        )
+        guard let lease = await http.beginIdentityTransition() else {
+            return XCTFail("identity transition was unexpectedly cancelled")
+        }
+
+        let cancellation = Task { await http.cancelInFlightRequests() }
+        guard await waitForCancellationPass(cancellationBarrier, count: 1) else {
+            await http.endIdentityTransition(lease)
+            return XCTFail("cancellation pass did not reach its barrier")
+        }
+
+        // Mirrors ServerRegistry publishing `activeServerId` before releasing
+        // the transition lease, which starts ContentView's keyed hydration.
+        let activeServerPublications = LockedCounter()
+        let hydrationStarts = LockedCounter()
+        activeServerPublications.increment()
+        let hydration = Task {
+            guard await http.waitForRequestDispatchOpen() else { return false }
+            guard !Task.isCancelled else { return false }
+            hydrationStarts.increment()
+            return true
+        }
+        guard await waitForRequestDispatchWaiter(http) else {
+            await cancellationBarrier.release(pass: 1)
+            await cancellation.value
+            await http.endIdentityTransition(lease)
+            return XCTFail("published-server hydration did not wait for dispatch")
+        }
+        XCTAssertEqual(activeServerPublications.value, 1)
+        XCTAssertEqual(hydrationStarts.value, 0)
+
+        await cancellationBarrier.release(pass: 1)
+        await cancellation.value
+        XCTAssertEqual(
+            hydrationStarts.value,
+            0,
+            "finishing cancellation alone must not bypass the published switch lease"
+        )
+
+        await http.endIdentityTransition(lease)
+        let hydrationCompleted = await hydration.value
+        XCTAssertTrue(hydrationCompleted)
+        XCTAssertEqual(hydrationStarts.value, 1)
+    }
+
+    func testCancelledDispatchOpenWaiterPerformsNoHydrationWork() async throws {
+        SettingsStubProtocol.reset(mode: .normal)
+        let harness = try await makeRefreshHarness(testName: "CancelledHydrationWaiter")
+        guard let lease = await harness.http.beginIdentityTransition() else {
+            return XCTFail("identity transition was unexpectedly cancelled")
+        }
+
+        let hydrationStarts = LockedCounter()
+        let hydration = Task {
+            guard await harness.http.waitForRequestDispatchOpen() else { return false }
+            guard !Task.isCancelled else { return false }
+            hydrationStarts.increment()
+            return true
+        }
+        guard await waitForRequestDispatchWaiter(harness.http) else {
+            await harness.http.endIdentityTransition(lease)
+            return XCTFail("hydration did not queue behind the transition")
+        }
+
+        hydration.cancel()
+        let hydrationCompleted = await hydration.value
+        let pendingWaiters = await harness.http.pendingRequestDispatchWaiterCount()
+        XCTAssertFalse(hydrationCompleted)
+        XCTAssertEqual(hydrationStarts.value, 0)
+        XCTAssertEqual(pendingWaiters, 0)
+
+        await harness.http.endIdentityTransition(lease)
+        XCTAssertEqual(hydrationStarts.value, 0)
+    }
+
+    func testRequestCaptureCannotSurviveCompletedIdentityRetarget() async throws {
+        SettingsStubProtocol.reset(mode: .normal)
+        let harness = try await makeRefreshHarness(testName: "CaptureDuringRetarget")
+        let barrier = SerializedCancellationPassBarrier()
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [SettingsStubProtocol.self]
+        let http = HTTPClient(
+            session: URLSession(configuration: config),
+            tokenStore: harness.tokenStore,
+            requestCaptureBarrier: { await barrier.enter() }
+        )
+
+        let request = Task {
+            try await http.requestData(
+                method: "GET",
+                path: "/api/v1/settings/contract/capabilities"
+            )
+        }
+        guard await waitForCancellationPass(barrier, count: 1) else {
+            return XCTFail("request did not pause before credential capture")
+        }
+        guard let lease = await http.beginIdentityTransition() else {
+            return XCTFail("identity transition was unexpectedly cancelled")
+        }
+        await http.cancelInFlightRequests()
+        await harness.tokenStore.setServerUrl("http://replacement.invalid")
+        await harness.tokenStore.switchActiveServer(serverId: "server-b")
+        await harness.tokenStore.setProfileId("profile-b")
+        await harness.tokenStore.saveTokens(accessToken: "example", refreshToken: "sample")
+        await http.endIdentityTransition(lease)
+        await barrier.release(pass: 1)
+
+        do {
+            _ = try await request.value
+            XCTFail("a pre-retarget dispatch revision must not send after the gate reopens")
+        } catch HTTPError.requestIdentityChanged {
+            // Expected.
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+        XCTAssertNil(SettingsStubProtocol.state().lastRequest)
+    }
+
+    func testCompletedResponseIsRejectedWhenIdentityTransitionsBeforeDelivery() async throws {
+        SettingsStubProtocol.reset(mode: .normal)
+        let harness = try await makeRefreshHarness(testName: "ResponseDuringTransition")
+        let barrier = SerializedCancellationPassBarrier()
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [SettingsStubProtocol.self]
+        let http = HTTPClient(
+            session: URLSession(configuration: config),
+            tokenStore: harness.tokenStore,
+            responseReceivedBarrier: { await barrier.enter() }
+        )
+
+        let request = Task {
+            try await http.requestData(
+                method: "GET",
+                path: "/api/v1/settings/contract/capabilities"
+            )
+        }
+        guard await waitForCancellationPass(barrier, count: 1) else {
+            return XCTFail("request did not pause after URLSession completed")
+        }
+        guard let lease = await http.beginIdentityTransition() else {
+            return XCTFail("identity transition was unexpectedly cancelled")
+        }
+        await http.cancelInFlightRequests()
+        await http.endIdentityTransition(lease)
+        await barrier.release(pass: 1)
+
+        do {
+            _ = try await request.value
+            XCTFail("a completed old-generation response must fail closed")
+        } catch HTTPError.requestIdentityChanged {
+            // Expected.
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+        XCTAssertEqual(
+            SettingsStubProtocol.state().requestCounts["/api/v1/settings/contract/capabilities"],
+            1
+        )
+    }
+
+    func testCandidateProbeDoesNotChangeActiveServerReachability() async throws {
+        SettingsStubProtocol.reset(mode: .normal)
+        let harness = try await makeRefreshHarness(testName: "CandidateReachabilityIsolation")
+        await MainActor.run { ConnectionMonitor.shared.noteServerUnreachable() }
+
+        let health: HealthStatus = try await harness.http.getUnauthenticated(
+            serverURL: harness.identity.serverURL,
+            path: "/api/v1/health"
+        )
+        XCTAssertEqual(health.status, "ok")
+        let activeStillUnreachable = await MainActor.run {
+            if case .unreachable = ConnectionMonitor.shared.serverStatus { return true }
+            return false
+        }
+        XCTAssertTrue(
+            activeStillUnreachable,
+            "a candidate response must not mark the unrelated active server healthy"
+        )
+        await MainActor.run { ConnectionMonitor.shared.noteServerResponded() }
+    }
+
+    func testCancelledQueuedSessionInstallNeverAcquiresLeaseOrWritesTokens() async throws {
+        SettingsStubProtocol.reset(mode: .normal)
+        let harness = try await makeRefreshHarness(testName: "CancelledQueuedInstall")
+        guard let blockingLease = await harness.http.beginIdentityTransition() else {
+            return XCTFail("blocking transition was unexpectedly cancelled")
+        }
+
+        let queuedInstall = Task {
+            guard let lease = await harness.http.beginIdentityTransition() else {
+                return false
+            }
+            guard !Task.isCancelled else {
+                await harness.http.endIdentityTransition(lease)
+                return false
+            }
+            await harness.tokenStore.saveTokens(
+                accessToken: "placeholder",
+                refreshToken: "redacted"
+            )
+            await harness.http.endIdentityTransition(lease)
+            return true
+        }
+        guard await waitForIdentityTransitionWaiter(harness.http) else {
+            await harness.http.endIdentityTransition(blockingLease)
+            return XCTFail("session install did not queue behind the active transition")
+        }
+        queuedInstall.cancel()
+        let installCommitted = await queuedInstall.value
+        XCTAssertFalse(installCommitted)
+        let accessBeforeRelease = await harness.tokenStore.getAccessToken()
+        let refreshBeforeRelease = await harness.tokenStore.getRefreshToken()
+        XCTAssertEqual(accessBeforeRelease, "fake")
+        XCTAssertEqual(refreshBeforeRelease, "dummy")
+
+        await harness.http.endIdentityTransition(blockingLease)
+        guard let nextLease = await harness.http.beginIdentityTransition() else {
+            return XCTFail("queue did not progress after removing the cancelled waiter")
+        }
+        await harness.http.endIdentityTransition(nextLease)
+    }
+
+    func testAccountBoundLogoutCannotDispatchAfterServerSwitch() async throws {
+        SettingsStubProtocol.reset(mode: .normal)
+        let harness = try await makeRefreshHarness(testName: "BoundLogoutServerSwitch")
+        let accountValue = await harness.tokenStore.refreshAccountIdentity()
+        let account = try XCTUnwrap(accountValue)
+        let barrier = SerializedCancellationPassBarrier()
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [SettingsStubProtocol.self]
+        let http = HTTPClient(
+            session: URLSession(configuration: config),
+            tokenStore: harness.tokenStore,
+            requestCaptureBarrier: { await barrier.enter() }
+        )
+
+        let logout = Task {
+            try await http.postVoid(
+                "/api/v1/auth/logout",
+                expectedAccount: account
+            )
+        }
+        guard await waitForCancellationPass(barrier, count: 1) else {
+            return XCTFail("logout did not pause before its bound account capture")
+        }
+        guard let lease = await http.beginIdentityTransition() else {
+            return XCTFail("server switch transition was unexpectedly cancelled")
+        }
+        await http.cancelInFlightRequests()
+        await harness.tokenStore.setServerUrl("http://replacement.invalid")
+        await harness.tokenStore.switchActiveServer(serverId: "server-b")
+        await harness.tokenStore.setProfileId("profile-b")
+        await harness.tokenStore.saveTokens(accessToken: "example", refreshToken: "sample")
+        await http.endIdentityTransition(lease)
+        await barrier.release(pass: 1)
+
+        do {
+            try await logout.value
+            XCTFail("logout bound to server A must not dispatch under server B")
+        } catch HTTPError.requestIdentityChanged {
+            // Expected.
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+        XCTAssertEqual(SettingsStubProtocol.state().requestCounts["/api/v1/auth/logout"] ?? 0, 0)
+        let currentAccess = await harness.tokenStore.getAccessToken()
+        XCTAssertEqual(currentAccess, "example")
+    }
+
+    func testOrdinaryRefreshLateSuccessCannotWriteAcrossServerSwitch() async throws {
+        SettingsStubProtocol.reset(mode: .ordinaryRefreshDelayed)
+        let harness = try await makeRefreshHarness(testName: "RefreshServerSwitch")
+        let sessionExpiredCount = LockedCounter()
+        let observer = NotificationCenter.default.addObserver(
+            forName: .continuumSessionExpired,
+            object: nil,
+            queue: nil
+        ) { _ in
+            sessionExpiredCount.increment()
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        let requestTask = Task {
+            try await harness.http.requestData(
+                method: "GET",
+                path: "/api/v1/settings/contract/capabilities"
+            )
+        }
+        guard await waitForPendingOrdinaryRefresh() else {
+            SettingsStubProtocol.releaseOrdinaryRefresh(status: 503)
+            return XCTFail("ordinary refresh did not reach the delayed response")
+        }
+
+        await harness.tokenStore.switchActiveServer(serverId: "server-b")
+        await harness.tokenStore.setServerUrl("http://settings-test.invalid/server-b")
+        await harness.tokenStore.setProfileId("profile-b")
+        await harness.tokenStore.saveTokens(
+            accessToken: "example",
+            refreshToken: "sample"
+        )
+        SettingsStubProtocol.releaseOrdinaryRefresh(status: 200)
+
+        do {
+            _ = try await requestTask.value
+            XCTFail("the server-A request must keep its original 401 after switching to server B")
+        } catch {
+            XCTAssertEqual((error as? HTTPError)?.statusCode, 401)
+        }
+        let serverBAccess = await harness.tokenStore.getAccessToken()
+        let serverBRefresh = await harness.tokenStore.getRefreshToken()
+        XCTAssertEqual(serverBAccess, "example")
+        XCTAssertEqual(serverBRefresh, "sample")
+        XCTAssertEqual(sessionExpiredCount.value, 0)
+        let state = SettingsStubProtocol.state()
+        XCTAssertEqual(state.requestCounts["/api/v1/auth/refresh"], 1)
+        XCTAssertEqual(state.requestCounts["/api/v1/settings/contract/capabilities"], 1)
+    }
+
+    func testOrdinaryRefreshLateSuccessCannotRestoreSignedOutSession() async throws {
+        SettingsStubProtocol.reset(mode: .ordinaryRefreshDelayed)
+        let harness = try await makeRefreshHarness(testName: "RefreshSignOut")
+        let sessionExpiredCount = LockedCounter()
+        let observer = NotificationCenter.default.addObserver(
+            forName: .continuumSessionExpired,
+            object: nil,
+            queue: nil
+        ) { _ in
+            sessionExpiredCount.increment()
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        let requestTask = Task {
+            try await harness.http.requestData(
+                method: "GET",
+                path: "/api/v1/settings/contract/capabilities"
+            )
+        }
+        guard await waitForPendingOrdinaryRefresh() else {
+            SettingsStubProtocol.releaseOrdinaryRefresh(status: 503)
+            return XCTFail("ordinary refresh did not reach the delayed response")
+        }
+
+        await harness.tokenStore.clearTokens()
+        SettingsStubProtocol.releaseOrdinaryRefresh(status: 200)
+
+        do {
+            _ = try await requestTask.value
+            XCTFail("a late refresh response must not sign the user back in")
+        } catch {
+            XCTAssertEqual((error as? HTTPError)?.statusCode, 401)
+        }
+        let accessToken = await harness.tokenStore.getAccessToken()
+        let refreshToken = await harness.tokenStore.getRefreshToken()
+        XCTAssertNil(accessToken)
+        XCTAssertNil(refreshToken)
+        XCTAssertEqual(sessionExpiredCount.value, 0)
+    }
+
+    func testOrdinaryRejectedRefreshCannotClearNewerCredentials() async throws {
+        SettingsStubProtocol.reset(mode: .ordinaryRefreshDelayed)
+        let harness = try await makeRefreshHarness(testName: "RefreshNewerToken")
+        let sessionExpiredCount = LockedCounter()
+        let observer = NotificationCenter.default.addObserver(
+            forName: .continuumSessionExpired,
+            object: nil,
+            queue: nil
+        ) { _ in
+            sessionExpiredCount.increment()
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        let requestTask = Task {
+            try await harness.http.requestData(
+                method: "GET",
+                path: "/api/v1/settings/contract/capabilities"
+            )
+        }
+        guard await waitForPendingOrdinaryRefresh() else {
+            SettingsStubProtocol.releaseOrdinaryRefresh(status: 503)
+            return XCTFail("ordinary refresh did not reach the delayed response")
+        }
+
+        await harness.tokenStore.saveTokens(
+            accessToken: "placeholder",
+            refreshToken: "redacted"
+        )
+        SettingsStubProtocol.releaseOrdinaryRefresh(status: 403)
+
+        do {
+            _ = try await requestTask.value
+            XCTFail("the rejected request must not retry as a replacement login epoch")
+        } catch {
+            XCTAssertEqual((error as? HTTPError)?.statusCode, 401)
+        }
+        let accessToken = await harness.tokenStore.getAccessToken()
+        let refreshToken = await harness.tokenStore.getRefreshToken()
+        XCTAssertEqual(accessToken, "placeholder")
+        XCTAssertEqual(refreshToken, "redacted")
+        XCTAssertEqual(sessionExpiredCount.value, 0)
+        let state = SettingsStubProtocol.state()
+        XCTAssertEqual(state.requestCounts["/api/v1/auth/refresh"], 1)
+        XCTAssertEqual(state.requestCounts["/api/v1/settings/contract/capabilities"], 1)
+    }
+
+    func testScopedRefreshPersistsServerAccountRotationAcrossProfileChange() async throws {
+        let suiteName = "settings-refresh-profile-switch-\(UUID().uuidString)"
+        let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        addTeardownBlock {
+            UserDefaults().removePersistentDomain(forName: suiteName)
+        }
+        let keychain = SharedKeychain(
+            service: "SettingValuesRefreshProfileTests.\(UUID().uuidString)",
+            accessGroup: nil
+        )
+        let tokenStore = TokenStore(
+            keychain: keychain,
+            defaults: SharedDefaults(suite: suite, standard: suite)
+        )
+        let identity = HTTPRequestIdentity(
+            serverId: "server-a",
+            serverURL: "http://settings-test.invalid",
+            profileId: "profile-a",
+            clientFamily: "mobile"
+        )
+
+        await tokenStore.switchActiveServer(serverId: identity.serverId)
+        await tokenStore.setServerUrl(identity.serverURL)
+        await tokenStore.setProfileId(identity.profileId)
+        await tokenStore.saveTokens(accessToken: "fake", refreshToken: "dummy")
+        await tokenStore.setProfileToken("example")
+
+        // The account refresh began under profile A, but profile B became
+        // active before the server returned its rotated account credentials.
+        await tokenStore.setProfileId("profile-b")
+        await tokenStore.setProfileToken("sample")
+        let stored = await tokenStore.saveRefreshedTokens(
+            "placeholder",
+            "redacted",
+            replacing: "dummy",
+            expected: identity,
+            credentialOwner: .persistentServer(serverId: identity.serverId)
+        )
+
+        XCTAssertTrue(stored)
+        let currentAccess = await tokenStore.getAccessToken()
+        let currentRefresh = await tokenStore.getRefreshToken()
+        let currentProfileId = await tokenStore.getProfileId()
+        let currentProfileValue = await tokenStore.getProfileToken()
+        XCTAssertEqual(currentAccess, "placeholder")
+        XCTAssertEqual(currentRefresh, "redacted")
+        XCTAssertEqual(currentProfileId, "profile-b")
+        XCTAssertEqual(currentProfileValue, "sample")
+    }
+
+    func testScopedRefreshRejectsChangedServerAccountAndTemporaryScope() async throws {
+        let suiteName = "settings-refresh-account-boundary-\(UUID().uuidString)"
+        let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        addTeardownBlock {
+            UserDefaults().removePersistentDomain(forName: suiteName)
+        }
+        let keychain = SharedKeychain(
+            service: "SettingValuesRefreshBoundaryTests.\(UUID().uuidString)",
+            accessGroup: nil
+        )
+        let tokenStore = TokenStore(
+            keychain: keychain,
+            defaults: SharedDefaults(suite: suite, standard: suite)
+        )
+        let identity = HTTPRequestIdentity(
+            serverId: "server-a",
+            serverURL: "http://settings-test.invalid",
+            profileId: "profile-a",
+            clientFamily: "mobile"
+        )
+
+        await tokenStore.switchActiveServer(serverId: identity.serverId)
+        await tokenStore.setServerUrl(identity.serverURL)
+        await tokenStore.setProfileId(identity.profileId)
+        await tokenStore.saveTokens(accessToken: "fake", refreshToken: "dummy")
+
+        await tokenStore.setServerUrl("http://changed-url.invalid")
+        let wrongURLStored = await tokenStore.saveRefreshedTokens(
+            "example",
+            "sample",
+            replacing: "dummy",
+            expected: identity,
+            credentialOwner: .persistentServer(serverId: identity.serverId)
+        )
+        let refreshAfterWrongURL = await tokenStore.getRefreshToken()
+        XCTAssertFalse(wrongURLStored)
+        XCTAssertEqual(refreshAfterWrongURL, "dummy")
+
+        await tokenStore.setServerUrl(identity.serverURL)
+        await tokenStore.saveTokens(accessToken: "placeholder", refreshToken: "redacted")
+        let staleStored = await tokenStore.saveRefreshedTokens(
+            "not-a-real",
+            "changeme",
+            replacing: "dummy",
+            expected: identity,
+            credentialOwner: .persistentServer(serverId: identity.serverId)
+        )
+        let refreshAfterStale = await tokenStore.getRefreshToken()
+        XCTAssertFalse(staleStored)
+        XCTAssertEqual(refreshAfterStale, "redacted")
+        let staleCleared = await tokenStore.clearTokensAfterRejectedRefresh(
+            replacing: "dummy",
+            expected: identity,
+            credentialOwner: .persistentServer(serverId: identity.serverId)
+        )
+        let refreshAfterStaleClear = await tokenStore.getRefreshToken()
+        XCTAssertFalse(staleCleared)
+        XCTAssertEqual(refreshAfterStaleClear, "redacted")
+
+        let temporary = TemporaryAuthScope(
+            serverId: identity.serverId,
+            serverURL: identity.serverURL,
+            accessToken: "test-auth-token",
+            // Match the persistent value so credential provenance, rather
+            // than value inequality, is what prevents the write.
+            refreshToken: "redacted",
+            profileId: "temporary-profile",
+            profileToken: "secret-token",
+            controllerDeviceId: "controller",
+            expiresAt: Date().addingTimeInterval(60)
+        )
+        await tokenStore.beginTemporaryScope(temporary)
+        let temporaryIdentity = HTTPRequestIdentity(
+            serverId: identity.serverId,
+            serverURL: identity.serverURL,
+            profileId: temporary.profileId,
+            clientFamily: identity.clientFamily
+        )
+        let capturedTemporary = try await tokenStore.captureRequestAuth(expected: temporaryIdentity)
+        _ = await tokenStore.endTemporaryScope()
+        let temporaryStored = await tokenStore.saveRefreshedTokens(
+            "test-token-placeholder",
+            "token-oversized",
+            replacing: "redacted",
+            expected: temporaryIdentity,
+            credentialOwner: capturedTemporary.credentialOwner
+        )
+        let refreshAfterTemporary = await tokenStore.getRefreshToken()
+        XCTAssertFalse(temporaryStored)
+        XCTAssertEqual(capturedTemporary.credentialOwner, .temporary)
+        XCTAssertEqual(
+            refreshAfterTemporary,
+            "redacted",
+            "credentials captured from a temporary scope must never redirect into persistent storage"
+        )
+
+        await tokenStore.switchActiveServer(serverId: "server-b")
+        await tokenStore.setServerUrl("http://server-b.invalid")
+        await tokenStore.setProfileId("profile-b")
+        await tokenStore.saveTokens(accessToken: "gateway-token", refreshToken: "decoy-token")
+        let crossServerStored = await tokenStore.saveRefreshedTokens(
+            "clawrouter-e2e-secret",
+            "very-long-browser-token-0123456789",
+            replacing: "redacted",
+            expected: identity,
+            credentialOwner: .persistentServer(serverId: identity.serverId)
+        )
+        let crossServerCleared = await tokenStore.clearTokensAfterRejectedRefresh(
+            replacing: "redacted",
+            expected: identity,
+            credentialOwner: .persistentServer(serverId: identity.serverId)
+        )
+        let serverBAccess = await tokenStore.getAccessToken()
+        let serverBRefresh = await tokenStore.getRefreshToken()
+        XCTAssertFalse(crossServerStored)
+        XCTAssertFalse(crossServerCleared)
+        XCTAssertEqual(serverBAccess, "gateway-token")
+        XCTAssertEqual(serverBRefresh, "decoy-token")
+    }
+
+    func testPutNavigationShortcutItemSendsAtomicBodyMutationAndProfileHeaders() async throws {
+        SettingsStubProtocol.reset(mode: .normal)
+        let api = await makeStubbedAPI()
+        let mutationId = newSettingMutationId()
+        let item = PrimaryMenuItem.section(
+            libraryId: 7,
+            sectionId: "recently-added",
+            label: "Recently Added"
+        )
+
+        let receipt = try await api.putNavigationShortcutItem(
+            item,
+            present: true,
+            mutationId: mutationId
+        )
+
+        XCTAssertEqual(receipt.value.settingKey, .navShortcuts)
+        XCTAssertEqual(
+            try receipt.value.value.decoded(as: NavigationShortcutsPreference.self),
+            NavigationShortcutsPreference(items: [item])
+        )
+
+        let recorded = try XCTUnwrap(SettingsStubProtocol.state().lastRequest)
+        XCTAssertEqual(recorded.method, "PUT")
+        XCTAssertEqual(recorded.path, "/api/v1/settings/values/nav.shortcuts/item")
+        XCTAssertTrue(recorded.query.isEmpty)
+        XCTAssertEqual(recorded.header("X-Silo-Mutation-Id"), mutationId)
+        XCTAssertEqual(recorded.header("X-Profile-Id"), Self.stubProfileId)
+
+        let body = try XCTUnwrap(recorded.body)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: body) as? [String: Any]
+        )
+        XCTAssertEqual(object["present"] as? Bool, true)
+        let encodedItem = try XCTUnwrap(object["item"] as? [String: Any])
+        XCTAssertEqual(encodedItem["type"] as? String, "section")
+        XCTAssertEqual(encodedItem["library_id"] as? Int, 7)
+        XCTAssertEqual(encodedItem["section_id"] as? String, "recently-added")
+        XCTAssertEqual(encodedItem["label"] as? String, "Recently Added")
+    }
+
+    func testPutNavigationShortcutItemRejectsBuiltinsBeforeSending() async throws {
+        SettingsStubProtocol.reset(mode: .normal)
+        let api = await makeStubbedAPI()
+
+        do {
+            _ = try await api.putNavigationShortcutItem(
+                .builtin(.home),
+                present: true,
+                mutationId: newSettingMutationId()
+            )
+            XCTFail("built-in destinations are not valid nav.shortcuts items")
+        } catch let error as SettingsAPIError {
+            guard case .invalidValue = error else {
+                return XCTFail("expected a local invalid-value error, got \(error)")
+            }
+        }
+
+        XCTAssertNil(SettingsStubProtocol.state().lastRequest)
     }
 
     func testPutValueSurfacesAnIdempotentReplay() async throws {
@@ -644,6 +2510,109 @@ final class SettingValuesAPITests: XCTestCase {
         let http = HTTPClient(session: URLSession(configuration: config), tokenStore: tokenStore)
         return ContinuumAPI(http: http, tokenStore: tokenStore)
     }
+
+    private func makeRefreshHarness(testName: String) async throws -> (
+        tokenStore: TokenStore,
+        identity: HTTPRequestIdentity,
+        http: HTTPClient
+    ) {
+        let suiteName = "settings-refresh-\(testName)-\(UUID().uuidString)"
+        let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        addTeardownBlock {
+            UserDefaults().removePersistentDomain(forName: suiteName)
+        }
+        let tokenStore = TokenStore(
+            keychain: SharedKeychain(
+                service: "SettingValues\(testName)Tests.\(UUID().uuidString)",
+                accessGroup: nil
+            ),
+            defaults: SharedDefaults(suite: suite, standard: suite)
+        )
+        let identity = HTTPRequestIdentity(
+            serverId: "server-a",
+            serverURL: "http://settings-test.invalid",
+            profileId: "profile-a",
+            clientFamily: "mobile"
+        )
+        await tokenStore.switchActiveServer(serverId: identity.serverId)
+        await tokenStore.setServerUrl(identity.serverURL)
+        await tokenStore.setProfileId(identity.profileId)
+        await tokenStore.saveTokens(accessToken: "fake", refreshToken: "dummy")
+
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [SettingsStubProtocol.self]
+        let http = HTTPClient(session: URLSession(configuration: config), tokenStore: tokenStore)
+        return (tokenStore, identity, http)
+    }
+
+    private func waitForPendingOrdinaryRefresh() async -> Bool {
+        let deadline = ContinuousClock.now + .seconds(2)
+        while ContinuousClock.now < deadline {
+            if SettingsStubProtocol.hasPendingOrdinaryRefresh() {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return false
+    }
+
+    private func waitForPendingOrdinaryUnauthorized() async -> Bool {
+        let deadline = ContinuousClock.now + .seconds(2)
+        while ContinuousClock.now < deadline {
+            if SettingsStubProtocol.hasPendingOrdinaryUnauthorized() {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return false
+    }
+
+    private func waitForCounter(_ counter: LockedCounter, atLeast target: Int) async -> Bool {
+        let deadline = ContinuousClock.now + .seconds(2)
+        while ContinuousClock.now < deadline {
+            if counter.value >= target {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return false
+    }
+
+    private func waitForCancellationPass(
+        _ barrier: SerializedCancellationPassBarrier,
+        count: Int
+    ) async -> Bool {
+        let deadline = ContinuousClock.now + .seconds(2)
+        while ContinuousClock.now < deadline {
+            if await barrier.entryCount >= count {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return false
+    }
+
+    private func waitForIdentityTransitionWaiter(_ http: HTTPClient) async -> Bool {
+        let deadline = ContinuousClock.now + .seconds(2)
+        while ContinuousClock.now < deadline {
+            if await http.pendingIdentityTransitionCount() > 0 {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return false
+    }
+
+    private func waitForRequestDispatchWaiter(_ http: HTTPClient) async -> Bool {
+        let deadline = ContinuousClock.now + .seconds(2)
+        while ContinuousClock.now < deadline {
+            if await http.pendingRequestDispatchWaiterCount() > 0 {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return false
+    }
 }
 
 /// In-process stub for the canonical settings endpoints. State is static
@@ -661,6 +2630,22 @@ final class SettingsStubProtocol: URLProtocol {
         case idempotentReplay
         /// A delete addressing a scope with no stored value.
         case nothingStored
+        /// Two expired scoped requests race one rotating account refresh.
+        case concurrentScopedRefresh
+        /// A scoped request owns refresh while an ordinary 401 joins it.
+        case mixedRefreshScopedWins
+        /// A scoped-owned refresh rejects while an ordinary 401 joins it.
+        case mixedRefreshScopedFailure
+        /// A scoped-owned refresh receives a retryable 429 or 5xx response.
+        case mixedRefreshScopedTransientFailure(status: Int)
+        /// A scoped-owned refresh receives HTTP 200 with an invalid token body.
+        case mixedRefreshScopedMalformedSuccess
+        /// An ordinary request's refresh waits for an explicit test release.
+        case ordinaryRefreshDelayed
+        /// An ordinary request's initial 401 waits across a server switch.
+        case ordinaryUnauthorizedDelayed
+        /// A temporary credential generation is terminally rejected.
+        case temporaryRefreshRejected
     }
 
     struct RecordedRequest {
@@ -680,14 +2665,33 @@ final class SettingsStubProtocol: URLProtocol {
     struct State {
         var mode: Mode = .normal
         var lastRequest: RecordedRequest?
+        var requestCounts: [String: Int] = [:]
     }
 
     private static let lock = NSLock()
     private static var current = State()
+    private static var pendingConcurrentUnauthorized: [SettingsStubProtocol] = []
+    private static var pendingMixedOrdinaryUnauthorized: SettingsStubProtocol?
+    private static var pendingOrdinaryRefresh: SettingsStubProtocol?
+    private static var pendingOrdinaryUnauthorized: SettingsStubProtocol?
+    private static var pendingMixedRefresh: (
+        request: SettingsStubProtocol,
+        status: Int,
+        body: String
+    )?
+    private static var mixedRefreshStarted = false
+    private static var ordinaryUnauthorizedReleased = false
 
     static func reset(mode: Mode) {
         lock.lock()
         current = State(mode: mode)
+        pendingConcurrentUnauthorized.removeAll()
+        pendingMixedOrdinaryUnauthorized = nil
+        pendingOrdinaryRefresh = nil
+        pendingOrdinaryUnauthorized = nil
+        pendingMixedRefresh = nil
+        mixedRefreshStarted = false
+        ordinaryUnauthorizedReleased = false
         lock.unlock()
     }
 
@@ -695,6 +2699,54 @@ final class SettingsStubProtocol: URLProtocol {
         lock.lock()
         defer { lock.unlock() }
         return current
+    }
+
+    static func hasPendingOrdinaryRefresh() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return pendingOrdinaryRefresh != nil
+    }
+
+    static func releaseOrdinaryRefresh(status: Int) {
+        let pending: SettingsStubProtocol?
+        lock.lock()
+        pending = pendingOrdinaryRefresh
+        pendingOrdinaryRefresh = nil
+        lock.unlock()
+
+        let body: String
+        if (200..<300).contains(status) {
+            body = #"{"access_token":"placeholder","refresh_token":"redacted","expires_in":3600}"#
+        } else {
+            body = #"{"error":"invalid_token"}"#
+        }
+        pending?.respond(status: status, body: body)
+    }
+
+    static func hasPendingOrdinaryUnauthorized() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return pendingOrdinaryUnauthorized != nil
+    }
+
+    static func releaseOrdinaryUnauthorized() {
+        let pending: SettingsStubProtocol?
+        lock.lock()
+        pending = pendingOrdinaryUnauthorized
+        pendingOrdinaryUnauthorized = nil
+        ordinaryUnauthorizedReleased = true
+        lock.unlock()
+        pending?.respond(status: 401, body: #"{"error":"unauthorized"}"#)
+    }
+
+    static func releaseMixedRefresh() {
+        let pending: (request: SettingsStubProtocol, status: Int, body: String)?
+        lock.lock()
+        pending = pendingMixedRefresh
+        pendingMixedRefresh = nil
+        lock.unlock()
+        guard let pending else { return }
+        pending.request.respond(status: pending.status, body: pending.body)
     }
 
     private static func mutate(_ apply: (inout State) -> Void) {
@@ -724,9 +2776,90 @@ final class SettingsStubProtocol: URLProtocol {
             headers: Self.lowercasedHeaders(request.allHTTPHeaderFields ?? [:]),
             body: Self.requestBody(of: request)
         )
-        Self.mutate { $0.lastRequest = recorded }
+        Self.mutate {
+            $0.lastRequest = recorded
+            $0.requestCounts[recorded.path, default: 0] += 1
+        }
 
         let mode = Self.state().mode
+        if mode == .ordinaryRefreshDelayed {
+            handleOrdinaryDelayedRefresh(recorded)
+            return
+        }
+        if mode == .ordinaryUnauthorizedDelayed {
+            handleOrdinaryUnauthorizedDelayed(recorded)
+            return
+        }
+        if mode == .temporaryRefreshRejected {
+            switch (recorded.method, recorded.path) {
+            case ("GET", "/api/v1/settings/contract/capabilities"):
+                respond(status: 401, body: #"{"error":"unauthorized"}"#)
+            case ("POST", "/api/v1/auth/refresh"):
+                respond(status: 401, body: #"{"error":"invalid_token"}"#)
+            default:
+                respond(status: 404, body: #"{"error":"not_found"}"#)
+            }
+            return
+        }
+        if mode == .concurrentScopedRefresh {
+            switch (recorded.method, recorded.path) {
+            case ("POST", "/api/v1/auth/refresh"):
+                respond(
+                    status: 200,
+                    body: #"{"access_token":"placeholder","refresh_token":"redacted","expires_in":3600}"#
+                )
+            case ("GET", "/api/v1/settings/contract/capabilities"):
+                if recorded.header("Authorization") == "Bearer placeholder" {
+                    respond(
+                        status: 200,
+                        body: """
+                        {"api_version":1,"revision":\(SettingKey.revision),"contract_etag":"\\"etag\\"","definition_count":48,
+                         "scopes":["account","profile","profile_device","profile_library","profile_series"],
+                         "supports_batched_effective":true,"supports_idempotent_writes":true,
+                         "supports_atomic_shortcuts":true}
+                        """
+                    )
+                } else {
+                    holdConcurrentUnauthorizedUntilBothExpiredRequestsArrive()
+                }
+            default:
+                respond(status: 404, body: #"{"error":"not_found"}"#)
+            }
+            return
+        }
+        switch mode {
+        case .mixedRefreshScopedWins:
+            handleMixedRefreshScopedFlight(
+                recorded,
+                refreshStatus: 200,
+                refreshBody: #"{"access_token":"placeholder","refresh_token":"redacted","expires_in":3600}"#
+            )
+            return
+        case .mixedRefreshScopedFailure:
+            handleMixedRefreshScopedFlight(
+                recorded,
+                refreshStatus: 401,
+                refreshBody: #"{"error":"invalid_token"}"#,
+                holdRefreshForExplicitRelease: true
+            )
+            return
+        case .mixedRefreshScopedTransientFailure(let status):
+            handleMixedRefreshScopedFlight(
+                recorded,
+                refreshStatus: status,
+                refreshBody: #"{"error":"temporarily_unavailable"}"#
+            )
+            return
+        case .mixedRefreshScopedMalformedSuccess:
+            handleMixedRefreshScopedFlight(
+                recorded,
+                refreshStatus: 200,
+                refreshBody: #"{"access_token":"placeholder"}"#
+            )
+            return
+        default:
+            break
+        }
         if mode == .serverTooOld {
             // The chi router's own 404: plain text, no Silo error envelope.
             respond(status: 404, body: "404 page not found\n", contentType: "text/plain", headers: [:])
@@ -737,17 +2870,32 @@ final class SettingsStubProtocol: URLProtocol {
             : SettingKey.revision
 
         switch (recorded.method, recorded.path) {
+        case ("GET", "/api/v1/health"):
+            respond(status: 200, body: #"{"status":"ok","server_name":"Candidate"}"#)
         case ("GET", "/api/v1/settings/contract/capabilities"):
             respond(status: 200, body: """
             {"api_version":1,"revision":\(responseRevision),"contract_etag":"\\"etag\\"","definition_count":48,
              "scopes":["account","profile","profile_device","profile_library","profile_series"],
-             "supports_batched_effective":true,"supports_idempotent_writes":true}
+             "supports_batched_effective":true,"supports_idempotent_writes":true,
+             "supports_atomic_shortcuts":true}
             """)
         case ("GET", "/api/v1/settings/values/effective"):
             respond(status: 200, body: """
             {"settings":[{"key":"playback.auto_play_next","value":true,"source":"default"}],
              "revision":\(responseRevision)}
             """)
+        case ("PUT", "/api/v1/settings/values/nav.shortcuts/item"):
+            let value = Self.shortcutValueFromMutationBody(recorded.body) ?? #"{"items":[]}"#
+            let replay = mode == .idempotentReplay
+            respond(
+                status: 200,
+                body: """
+                {"key":"nav.shortcuts","scope":"profile",
+                 "value":\(value),"revision":\(replay ? 0 : 3)}
+                """,
+                contentType: "application/json",
+                headers: replay ? ["X-Silo-Idempotent-Replay": "true"] : [:]
+            )
         case ("PUT", let path) where path.hasPrefix("/api/v1/settings/values/"):
             let key = String(path.dropFirst("/api/v1/settings/values/".count))
             let value = Self.valueFromWriteBody(recorded.body) ?? "null"
@@ -774,6 +2922,152 @@ final class SettingsStubProtocol: URLProtocol {
 
     override func stopLoading() {}
 
+    /// Release both initial 401s together so the regression deterministically
+    /// exercises two already-sent requests joining the same refresh flight.
+    /// Retaining the protocol instances avoids blocking URLSession's loader
+    /// queue while waiting for the second request.
+    private func holdConcurrentUnauthorizedUntilBothExpiredRequestsArrive() {
+        let ready: [SettingsStubProtocol]
+        Self.lock.lock()
+        Self.pendingConcurrentUnauthorized.append(self)
+        if Self.pendingConcurrentUnauthorized.count >= 2 {
+            ready = Self.pendingConcurrentUnauthorized
+            Self.pendingConcurrentUnauthorized.removeAll()
+        } else {
+            ready = []
+        }
+        Self.lock.unlock()
+
+        for pending in ready {
+            pending.respond(status: 401, body: #"{"error":"unauthorized"}"#)
+        }
+    }
+
+    private func handleMixedRefreshScopedFlight(
+        _ recorded: RecordedRequest,
+        refreshStatus: Int,
+        refreshBody: String,
+        holdRefreshForExplicitRelease: Bool = false
+    ) {
+        switch (recorded.method, recorded.path) {
+        case ("GET", "/api/v1/settings/contract/capabilities"):
+            if recorded.header("Authorization") == "Bearer placeholder" {
+                respond(
+                    status: 200,
+                    body: """
+                    {"api_version":1,"revision":\(SettingKey.revision),"contract_etag":"\\"etag\\"","definition_count":48,
+                     "scopes":["account","profile","profile_device","profile_library","profile_series"],
+                     "supports_batched_effective":true,"supports_idempotent_writes":true,
+                     "supports_atomic_shortcuts":true}
+                    """
+                )
+                return
+            }
+            if recorded.header("X-Test-Refresh-Flow") == "scoped" {
+                respond(status: 401, body: #"{"error":"unauthorized"}"#)
+                return
+            }
+
+            let refreshAlreadyStarted: Bool
+            Self.lock.lock()
+            refreshAlreadyStarted = Self.mixedRefreshStarted
+            if !refreshAlreadyStarted {
+                Self.pendingMixedOrdinaryUnauthorized = self
+            }
+            Self.lock.unlock()
+            if refreshAlreadyStarted {
+                respond(status: 401, body: #"{"error":"unauthorized"}"#)
+            }
+
+        case ("POST", "/api/v1/auth/refresh"):
+            let pendingOrdinary: SettingsStubProtocol?
+            Self.lock.lock()
+            Self.mixedRefreshStarted = true
+            pendingOrdinary = Self.pendingMixedOrdinaryUnauthorized
+            Self.pendingMixedOrdinaryUnauthorized = nil
+            if holdRefreshForExplicitRelease {
+                Self.pendingMixedRefresh = (self, refreshStatus, refreshBody)
+            }
+            Self.lock.unlock()
+            pendingOrdinary?.respond(status: 401, body: #"{"error":"unauthorized"}"#)
+
+            if !holdRefreshForExplicitRelease {
+                // Keep the scoped-owned refresh in flight long enough for the
+                // ordinary 401 to reach HTTPClient's shared account slot.
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .milliseconds(100))
+                    self?.respond(status: refreshStatus, body: refreshBody)
+                }
+            }
+
+        default:
+            respond(status: 404, body: #"{"error":"not_found"}"#)
+        }
+    }
+
+    private func handleOrdinaryDelayedRefresh(_ recorded: RecordedRequest) {
+        switch (recorded.method, recorded.path) {
+        case ("GET", "/api/v1/settings/contract/capabilities"):
+            if ["Bearer placeholder", "Bearer newer-access"].contains(
+                recorded.header("Authorization")
+            ) {
+                respond(
+                    status: 200,
+                    body: """
+                    {"api_version":1,"revision":\(SettingKey.revision),"contract_etag":"\\"etag\\"","definition_count":48,
+                     "scopes":["account","profile","profile_device","profile_library","profile_series"],
+                     "supports_batched_effective":true,"supports_idempotent_writes":true,
+                     "supports_atomic_shortcuts":true}
+                    """
+                )
+            } else {
+                respond(status: 401, body: #"{"error":"unauthorized"}"#)
+            }
+
+        case ("POST", "/api/v1/auth/refresh"):
+            Self.lock.lock()
+            Self.pendingOrdinaryRefresh = self
+            Self.lock.unlock()
+
+        default:
+            respond(status: 404, body: #"{"error":"not_found"}"#)
+        }
+    }
+
+    private func handleOrdinaryUnauthorizedDelayed(_ recorded: RecordedRequest) {
+        switch (recorded.method, recorded.path) {
+        case ("GET", "/api/v1/settings/contract/capabilities"):
+            let unauthorizedWasReleased: Bool
+            Self.lock.lock()
+            unauthorizedWasReleased = Self.ordinaryUnauthorizedReleased
+            Self.lock.unlock()
+            if unauthorizedWasReleased || recorded.header("Authorization") == "Bearer placeholder" {
+                respond(
+                    status: 200,
+                    body: """
+                    {"api_version":1,"revision":\(SettingKey.revision),"contract_etag":"\\"etag\\"","definition_count":48,
+                     "scopes":["account","profile","profile_device","profile_library","profile_series"],
+                     "supports_batched_effective":true,"supports_idempotent_writes":true,
+                     "supports_atomic_shortcuts":true}
+                    """
+                )
+            } else {
+                Self.lock.lock()
+                Self.pendingOrdinaryUnauthorized = self
+                Self.lock.unlock()
+            }
+
+        case ("POST", "/api/v1/auth/refresh"):
+            respond(
+                status: 200,
+                body: #"{"access_token":"placeholder","refresh_token":"redacted","expires_in":3600}"#
+            )
+
+        default:
+            respond(status: 404, body: #"{"error":"not_found"}"#)
+        }
+    }
+
     /// Pull the raw `value` back out of a `{"value": …}` body without
     /// re-encoding it, so a test can assert the stub echoed exactly what the
     /// client sent.
@@ -785,6 +3079,20 @@ final class SettingsStubProtocol: URLProtocol {
         guard let data = try? JSONSerialization.data(
             withJSONObject: value,
             options: [.fragmentsAllowed, .sortedKeys]
+        ) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private static func shortcutValueFromMutationBody(_ body: Data?) -> String? {
+        guard let body,
+              let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+              let item = object["item"] as? [String: Any],
+              let present = object["present"] as? Bool
+        else { return nil }
+        let value: [String: Any] = ["items": present ? [item] : []]
+        guard let data = try? JSONSerialization.data(
+            withJSONObject: value,
+            options: [.sortedKeys]
         ) else { return nil }
         return String(data: data, encoding: .utf8)
     }
@@ -839,5 +3147,56 @@ final class SettingsStubProtocol: URLProtocol {
             client.urlProtocol(self, didLoad: Data(body.utf8))
         }
         client.urlProtocolDidFinishLoading(self)
+    }
+}
+
+private final class LockedCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    func increment() {
+        lock.lock()
+        count += 1
+        lock.unlock()
+    }
+
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
+    }
+}
+
+private final class LockedSessionExpiryEvents: @unchecked Sendable {
+    private let lock = NSLock()
+    private var events: [SessionExpiryEvent] = []
+
+    func append(_ event: SessionExpiryEvent) {
+        lock.lock()
+        events.append(event)
+        lock.unlock()
+    }
+
+    var values: [SessionExpiryEvent] {
+        lock.lock()
+        defer { lock.unlock() }
+        return events
+    }
+}
+
+private actor SerializedCancellationPassBarrier {
+    private(set) var entryCount = 0
+    private var releases: [Int: CheckedContinuation<Void, Never>] = [:]
+
+    func enter() async {
+        entryCount += 1
+        let pass = entryCount
+        await withCheckedContinuation { continuation in
+            releases[pass] = continuation
+        }
+    }
+
+    func release(pass: Int) {
+        releases.removeValue(forKey: pass)?.resume()
     }
 }
