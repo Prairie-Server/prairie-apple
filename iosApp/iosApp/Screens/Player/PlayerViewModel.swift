@@ -1092,7 +1092,9 @@ class PlayerViewModel {
     /// Re-applies subtitle styling when the user edits the system's
     /// Subtitles & Captioning preferences mid-playback.
     private var systemCaptionObserverToken: NSObjectProtocol?
-    private var audioRouteObserverToken: NSObjectProtocol?
+    /// Triggers a V3 replan when the audio route the session was planned
+    /// against changes. iOS/tvOS only — macOS has no `AVAudioSession`.
+    private var outputRouteObserverToken: NSObjectProtocol?
 
     init() {
         activePlayer = .none
@@ -1172,7 +1174,7 @@ class PlayerViewModel {
             self.applySubtitleAppearanceToPlayer()
         }
         #if !os(macOS)
-        audioRouteObserverToken = NotificationCenter.default.addObserver(
+        outputRouteObserverToken = NotificationCenter.default.addObserver(
             forName: AVAudioSession.routeChangeNotification,
             object: nil,
             queue: .main
@@ -1387,6 +1389,7 @@ class PlayerViewModel {
             self.applySourceCacheStats(&enrichedStats)
             self.applyFileBitrateStats(&enrichedStats)
             self.applySourceOriginLabel(&enrichedStats)
+            self.applyRuntimeDynamicRangeBadge(enrichedStats)
             self.playbackStats = enrichedStats
         }
         cb.onEndOfFile = { [weak self] in
@@ -5951,9 +5954,9 @@ class PlayerViewModel {
         freshLoadTask?.cancel()
         protocolV3ReplanTask?.cancel()
         protocolV3ReplanTask = nil
-        if let audioRouteObserverToken {
-            NotificationCenter.default.removeObserver(audioRouteObserverToken)
-            self.audioRouteObserverToken = nil
+        if let outputRouteObserverToken {
+            NotificationCenter.default.removeObserver(outputRouteObserverToken)
+            self.outputRouteObserverToken = nil
         }
         nextUpLookupTask?.cancel()
         nextUpOnDeckTask?.cancel()
@@ -6055,8 +6058,8 @@ class PlayerViewModel {
         if let systemCaptionObserverToken {
             NotificationCenter.default.removeObserver(systemCaptionObserverToken)
         }
-        if let audioRouteObserverToken {
-            NotificationCenter.default.removeObserver(audioRouteObserverToken)
+        if let outputRouteObserverToken {
+            NotificationCenter.default.removeObserver(outputRouteObserverToken)
         }
         freshLoadTask?.cancel()
         protocolV3ReplanTask?.cancel()
@@ -6537,6 +6540,46 @@ class PlayerViewModel {
         }
     }
 
+    /// The session metadata is available before the engine has inspected its
+    /// format description, and derives its badge from the server's `hdr`
+    /// flag — so it may only say "HDR", or claim HDR for a source the user's
+    /// settings have since routed to SDR. Once the engine confirms what it is
+    /// actually rendering, reconcile the visible badge with that.
+    ///
+    /// Only `confirmedDynamicRange` is trusted here: `stats.dynamicRange` is
+    /// a prose label that describes the *source* ("Dolby Vision Profile 7 …
+    /// as HDR10") and falls back to the planned route when introspection is
+    /// unavailable, so matching on it claims Dolby Vision for pictures
+    /// rendering as plain HDR10. A `nil` confirmation means "not determined
+    /// yet" and leaves the source-derived badge untouched.
+    private func applyRuntimeDynamicRangeBadge(_ stats: PlaybackStats) {
+        guard let confirmed = stats.confirmedDynamicRange else { return }
+
+        let replacement: String?
+        switch confirmed {
+        case .dolbyVision: replacement = "Dolby Vision"
+        case .hdr10, .hlg: replacement = "HDR"
+        case .sdr: replacement = nil
+        }
+
+        let isDynamicRangeBadge: (String) -> Bool = { badge in
+            let normalized = badge.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+            return normalized == "HDR" || normalized == "DV" || normalized == "DOLBY VISION"
+        }
+
+        // Keep the badge where the source put it — between resolution and
+        // video codec — rather than re-inserting it at a fixed index.
+        var expectedBadges = metadata.badges
+        let existing = expectedBadges.firstIndex(where: isDynamicRangeBadge)
+        expectedBadges.removeAll(where: isDynamicRangeBadge)
+        if let replacement {
+            expectedBadges.insert(replacement, at: min(existing ?? 1, expectedBadges.count))
+        }
+
+        guard metadata.badges != expectedBadges else { return }
+        metadata.badges = expectedBadges
+    }
+
     private func applySourceCacheStats(_ stats: inout PlaybackStats) {
         guard let sourceProxy else { return }
         let sourceStats = sourceProxy.stats()
@@ -6705,6 +6748,8 @@ class PlayerViewModel {
             "db1p"
         case .passthroughProfile8(.hdr10):
             "db1p"
+        case .passthroughProfile8(.sdr):
+            "db2g"
         case .passthroughProfile8(.hlg):
             "db4h"
         case .passthroughHEVC, .passthroughH264:

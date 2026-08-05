@@ -204,28 +204,26 @@ struct DownloadCaps: Encodable, Sendable {
     let maxResolution: String?
     let hdr: Bool
 
-    /// Reasonable decode caps for the current Apple platform. Matches the
-    /// truthful direct-play surface the playback bootstrap reports.
+    /// Decode caps for the current Apple platform, from the same
+    /// `AppleDecodeCapabilities` lists the playback bootstrap and the V3
+    /// capability snapshot report — a download that plays online has to plan
+    /// the same way offline.
+    ///
+    /// Downloads are persistent artifacts, so HDR here is the device's
+    /// maximum decode capability rather than the active display route:
+    /// output-dependent HDR eligibility belongs to playback negotiation.
+    /// Passthrough is this surface's own claim, since a download is decided
+    /// long before there is an output route to ask.
     static func current() -> DownloadCaps {
-        #if os(macOS)
+        let isSimulator = AppleDecodeCapabilities.isSimulator
         return DownloadCaps(
-            codecsVideo: ["h264", "hevc"],
-            codecsAudio: ["aac", "ac3", "eac3", "alac", "mp3"],
-            audioPassthroughCodecs: ["ac3", "eac3"],
-            containers: ["mp4", "mov", "m4v"],
-            maxResolution: nil,
-            hdr: true
+            codecsVideo: AppleDecodeCapabilities.videoCodecs,
+            codecsAudio: AppleDecodeCapabilities.audioCodecs,
+            audioPassthroughCodecs: isSimulator ? [] : ["ac3", "eac3"],
+            containers: AppleDecodeCapabilities.containers,
+            maxResolution: AppleDecodeCapabilities.maxResolution,
+            hdr: !isSimulator
         )
-        #else
-        return DownloadCaps(
-            codecsVideo: ["h264", "hevc"],
-            codecsAudio: ["aac", "ac3", "eac3", "dts", "truehd", "flac", "mp3", "opus"],
-            audioPassthroughCodecs: ["ac3", "eac3"],
-            containers: ["mkv", "mp4", "mov", "m4v", "webm", "avi", "ts", "m2ts"],
-            maxResolution: nil,
-            hdr: true
-        )
-        #endif
     }
 }
 
