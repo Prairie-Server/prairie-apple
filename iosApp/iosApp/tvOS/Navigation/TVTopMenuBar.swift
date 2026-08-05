@@ -327,6 +327,40 @@ struct TVTopMenuBar: View {
     }
 
     private var tabCluster: some View {
+        ViewThatFits(in: .horizontal) {
+            centeredTabCluster
+            scrollingTabCluster
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
+        .frame(height: ContinuumTheme.Skyline.barHeight)
+    }
+
+    /// Keep the ordinary menu as one native focus row. Besides preserving the
+    /// Skyline screen-centered composition, this gives Search and Home direct
+    /// focus adjacency instead of separating them with a scroll container.
+    private var centeredTabCluster: some View {
+        HStack(spacing: ContinuumTheme.Skyline.tabSpacing) {
+            searchButton
+
+            ForEach(Array(roots.enumerated()), id: \.element) { index, root in
+                rootButton(root, index: index, count: roots.count)
+            }
+
+            // Balance Search so the roots themselves remain screen-centered.
+            Color.clear
+                .frame(
+                    width: ContinuumTheme.Skyline.barIconSize,
+                    height: ContinuumTheme.Skyline.barIconSize
+                )
+                .accessibilityHidden(true)
+        }
+        // `ViewThatFits` must measure the row's intrinsic width so it can
+        // select the scrolling fallback only when customization overflows.
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    /// Long customized menus keep Search fixed and scroll only the roots.
+    private var scrollingTabCluster: some View {
         HStack(spacing: ContinuumTheme.Skyline.tabSpacing) {
             searchButton
 
@@ -355,8 +389,7 @@ struct TVTopMenuBar: View {
         // Search and Profile stay fixed while only the customizable roots
         // scroll through the center lane.
         .padding(.horizontal, 150)
-        .frame(maxWidth: .infinity, alignment: .center)
-        .frame(height: ContinuumTheme.Skyline.barHeight)
+        .frame(maxWidth: .infinity)
     }
 
     private var trailingCluster: some View {
@@ -388,6 +421,11 @@ struct TVTopMenuBar: View {
         }
         .buttonStyle(.continuumFlat)
         .focused($focusedItem, equals: .root(root))
+        // A ScrollView is its own focus region on tvOS. At its leading edge,
+        // explicitly hand Left back to the fixed Search anchor.
+        .modifier(TVTopMenuLeadingBoundaryHandler(isLeading: index == 0) {
+            focusedItem = .search
+        })
         // Down opens this tab's cascade panel (if a dwell hasn't already)
         // and hands focus straight into it, so the move never escapes to the
         // page content behind the bar. Fires only when the engine can't move
@@ -495,6 +533,12 @@ struct TVTopMenuBar: View {
         }
         .buttonStyle(.continuumFlat)
         .focused($focusedItem, equals: .search)
+        // The inverse boundary keeps Search usable in the scrolling fallback;
+        // in the centered layout the native focus graph resolves this first.
+        .onMoveCommand { direction in
+            guard direction == .right, let firstRoot = roots.first else { return }
+            focusedItem = .root(firstRoot)
+        }
         .accessibilityLabel("Search")
     }
 
@@ -748,6 +792,25 @@ private struct TVTopMenuDownHandler: ViewModifier {
         if canOpenPanel {
             content.onMoveCommand { direction in
                 if direction == .down { onDown() }
+            }
+        } else {
+            content
+        }
+    }
+}
+
+/// The scrolling overflow layout puts its roots in a separate focus region
+/// from the fixed Search button. This boundary reconnects the two regions
+/// without taking ownership of ordinary movement inside either one.
+private struct TVTopMenuLeadingBoundaryHandler: ViewModifier {
+    let isLeading: Bool
+    let onMoveLeft: () -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isLeading {
+            content.onMoveCommand { direction in
+                if direction == .left { onMoveLeft() }
             }
         } else {
             content
