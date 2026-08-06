@@ -61,6 +61,7 @@ struct TVItemDetailView: View {
         .onAppear {
             Self.focusLogger.debug("itemDetail.appear contentId=\(contentId, privacy: .public) pathDepth=\(router.path.count, privacy: .public)")
             allowRemoteTrailers = TVTrailerLaunch.isYouTubeAppInstalled()
+            seedSubtitleOverrideIfNeeded()
             // Returning from the player (or an extra) resumes a poll that
             // `onDisappear` cancelled — without re-POSTing, since the server
             // already spent the item's weekly slot. Precedent:
@@ -483,6 +484,7 @@ struct TVItemDetailView: View {
                 },
                 onSelectSubtitleTrack: { index in
                     didClearSubtitleOverride = (index == nil)
+                    viewModel.preferredSubtitleTrackWasManuallySelected = true
                     preferredSubtitleTrackIndex = sanitizedSubtitleTrackIndex(
                         for: detail,
                         versionFileId: preferredVersionFileId,
@@ -665,11 +667,20 @@ struct TVItemDetailView: View {
     /// the pick was persisted; audio doesn't need an equivalent because
     /// `resolvedAudioOrdinal` falls back to `effectiveAudioTrackIndex`.
     private func seedSubtitleOverrideIfNeeded() {
-        guard preferredSubtitleTrackIndex == nil, let detail = viewModel.detail else { return }
-        preferredSubtitleTrackIndex = DetailPlaybackFormatting.serverPreferredSubtitleIndex(
+        if PlayerSettings.shared.subtitleMatchesSystemAppearance {
+            if !viewModel.preferredSubtitleTrackWasManuallySelected {
+                preferredSubtitleTrackIndex = nil
+            }
+            return
+        }
+        guard !viewModel.preferredSubtitleTrackWasManuallySelected,
+              preferredSubtitleTrackIndex == nil,
+              let detail = viewModel.detail else { return }
+        preferredSubtitleTrackIndex = DetailPlaybackFormatting.launchPreferredSubtitleIndex(
             version: effectiveVersion(for: detail, versionFileId: preferredVersionFileId),
             signature: detail.effectiveSubtitleTrackSignature,
-            mode: detail.effectiveSubtitleMode
+            mode: detail.effectiveSubtitleMode,
+            usesDeviceSettings: PlayerSettings.shared.subtitleMatchesSystemAppearance
         )
     }
 
@@ -758,10 +769,11 @@ struct TVItemDetailView: View {
             let enriched = await enrichPlaybackMetadata(for: item, contentId: nextUp.contentId)
             guard !Task.isCancelled else { return }
             nextUpPlaybackDetail = enriched
-            preferredNextUpSubtitleTrackIndex = DetailPlaybackFormatting.serverPreferredSubtitleIndex(
+            preferredNextUpSubtitleTrackIndex = DetailPlaybackFormatting.launchPreferredSubtitleIndex(
                 version: effectiveVersion(for: enriched, versionFileId: nil),
                 signature: enriched.effectiveSubtitleTrackSignature,
-                mode: enriched.effectiveSubtitleMode
+                mode: enriched.effectiveSubtitleMode,
+                usesDeviceSettings: PlayerSettings.shared.subtitleMatchesSystemAppearance
             )
             didLoadNextUpPlaybackDetail = true
         } catch {
@@ -813,10 +825,11 @@ struct TVItemDetailView: View {
             let enriched = await enrichPlaybackMetadata(for: item, contentId: nextUp.contentId)
             guard !Task.isCancelled else { return }
             nextUpPlaybackDetail = enriched
-            preferredNextUpSubtitleTrackIndex = DetailPlaybackFormatting.serverPreferredSubtitleIndex(
+            preferredNextUpSubtitleTrackIndex = DetailPlaybackFormatting.launchPreferredSubtitleIndex(
                 version: effectiveVersion(for: enriched, versionFileId: nil),
                 signature: enriched.effectiveSubtitleTrackSignature,
-                mode: enriched.effectiveSubtitleMode
+                mode: enriched.effectiveSubtitleMode,
+                usesDeviceSettings: PlayerSettings.shared.subtitleMatchesSystemAppearance
             )
             didLoadNextUpPlaybackDetail = true
         } catch {

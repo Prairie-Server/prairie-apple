@@ -35,32 +35,22 @@ struct TVSubtitleSettingsPane: View {
     private var profileSection: some View {
         TVSettingsSectionHeader("PROFILE")
 
-        if viewModel.settingsServerUpgradeRequired {
-            TVSettingsPickerRow(
-                title: "Language",
-                value: TVSettingsOptions.label(
-                    for: viewModel.editorSubtitleLanguage,
-                    in: TVSettingsOptions.subtitleLanguage(viewModel.subtitleLanguageOptions)
-                )
-            ) { showPicker(.language) }
-            .disabled(true)
-        } else {
-            TVSettingsPickerRow(
-                title: "Language",
-                value: TVSettingsOptions.label(
-                    for: viewModel.editorSubtitleLanguage,
-                    in: TVSettingsOptions.subtitleLanguage(viewModel.subtitleLanguageOptions)
-                )
-            ) { showPicker(.language) }
-            .focused(detailFocus, equals: .top)
-        }
+        TVSettingsPickerRow(
+            title: "Language",
+            value: TVSettingsOptions.label(
+                for: viewModel.editorSubtitleLanguage,
+                in: TVSettingsOptions.subtitleLanguage(viewModel.subtitleLanguageOptions)
+            )
+        ) { showPicker(.language) }
+        .focused(detailFocus, equals: .top)
+        .disabled(viewModel.settingsServerUpgradeRequired || viewModel.subtitleMatchesSystemAppearance)
 
         TVSettingsPickerRow(
             title: "Behavior",
             value: TVSettingsOptions.label(for: viewModel.editorSubtitleMode, in: TVSettingsOptions.subtitleMode)
         ) { showPicker(.mode) }
         .focused(detailFocus, equals: .subtitleBehavior)
-        .disabled(viewModel.settingsServerUpgradeRequired)
+        .disabled(viewModel.settingsServerUpgradeRequired || viewModel.subtitleMatchesSystemAppearance)
 
         TVSettingsToggleRow(
             title: "Show Forced Subtitles",
@@ -69,9 +59,11 @@ struct TVSubtitleSettingsPane: View {
             viewModel.editorShowForcedSubtitles =
                 viewModel.editorShowForcedSubtitles == "on" ? "off" : "on"
         }
-        .disabled(viewModel.settingsServerUpgradeRequired)
+        .disabled(viewModel.settingsServerUpgradeRequired || viewModel.subtitleMatchesSystemAppearance)
 
-        if viewModel.settingsServerUpgradeRequired {
+        if viewModel.subtitleMatchesSystemAppearance {
+            TVSettingsFooter("Language, display behavior, forced captions, and CC/SDH preference follow this Apple TV's Accessibility settings.")
+        } else if viewModel.settingsServerUpgradeRequired {
             TVSettingsWarningFooter(ProfilePrefsEditor.serverUpgradeMessage)
         } else {
             TVSettingsFooter("Used to pick a matching track when one is available. Forced subtitles cover foreign-language dialogue even when subtitles are off or set to auto.")
@@ -112,24 +104,14 @@ struct TVSubtitleSettingsPane: View {
             TVSettingsFooter("Low contrast — dark text without a box or outline can be hard to read.")
         }
 
-        if viewModel.settingsServerUpgradeRequired {
-            TVSettingsToggleRow(
-                title: "Match Device Settings",
-                isOn: viewModel.subtitleMatchesSystemAppearance
-            ) {
-                let enabled = !viewModel.subtitleMatchesSystemAppearance
-                Task { await viewModel.setSubtitleMatchesSystemAppearance(enabled) }
-            }
-            .focused(detailFocus, equals: .top)
-        } else {
-            TVSettingsToggleRow(
-                title: "Match Device Settings",
-                isOn: viewModel.subtitleMatchesSystemAppearance
-            ) {
-                let enabled = !viewModel.subtitleMatchesSystemAppearance
-                Task { await viewModel.setSubtitleMatchesSystemAppearance(enabled) }
-            }
+        TVSettingsToggleRow(
+            title: "Use Device Settings",
+            isOn: viewModel.subtitleMatchesSystemAppearance
+        ) {
+            let enabled = !viewModel.subtitleMatchesSystemAppearance
+            Task { await viewModel.setSubtitleMatchesSystemAppearance(enabled) }
         }
+        .focused(detailFocus, equals: .subtitleUseDeviceSettings)
 
         TVSettingsToggleRow(
             title: "Custom Subtitle Appearance",
@@ -216,13 +198,16 @@ struct TVSubtitleSettingsPane: View {
     private var appearanceFooterText: String {
         let source: String
         if viewModel.subtitleMatchesSystemAppearance {
-            source = "Following this Apple TV's caption style from Settings → Accessibility. Editing any option switches back to Silo styling."
+            source = "Following this Apple TV's caption language, display behavior, CC/SDH preference, font, colors, opacity, edges, size, and caption window from Settings → Accessibility."
         } else if viewModel.subtitleUsesDeviceAppearanceOverride {
             source = "Appearance is saved on the server for this profile on this Apple TV."
         } else {
             source = "Appearance is using the server fallback for this profile on this Apple TV."
         }
-        return source + " Subtitles with their own built-in styling keep their original appearance; image-based subtitles keep their authored fonts and colors but follow the size, position, and background settings."
+        let authoredStyleBehavior = viewModel.subtitleMatchesSystemAppearance
+            ? " Subtitles with built-in styling follow each device caption option's Video Overrides Style choice."
+            : " Subtitles with their own built-in styling keep their original appearance; image-based subtitles keep their authored fonts and colors but follow the size, position, and background settings."
+        return source + authoredStyleBehavior
     }
 
     @ViewBuilder
