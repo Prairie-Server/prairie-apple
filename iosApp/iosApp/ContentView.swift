@@ -196,6 +196,8 @@ struct ContentView: View {
                 serverId: serverRegistry.activeServerId ?? ""
             )
             overlayPrefs.clear()
+            guard !Task.isCancelled else { return }
+            Task { await AuthService.shared.refreshActiveServerName() }
             if router.authState == .authenticated {
                 await uiCustomization.refresh()
                 await overlayPrefs.hydrateIfNeeded()
