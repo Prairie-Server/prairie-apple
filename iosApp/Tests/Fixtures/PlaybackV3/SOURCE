@@ -1,0 +1,6 @@
+Source: silo-server docs/design/schemas/playback-v3/v3/fixtures/valid and internal/playback/testdata/protocol_v3
+Server ref: codex/playback-v3-neutral-server
+Server commit: ce2f3e6df084f52c62595db8e3011f55c3a925ef
+Vendored: 2026-08-10
+
+Refresh these files from the exact server commit above, then regenerate Silo.xcodeproj with cd iosApp && xcodegen generate.

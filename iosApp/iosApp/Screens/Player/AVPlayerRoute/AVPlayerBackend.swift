@@ -1387,6 +1387,12 @@ final class AVPlayerBackend {
                   let selectedTrackIndex = selectedTrack.srcId else {
                 return
             }
+            guard selectedTrackIndex != spec.selectedAudio.trackIndex else {
+                Self.logger.debug(
+                    "[CMP-AVP] ignoring unchanged loopback audio trackId=\(trackId, privacy: .public) trackIndex=\(selectedTrackIndex, privacy: .public)"
+                )
+                return
+            }
             let playerSeconds = currentTime()
             let startTime = playerSeconds.isFinite
                 ? mediaTime(for: max(0, playerSeconds))
@@ -1433,7 +1439,8 @@ final class AVPlayerBackend {
                     compatibilityBrand: spec.manifestMetadata.compatibilityBrand,
                     videoRange: spec.manifestMetadata.videoRange,
                     mayClaimAtmos: Self.loopbackPreservesAtmos(for: selectedTrack)
-                )
+                ),
+                servingMode: spec.servingMode
             )
             Self.logger.info(
                 "[CMP-AVP] rebuilding loopback for audio trackId=\(trackId, privacy: .public) trackIndex=\(selectedTrackIndex, privacy: .public) ffIndex=\(selectedTrack.ffIndex ?? -1, privacy: .public)"
@@ -1685,7 +1692,10 @@ final class AVPlayerBackend {
             from: currentSourceStrategy,
             to: strategy
         )
-        teardownMediaPipeline(clearDisplayCriteria: !preserveDisplayCriteria)
+        teardownMediaPipeline(
+            clearDisplayCriteria: !preserveDisplayCriteria,
+            deactivateAudioSession: false
+        )
         isPreservingTVDisplayCriteriaForReload = preserveDisplayCriteria
         currentSourceStrategy = strategy
         applyExternalPlaybackPolicy(for: strategy)
@@ -2141,6 +2151,12 @@ final class AVPlayerBackend {
                 guard let self, !self.isDisposed else { return }
                 guard self.activeLoopbackSessionID == sessionID else { return }
                 guard case .siloLoopback = self.currentSourceStrategy else { return }
+                // EVENT fragments are normalized to a fresh zero-based
+                // timeline and need their observed source anchor. Static VOD
+                // fragments stay on the segment plan's stable playlist axis;
+                // replacing that plan anchor with a mid-title packet timestamp
+                // briefly doubles the playhead and can trigger a false replan.
+                guard sessionSpec.servingMode != .vodPlan else { return }
                 self.setMediaTimelineOffset(sourceStartSeconds)
             }
         }
@@ -2717,7 +2733,8 @@ final class AVPlayerBackend {
 
     @MainActor
     private func audioStats(for item: AVPlayerItem) async -> PlaybackStats.MediaStream {
-        if case .siloLoopback(let spec) = currentSourceStrategy {
+        if case .siloLoopback(let spec) = currentSourceStrategy,
+           spec.selectedAudio.isPresent {
             let outputMode = Self.audioOutputModeLabel(spec.selectedAudio.outputMode)
             let liveStream = await AVFoundationPlaybackIntrospection.audioStream(for: item)
             return PlaybackStats.MediaStream(
@@ -4337,7 +4354,10 @@ final class AVPlayerBackend {
         )
     }
 
-    private func teardownMediaPipeline(clearDisplayCriteria: Bool = true) {
+    private func teardownMediaPipeline(
+        clearDisplayCriteria: Bool = true,
+        deactivateAudioSession: Bool = true
+    ) {
         cancelSeekDeadline()
         loopbackItemDeathRecoveryState.reset()
         loopbackItemDeathConfirmationState.reset()
@@ -4388,7 +4408,9 @@ final class AVPlayerBackend {
             didTemporarilyMuteForInitialVideoDisplay = false
         }
         avPlayer.replaceCurrentItem(with: nil)
-        deactivateAudioSession()
+        if deactivateAudioSession {
+            self.deactivateAudioSession()
+        }
         currentItem = nil
         subtitleSession?.teardown()
         lastBitmapCueRenderKey = nil
@@ -4512,8 +4534,9 @@ final class AVPlayerBackend {
                 // A reload that preserved criteria left the panel in the
                 // right mode already; only a fresh apply can start an HDMI
                 // negotiation the item creation must not race. The settle
-                // helper early-outs in one poll when the panel is already
-                // hosting HDR, so an in-mode start pays no real latency.
+                // helper watches the bounded switch-start window even when
+                // EDR is already elevated because HDR10 and Dolby Vision are
+                // indistinguishable from headroom alone.
                 return !preservedForReload
             case .formatUnavailable:
                 break

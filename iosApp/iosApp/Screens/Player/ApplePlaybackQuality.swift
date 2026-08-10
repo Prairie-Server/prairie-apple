@@ -115,6 +115,66 @@ enum ApplePlaybackQuality {
         settingsOptions
     }
 
+    /// Build the in-player menu from the server's V3 plan. The server owns
+    /// which rungs are executable for this source; showing the wider Settings
+    /// catalog here would let the user request qualities the active plan never
+    /// offered.
+    static func playbackOptions(
+        serverQualities: [PlaybackV3AvailableQuality],
+        fallbackVersion: FileVersion?
+    ) -> [ApplePlaybackQualityOption] {
+        guard !serverQualities.isEmpty else {
+            return [auto]
+        }
+        var seen = Set<String>()
+        let planned = serverQualities.compactMap { quality -> ApplePlaybackQualityOption? in
+            let id = protocolV3QualityId(quality.label)
+            guard id != autoId, seen.insert(id).inserted else { return nil }
+            let isOriginal = quality.preservesSource || id == originalId
+            let height = quality.height ?? 0
+            return ApplePlaybackQualityOption(
+                id: id,
+                label: playbackLabel(id: id, height: height, isOriginal: isOriginal),
+                resolution: isOriginal || height <= 0 ? "" : "\(height)p",
+                bitrateKbps: max(0, quality.bitrateKbps),
+                isOriginal: isOriginal,
+                isAuto: false
+            )
+        }
+        return [auto] + planned
+    }
+
+    /// Quality labels in an active V3 plan are server-owned identifiers. Keep
+    /// unknown additive rungs instead of coercing them to Auto; only Settings
+    /// persistence uses the closed local catalog in `normalizeStoredId`.
+    static func protocolV3QualityId(_ raw: String?) -> String {
+        let value = raw?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+        guard !value.isEmpty else { return autoId }
+        switch value {
+        case "4k", "uhd":
+            return ultraHDId
+        case "420p":
+            return "328p"
+        default:
+            return value
+        }
+    }
+
+    private static func playbackLabel(id: String, height: Int, isOriginal: Bool) -> String {
+        if isOriginal { return "Original" }
+        switch height {
+        case 2_160: return "Up to 4K"
+        case 1_080: return "Up to 1080p HD"
+        case 720: return "Up to 720p HD"
+        case 480: return "Up to 480p"
+        default:
+            return settingsOptions.first(where: { $0.id == id })?.label
+                ?? (height > 0 ? "Up to \(height)p" : id)
+        }
+    }
+
     static func resolvedRequestOption(
         preferredQualityId: String?,
         selectedVersion: FileVersion,
@@ -144,6 +204,24 @@ enum ApplePlaybackQuality {
             return id
         }
         return autoId
+    }
+
+    static func activeProtocolV3QualityId(
+        requestedQualityId: String?,
+        availableQualities: [PlaybackV3AvailableQuality]
+    ) -> String {
+        let requested = protocolV3QualityId(requestedQualityId)
+        guard requested != autoId else { return autoId }
+        let requestedResolution = settingsOptions.contains(where: { $0.id == requested })
+            ? AppleQualityAxes.split(requested).resolution
+            : nil
+        return availableQualities.contains(where: { quality in
+            let offered = protocolV3QualityId(quality.label)
+            return offered == requested
+                || requestedResolution.map {
+                    AppleQualityAxes.split(offered).resolution == $0
+                } == true
+        }) ? requested : autoId
     }
 
     /// Whether changing quality must re-run source-version selection instead

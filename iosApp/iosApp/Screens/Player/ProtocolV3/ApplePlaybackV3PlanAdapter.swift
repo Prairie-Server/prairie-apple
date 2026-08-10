@@ -4,14 +4,13 @@ struct PreparedPlaybackV3: Equatable {
     let playbackAttemptId: String
     let planAttemptId: String
     let planAttemptKey: String
-    let outputRouteGeneration: Int64
+    let outputContextId: String?
     let serverFeatures: [String]
     let plan: PlaybackV3Plan
 }
 
 enum ApplePlaybackV3PlanError: LocalizedError, Equatable {
     case unsupportedDelivery(String)
-    case unsupportedEngine(String)
     case invalidTransport(String)
     case unsupportedClientTransformation(String)
     case invalidClientTransformation(String)
@@ -21,8 +20,6 @@ enum ApplePlaybackV3PlanError: LocalizedError, Equatable {
         switch self {
         case .unsupportedDelivery(let value):
             return "The server selected an unsupported V3 delivery: \(value)."
-        case .unsupportedEngine(let value):
-            return "The server selected an unsupported V3 execution engine: \(value)."
         case .invalidTransport(let value):
             return "The V3 playback transport is invalid: \(value)."
         case .unsupportedClientTransformation(let value):
@@ -44,23 +41,8 @@ enum ApplePlaybackV3PlanAdapter {
     ]
 
     static func validate(_ plan: PlaybackV3Plan) throws {
-        guard [
-            "original_http", "server_remux_hls", "server_remux_progressive", "server_transcode_hls"
-        ].contains(plan.delivery) else {
+        guard PlaybackProtocolV3.PlanDelivery.supported.contains(plan.delivery) else {
             throw ApplePlaybackV3PlanError.unsupportedDelivery(plan.delivery)
-        }
-        guard ["media3_direct", "media3_progressive_remux", "media3_hls"].contains(plan.engine) else {
-            throw ApplePlaybackV3PlanError.unsupportedEngine(plan.engine)
-        }
-        let expectedEngine: String = switch plan.delivery {
-        case "original_http": "media3_direct"
-        case "server_remux_progressive": "media3_progressive_remux"
-        default: "media3_hls"
-        }
-        guard plan.engine == expectedEngine else {
-            throw ApplePlaybackV3PlanError.invalidTransport(
-                "delivery \(plan.delivery) requires engine \(expectedEngine)"
-            )
         }
         guard !plan.stream.url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ApplePlaybackV3PlanError.invalidTransport("empty stream URL")
@@ -92,10 +74,9 @@ enum ApplePlaybackV3PlanAdapter {
                 "multiple mutually exclusive client transformations"
             )
         }
-        if !selectedClientTransformations.isEmpty
-            && (plan.delivery != "original_http" || plan.engine != "media3_direct") {
+        if !selectedClientTransformations.isEmpty && plan.delivery != "original_http" {
             throw ApplePlaybackV3PlanError.invalidClientTransformation(
-                "client transformations require original_http/media3_direct"
+                "client transformations require the original_http delivery"
             )
         }
         if let unsupported = plan.runtimeCorrections.first(where: { !runtimeCorrections.contains($0) }) {
@@ -106,21 +87,60 @@ enum ApplePlaybackV3PlanAdapter {
     static func playbackSession(
         plan: PlaybackV3Plan,
         sessionId: String,
-        selectedVersion: FileVersion
+        selectedVersion: FileVersion,
+        serverFeatures: [String]
     ) -> PlaybackSessionResponse {
-        let subtitleUrls: [SubtitleUrl]? = plan.subtitle.artifact.map { artifact in
+        var subtitleUrls = plan.subtitle.inventory.compactMap { item -> SubtitleUrl? in
+            guard item.delivery == "sidecar",
+                  let url = item.url?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !url.isEmpty else {
+                return nil
+            }
+            return SubtitleUrl(
+                index: item.combinedIndex,
+                language: item.language,
+                codec: item.codec,
+                label: item.label,
+                source: item.source,
+                forced: item.forced,
+                default: item.default,
+                hearingImpaired: item.hearingImpaired,
+                fontBundleUrl: item.fontBundleUrl,
+                url: url
+            )
+        }
+        // Inventory is authoritative in the neutral contract. Keep a narrow
+        // fallback for a selected sidecar artifact so an otherwise executable
+        // plan does not lose its active subtitle if a transitional server
+        // omitted that one inventory URL.
+        if let artifact = plan.subtitle.artifact,
+           let selectedIndex = plan.selectedTracks.subtitle?.index,
+           !subtitleUrls.contains(where: { $0.index == selectedIndex }) {
             let selected = plan.selectedTracks.subtitle?.index.flatMap {
                 subtitleTrack(atServerCombinedIndex: $0, in: selectedVersion)
             }
-            return [SubtitleUrl(
-                index: plan.selectedTracks.subtitle?.index ?? 0,
+            subtitleUrls.append(SubtitleUrl(
+                index: selectedIndex,
                 language: selected?.language,
                 codec: artifact.format,
                 label: selected?.title,
                 source: selected.map { $0.external == true ? "external" : "embedded" } ?? "protocol_v3",
                 forced: selected?.forced,
+                default: selected?.isDefault,
+                hearingImpaired: selected?.hearingImpaired,
+                fontBundleUrl: nil,
                 url: artifact.url
-            )]
+            ))
+        }
+        let durationSeconds: Double?
+        if serverFeatures.contains(PlaybackProtocolV3.planSourceDurationFeature) {
+            // Presence of the feature makes nil authoritative: the server
+            // knows the field but could not determine this source's runtime.
+            durationSeconds = plan.source.durationSeconds
+        } else {
+            // Transitional servers predate the field, so the catalog value is
+            // still the only duration evidence available.
+            durationSeconds = plan.source.durationSeconds ?? selectedVersion.duration
         }
         return PlaybackSessionResponse(
             sessionId: sessionId,
@@ -132,11 +152,7 @@ enum ApplePlaybackV3PlanAdapter {
             isPaused: false,
             streamUrl: plan.stream.url,
             audioTrackIndex: plan.selectedTracks.audio?.index,
-            // The plan's runtime is authoritative and describes the effective
-            // file the server actually chose. Fall back to the catalog version
-            // only for servers that predate the field; substituting it when
-            // the server reports an unknown runtime would reintroduce a guess.
-            durationSeconds: plan.source.durationSeconds ?? selectedVersion.duration,
+            durationSeconds: durationSeconds,
             timelineOffsetSeconds: max(0, plan.timeline.timelineOffsetSeconds),
             subtitleUrls: subtitleUrls,
             playbackInfo: PlaybackInfo(
@@ -180,6 +196,19 @@ enum ApplePlaybackV3PlanAdapter {
             ffmpegStreamIndex: ffmpegStreamIndex,
             in: version
         )
+    }
+
+    static func ffmpegSubtitleStreamIndex(
+        serverCombinedIndex: Int,
+        in version: FileVersion
+    ) -> Int? {
+        guard serverCombinedIndex >= 0 else { return nil }
+        let tracks = version.subtitleTracks ?? []
+        let externalCount = tracks.filter { $0.external == true }.count
+        let embedded = tracks.filter { $0.external != true }
+        let embeddedOrdinal = serverCombinedIndex - externalCount
+        guard embedded.indices.contains(embeddedOrdinal) else { return nil }
+        return embedded[embeddedOrdinal].index
     }
 
     static func makeExecutionPlan(
@@ -229,7 +258,9 @@ enum ApplePlaybackV3PlanAdapter {
             audioCodec: plan.source.audioCodec,
             subtitleCodecs: basePlan.sourceMetadata.subtitleCodecs,
             dolbyVisionProfile: plan.source.dolbyVisionProfile,
-            colorRange: basePlan.sourceMetadata.colorRange
+            // Prefer the server's probed source fact. Catalog metadata remains
+            // the compatibility fallback for plans that omit color_range.
+            colorRange: plan.source.colorRange ?? basePlan.sourceMetadata.colorRange
         )
         let transformationTokens = plan.transformations.map {
             "v3_transform_\($0.executor)_\($0.name)_\($0.recipeVersion)"
@@ -240,7 +271,8 @@ enum ApplePlaybackV3PlanAdapter {
         let normalization = PlaybackNormalizationSummary(
             containerMode: plan.delivery == "original_http" ? basePlan.normalizationSummary.containerMode : plan.delivery,
             videoMode: plan.effectiveRecipe.videoCodec ?? "copy",
-            audioMode: plan.effectiveRecipe.audioCodec ?? "copy",
+            audioMode: plan.effectiveRecipe.audioCodec
+                ?? (plan.source.audioCodec == nil ? "none" : "copy"),
             subtitleMode: plan.subtitle.mode
         )
 
@@ -257,7 +289,7 @@ enum ApplePlaybackV3PlanAdapter {
             featureFlagEnabled: true,
             parityBlockers: routeCapabilities.blockingReasons(for: routeRequirements),
             decisionTrace: basePlan.decisionTrace + [
-                "protocol_v3", "v3_plan_\(plan.planId)", "v3_engine_\(plan.engine)", "v3_delivery_\(plan.delivery)"
+                "protocol_v3", "v3_plan_\(plan.planId)", "v3_delivery_\(plan.delivery)"
             ] + transformationTokens + quirkTokens + correctionTokens,
             degradationWarnings: warnings + routeCapabilities.degradationNotes(for: routeRequirements),
             reason: "v3_\(plan.decisionReason)",

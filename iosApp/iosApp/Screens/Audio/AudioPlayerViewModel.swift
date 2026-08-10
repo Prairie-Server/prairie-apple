@@ -5,6 +5,12 @@ import OSLog
 @Observable
 @MainActor
 final class AudioPlayerViewModel {
+    private struct StartedAudioSession {
+        let session: PlaybackSessionResponse
+        let track: AudioPlaybackTrack
+        let streamHeaders: [String: String]
+    }
+
     private let engine = AudioPlayerEngine()
     private let nowPlaying = NowPlayingController()
     private var syncTask: Task<Void, Never>?
@@ -13,6 +19,8 @@ final class AudioPlayerViewModel {
     /// engine. Audiobooks get one session per file; crossing a part
     /// boundary retires this session and starts a fresh one.
     private var activeSession: PlaybackSessionResponse?
+    /// Converts engine-local time back to the effective file's source time.
+    private var activeTimelineOffsetSeconds: Double = 0
     /// Invalidates an in-flight track load when the user seeks again or
     /// closes the player while `/playback/start` is still on the wire.
     private var loadGeneration = 0
@@ -183,6 +191,7 @@ final class AudioPlayerViewModel {
         context = nil
         activeSession = nil
         activeTrackIndex = nil
+        activeTimelineOffsetSeconds = 0
         currentTime = 0
         duration = 0
         palette = .fallback
@@ -207,28 +216,39 @@ final class AudioPlayerViewModel {
             throw APIError.unsupportedMedia("No playable audio track is available.")
         }
         let localTime = AudioPlaybackTimeline.localTime(for: globalTime, in: track)
+        var resolvedGlobalTime = globalTime
         if activeTrackIndex == index, activeSession != nil {
-            engine.seek(to: localTime)
+            engine.seek(to: max(0, localTime - activeTimelineOffsetSeconds))
         } else {
             loadGeneration += 1
             let generation = loadGeneration
             retireActiveSession()
-            let session = try await startSession(for: track, localTime: localTime)
+            let started = try await startSession(for: track, localTime: localTime)
             guard generation == loadGeneration, self.context != nil else {
                 // Superseded by a newer seek or a close while the request
                 // was in flight — release the session we no longer need.
-                Task { try? await ContinuumAPI.shared.stopPlayback(sessionId: session.sessionId) }
+                Task { try? await ContinuumAPI.shared.stopPlayback(sessionId: started.session.sessionId) }
                 return
             }
-            guard let url = await resolvedStreamURL(session.streamUrl) else {
-                Task { try? await ContinuumAPI.shared.stopPlayback(sessionId: session.sessionId) }
+            guard let url = await resolvedStreamURL(started.session.streamUrl) else {
+                Task { try? await ContinuumAPI.shared.stopPlayback(sessionId: started.session.sessionId) }
                 throw APIError.unsupportedMedia("No playable audio track is available.")
             }
-            activeSession = session
-            activeTrackIndex = index
-            engine.load(url: url, headers: await authHeaders(), startSeconds: localTime)
+            activeSession = started.session
+            activeTrackIndex = started.track.index
+            activeTimelineOffsetSeconds = max(0, started.session.timelineOffsetSeconds)
+            let headers = started.streamHeaders.merging(await authHeaders()) { _, auth in auth }
+            engine.load(
+                url: url,
+                headers: headers,
+                startSeconds: max(0, started.session.position)
+            )
+            resolvedGlobalTime =
+                started.track.startOffsetSeconds
+                    + max(0, started.session.position)
+                    + activeTimelineOffsetSeconds
         }
-        currentTime = clampGlobal(globalTime)
+        currentTime = clampGlobal(resolvedGlobalTime)
         if autoplay {
             isPlaying = true
             engine.setRate(playbackRate, shouldResume: true)
@@ -239,22 +259,104 @@ final class AudioPlayerViewModel {
     private func startSession(
         for track: AudioPlaybackTrack,
         localTime: Double
-    ) async throws -> PlaybackSessionResponse {
-        let profileId = await TokenStore.shared.getProfileId()
-        return try await ContinuumAPI.shared.startPlayback(request: StartPlaybackRequest(
+    ) async throws -> StartedAudioSession {
+        try await PlaybackV3CapabilityGate.shared.requireNeutralProtocolV3()
+        guard let profileId = await TokenStore.shared.getProfileId(),
+              !profileId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw PlaybackV3TerminalFailure(
+                reason: "profile_required",
+                message: "Select a profile before starting playback.",
+                retryable: false
+            )
+        }
+
+        let snapshot = ApplePlaybackV3Capabilities.audiobookSnapshot()
+        let playbackAttemptId = "apple-audio:\(UUID().uuidString.lowercased())"
+        // Audiobook resume is a whole-item timeline stitched across files.
+        // The server keeps session-local progress for liveness, while the
+        // client owns durable resume/history through /sync/progress.
+        let request = PlaybackV3StartRequest(
+            protocolVersion: PlaybackProtocolV3.version,
+            clientFeatures: ApplePlaybackV3Capabilities.audiobookFeatures,
             fileId: track.fileId,
             profileId: profileId,
-            playMethod: "direct",
-            startPosition: localTime,
+            playbackAttemptId: playbackAttemptId,
+            qualityPreference: ApplePlaybackQuality.autoId,
+            subtitleFidelityPreference: "preserve",
+            progressPersistence: "client",
+            startPosition: localTime.isFinite ? max(0, localTime) : 0,
+            audioTrackId: nil,
             audioTrackIndex: nil,
-            preserveDirectAudioSelection: false,
-            codecsVideo: [],
-            codecsAudio: [],
-            containers: [],
-            maxResolution: nil,
-            hdr: false,
-            disableProgressPersistence: true
-        ))
+            subtitleTrackId: nil,
+            subtitleTrackIndex: nil,
+            metered: false,
+            bandwidthEstimateKbps: nil,
+            bandwidthCapKbps: nil,
+            clientCapabilities: snapshot.capabilities,
+            clientPlaybackContext: snapshot.context
+        )
+        let response: PlaybackV3DecisionResponse
+        do {
+            response = try await ContinuumAPI.shared.startPlaybackV3(request: request)
+        } catch let error as HTTPError {
+            guard case .network = error else { throw error }
+            // Preserve the logical attempt identity across an ambiguous
+            // transport retry so the server replays instead of double-starting.
+            response = try await ContinuumAPI.shared.startPlaybackV3(request: request)
+        }
+
+        switch response.validatedForApple() {
+        case .terminal(let terminal):
+            Task {
+                await PlaybackSessionBridge.reportTerminalStart(
+                    playbackAttemptId: playbackAttemptId,
+                    snapshot: snapshot,
+                    terminal: terminal
+                )
+            }
+            throw PlaybackV3TerminalFailure(
+                reason: terminal.reason,
+                message: terminal.message,
+                retryable: terminal.retryable
+            )
+        case .incompatible(let allocatedSessionId):
+            if let allocatedSessionId {
+                try? await ContinuumAPI.shared.stopPlayback(sessionId: allocatedSessionId)
+            }
+            throw PlaybackV3TerminalFailure(
+                reason: "invalid_playback_plan",
+                message: "The server returned an incompatible protocol V3 playback plan.",
+                retryable: false
+            )
+        case .playable(let plan, let sessionId):
+            do {
+                try ApplePlaybackV3PlanAdapter.validate(plan)
+            } catch {
+                try? await ContinuumAPI.shared.stopPlayback(sessionId: sessionId)
+                throw error
+            }
+            guard let effectiveTrack = context?.tracks.first(where: {
+                $0.fileId == plan.effectiveMediaFileId
+            }) else {
+                try? await ContinuumAPI.shared.stopPlayback(sessionId: sessionId)
+                throw PlaybackV3TerminalFailure(
+                    reason: "effective_file_unavailable",
+                    message: "The server selected an unavailable audiobook part.",
+                    retryable: false
+                )
+            }
+            let session = ApplePlaybackV3PlanAdapter.playbackSession(
+                plan: plan,
+                sessionId: sessionId,
+                selectedVersion: effectiveTrack.version,
+                serverFeatures: response.serverFeatures
+            )
+            return StartedAudioSession(
+                session: session,
+                track: effectiveTrack,
+                streamHeaders: plan.stream.headers
+            )
+        }
     }
 
     private func loadPalette(posterUrl: String?) {
@@ -270,6 +372,7 @@ final class AudioPlayerViewModel {
         guard let session = activeSession else { return }
         activeSession = nil
         activeTrackIndex = nil
+        activeTimelineOffsetSeconds = 0
         Task { try? await ContinuumAPI.shared.stopPlayback(sessionId: session.sessionId) }
     }
 
@@ -277,7 +380,12 @@ final class AudioPlayerViewModel {
         guard let context,
               let activeTrackIndex,
               let track = context.tracks.first(where: { $0.index == activeTrackIndex }) else { return }
-        currentTime = clampGlobal(AudioPlaybackTimeline.globalTime(for: localTime, in: track))
+        currentTime = clampGlobal(
+            AudioPlaybackTimeline.globalTime(
+                for: localTime + activeTimelineOffsetSeconds,
+                in: track
+            )
+        )
         pushNowPlaying()
     }
 
