@@ -15,6 +15,7 @@ struct SeriesDetailContent<BelowOverview: View>: View {
     let seasons: [Season]
     let selectedSeason: Season?
     let episodes: [EpisodeListItem]
+    let episodesBySeason: [Int: [EpisodeListItem]]
     let isLoadingEpisodes: Bool
     let selectedNextUpFileId: Int?
     let selectedNextUpAudioTrackIndex: Int?
@@ -49,11 +50,12 @@ struct SeriesDetailContent<BelowOverview: View>: View {
     /// site (which owns the view model) and rendered under the overview.
     @ViewBuilder let belowOverview: () -> BelowOverview
 
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var showResumeDialog = false
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 32) {
+            VStack(alignment: .leading, spacing: heroToContentSpacing) {
                 hero
                 belowFold
             }
@@ -72,6 +74,10 @@ struct SeriesDetailContent<BelowOverview: View>: View {
         }
     }
 
+    private var heroToContentSpacing: CGFloat {
+        horizontalSizeClass == .regular ? 16 : 32
+    }
+
     // MARK: - Hero
 
     private var hero: some View {
@@ -79,6 +85,8 @@ struct SeriesDetailContent<BelowOverview: View>: View {
             title: detail.title,
             seriesTitle: nil,
             logoUrl: detail.logoUrl,
+            posterUrl: detail.posterUrl,
+            posterThumbhash: detail.posterThumbhash,
             backdropUrl: detail.backdropUrl,
             backdropThumbhash: detail.backdropThumbhash,
             eyebrow: PhoneHeroMetadata.eyebrow(from: detail),
@@ -310,44 +318,21 @@ struct SeriesDetailContent<BelowOverview: View>: View {
             )
             .padding(.horizontal, ContinuumTheme.safePadding)
 
-            if seasons.count > 1 {
-                PhoneSeasonChips(
-                    seasons: seasons,
-                    selected: selectedSeason,
-                    onSelect: onSelectSeason
-                )
-            }
-
-            episodeBody
+            PhoneSeasonEpisodeBrowser(
+                seasons: seasons,
+                selectedSeason: selectedSeason,
+                episodes: episodes,
+                episodesBySeason: episodesBySeason,
+                isLoadingEpisodes: isLoadingEpisodes,
+                onSelectSeason: onSelectSeason,
+                onSelectEpisode: onEpisodeTap
+            )
         }
     }
 
     private var episodeCountSubtitle: String? {
         guard let count = selectedSeason?.episodeCount, count > 0 else { return nil }
         return "\(count) episode\(count == 1 ? "" : "s")"
-    }
-
-    @ViewBuilder
-    private var episodeBody: some View {
-        if selectedSeason == nil && seasons.isEmpty {
-            EmptyView()
-        } else if isLoadingEpisodes {
-            HStack {
-                Spacer()
-                ProgressView().tint(.continuumOnSurface).padding()
-                Spacer()
-            }
-        } else if episodes.isEmpty {
-            Text("No episodes available")
-                .font(.continuumCaption)
-                .foregroundColor(.continuumSecondaryText)
-                .padding(.horizontal, ContinuumTheme.safePadding)
-        } else {
-            PhoneEpisodeRail(
-                episodes: episodes,
-                onSelect: onEpisodeTap
-            )
-        }
     }
 
     // MARK: - Cast
