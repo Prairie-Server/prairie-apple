@@ -1,5 +1,5 @@
 import SwiftUI
-#if os(tvOS)
+#if os(iOS) || os(tvOS)
 import UIKit
 #endif
 
@@ -711,6 +711,422 @@ struct ContentView: View {
     }
 }
 
+#if os(iOS)
+/// SwiftUI treats `navigationSplitViewColumnWidth` as a preference on iPad.
+/// Pin the backing UIKit split controller to the same width so its divider
+/// cannot resize the overlay while retaining the system sidebar presentation.
+private struct FixedPrimarySplitViewWidth: UIViewControllerRepresentable {
+    let width: CGFloat
+    let sidebarIsHidden: Bool
+    let onSwipeLeft: () -> Void
+
+    func makeUIViewController(context: Context) -> Controller {
+        let controller = Controller(width: width, onSwipeLeft: onSwipeLeft)
+        controller.sidebarIsHidden = sidebarIsHidden
+        return controller
+    }
+
+    func updateUIViewController(_ controller: Controller, context: Context) {
+        controller.width = width
+        controller.sidebarIsHidden = sidebarIsHidden
+        controller.onSwipeLeft = onSwipeLeft
+        controller.applyWidthLock()
+    }
+
+    static func dismantleUIViewController(_ controller: Controller, coordinator: Void) {
+        controller.tearDown()
+    }
+
+    final class Controller: UIViewController, UIGestureRecognizerDelegate {
+        var width: CGFloat
+        var sidebarIsHidden = false
+        var onSwipeLeft: () -> Void
+        private var dragStartOffset: CGFloat = 0
+        private var isDismissAnimationRunning = false
+        private weak var managedSplitViewController: UISplitViewController?
+        private weak var dragPresentationView: UIView?
+        private weak var dragDimmingView: UIView?
+        private var dimmingBaseAlpha: CGFloat = 1
+        private weak var swipeHostView: UIView?
+        private lazy var swipeLeftRecognizer: UIPanGestureRecognizer = {
+            let recognizer = UIPanGestureRecognizer(
+                target: self,
+                action: #selector(handleSwipeLeft(_:))
+            )
+            recognizer.maximumNumberOfTouches = 1
+            recognizer.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+            recognizer.cancelsTouchesInView = false
+            recognizer.delegate = self
+            return recognizer
+        }()
+
+        init(width: CGFloat, onSwipeLeft: @escaping () -> Void) {
+            self.width = width
+            self.onSwipeLeft = onSwipeLeft
+            super.init(nibName: nil, bundle: nil)
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
+        }
+
+        override func didMove(toParent parent: UIViewController?) {
+            super.didMove(toParent: parent)
+            applyWidthLock()
+        }
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            applyWidthLock()
+        }
+
+        override func viewDidLayoutSubviews() {
+            super.viewDidLayoutSubviews()
+            applyWidthLock()
+            resetStrandedSidebarTransformIfNeeded()
+        }
+
+        /// `sidebarPresentationView` walks one level of private hierarchy; if
+        /// an iPadOS release reshuffles it, or an interrupted animation leaks
+        /// a translation, a stale transform would leave the sidebar visually
+        /// offset with no gesture in flight. Layout passes are the safety net:
+        /// when nothing owns the view, force it back to identity.
+        private func resetStrandedSidebarTransformIfNeeded() {
+            guard !isDragActive, !isDismissAnimationRunning,
+                  let strandedView = dragPresentationView,
+                  strandedView.transform != .identity,
+                  strandedView.layer.animationKeys()?.isEmpty != false
+            else { return }
+            strandedView.transform = .identity
+            dragPresentationView = nil
+            releaseDimmingView(restoring: true)
+        }
+
+        func applyWidthLock() {
+            guard let splitViewController = splitViewControllerAncestor else { return }
+            managedSplitViewController = splitViewController
+            // While the sidebar is visible the direct-touch pan below is the
+            // sole interactive transition owner: keeping UIKit's built-in pan
+            // enabled would let both recognizers move the same primary column
+            // simultaneously. While the sidebar is hidden our recognizer only
+            // accepts leftward swipes, so the system edge swipe stays enabled
+            // to reveal the sidebar.
+            splitViewController.presentsWithGesture = sidebarIsHidden
+            if splitViewController.preferredPrimaryColumnWidth != width {
+                splitViewController.preferredPrimaryColumnWidth = width
+            }
+            if splitViewController.minimumPrimaryColumnWidth != width {
+                splitViewController.minimumPrimaryColumnWidth = width
+            }
+            if splitViewController.maximumPrimaryColumnWidth != width {
+                splitViewController.maximumPrimaryColumnWidth = width
+            }
+            installSwipeRecognizer(in: splitViewController)
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            true
+        }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard let panGesture = gestureRecognizer as? UIPanGestureRecognizer else {
+                return true
+            }
+            let velocity = panGesture.velocity(in: swipeHostView)
+            return velocity.x < 0 && abs(velocity.x) > abs(velocity.y) * 1.1
+        }
+
+        @objc private func handleSwipeLeft(_ gestureRecognizer: UIPanGestureRecognizer) {
+            guard let splitViewController = splitViewControllerAncestor else { return }
+
+            let presentationView: UIView
+            if gestureRecognizer.state == .began {
+                guard let resolvedView = sidebarPresentationView(in: splitViewController) else {
+                    return
+                }
+                presentationView = resolvedView
+                dragPresentationView = resolvedView
+            } else {
+                guard let activeView = dragPresentationView else { return }
+                presentationView = activeView
+            }
+
+            switch gestureRecognizer.state {
+            case .began:
+                let visibleTransform = presentationView.layer
+                    .presentation()?
+                    .affineTransform() ?? presentationView.transform
+                presentationView.layer.removeAllAnimations()
+                UIView.performWithoutAnimation {
+                    presentationView.transform = visibleTransform
+                }
+                dragStartOffset = visibleTransform.tx
+                // The dismiss/restore animations also own the scrim's alpha.
+                // Strip that animation alongside the transform one, or the
+                // shared animation transaction outlives the re-grab and its
+                // delayed completion can hide the column mid-drag.
+                if let dimmingView = dragDimmingView {
+                    let visibleAlpha = dimmingView.layer.presentation()?.opacity
+                        ?? Float(dimmingView.alpha)
+                    dimmingView.layer.removeAllAnimations()
+                    UIView.performWithoutAnimation {
+                        dimmingView.alpha = CGFloat(visibleAlpha)
+                    }
+                }
+                resolveDimmingView(
+                    in: splitViewController,
+                    excluding: presentationView
+                )
+
+            case .changed:
+                let translation = gestureRecognizer.translation(in: splitViewController.view)
+                let horizontalOffset = max(
+                    -width,
+                    min(0, dragStartOffset + translation.x)
+                )
+                presentationView.transform = CGAffineTransform(
+                    translationX: horizontalOffset,
+                    y: 0
+                )
+                updateDimming(forSidebarOffset: horizontalOffset)
+
+            case .ended:
+                let translation = gestureRecognizer.translation(in: splitViewController.view)
+                let velocity = gestureRecognizer.velocity(in: splitViewController.view)
+                let horizontalOffset = max(
+                    -width,
+                    min(0, dragStartOffset + translation.x)
+                )
+                let shouldDismiss = horizontalOffset <= -(width * 0.25) || velocity.x <= -700
+                dragStartOffset = 0
+
+                if shouldDismiss {
+                    isDismissAnimationRunning = true
+                    UIView.animate(
+                        withDuration: 0.18,
+                        delay: 0,
+                        options: [.curveEaseOut, .beginFromCurrentState]
+                    ) {
+                        presentationView.transform = CGAffineTransform(
+                            translationX: -self.width,
+                            y: 0
+                        )
+                        self.dragDimmingView?.alpha = 0
+                    } completion: { finished in
+                        self.isDismissAnimationRunning = false
+                        // A new drag re-owns the view mid-animation; leave its
+                        // state alone. Any other interruption (rotation, split
+                        // relayout) must still complete the hide, or the
+                        // sidebar stays "visible" while translated off-screen
+                        // with no toggle button rendered to recover it.
+                        guard finished || !self.isDragActive else { return }
+                        UIView.performWithoutAnimation {
+                            splitViewController.hide(.primary)
+                            self.onSwipeLeft()
+                            presentationView.transform = .identity
+                            // The hide dismantles the overlay presentation,
+                            // but UIKit may reuse the scrim next time the
+                            // sidebar opens — leave it at its resting alpha,
+                            // not the zero we faded it to.
+                            self.releaseDimmingView(restoring: true)
+                            splitViewController.view.layoutIfNeeded()
+                            self.dragPresentationView = nil
+                        }
+                    }
+                } else {
+                    restoreSidebarPosition(presentationView)
+                }
+
+            case .cancelled, .failed:
+                dragStartOffset = 0
+                restoreSidebarPosition(presentationView)
+
+            default:
+                break
+            }
+        }
+
+        /// UIKit's overlay presentation dims the detail pane behind the
+        /// sidebar but knows nothing about our interactive drag, so the dim
+        /// would stay opaque until dismissal completes and then pop off. Track
+        /// the dimming view (identified structurally: a full-size, non-opaque
+        /// scrim under the sidebar surface) and fade it with the drag. If the
+        /// hierarchy doesn't match, everything degrades to the old pop.
+        private func resolveDimmingView(
+            in splitViewController: UISplitViewController,
+            excluding presentationView: UIView
+        ) {
+            guard dragDimmingView == nil else { return }
+            guard let dimmingView = findDimmingView(
+                from: splitViewController.view,
+                excluding: presentationView,
+                depth: 0
+            ) else {
+                #if DEBUG
+                logSidebarHierarchy(splitViewController.view, presentationView: presentationView)
+                #endif
+                return
+            }
+            dragDimmingView = dimmingView
+            dimmingBaseAlpha = dimmingView.alpha
+        }
+
+        #if DEBUG
+        /// One-shot dump of the split view's subtree when no scrim was found,
+        /// so a mismatched iPadOS hierarchy is diagnosable from device logs.
+        private static var didLogSidebarHierarchy = false
+        private func logSidebarHierarchy(_ root: UIView, presentationView: UIView) {
+            guard !Self.didLogSidebarHierarchy else { return }
+            Self.didLogSidebarHierarchy = true
+            func describe(_ view: UIView, indent: String) -> String {
+                let marker = view === presentationView ? " <sidebar-surface>" : ""
+                let color = view.backgroundColor.map { " bg=\($0)" } ?? ""
+                var lines = "\(indent)\(type(of: view)) frame=\(view.frame) alpha=\(view.alpha)\(color)\(marker)\n"
+                guard indent.count < 12 else { return lines }
+                for subview in view.subviews {
+                    lines += describe(subview, indent: indent + "  ")
+                }
+                return lines
+            }
+            DiagLog.d(
+                .other,
+                "SidebarDrag",
+                "No dimming view found; hierarchy:\n\(describe(root, indent: ""))"
+            )
+        }
+        #endif
+
+        /// The scrim is identified by class name ("Dimming"), the same way
+        /// UIKit names it across releases (`UIDimmingView`, knockout backdrop
+        /// variants). The sidebar surface's own subtree is excluded so we
+        /// never fade something that slides with the drag.
+        private func findDimmingView(
+            from root: UIView,
+            excluding presentationView: UIView,
+            depth: Int
+        ) -> UIView? {
+            guard depth <= 6 else { return nil }
+            for candidate in root.subviews {
+                guard candidate !== presentationView else { continue }
+                if !candidate.isHidden,
+                   String(describing: type(of: candidate))
+                       .localizedCaseInsensitiveContains("dimming") {
+                    return candidate
+                }
+                if let nested = findDimmingView(
+                    from: candidate,
+                    excluding: presentationView,
+                    depth: depth + 1
+                ) {
+                    return nested
+                }
+            }
+            return nil
+        }
+
+        private func updateDimming(forSidebarOffset horizontalOffset: CGFloat) {
+            guard let dimmingView = dragDimmingView, width > 0 else { return }
+            let visibleFraction = max(0, min(1, 1 + horizontalOffset / width))
+            dimmingView.alpha = dimmingBaseAlpha * visibleFraction
+        }
+
+        private func releaseDimmingView(restoring: Bool = false) {
+            if restoring {
+                dragDimmingView?.alpha = dimmingBaseAlpha
+            }
+            dragDimmingView = nil
+        }
+
+        /// Whether a pan is actively re-owning the sidebar mid-animation.
+        private var isDragActive: Bool {
+            switch swipeLeftRecognizer.state {
+            case .began, .changed: return true
+            default: return false
+            }
+        }
+
+        private func restoreSidebarPosition(_ presentationView: UIView) {
+            UIView.animate(
+                withDuration: 0.25,
+                delay: 0,
+                usingSpringWithDamping: 0.9,
+                initialSpringVelocity: 0,
+                options: [.beginFromCurrentState, .allowUserInteraction]
+            ) {
+                presentationView.transform = .identity
+                self.dragDimmingView?.alpha = self.dimmingBaseAlpha
+            } completion: { finished in
+                if finished {
+                    self.dragPresentationView = nil
+                    self.releaseDimmingView(restoring: true)
+                }
+            }
+        }
+
+        private func sidebarPresentationView(
+            in splitViewController: UISplitViewController
+        ) -> UIView? {
+            guard let primaryView = splitViewController
+                .viewController(for: .primary)?
+                .view
+            else { return nil }
+
+            // On iPadOS the navigation controller is wrapped by a clipping
+            // view and then by the adaptive column surface that owns the
+            // sidebar's glass background and shadow. Move that complete
+            // fixed-width surface when it matches the primary geometry;
+            // otherwise fall back to the public primary view.
+            guard let columnView = primaryView.superview?.superview,
+                  columnView !== splitViewController.view,
+                  abs(columnView.bounds.width - width) <= 1,
+                  abs(columnView.bounds.height - primaryView.bounds.height) <= 1
+            else { return primaryView }
+            return columnView
+        }
+
+        private func installSwipeRecognizer(in splitViewController: UISplitViewController) {
+            guard let primaryView = splitViewController
+                .viewController(for: .primary)?
+                .view,
+                  swipeHostView !== primaryView
+            else { return }
+
+            swipeHostView?.removeGestureRecognizer(swipeLeftRecognizer)
+            primaryView.addGestureRecognizer(swipeLeftRecognizer)
+            swipeHostView = primaryView
+        }
+
+        func tearDown() {
+            dragPresentationView?.layer.removeAllAnimations()
+            dragPresentationView?.transform = .identity
+            dragPresentationView = nil
+            releaseDimmingView(restoring: true)
+            swipeHostView?.layer.removeAllAnimations()
+            swipeHostView?.transform = .identity
+            swipeHostView?.removeGestureRecognizer(swipeLeftRecognizer)
+            swipeHostView = nil
+            managedSplitViewController?.presentsWithGesture = true
+            managedSplitViewController = nil
+        }
+
+        private var splitViewControllerAncestor: UISplitViewController? {
+            var ancestor = parent
+            while let controller = ancestor {
+                if let splitViewController = controller as? UISplitViewController {
+                    return splitViewController
+                }
+                ancestor = controller.parent
+            }
+            return nil
+        }
+    }
+}
+#endif
+
 private struct DebugPlayerPresentationModifier: ViewModifier {
     let contentId: String?
     @Binding var isPresented: Bool
@@ -786,30 +1202,35 @@ struct MainTabDestination: Identifiable, Equatable {
         .init(id: .app(tab), title: tab.rawValue, icon: tab.icon, selectedIcon: tab.selectedIcon)
     }
 
-    static func library(id: Int, label: String) -> MainTabDestination {
+    static func library(
+        id: Int,
+        label: String,
+        icon: String = "rectangle.stack",
+        selectedIcon: String = "rectangle.stack.fill"
+    ) -> MainTabDestination {
         .init(
             id: .library(id),
             title: label,
-            icon: "rectangle.stack",
-            selectedIcon: "rectangle.stack.fill"
+            icon: icon,
+            selectedIcon: selectedIcon
         )
     }
 
     static func libraryCategory(_ category: PrimaryMenuBuiltin) -> MainTabDestination {
-        let icon: String
-        switch category {
-        case .movies: icon = "film.stack"
-        case .series: icon = "tv"
-        case .audiobooks: icon = "book.closed"
-        default: icon = "rectangle.stack"
-        }
         return .init(
             id: .libraryCategory(category),
             title: category.title,
-            icon: icon,
-            selectedIcon: icon
+            icon: category.navigationIcon,
+            selectedIcon: category.navigationIcon
         )
     }
+}
+
+private struct MainTabSidebarDestination: Identifiable {
+    let destination: MainTabDestination
+    let isNestedLibrary: Bool
+
+    var id: MainTabDestinationID { destination.id }
 }
 
 /// Projects the cross-client menu into roots this Apple shell can navigate
@@ -824,8 +1245,11 @@ func projectedMainTabDestinations(
         return AppTab.visibleCases.map(MainTabDestination.app)
     }
 
+    let menuItems = primaryMenu.items.count == 1 && primaryMenu.items[0].isHome
+        ? appleDefaultPrimaryMenuItems()
+        : primaryMenu.items
     var destinations: [MainTabDestination] = []
-    for item in primaryMenu.items {
+    for item in menuItems {
         guard mainTabSupportsDestination(item, availableLibraries: availableLibraries) else {
             continue
         }
@@ -839,7 +1263,13 @@ func projectedMainTabDestinations(
         case .builtin(.forYou): destination = .app(.recommendations)
         case .builtin(.calendar): destination = .app(.calendar)
         case .library(let libraryId, let label):
-            destination = .library(id: libraryId, label: label)
+            let library = availableLibraries.first(where: { $0.id == libraryId })
+            destination = .library(
+                id: libraryId,
+                label: library?.name ?? label,
+                icon: library?.navigationIcon ?? "rectangle.stack",
+                selectedIcon: library?.selectedNavigationIcon ?? "rectangle.stack.fill"
+            )
         case .section, .collection:
             destination = nil
         }
@@ -850,6 +1280,24 @@ func projectedMainTabDestinations(
     }
     if !destinations.contains(where: { $0.id == .app(.home) }) {
         destinations.insert(.app(.home), at: 0)
+    }
+    if destinations.count == 1, destinations[0].id == .app(.home) {
+        var defaults: [MainTabDestination] = [.app(.home)]
+        if availableLibraries.contains(where: {
+            libraryMatchesPrimaryMenuCategory($0, category: .movies)
+        }) {
+            defaults.append(.libraryCategory(.movies))
+        }
+        if availableLibraries.contains(where: {
+            libraryMatchesPrimaryMenuCategory($0, category: .series)
+        }) {
+            defaults.append(.libraryCategory(.series))
+        }
+        defaults.append(contentsOf: [
+            .app(.recommendations),
+            .app(.calendar),
+        ])
+        return defaults
     }
     return destinations
 }
@@ -964,6 +1412,7 @@ struct MainTabView: View {
     /// its cache invalidation and network refresh finish.
     @State private var librarySnapshot = MainTabLibrarySnapshot.cachedForCurrentAuthority()
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var iPadColumnVisibility: NavigationSplitViewVisibility = .detailOnly
     /// Shared namespace for the poster → detail zoom transition. Injected into
     /// the environment (`\.zoomNamespace`) so both the cards and the central
     /// detail destination resolve the same identity.
@@ -1042,6 +1491,13 @@ struct MainTabView: View {
                 selectedDestinationID,
                 visibleDestinations: visibleDestinations
             )
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .userLibrariesDidRefresh)) {
+            notification in
+            guard let authority = currentLibraryAuthority,
+                  let response = notification.object as? LibrariesResponse
+            else { return }
+            librarySnapshot = .init(authority: authority, libraries: response.libraries)
         }
         #if !os(macOS)
         .fullScreenCover(isPresented: Binding(
@@ -1136,6 +1592,10 @@ struct MainTabView: View {
             ?? .app(.home)
     }
 
+    private var sidebarTitle: String {
+        serverRegistry.activeServer?.displayName ?? "Silo"
+    }
+
     /// iPhone + iPad compact width: bottom tab bar, single navigation stack.
     private var tabLayout: some View {
         NavigationStack(path: $router.path) {
@@ -1173,55 +1633,210 @@ struct MainTabView: View {
         .environment(\.zoomNamespace, zoomNamespace)
     }
 
-    /// iPad regular width: sidebar list + detail pane.
-    /// Selection drives both the highlighted row and the detail content.
+    /// iPad regular width: the native sidebar overlays the detail pane without
+    /// changing its original system material or row-selection appearance.
+    /// macOS keeps the standard side-by-side split-view layout.
     ///
     /// Home / Libraries / Recommendations hide the nav bar (so SwiftUI's
     /// default sidebar toggle isn't visible on those screens). We inject a
     /// toggle closure through `\.sidebarToggle` instead — each custom header
-    /// renders a `SidebarToggleButton` on its leading edge, which collapses
-    /// and re-expands the sidebar. Video playback doesn't overlap the sidebar
-    /// because the player is presented via `fullScreenCover` on
-    /// `router.presentedPlayer` rather than pushed into the detail pane.
+    /// renders a `SidebarToggleButton` on its leading edge while the overlay is
+    /// closed. Video playback doesn't overlap the sidebar because the player is
+    /// presented via `fullScreenCover` on `router.presentedPlayer` rather than
+    /// pushed into the detail pane.
     private var sidebarLayout: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            List(selection: Binding<MainTabDestinationID?>(
-                get: { selectedDestinationID },
-                set: { if let value = $0 { selectSidebarDestination(value) } }
-            )) {
-                ForEach(visibleDestinations) { destination in
-                    Label(
-                        destination.title,
-                        systemImage: selectedDestinationID == destination.id
-                            ? destination.selectedIcon
-                            : destination.icon
-                    )
-                    .tag(destination.id)
-                }
-            }
-            .navigationTitle("Silo")
-            .navigationSplitViewColumnWidth(min: 240, ideal: 260, max: 280)
-        } detail: {
-            NavigationStack(path: $router.path) {
-                destinationContent(for: selectedDestination)
-                    .id(selectedDestination.id)
-                    .navigationDestination(for: Route.self) { route in
-                        routeContent(for: route)
-                    }
-            }
+        Group {
+            #if os(iOS)
+            iPadSidebarLayout
+                .environment(
+                    \.sidebarToggle,
+                    iPadColumnVisibility == .detailOnly ? toggleSidebar : nil
+                )
+                .environment(\.reservesSidebarToggleSpace, true)
+            #else
+            macSidebarLayout
+                .environment(\.sidebarToggle, toggleSidebar)
+            #endif
         }
-        .environment(\.sidebarToggle, toggleSidebar)
         .environment(\.zoomNamespace, zoomNamespace)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             NowPlayingShelf(style: .card)
         }
     }
 
-    /// Collapses or re-expands the sidebar. Animated so the detail pane
-    /// slides into place rather than snapping.
+    #if os(iOS)
+    private let iPadSidebarWidth: CGFloat = 320
+
+    private var iPadSidebarLayout: some View {
+        NavigationSplitView(columnVisibility: $iPadColumnVisibility) {
+            sidebarList(
+                dismissAfterSelection: true,
+                nestsPinnedLibraries: true
+            )
+                .background {
+                    FixedPrimarySplitViewWidth(
+                        width: iPadSidebarWidth,
+                        sidebarIsHidden: iPadColumnVisibility == .detailOnly,
+                        onSwipeLeft: finishInteractiveSidebarDismissal
+                    )
+                        .frame(width: 0, height: 0)
+                }
+                .navigationSplitViewColumnWidth(
+                    min: iPadSidebarWidth,
+                    ideal: iPadSidebarWidth,
+                    max: iPadSidebarWidth
+                )
+                .toolbar(removing: .sidebarToggle)
+                .toolbar(.hidden, for: .navigationBar)
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    iPadSidebarHeader
+                }
+        } detail: {
+            sidebarDetailContent
+                .toolbar(removing: .sidebarToggle)
+        }
+        .navigationSplitViewStyle(.prominentDetail)
+    }
+
+    /// Custom sidebar header replacing the navigation bar so the server name
+    /// and close button can sit lower than the system bar allows.
+    private var iPadSidebarHeader: some View {
+        HStack(spacing: 0) {
+            Color.clear
+                .frame(
+                    width: ContinuumTheme.topBarIconHitSize,
+                    height: ContinuumTheme.topBarIconHitSize
+                )
+                .accessibilityHidden(true)
+
+            Text(sidebarTitle)
+                .font(.headline)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .center)
+
+            Button(action: dismissSidebar) {
+                Image(systemName: "arrow.left")
+                    .font(.body.weight(.semibold))
+                    .frame(
+                        width: ContinuumTheme.topBarIconHitSize,
+                        height: ContinuumTheme.topBarIconHitSize
+                    )
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Close sidebar")
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 24)
+        .padding(.bottom, 12)
+    }
+
+    #else
+    private var macSidebarLayout: some View {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            sidebarList(
+                dismissAfterSelection: false,
+                nestsPinnedLibraries: false
+            )
+                .navigationTitle(sidebarTitle)
+                .navigationSplitViewColumnWidth(min: 240, ideal: 260, max: 280)
+        } detail: {
+            sidebarDetailContent
+        }
+    }
+    #endif
+
+    private var sidebarDetailContent: some View {
+        NavigationStack(path: $router.path) {
+            destinationContent(for: selectedDestination)
+                .id(selectedDestination.id)
+                .navigationDestination(for: Route.self) { route in
+                    routeContent(for: route)
+                        #if os(iOS)
+                        .toolbar {
+                            if routeNeedsSidebarToggle(route) {
+                                ToolbarItem(placement: .topBarLeading) {
+                                    SidebarToggleButton()
+                                }
+                            }
+                        }
+                        #endif
+                }
+        }
+    }
+
+    private func sidebarList(
+        dismissAfterSelection: Bool,
+        nestsPinnedLibraries: Bool
+    ) -> some View {
+        List(selection: Binding<MainTabDestinationID?>(
+            get: { selectedDestinationID },
+            set: { value in
+                guard let value else { return }
+                selectSidebarDestination(value)
+                if dismissAfterSelection {
+                    dismissSidebar()
+                }
+            }
+        )) {
+            ForEach(sidebarDestinations(nestingPinnedLibraries: nestsPinnedLibraries)) { item in
+                let destination = item.destination
+                Label(
+                    destination.title,
+                    systemImage: selectedDestinationID == destination.id
+                        ? destination.selectedIcon
+                        : destination.icon
+                )
+                .padding(.leading, item.isNestedLibrary ? 24 : 0)
+                .tag(destination.id)
+            }
+        }
+        // The sidebar's few rows rarely overflow; without this the list
+        // still rubber-bands on drag, visually dragging the whole bar.
+        .scrollBounceBehavior(.basedOnSize)
+    }
+
+    private func sidebarDestinations(
+        nestingPinnedLibraries: Bool
+    ) -> [MainTabSidebarDestination] {
+        guard nestingPinnedLibraries else {
+            return visibleDestinations.map {
+                MainTabSidebarDestination(destination: $0, isNestedLibrary: false)
+            }
+        }
+
+        let availableLibraries = librarySnapshot.availableLibraries(
+            for: currentLibraryAuthority
+        )
+        return groupPinnedLibrariesUnderMediaTypes(
+            visibleDestinations,
+            libraries: availableLibraries,
+            libraryID: { destination in
+                guard case .library(let libraryID) = destination.id else { return nil }
+                return libraryID
+            },
+            mediaTypeCategory: { destination in
+                guard case .libraryCategory(let category) = destination.id else {
+                    return nil
+                }
+                return category
+            }
+        ).map {
+            MainTabSidebarDestination(
+                destination: $0.element,
+                isNestedLibrary: $0.isNestedLibrary
+            )
+        }
+    }
+
+    /// Collapses or re-expands the sidebar without moving the detail content.
     private func toggleSidebar() {
         withAnimation(.easeInOut(duration: 0.25)) {
+            #if os(iOS)
+            iPadColumnVisibility = iPadColumnVisibility == .detailOnly ? .all : .detailOnly
+            #else
             columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
+            #endif
         }
     }
 
@@ -1232,6 +1847,25 @@ struct MainTabView: View {
         router.popToRoot()
         selectedDestinationID = destinationID
     }
+
+    private func dismissSidebar() {
+        #if os(iOS)
+        guard iPadColumnVisibility != .detailOnly else { return }
+        withAnimation(.easeInOut(duration: 0.25)) {
+            iPadColumnVisibility = .detailOnly
+        }
+        #endif
+    }
+
+    #if os(iOS)
+    private func finishInteractiveSidebarDismissal() {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            iPadColumnVisibility = .detailOnly
+        }
+    }
+    #endif
 
     @ViewBuilder
     private func destinationContent(for destination: MainTabDestination) -> some View {
@@ -1423,6 +2057,17 @@ struct MainTabView: View {
                 .continuumBackground()
         }
     }
+
+    #if os(iOS)
+    private func routeNeedsSidebarToggle(_ route: Route) -> Bool {
+        switch route {
+        case .downloads, .recommendations:
+            false
+        default:
+            true
+        }
+    }
+    #endif
 
     private var settingsPlaceholder: some View {
         List {

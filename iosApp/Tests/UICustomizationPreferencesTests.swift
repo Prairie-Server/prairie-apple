@@ -250,7 +250,13 @@ final class UICustomizationPreferencesTests: XCTestCase {
     }
 
     func testMainTabProjectionKeepsLibraryIdentityAndHidesUnsupportedShortcuts() {
-        let movie = Library(id: 7, name: "Movies", type: "movies", sortOrder: 0, posterUrl: nil)
+        let movie = Library(
+            id: 7,
+            name: "Renamed Movies",
+            type: "movies",
+            sortOrder: 0,
+            posterUrl: nil
+        )
         let series = Library(id: 8, name: "Series", type: "series", sortOrder: 1, posterUrl: nil)
         let audiobook = Library(
             id: 9,
@@ -288,7 +294,11 @@ final class UICustomizationPreferencesTests: XCTestCase {
                 .app(.calendar),
             ]
         )
-        XCTAssertEqual(destinations[4].title, "Movies")
+        XCTAssertEqual(
+            destinations[4].title,
+            "Renamed Movies",
+            "pinned destinations should use current library metadata instead of their stored label"
+        )
         XCTAssertFalse(
             destinations.contains { $0.id == .app(.libraries) },
             "authored categories and unsupported shortcut IDs must not collapse into an aggregate tab"
@@ -303,7 +313,10 @@ final class UICustomizationPreferencesTests: XCTestCase {
         ])
 
         let unavailable = projectedMainTabDestinations(primaryMenu: menu)
-        XCTAssertEqual(unavailable.map(\.id), [.app(.home)])
+        XCTAssertEqual(
+            unavailable.map(\.id),
+            [.app(.home), .app(.recommendations), .app(.calendar)]
+        )
 
         let known = projectedMainTabDestinations(
             primaryMenu: menu,
@@ -322,7 +335,32 @@ final class UICustomizationPreferencesTests: XCTestCase {
         )
 
         let knownEmpty = projectedMainTabDestinations(primaryMenu: menu, availableLibraries: [])
-        XCTAssertEqual(knownEmpty.map(\.id), [.app(.home)])
+        XCTAssertEqual(
+            knownEmpty.map(\.id),
+            [.app(.home), .app(.recommendations), .app(.calendar)]
+        )
+    }
+
+    func testHomeOnlyMainTabProjectionRestoresAppleDefaults() {
+        let menu = PrimaryMenuPreference(items: [.builtin(.home)])
+        let destinations = projectedMainTabDestinations(
+            primaryMenu: menu,
+            availableLibraries: [
+                Library(id: 1, name: "Movies", type: "movies", sortOrder: 0, posterUrl: nil),
+                Library(id: 2, name: "Series", type: "series", sortOrder: 1, posterUrl: nil),
+            ]
+        )
+
+        XCTAssertEqual(
+            destinations.map(\.id),
+            [
+                .app(.home),
+                .libraryCategory(.movies),
+                .libraryCategory(.series),
+                .app(.recommendations),
+                .app(.calendar),
+            ]
+        )
     }
 
     func testLibraryTabRequestUsesFirstAuthoredLibraryRoot() {
@@ -472,23 +510,285 @@ final class UICustomizationPreferencesTests: XCTestCase {
         )
     }
 
-    func testAvailableLibraryShortcutsExcludeInaccessibleAndVisibleItems() {
-        let removed = PrimaryMenuItem.library(libraryId: 7, label: "Removed")
-        let available = PrimaryMenuItem.library(libraryId: 8, label: "Available")
-        let alreadyVisible = PrimaryMenuItem.library(libraryId: 9, label: "Visible")
-        let section = PrimaryMenuItem.section(
-            libraryId: 8,
-            sectionId: "recent",
-            label: "Recent"
+    func testAvailableShortcutsExcludeItemsAlreadyInPrimaryMenu() {
+        let availableLibrary = Library(
+            id: 8,
+            name: "Available",
+            type: "movies",
+            sortOrder: 0,
+            posterUrl: nil
+        )
+        let visibleLibrary = Library(
+            id: 9,
+            name: "Visible",
+            type: "series",
+            sortOrder: 1,
+            posterUrl: nil
+        )
+        let visibleItem = PrimaryMenuItem.library(libraryId: 9, label: "Old Name")
+
+        XCTAssertEqual(
+            availablePrimaryMenuShortcuts(
+                candidates: [.builtin(.home), .builtin(.forYou)],
+                libraries: [availableLibrary, visibleLibrary],
+                visibleIds: [PrimaryMenuItem.builtin(.home).id, visibleItem.id]
+            ),
+            [
+                .builtin(.forYou),
+                .library(libraryId: 8, label: "Available"),
+            ]
+        )
+    }
+
+    func testShortcutTypeTitlesUseCustomizationCategories() {
+        XCTAssertEqual(primaryMenuShortcutTypeTitle(.builtin(.movies)), "Media Type")
+        XCTAssertEqual(
+            primaryMenuShortcutTypeTitle(.library(libraryId: 1, label: "Movies")),
+            "Library"
+        )
+        XCTAssertEqual(primaryMenuShortcutTypeTitle(.builtin(.forYou)), "Discover")
+        XCTAssertEqual(primaryMenuShortcutTypeTitle(.builtin(.home)), "Your Stuff")
+
+        let mixed = Library(
+            id: 2,
+            name: "Mixed",
+            type: "mixed",
+            sortOrder: 0,
+            posterUrl: nil
+        )
+        XCTAssertEqual(
+            primaryMenuShortcutTypeTitle(
+                .library(libraryId: 2, label: "Mixed"),
+                libraries: [mixed]
+            ),
+            "Mixed Library"
+        )
+
+        let movies = Library(
+            id: 3,
+            name: "Movies",
+            type: "movies",
+            sortOrder: 1,
+            posterUrl: nil
+        )
+        let series = Library(
+            id: 4,
+            name: "Series",
+            type: "series",
+            sortOrder: 2,
+            posterUrl: nil
+        )
+        XCTAssertEqual(
+            primaryMenuShortcutTypeTitle(
+                .library(libraryId: 3, label: "Movies"),
+                libraries: [movies, series]
+            ),
+            "Movies Library"
+        )
+        XCTAssertEqual(
+            primaryMenuShortcutTypeTitle(
+                .library(libraryId: 4, label: "Series"),
+                libraries: [movies, series]
+            ),
+            "Series Library"
+        )
+        XCTAssertEqual(
+            primaryMenuShortcutTypeTitle(
+                .library(libraryId: 3, label: "Movies"),
+                libraries: [movies, series],
+                isNestedLibrary: true
+            ),
+            "Library"
+        )
+    }
+
+    func testPrimaryMenuItemsUseMainMenuNavigationIcons() {
+        XCTAssertEqual(PrimaryMenuItem.builtin(.home).navigationIcon, AppTab.home.icon)
+        XCTAssertEqual(PrimaryMenuItem.builtin(.movies).navigationIcon, "film.stack")
+        XCTAssertEqual(PrimaryMenuItem.builtin(.series).navigationIcon, "tv")
+        XCTAssertEqual(PrimaryMenuItem.builtin(.music).navigationIcon, "rectangle.stack")
+        XCTAssertEqual(PrimaryMenuItem.builtin(.audiobooks).navigationIcon, "book.closed")
+        XCTAssertEqual(
+            PrimaryMenuItem.builtin(.forYou).navigationIcon,
+            AppTab.recommendations.icon
+        )
+        XCTAssertEqual(PrimaryMenuItem.builtin(.calendar).navigationIcon, AppTab.calendar.icon)
+        XCTAssertEqual(
+            PrimaryMenuItem.library(libraryId: 1, label: "Movies").navigationIcon,
+            "rectangle.stack"
+        )
+    }
+
+    func testPrimaryMenuEditorGroupsLibrariesUnderTheirVisibleMediaType() {
+        let movies = Library(
+            id: 1,
+            name: "Movies A",
+            type: "movies",
+            sortOrder: 0,
+            posterUrl: nil
+        )
+        let series = Library(
+            id: 2,
+            name: "Series A",
+            type: "series",
+            sortOrder: 1,
+            posterUrl: nil
+        )
+        let mixed = Library(
+            id: 3,
+            name: "Mixed",
+            type: "mixed",
+            sortOrder: 2,
+            posterUrl: nil
+        )
+        let items: [PrimaryMenuItem] = [
+            .builtin(.home),
+            .library(libraryId: 2, label: "Series A"),
+            .builtin(.movies),
+            .builtin(.series),
+            .library(libraryId: 1, label: "Movies A"),
+            .library(libraryId: 3, label: "Mixed"),
+            .builtin(.forYou),
+        ]
+
+        let rows = groupedPrimaryMenuEditorRows(
+            items,
+            libraries: [movies, series, mixed]
         )
 
         XCTAssertEqual(
-            availablePrimaryMenuLibraryShortcuts(
-                [removed, available, alreadyVisible, section],
-                visibleIds: [alreadyVisible.id],
-                availableLibraryIds: [8, 9]
+            rows.map(\.item),
+            [
+                .builtin(.home),
+                .builtin(.movies),
+                .library(libraryId: 1, label: "Movies A"),
+                .builtin(.series),
+                .library(libraryId: 2, label: "Series A"),
+                .library(libraryId: 3, label: "Mixed"),
+                .builtin(.forYou),
+            ]
+        )
+        XCTAssertEqual(
+            rows.map(\.parentMediaType),
+            [nil, nil, .movies, nil, .series, nil, nil]
+        )
+    }
+
+    func testMixedLibraryStaysOutsidePrimaryMenuMediaTypes() {
+        let mixed = Library(
+            id: 3,
+            name: "Mixed",
+            type: "mixed",
+            sortOrder: 0,
+            posterUrl: nil
+        )
+
+        XCTAssertNil(
+            primaryMenuParentCategory(for: mixed, among: [.movies, .series])
+        )
+        XCTAssertEqual(mixed.navigationIcon, "square.stack.3d.up")
+        XCTAssertEqual(mixed.selectedNavigationIcon, "square.stack.3d.up.fill")
+    }
+
+    func testPinnedMixedLibraryOnlySwitchesAmongMixedLibraries() {
+        let mixed = Library(
+            id: 1, name: "Mixed A", type: "mixed", sortOrder: 0, posterUrl: nil
+        )
+        let otherMixed = Library(
+            id: 2, name: "Mixed B", type: "mixed", sortOrder: 1, posterUrl: nil
+        )
+        let movies = Library(
+            id: 3, name: "Movies", type: "movies", sortOrder: 2, posterUrl: nil
+        )
+        let series = Library(
+            id: 4, name: "Series", type: "series", sortOrder: 3, posterUrl: nil
+        )
+
+        XCTAssertEqual(
+            visibleLibrariesForRoot(
+                [mixed, otherMixed, movies, series],
+                category: nil,
+                fixedLibraryId: mixed.id,
+                showAudiobooks: true
+            ).map(\.id),
+            [mixed.id, otherMixed.id]
+        )
+    }
+
+    func testPrimaryMenuEditorOnlyOffsetsLibrariesWithinTheirMediaType() {
+        let rows = [
+            PrimaryMenuEditorRow(item: .builtin(.movies), parentMediaType: nil),
+            PrimaryMenuEditorRow(
+                item: .library(libraryId: 1, label: "Movies A"),
+                parentMediaType: .movies
             ),
-            [available]
+            PrimaryMenuEditorRow(
+                item: .library(libraryId: 2, label: "Movies B"),
+                parentMediaType: .movies
+            ),
+            PrimaryMenuEditorRow(item: .builtin(.series), parentMediaType: nil),
+            PrimaryMenuEditorRow(
+                item: .library(libraryId: 3, label: "Series A"),
+                parentMediaType: .series
+            ),
+        ]
+
+        XCTAssertNil(
+            offsetPrimaryMenuEditorItem(
+                rows,
+                itemId: "library:1",
+                by: 2
+            )
+        )
+        XCTAssertEqual(
+            offsetPrimaryMenuEditorItem(
+                rows,
+                itemId: "library:1",
+                by: 1
+            ),
+            [
+                .builtin(.movies),
+                .library(libraryId: 2, label: "Movies B"),
+                .library(libraryId: 1, label: "Movies A"),
+                .builtin(.series),
+                .library(libraryId: 3, label: "Series A"),
+            ]
+        )
+    }
+
+    func testPrimaryMenuEditorMovesMediaTypeWithAssociatedLibraries() {
+        let rows = [
+            PrimaryMenuEditorRow(item: .builtin(.home), parentMediaType: nil),
+            PrimaryMenuEditorRow(item: .builtin(.movies), parentMediaType: nil),
+            PrimaryMenuEditorRow(
+                item: .library(libraryId: 1, label: "Movies A"),
+                parentMediaType: .movies
+            ),
+            PrimaryMenuEditorRow(
+                item: .library(libraryId: 2, label: "Movies B"),
+                parentMediaType: .movies
+            ),
+            PrimaryMenuEditorRow(item: .builtin(.series), parentMediaType: nil),
+            PrimaryMenuEditorRow(
+                item: .library(libraryId: 3, label: "Series A"),
+                parentMediaType: .series
+            ),
+        ]
+
+        XCTAssertEqual(
+            offsetPrimaryMenuEditorItem(
+                rows,
+                itemId: "builtin:series",
+                by: -1
+            ),
+            [
+                .builtin(.home),
+                .builtin(.series),
+                .library(libraryId: 3, label: "Series A"),
+                .builtin(.movies),
+                .library(libraryId: 1, label: "Movies A"),
+                .library(libraryId: 2, label: "Movies B"),
+            ]
         )
     }
 
@@ -538,8 +838,12 @@ final class UICustomizationPreferencesTests: XCTestCase {
             "an inaccessible pinned ID must not fall through to another library"
         )
         XCTAssertFalse(
+            libraryRootCanSwitch(fixedLibraryId: second.id, visibleLibraryCount: 1),
+            "a direct root with no same-type siblings disables the library picker"
+        )
+        XCTAssertTrue(
             libraryRootCanSwitch(fixedLibraryId: second.id, visibleLibraryCount: 2),
-            "a direct root keeps top-bar utilities but disables the library picker"
+            "a direct root with same-type siblings allows switching via the top selector"
         )
         XCTAssertTrue(libraryRootCanSwitch(fixedLibraryId: nil, visibleLibraryCount: 2))
 
@@ -563,6 +867,34 @@ final class UICustomizationPreferencesTests: XCTestCase {
             ),
             second.id,
             "changing a reused fixed-root scope must immediately select the new exact library"
+        )
+
+        let sibling = Library(
+            id: 9, name: "Sibling", type: "series", sortOrder: 2, posterUrl: nil
+        )
+        XCTAssertEqual(
+            resolvedLibraryIdForRoot(
+                [first, second, sibling],
+                category: nil,
+                fixedLibraryId: second.id,
+                showAudiobooks: true,
+                storedLibraryId: 0,
+                currentSelectionId: sibling.id
+            ),
+            sibling.id,
+            "an in-session switch to a same-type sibling must survive re-resolution"
+        )
+        XCTAssertEqual(
+            resolvedLibraryIdForRoot(
+                [first, second, sibling],
+                category: nil,
+                fixedLibraryId: second.id,
+                showAudiobooks: true,
+                storedLibraryId: 0,
+                currentSelectionId: first.id
+            ),
+            second.id,
+            "a selection outside the root scope must fall back to the pinned library"
         )
     }
 

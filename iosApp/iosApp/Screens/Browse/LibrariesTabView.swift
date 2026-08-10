@@ -16,6 +16,86 @@ func libraryMatchesPrimaryMenuCategory(
     }
 }
 
+func primaryMenuParentCategory(
+    for library: Library,
+    among categories: [PrimaryMenuBuiltin]
+) -> PrimaryMenuBuiltin? {
+    guard !library.isMixedLibrary else { return nil }
+    return categories.first {
+        libraryMatchesPrimaryMenuCategory(library, category: $0)
+    }
+}
+
+struct PinnedLibraryGroupedElement<Element> {
+    let element: Element
+    let parentCategory: PrimaryMenuBuiltin?
+
+    var isNestedLibrary: Bool { parentCategory != nil }
+}
+
+/// Orders navigation elements so pinned libraries sit directly beneath the
+/// media-type category that contains them, while libraries without a visible
+/// parent (mixed libraries, or categories the user hid) stay at root level.
+/// Shared by the iPad sidebar and the interface-customization editor so the
+/// two surfaces cannot drift apart.
+func groupPinnedLibrariesUnderMediaTypes<Element>(
+    _ elements: [Element],
+    libraries: [Library],
+    libraryID: (Element) -> Int?,
+    mediaTypeCategory: (Element) -> PrimaryMenuBuiltin?
+) -> [PinnedLibraryGroupedElement<Element>] {
+    let librariesByID = Dictionary(
+        uniqueKeysWithValues: libraries.map { ($0.id, $0) }
+    )
+    let visibleCategories = elements.compactMap(mediaTypeCategory)
+    var parentByLibraryID: [Int: PrimaryMenuBuiltin] = [:]
+    for element in elements {
+        guard let libraryID = libraryID(element),
+              let library = librariesByID[libraryID],
+              let parent = primaryMenuParentCategory(
+                  for: library,
+                  among: visibleCategories
+              )
+        else { continue }
+        parentByLibraryID[libraryID] = parent
+    }
+
+    var grouped: [PinnedLibraryGroupedElement<Element>] = []
+    for element in elements {
+        if let libraryID = libraryID(element) {
+            if parentByLibraryID[libraryID] == nil {
+                grouped.append(.init(element: element, parentCategory: nil))
+            }
+            continue
+        }
+
+        grouped.append(.init(element: element, parentCategory: nil))
+        guard let category = mediaTypeCategory(element) else { continue }
+        for child in elements {
+            guard let childLibraryID = libraryID(child),
+                  parentByLibraryID[childLibraryID] == category
+            else { continue }
+            grouped.append(.init(element: child, parentCategory: category))
+        }
+    }
+    return grouped
+}
+
+private func sharesPrimaryMenuCategory(_ lhs: Library, _ rhs: Library) -> Bool {
+    // Mixed libraries participate in both authored Movies and Series roots,
+    // but a pinned mixed-library root is its own scope. Treating its two
+    // category memberships as sibling relationships would expose every movie
+    // and series library from that direct root.
+    if lhs.isMixedLibrary {
+        return rhs.isMixedLibrary
+    }
+    let categories: [PrimaryMenuBuiltin] = [.movies, .series, .audiobooks]
+    return categories.contains {
+        libraryMatchesPrimaryMenuCategory(lhs, category: $0)
+            && libraryMatchesPrimaryMenuCategory(rhs, category: $0)
+    }
+}
+
 func visibleLibrariesForRoot(
     _ libraries: [Library],
     category: PrimaryMenuBuiltin?,
@@ -23,7 +103,15 @@ func visibleLibrariesForRoot(
     showAudiobooks: Bool
 ) -> [Library] {
     if let fixedLibraryId {
-        return libraries.filter { $0.id == fixedLibraryId }
+        // A direct library root still requires the exact library to be
+        // accessible, but exposes sibling libraries of the same media type
+        // so the top selector can switch between them like media-type roots.
+        guard let fixed = libraries.first(where: { $0.id == fixedLibraryId }) else {
+            return []
+        }
+        return libraries.filter {
+            $0.id == fixed.id || sharesPrimaryMenuCategory(fixed, $0)
+        }
     }
     guard let category else {
         return libraries.filter { showAudiobooks || !$0.isAudiobookLibrary }
@@ -32,7 +120,7 @@ func visibleLibrariesForRoot(
 }
 
 func libraryRootCanSwitch(fixedLibraryId: Int?, visibleLibraryCount: Int) -> Bool {
-    fixedLibraryId == nil && visibleLibraryCount > 1
+    visibleLibraryCount > 1
 }
 
 func resolvedLibraryIdForRoot(
@@ -40,7 +128,8 @@ func resolvedLibraryIdForRoot(
     category: PrimaryMenuBuiltin?,
     fixedLibraryId: Int?,
     showAudiobooks: Bool,
-    storedLibraryId: Int
+    storedLibraryId: Int,
+    currentSelectionId: Int? = nil
 ) -> Int? {
     let visible = visibleLibrariesForRoot(
         libraries,
@@ -48,8 +137,14 @@ func resolvedLibraryIdForRoot(
         fixedLibraryId: fixedLibraryId,
         showAudiobooks: showAudiobooks
     )
-    if fixedLibraryId != nil {
-        return visible.first?.id
+    if let fixedLibraryId {
+        // Keep an in-session switch to a sibling library, but always land on
+        // the exact pinned library when entering the root fresh.
+        if let current = currentSelectionId,
+           visible.contains(where: { $0.id == current }) {
+            return current
+        }
+        return visible.first(where: { $0.id == fixedLibraryId })?.id
     }
     if storedLibraryId != 0,
        let restored = visible.first(where: { $0.id == storedLibraryId }) {
@@ -129,6 +224,11 @@ struct LibrariesTabView: View {
     /// have no persistence key because their destination already fixes the ID.
     private let selectionStorageKey: String?
     @State private var storedLibraryId: Int
+    /// Scope the current `selectedLibraryId` belongs to. A direct-library
+    /// root allows switching to sibling libraries in-session, but a fresh
+    /// visit (or a reused view whose destination changed) must land on the
+    /// exact pinned library again.
+    @State private var appliedScopeID: String?
 
     @Environment(AppRouter.self) private var router
 
@@ -189,9 +289,15 @@ struct LibrariesTabView: View {
         .onChange(of: navPrefs.showAudiobooks) {
             applyLibrarySelection()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .userLibrariesDidRefresh)) {
+            notification in
+            guard let response = notification.object as? LibrariesResponse else { return }
+            acceptRefreshedLibraries(response)
+        }
         .sheet(isPresented: $showPicker) {
             LibraryPickerSheet(
                 libraries: visibleLibraries,
+                scopedCategory: pickerScopeCategory,
                 selectedLibraryId: selectedLibraryId,
                 onSelect: { id in
                     selectedLibraryId = id
@@ -239,9 +345,7 @@ struct LibrariesTabView: View {
                     visibleLibraryCount: visibleLibraries.count
                 ),
                 profile: currentProfile,
-                onLibraryTap: {
-                    if fixedLibraryId == nil { showPicker = true }
-                },
+                onLibraryTap: { showPicker = true },
                 onSearch: { router.navigate(to: .search) },
                 onOpenSettings: { router.navigate(to: .settings) },
                 onOpenRequests: { router.navigate(to: .requestsHub) },
@@ -263,6 +367,21 @@ struct LibrariesTabView: View {
 
     private var activeLibrary: Library? {
         visibleLibraries.first(where: { $0.id == selectedLibraryId })
+    }
+
+    /// The media-type scope the picker opened under, if any. A direct-library
+    /// root inherits the pinned library's type since its siblings share it.
+    /// Mixed-library roots have their own scope rather than inheriting either
+    /// Movies or Series.
+    private var pickerScopeCategory: PrimaryMenuBuiltin? {
+        if let category { return category }
+        guard let fixedLibraryId,
+              let fixed = libraries.first(where: { $0.id == fixedLibraryId }),
+              !fixed.isMixedLibrary
+        else { return nil }
+        return [PrimaryMenuBuiltin.movies, .series, .audiobooks].first {
+            libraryMatchesPrimaryMenuCategory(fixed, category: $0)
+        }
     }
 
     private var visibleLibraries: [Library] {
@@ -290,12 +409,7 @@ struct LibrariesTabView: View {
         do {
             let response = try await StartupContentPrefetcher.fetchUserLibraries()
             guard !Task.isCancelled else { return }
-            libraries = response.libraries
-            applyLibrarySelection()
-            onLibrariesLoaded?(libraryAuthority, response.libraries)
-            if let selectedLibraryId {
-                StartupContentPrefetcher.prefetchLibraryLanding(libraryId: selectedLibraryId)
-            }
+            acceptRefreshedLibraries(response)
         } catch {
             if libraries.isEmpty {
                 self.error = ErrorState(error)
@@ -304,24 +418,66 @@ struct LibrariesTabView: View {
         isLoading = false
     }
 
+    /// Apply library metadata refreshed elsewhere (for example Home pull to
+    /// refresh) so retained tab instances cannot keep renamed or revoked
+    /// libraries in their local state.
+    private func acceptRefreshedLibraries(_ response: LibrariesResponse) {
+        libraries = response.libraries
+        error = nil
+        isLoading = false
+        applyLibrarySelection()
+        onLibrariesLoaded?(libraryAuthority, response.libraries)
+        if let selectedLibraryId {
+            StartupContentPrefetcher.prefetchLibraryLanding(libraryId: selectedLibraryId)
+        }
+    }
+
     /// Preserve the stored selection if it still exists; otherwise fall
     /// back to the first available library.
     private func applyLibrarySelection() {
+        let scopeID = libraryRootScopeID(
+            category: category,
+            fixedLibraryId: fixedLibraryId,
+            authority: libraryAuthority
+        )
         let resolved = resolvedLibraryIdForRoot(
             libraries,
             category: category,
             fixedLibraryId: fixedLibraryId,
             showAudiobooks: navPrefs.showAudiobooks,
-            storedLibraryId: storedLibraryId
+            storedLibraryId: storedLibraryId,
+            currentSelectionId: appliedScopeID == scopeID ? selectedLibraryId : nil
         )
+        appliedScopeID = scopeID
         selectedLibraryId = resolved
         if let resolved { persistLibrarySelection(resolved) }
     }
 
     private func persistLibrarySelection(_ libraryId: Int) {
-        guard let selectionStorageKey else { return }
-        storedLibraryId = libraryId
-        UserDefaults.standard.set(libraryId, forKey: selectionStorageKey)
+        if let selectionStorageKey {
+            storedLibraryId = libraryId
+            UserDefaults.standard.set(libraryId, forKey: selectionStorageKey)
+        }
+        mirrorSelectionToMediaTypeRoots(libraryId)
+    }
+
+    /// Landing on (or switching within) a direct-library root also records
+    /// the selection for the matching media-type roots, so tapping "Movies"
+    /// after visiting "4K Movies" lands on 4K Movies.
+    private func mirrorSelectionToMediaTypeRoots(_ libraryId: Int) {
+        guard fixedLibraryId != nil,
+              libraryAuthority != nil,
+              let library = libraries.first(where: { $0.id == libraryId })
+        else { return }
+        for mediaType in [PrimaryMenuBuiltin.movies, .series, .audiobooks]
+        where libraryMatchesPrimaryMenuCategory(library, category: mediaType) {
+            guard let key = librarySelectionStorageKey(
+                category: mediaType,
+                fixedLibraryId: nil,
+                authority: libraryAuthority
+            ) else { continue }
+            UserDefaults.standard.set(libraryId, forKey: key)
+        }
     }
 
     /// Load the currently-selected profile so we can render its avatar in
@@ -425,6 +581,7 @@ private struct LibrarySelectorButton: View {
 /// switching the active library from the Libraries tab.
 private struct LibraryPickerSheet: View {
     let libraries: [Library]
+    let scopedCategory: PrimaryMenuBuiltin?
     let selectedLibraryId: Int?
     let onSelect: (Int) -> Void
 
@@ -463,6 +620,7 @@ private struct LibraryPickerSheet: View {
                 ForEach(libraries) { library in
                     LibraryPickerRow(
                         library: library,
+                        scopedCategory: scopedCategory,
                         isSelected: library.id == selectedLibraryId,
                         onTap: { onSelect(library.id) }
                     )
@@ -478,6 +636,7 @@ private struct LibraryPickerSheet: View {
 
 private struct LibraryPickerRow: View {
     let library: Library
+    let scopedCategory: PrimaryMenuBuiltin?
     let isSelected: Bool
     let onTap: () -> Void
 
@@ -497,9 +656,11 @@ private struct LibraryPickerRow: View {
                     Text(library.name)
                         .font(.continuumHeadline)
                         .foregroundColor(.continuumOnSurface)
-                    Text(typeLabel)
-                        .font(.continuumCaption)
-                        .foregroundColor(.continuumSecondaryText)
+                    if let typeLabel {
+                        Text(typeLabel)
+                            .font(.continuumCaption)
+                            .foregroundColor(.continuumSecondaryText)
+                    }
                 }
 
                 Spacer()
@@ -533,7 +694,11 @@ private struct LibraryPickerRow: View {
         return "square.stack.3d.up.fill"
     }
 
-    private var typeLabel: String {
+    /// Nil when the caption would just repeat the media-type scope the picker
+    /// opened under — every non-mixed library there shares that type. Mixed
+    /// libraries keep their caption since they stand out from the scope.
+    private var typeLabel: String? {
+        if scopedCategory != nil && !library.isMixedLibrary { return nil }
         if library.isAudiobookLibrary { return "Audiobooks library" }
         if library.isMixedLibrary { return "Movies & Series library" }
         if library.isSeriesLibrary { return "TV library" }
