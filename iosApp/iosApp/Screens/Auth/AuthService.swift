@@ -190,6 +190,57 @@ final class AuthService: @unchecked Sendable {
         )
     }
 
+    // MARK: - Emailed invitations
+
+    /// Resolve an invite against its validated endpoint without changing the
+    /// active server or attaching credentials from an existing session.
+    func lookupInvitation(endpoint: ServerEndpoint, token: String) async throws -> InvitationLookupResponse {
+        try await HTTPClient.shared.getAnonymous(
+            from: endpoint,
+            "/api/v1/invitations/\(token)",
+            diagnosticPath: "/api/v1/invitations/<redacted>"
+        )
+    }
+
+    /// Accepts an invitation: the account is created server-side with the
+    /// invitation's email as username, and a normal session begins. The
+    /// server entry is registered so the session survives restarts.
+    func acceptInvitation(endpoint: ServerEndpoint, token: String, password: String) async throws -> String {
+        let id = ServerRegistry.serverId(for: endpoint.baseURL)
+        var fetchedName: String?
+        if let health: HealthStatus = try? await HTTPClient.shared.getAnonymous(
+            from: endpoint,
+            "/api/v1/health"
+        ) {
+            fetchedName = health.serverName
+        }
+        let response: LoginResponse = try await HTTPClient.shared.postAnonymous(
+            to: endpoint,
+            "/api/v1/invitations/\(token)/accept",
+            body: AcceptInvitationRequest(password: password),
+            diagnosticPath: "/api/v1/invitations/<redacted>/accept"
+        )
+
+        // Only a successful accept commits the server/session boundary.
+        ServerRegistry.shared.addOrUpdate(ServerEntry(
+            id: id,
+            url: endpoint.baseURL,
+            fetchedName: fetchedName,
+            profileId: nil,
+            lastUsedAt: Date()
+        ), preservingProfile: false)
+        await ServerRegistry.shared.switchTo(serverId: id)
+        guard let expectedAccount = await TokenStore.shared.refreshAccountIdentity() else {
+            throw HTTPError.serverUrlNotConfigured
+        }
+        try await installSession(
+            accessToken: response.accessToken,
+            refreshToken: response.refreshToken,
+            expectedAccount: expectedAccount
+        )
+        return String(response.user.id)
+    }
+
     /// A login response establishes a brand-new session. Wipe every piece of
     /// prior auth state before persisting the new tokens — no need to carry
     /// `profileId` or `profileToken` across the boundary, and keeping them
@@ -281,12 +332,23 @@ final class AuthService: @unchecked Sendable {
         #endif
     }
 
-    func createProfile(name: String, avatarEmoji: String?, pin: String?, isChild: Bool) async throws -> UserProfile {
+    func createProfile(
+        name: String,
+        avatarEmoji: String?,
+        pin: String?,
+        isChild: Bool,
+        maxContentRating: String? = nil,
+        libraryRestrictionsEnabled: Bool = false,
+        allowedLibraryIds: [Int] = []
+    ) async throws -> UserProfile {
         try await ContinuumAPI.shared.createProfile(
             name: name,
             avatarEmoji: avatarEmoji,
             pin: pin,
-            isChild: isChild
+            isChild: isChild,
+            maxContentRating: maxContentRating,
+            libraryRestrictionsEnabled: libraryRestrictionsEnabled,
+            allowedLibraryIds: allowedLibraryIds
         )
     }
 
