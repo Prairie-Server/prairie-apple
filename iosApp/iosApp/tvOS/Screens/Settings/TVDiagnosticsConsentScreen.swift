@@ -27,9 +27,11 @@ struct TVDiagnosticsConsentScreen: View {
                     .buttonStyle(TVSettingsPaneRowStyle())
                     .focused($focusedAction, equals: .ask)
 
-                Button("Always") { proposedMode = .always }
-                    .buttonStyle(TVSettingsPaneRowStyle())
-                    .focused($focusedAction, equals: .always)
+                if model.allowsAlwaysSend {
+                    Button("Always") { proposedMode = .always }
+                        .buttonStyle(TVSettingsPaneRowStyle())
+                        .focused($focusedAction, equals: .always)
+                }
 
                 Button("Never") { proposedMode = .never }
                     .buttonStyle(TVSettingsPaneRowStyle(isDestructive: true))
@@ -50,7 +52,9 @@ struct TVDiagnosticsConsentScreen: View {
             } else if proposedMode == .never {
                 TVSettingsConfirmationOverlay(
                     title: "Turn Off Crash Reports?",
-                    message: "Pending reports for this server account will be deleted.",
+                    message: model.selectedDestination == .hosted
+                        ? "Pending local reports will be deleted. Reports already received by Silo Diagnostics will also be queued for deletion."
+                        : "Pending reports for this server account will be deleted.",
                     confirmTitle: "Turn Off and Delete",
                     cancel: cancelConfirmation,
                     confirm: { confirm(.never) }
