@@ -7,16 +7,41 @@ import SwiftUI
 /// `docs/tvos-focus.md`.
 struct TVGeneralSettingsPane: View {
     @State private var preferences = UICustomizationPreferences.shared
+    @State private var launchPreferences = ProfileLaunchPreferences.shared
     @State private var navPrefs = TVNavPreferences.shared
     @State private var activePicker: PickerKind?
     @State private var showsMenuEditor = false
     @State private var registry = ServerRegistry.shared
     @State private var librarySnapshot = MainTabLibrarySnapshot.cachedForCurrentAuthority()
+    let activeProfile: UserProfile?
     let detailFocus: FocusState<TVSettingsDetailFocus?>.Binding
+    let changePairedProfile: () -> Void
+    private let appleTVUserContext = AppleTVUserContext.current
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            TVSettingsSectionHeader("APPLE TV USER")
+
+            TVSettingsPickerRow(
+                title: "Paired Silo Profile",
+                value: pairedProfileName,
+                action: changePairedProfile
+            )
+            .focused(detailFocus, equals: .generalAppleTVUser)
+
+            TVSettingsFooter(pairingDescription)
+
+            TVSettingsSectionHeader("PROFILE AT LAUNCH")
+
+            TVSettingsPickerRow(
+                title: "Profile at Launch",
+                value: launchPreferences.behavior.title
+            ) { activePicker = .profileLaunch }
+            .focused(detailFocus, equals: .generalProfileLaunch)
+
+            TVSettingsFooter(launchPreferences.behavior.tvDescription)
+
             if let message = preferences.capabilityMessage {
                 TVSettingsSectionHeader("SERVER SUPPORT")
                 TVSettingsFooter(message)
@@ -26,7 +51,7 @@ struct TVGeneralSettingsPane: View {
                 TVSettingsSectionHeader("SYNC SOURCE")
                 if preferences.cardPresentationUsesDeviceOverride {
                     familySettingsButton
-                        .focused(detailFocus, equals: .top)
+                        .focused(detailFocus, equals: .generalCardPreset)
                 } else {
                     familySettingsButton
                 }
@@ -74,7 +99,7 @@ struct TVGeneralSettingsPane: View {
                 ) {
                     navPrefs.setShowAudiobooks(!navPrefs.showAudiobooks)
                 }
-                .focused(detailFocus, equals: .top)
+                .focused(detailFocus, equals: .generalTopMenu)
 
                 TVSettingsFooter("This server uses the legacy device-local menu preference. Adds an Audiobooks tab when an audiobook library is available.")
             } else {
@@ -132,6 +157,24 @@ struct TVGeneralSettingsPane: View {
         ).count
     }
 
+    private var pairedProfileName: String {
+        guard let serverID = registry.activeServerId,
+              let remembered = launchPreferences.rememberedProfile(for: serverID) else {
+            return "Not paired"
+        }
+        guard let activeProfile,
+              activeProfile.id == remembered.profileID else {
+            return "Saved profile"
+        }
+        return activeProfile.name
+    }
+
+    private var pairingDescription: String {
+        let base = appleTVUserContext.pairingDescription
+        guard launchPreferences.behavior == .askEveryLaunch else { return base }
+        return "\(base) Ask Every Time is on, so Silo will still show Who's Watching at launch."
+    }
+
     @ViewBuilder
     private var presetRow: some View {
         let row = TVSettingsPickerRow(
@@ -142,7 +185,7 @@ struct TVGeneralSettingsPane: View {
         if preferences.cardPresentationUsesDeviceOverride || !preferences.allowsEditing {
             row.disabled(true)
         } else {
-            row.focused(detailFocus, equals: .top)
+            row.focused(detailFocus, equals: .generalCardPreset)
         }
     }
 
@@ -157,6 +200,12 @@ struct TVGeneralSettingsPane: View {
     @ViewBuilder
     private func pickerSheet(for picker: PickerKind) -> some View {
         switch picker {
+        case .profileLaunch:
+            TVSettingsPickerSheet(
+                title: "Profile at Launch",
+                options: TVSettingsOptions.profileLaunch,
+                selection: $launchPreferences.behaviorID
+            )
         case .preset:
             TVSettingsPickerSheet(
                 title: "Card Preset",
@@ -213,6 +262,7 @@ struct TVGeneralSettingsPane: View {
     }
 
     private enum PickerKind: String, Identifiable {
+        case profileLaunch
         case preset
         case posterSize
         case caption
