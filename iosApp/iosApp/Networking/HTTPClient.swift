@@ -1079,15 +1079,7 @@ actor HTTPClient {
             request.setValue(profileToken, forHTTPHeaderField: "X-Profile-Token")
             attached.append("profileToken")
         }
-        let device = AppleDeviceIdentity.current
-        request.setValue(device.id, forHTTPHeaderField: "X-Silo-Device-Id")
-        request.setValue(device.name, forHTTPHeaderField: "X-Silo-Device-Name")
-        request.setValue(device.platform, forHTTPHeaderField: "X-Silo-Device-Platform")
-        request.setValue(device.clientFamily, forHTTPHeaderField: "X-Silo-Client-Family")
-        attached.append("device=\(device.platform)/\(device.clientFamily)")
-        let method = request.httpMethod ?? ""
-        let attachedDesc = attached.joined(separator: ", ")
-        Self.logger.debug("→ \(method, privacy: .public) \(path, privacy: .public) headers=[\(attachedDesc, privacy: .public)]")
+        attachIdentityAndTrace(&request, path: path, credentials: attached)
     }
 
     /// Attach the immutable account-owner/profile snapshot captured before the
@@ -1115,14 +1107,34 @@ actor HTTPClient {
             request.setValue(profileToken, forHTTPHeaderField: "X-Profile-Token")
             attached.append("profileToken")
         }
+        attachIdentityAndTrace(&request, path: path, credentials: attached)
+    }
+
+    /// Attaches the shared device/client identity headers and emits the
+    /// one-line request trace. Both the ordinary and legacy auth paths end
+    /// here so a field added to either the header set or the trace reaches
+    /// both instead of drifting between two copies.
+    ///
+    /// `credentials` is what the caller already attached (auth, profile,
+    /// profileToken); nothing here is user data, so the whole line is
+    /// logged `.public`.
+    private func attachIdentityAndTrace(
+        _ request: inout URLRequest,
+        path: String,
+        credentials: [String]
+    ) {
         let device = AppleDeviceIdentity.current
-        request.setValue(device.id, forHTTPHeaderField: "X-Silo-Device-Id")
-        request.setValue(device.name, forHTTPHeaderField: "X-Silo-Device-Name")
-        request.setValue(device.platform, forHTTPHeaderField: "X-Silo-Device-Platform")
-        request.setValue(device.clientFamily, forHTTPHeaderField: "X-Silo-Client-Family")
-        attached.append("device=\(device.platform)/\(device.clientFamily)")
+        device.applyHeaders(to: &request)
+        let trace = credentials + [
+            "device=\(device.platform)/\(device.clientFamily)",
+            // Channel included deliberately: it is the only field that
+            // separates a re-signed sideload build from the TestFlight build
+            // of the same version+build, which is exactly the question a
+            // user-supplied log has to answer.
+            "client=\(device.clientName) \(device.appVersion) (\(device.appBuild)) \(device.channel)"
+        ]
         let method = request.httpMethod ?? ""
-        let attachedDesc = attached.joined(separator: ", ")
+        let attachedDesc = trace.joined(separator: ", ")
         Self.logger.debug("→ \(method, privacy: .public) \(path, privacy: .public) headers=[\(attachedDesc, privacy: .public)]")
     }
 
@@ -1140,11 +1152,7 @@ actor HTTPClient {
         if let profileToken = auth.profileToken {
             request.setValue(profileToken, forHTTPHeaderField: "X-Profile-Token")
         }
-        let device = AppleDeviceIdentity.current
-        request.setValue(device.id, forHTTPHeaderField: "X-Silo-Device-Id")
-        request.setValue(device.name, forHTTPHeaderField: "X-Silo-Device-Name")
-        request.setValue(device.platform, forHTTPHeaderField: "X-Silo-Device-Platform")
-        request.setValue(device.clientFamily, forHTTPHeaderField: "X-Silo-Client-Family")
+        AppleDeviceIdentity.current.applyHeaders(to: &request)
     }
 
     // MARK: - Response handling

@@ -40,5 +40,7 @@
 	<true/>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>
 	<true/>
+	<key>SiloBuildChannel</key>
+	<string>$(SILO_BUILD_CHANNEL)</string>
 </dict>
 </plist>

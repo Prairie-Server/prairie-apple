@@ -187,6 +187,8 @@ enum ApplePlaybackV3Capabilities {
             protocolVersion: PlaybackProtocolV3.version,
             formFactor: formFactor,
             appVersion: appVersion,
+            appBuild: appBuild,
+            appChannel: appChannel,
             device: deviceContext,
             output: output,
             deliveries: deliveries
@@ -281,6 +283,8 @@ enum ApplePlaybackV3Capabilities {
             protocolVersion: base.context.protocolVersion,
             formFactor: base.context.formFactor,
             appVersion: base.context.appVersion,
+            appBuild: base.context.appBuild,
+            appChannel: base.context.appChannel,
             device: base.context.device,
             output: output,
             deliveries: deliveries
@@ -473,8 +477,22 @@ enum ApplePlaybackV3Capabilities {
         #endif
     }
 
+    // Version/build/channel come from the same readers the HTTP headers use,
+    // so the two carriers cannot disagree about the same running binary. They
+    // deliberately do NOT go through `AppleDeviceIdentity.current`: that
+    // initializer also resolves the keychain-backed device id, and a capability
+    // snapshot has no need to block on the keychain. A missing Info.plist key
+    // reports `unknown` rather than a plausible-looking "0".
     private static var appVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
+        AppleDeviceIdentity.bundleAppVersion
+    }
+
+    private static var appBuild: String {
+        AppleDeviceIdentity.bundleAppBuild
+    }
+
+    private static var appChannel: String {
+        AppleDeviceIdentity.buildChannel
     }
 
     private static var deviceContext: PlaybackV3DeviceContext {
