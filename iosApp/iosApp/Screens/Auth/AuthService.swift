@@ -297,6 +297,10 @@ final class AuthService: @unchecked Sendable {
         Task { @MainActor in
             await AICapabilities.shared.refresh()
             await RequestsFeatureStore.shared.refresh()
+            // Unlike the two above, this one gates *enablement* of an entry
+            // point that stays visible either way, and it defaults to
+            // available — so a slow or failing probe never hides anything.
+            await SubtitleProvidersStore.shared.refresh()
         }
     }
 
@@ -597,6 +601,7 @@ final class AuthService: @unchecked Sendable {
         // profile switch; `selectProfile` re-fetches after the switch lands.
         AICapabilities.shared.reset()
         RequestsFeatureStore.shared.reset()
+        SubtitleProvidersStore.shared.reset()
         RequestsEventBus.shared.reset()
         #if os(tvOS)
         ItemDetailCache.shared.clearAll()
@@ -758,6 +763,7 @@ final class AuthService: @unchecked Sendable {
         ProfilePrefsStore.shared.clear()
         AICapabilities.shared.reset()
         RequestsFeatureStore.shared.reset()
+        SubtitleProvidersStore.shared.reset()
         RequestsEventBus.shared.reset()
         #if os(tvOS)
         ItemDetailCache.shared.clearAll()
