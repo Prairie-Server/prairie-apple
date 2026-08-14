@@ -54,39 +54,26 @@ struct OnboardingProgressRequest: Codable {
     let skipped: Bool
 }
 
-/// Bridges an invitation's `show_tour=false` hint across profile creation.
-/// The server cannot record profile-scoped progress until a profile exists,
-/// so the authenticated gate posts the skip and clears this durable hint.
-/// Binding the marker to the newly claimed user prevents a later account on
-/// the same server from consuming another invitee's preference.
-enum OnboardingTourSuppression {
+/// Read-only compatibility for a tour preference stored by older builds after
+/// an invitation was claimed. New builds never create this marker, but consume
+/// an existing account-bound record so an upgrade does not reverse the user's
+/// previously accepted `show_tour=false` choice.
+enum LegacyInviteTourSuppression {
     private struct Record: Codable, Equatable {
         let serverId: String
         let userId: String
     }
 
     private static let key = "onboardingTourSuppressedAccount.v2"
-    private static let legacyKey = "onboardingTourSuppressedServerId.v1"
-
-    static func set(
-        for serverId: String,
-        userId: String,
-        defaults: SharedDefaults = .shared
-    ) {
-        guard let data = try? JSONEncoder().encode(Record(serverId: serverId, userId: userId)) else {
-            return
-        }
-        defaults.removeObject(forKey: legacyKey)
-        defaults.set(data, forKey: key)
-    }
+    private static let unsafeLegacyKey = "onboardingTourSuppressedServerId.v1"
 
     static func pendingUserId(
         for serverId: String?,
         defaults: SharedDefaults = .shared
     ) -> String? {
         // The v1 value was not account-bound and is unsafe to consume.
-        if defaults.containsObject(forKey: legacyKey) {
-            defaults.removeObject(forKey: legacyKey)
+        if defaults.containsObject(forKey: unsafeLegacyKey) {
+            defaults.removeObject(forKey: unsafeLegacyKey)
         }
         guard let serverId,
               let data = defaults.data(forKey: key),

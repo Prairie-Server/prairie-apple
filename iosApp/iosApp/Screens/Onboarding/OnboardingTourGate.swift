@@ -48,7 +48,7 @@ final class OnboardingTourGateModel {
             return
         }
 
-        if await handleInviteSuppressionIfNeeded() {
+        if await consumeLegacyInviteTourSuppressionIfNeeded() {
             return
         }
 
@@ -64,19 +64,18 @@ final class OnboardingTourGateModel {
         showTour = false
     }
 
-    /// Returns true when a matching suppression was consumed or must remain
-    /// pending. A marker for a different signed-in account is cleared and
-    /// normal onboarding evaluation continues.
-    private func handleInviteSuppressionIfNeeded() async -> Bool {
+    /// Finishes consuming an account-bound preference written by older builds.
+    /// No current flow creates this marker; it remains only for upgrade safety.
+    private func consumeLegacyInviteTourSuppressionIfNeeded() async -> Bool {
         guard let serverId = ServerRegistry.shared.activeServerId,
-              let expectedUserId = OnboardingTourSuppression.pendingUserId(for: serverId) else {
+              let expectedUserId = LegacyInviteTourSuppression.pendingUserId(for: serverId) else {
             return false
         }
 
         do {
             let user = try await ContinuumAPI.shared.currentUser()
             guard user.id == expectedUserId else {
-                OnboardingTourSuppression.clear(
+                LegacyInviteTourSuppression.clear(
                     serverId: serverId,
                     userId: expectedUserId
                 )
@@ -90,13 +89,13 @@ final class OnboardingTourGateModel {
                 completed: false,
                 skipped: true
             ))
-            OnboardingTourSuppression.clear(
+            LegacyInviteTourSuppression.clear(
                 serverId: serverId,
                 userId: expectedUserId
             )
             return true
         } catch {
-            // Keep the account-bound hint for a future authenticated launch.
+            // Preserve the marker and retry on the next authenticated launch.
             return true
         }
     }

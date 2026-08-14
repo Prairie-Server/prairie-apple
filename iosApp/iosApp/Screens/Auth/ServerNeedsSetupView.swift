@@ -1,20 +1,15 @@
 import SwiftUI
 
-#if os(macOS)
-import AppKit
-#endif
-
 #if !os(tvOS)
 /// Shown when the chosen server has no account yet (`/api/v1/auth/setup`
-/// reports `needsSetup`). iOS no longer creates the admin account in-app —
-/// that happens in the server's web UI — so we point the user there and offer
-/// a retry that re-probes the server.
+/// reports `needsSetup`). Account provisioning is intentionally unavailable
+/// in the Apple clients, so this screen only lets the user re-probe the server
+/// after its administrator finishes setup elsewhere.
 struct ServerNeedsSetupView: View {
     var router: AppRouter
-    @Environment(\.openURL) private var openURL
     @State private var isChecking = false
-    @State private var didCopy = false
     @State private var error: String?
+    @State private var retryTask: Task<Void, Never>?
 
     var body: some View {
         AuroraScreen(variant: .server, scrim: .soft) {
@@ -42,11 +37,11 @@ struct ServerNeedsSetupView: View {
             .padding(.bottom, 18)
 
             VStack(spacing: 12) {
-                Text("Your server needs one last step")
+                Text("This server isn't ready")
                     .font(.continuumTitle)
                     .foregroundStyle(Color.auroraInk)
                     .multilineTextAlignment(.center)
-                Text("Open the server in a browser and create its first account. When you're done, return here and check again.")
+                Text("Ask the server administrator to finish setup. When it's ready, return here and check again.")
                     .font(.continuumBody)
                     .foregroundStyle(Color.auroraInkSecondary)
                     .multilineTextAlignment(.center)
@@ -56,50 +51,17 @@ struct ServerNeedsSetupView: View {
             .padding(.bottom, 22)
 
             VStack(spacing: 16) {
-                if let setupURL {
-                    Button(action: copyURL) {
-                        HStack(spacing: 10) {
-                            Text(setupURL)
-                                .font(.system(size: 15, weight: .regular, design: .monospaced))
-                                .foregroundStyle(Color.auroraInk)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            Spacer(minLength: 0)
-                            Label(didCopy ? "Copied" : "Copy", systemImage: didCopy ? "checkmark" : "doc.on.doc")
-                                .font(.continuumCaption)
-                                .foregroundStyle(didCopy ? Color.continuumSuccess : Color.auroraInkSecondary)
-                        }
-                        .padding(.horizontal, 16)
-                        .frame(height: AuroraControl.height)
-                        .background(
-                            RoundedRectangle(cornerRadius: AuroraControl.corner)
-                                .fill(Color.continuumSurfaceElevated.opacity(0.82))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: AuroraControl.corner)
-                                .stroke(Color.continuumOutline, lineWidth: 1)
-                        )
-                    }
-                    .buttonStyle(.plain)
-                }
-
                 if let error {
                     AuroraErrorLabel(error)
                 }
 
-                Button(action: openSetup) {
-                    Label("Open in browser", systemImage: "safari")
-                }
-                .buttonStyle(AuroraPrimaryButtonStyle())
-                .disabled(setupURL == nil)
-
                 Button(action: retry) {
                     Text(isChecking ? "Checking…" : "Check again")
                 }
-                .buttonStyle(AuroraGhostButtonStyle())
+                .buttonStyle(AuroraPrimaryButtonStyle(isLoading: isChecking))
                 .disabled(isChecking)
 
-                Button("Change server") { router.resetToServerSetup() }
+                Button("Change server", action: changeServer)
                     .buttonStyle(AuroraGhostButtonStyle())
                     .frame(maxWidth: .infinity)
             }
@@ -108,28 +70,7 @@ struct ServerNeedsSetupView: View {
             .animation(.easeInOut(duration: 0.2), value: error)
         }
         .navigationBarBackButtonHidden()
-    }
-
-    private var setupURL: String? {
-        let url = AuthService.shared.serverUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-        return url.isEmpty ? nil : url
-    }
-
-    private func copyURL() {
-        guard let setupURL else { return }
-        #if os(iOS)
-        UIPasteboard.general.string = setupURL
-        #elseif os(macOS)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(setupURL, forType: .string)
-        #endif
-        didCopy = true
-    }
-
-    private func openSetup() {
-        guard let setupURL,
-              let url = URL(string: setupURL) else { return }
-        openURL(url)
+        .onDisappear(perform: cancelRetry)
     }
 
     /// Re-probe the current server. If it's now set up, pop back to the login
@@ -139,13 +80,16 @@ struct ServerNeedsSetupView: View {
         guard !isChecking else { return }
         isChecking = true
         error = nil
-        Task {
+        let expectedServerURL = AuthService.shared.serverUrl
+        retryTask = Task {
             do {
-                let status = try await AuthService.shared.checkServer(url: AuthService.shared.serverUrl)
+                let status = try await AuthService.shared.checkServer(url: expectedServerURL)
                 await MainActor.run {
                     isChecking = false
+                    guard !Task.isCancelled,
+                          AuthService.shared.serverUrl == expectedServerURL else { return }
                     if status.needsSetup {
-                        error = "This server still needs to be set up in a browser."
+                        error = "This server still needs administrator setup."
                     } else {
                         router.goBack()
                     }
@@ -153,10 +97,22 @@ struct ServerNeedsSetupView: View {
             } catch {
                 await MainActor.run {
                     isChecking = false
+                    guard !Task.isCancelled else { return }
                     self.error = "Couldn't reach the server. Check it's running and try again."
                 }
             }
         }
+    }
+
+    private func changeServer() {
+        cancelRetry()
+        router.resetToServerSetup()
+    }
+
+    private func cancelRetry() {
+        retryTask?.cancel()
+        retryTask = nil
+        isChecking = false
     }
 }
 #endif
