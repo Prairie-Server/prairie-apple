@@ -668,6 +668,7 @@ actor PlaybackSessionBridge {
         try await PlaybackV3CapabilityGate.shared.requireNeutralProtocolV3()
 
         let snapshot = ApplePlaybackV3Capabilities.snapshot()
+        cmpLog("[CMP-OUTPUT] phase=start \(snapshot.outputDiagnosticsLogFields)")
         let playbackAttemptId = "apple:\(UUID().uuidString.lowercased())"
         let request = PlaybackV3StartRequest(
             protocolVersion: PlaybackProtocolV3.version,
@@ -1030,6 +1031,7 @@ actor PlaybackSessionBridge {
 
         if classification == "output_route_changed" {
             active.snapshot = outputRouteSnapshot ?? ApplePlaybackV3Capabilities.snapshot()
+            cmpLog("[CMP-OUTPUT] phase=route_change \(active.snapshot.outputDiagnosticsLogFields)")
         }
 
         let isIntent = operation == PlaybackProtocolV3.ReplanOperation.trackChange

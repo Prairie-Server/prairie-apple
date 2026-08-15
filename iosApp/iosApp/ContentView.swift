@@ -17,6 +17,7 @@ struct ContentView: View {
     #endif
     @State private var debugPlayContentId: String?
     @State private var didAttemptDebugAutoPlay = false
+    @State private var didAttemptDebugDiagnostics = false
     @State private var didStartInitialStateCheck = false
     @State private var didFinishStartupSplash = false
     @State private var pendingInitialAuthState: AppRouter.AuthState?
@@ -194,6 +195,13 @@ struct ContentView: View {
                 #endif
             }
         }
+        #if DEBUG
+        #if os(iOS) || os(tvOS)
+        .task(id: router.authState) {
+            await maybeSendDiagnosticsForDebug()
+        }
+        #endif
+        #endif
         .task(id: serverRegistry.activeServerId) {
             // ServerRegistry publishes the destination ID while its identity
             // transition lease is still held. Wait before reading or
@@ -699,15 +707,46 @@ struct ContentView: View {
         return CommandLine.arguments[index + 1].trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// Debug: sign in from launch arguments
-    /// `-debugServer <url> -debugUsername <user> -debugPassword <pass>`,
-    /// selecting the primary (or only) PIN-less profile. Simulator-driven
-    /// end-to-end runs use this to reach `.authenticated` without UI input.
+    #if os(iOS) || os(tvOS)
+    /// Debug-only physical-device hook for exercising the complete hosted
+    /// diagnostics path after launch-driven playback has had time to start.
+    /// The argument value is a bounded delay in seconds; no report is sent
+    /// unless the tester explicitly supplies it.
+    private func maybeSendDiagnosticsForDebug() async {
+        guard router.authState == .authenticated,
+              !didAttemptDebugDiagnostics,
+              let rawDelay = debugLaunchArgValue("-debugSendDiagnosticsAfter"),
+              let requestedDelay = UInt64(rawDelay) else {
+            return
+        }
+        didAttemptDebugDiagnostics = true
+
+        let delay = min(requestedDelay, 300)
+        try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
+        guard !Task.isCancelled, router.authState == .authenticated else { return }
+
+        if CommandLine.arguments.contains("-debugDiagnosticsHosted"),
+           diagnosticsModel.selectedDestination != .hosted {
+            await diagnosticsModel.setDestination(.hosted)
+        }
+        await diagnosticsModel.handleForeground()
+        await diagnosticsModel.createAndSendManualReport()
+        print("[DebugDiagnostics] \(diagnosticsModel.notice?.message ?? "No upload result.")")
+    }
+    #endif
+
+    /// Debug: sign in from launch arguments, with the password accepted from
+    /// `SILO_DEBUG_PASSWORD` so physical-device runs do not expose it in the
+    /// process arguments. Simulator fixtures may still pass `-debugPassword`.
+    /// Selects the primary (or only) PIN-less profile.
     private func maybeDebugAutoLogin() async {
+        let password = debugLaunchArgValue("-debugPassword")
+            ?? ProcessInfo.processInfo.environment["SILO_DEBUG_PASSWORD"]
         guard router.authState != .authenticated,
               let server = debugLaunchArgValue("-debugServer"),
               let username = debugLaunchArgValue("-debugUsername"),
-              let password = debugLaunchArgValue("-debugPassword") else {
+              let password,
+              !password.isEmpty else {
             return
         }
         do {

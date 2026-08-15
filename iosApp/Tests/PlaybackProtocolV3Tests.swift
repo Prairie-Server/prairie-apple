@@ -755,6 +755,9 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         XCTAssertNil(snapshot.context.output.audioPassthrough)
         XCTAssertTrue(snapshot.outputContextId?.hasPrefix("apple:") == true)
         XCTAssertFalse(snapshot.capabilities.hdr)
+        XCTAssertTrue(snapshot.outputDiagnosticsLogFields.contains("hdrOutputEligible="))
+        XCTAssertTrue(snapshot.outputDiagnosticsLogFields.contains("dvModes="))
+        XCTAssertFalse(snapshot.outputDiagnosticsLogFields.contains("output."))
 
         let hdrDetails = try XCTUnwrap(snapshot.capabilities.hdrDetails)
         XCTAssertFalse(hdrDetails.claimsAnyHDR)

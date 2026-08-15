@@ -4,6 +4,50 @@ import Foundation
 import UIKit
 #endif
 
+/// The HDR modes tvOS/macOS reports for the current playback output path.
+///
+/// This is deliberately separate from codec decode support: AVPlayer's HDR
+/// availability reflects the device plus the connected display/HDMI chain,
+/// which is the evidence the protocol-v3 server uses when deciding whether a
+/// Dolby Vision source can stay source-preserving.
+struct ApplePlaybackHDRAvailability: Equatable {
+    let hdrPlaybackEligible: Bool
+    let supportsHDR10: Bool
+    let supportsHLG: Bool
+    let supportsDolbyVision: Bool
+
+    var supportsAnyHDRMode: Bool {
+        supportsHDR10 || supportsHLG || supportsDolbyVision
+    }
+
+    static func probe() -> ApplePlaybackHDRAvailability {
+        #if targetEnvironment(simulator)
+        return ApplePlaybackHDRAvailability(
+            hdrPlaybackEligible: false,
+            supportsHDR10: false,
+            supportsHLG: false,
+            supportsDolbyVision: false
+        )
+        #elseif os(macOS)
+        let eligible = AVPlayer.eligibleForHDRPlayback
+        return ApplePlaybackHDRAvailability(
+            hdrPlaybackEligible: eligible,
+            supportsHDR10: eligible,
+            supportsHLG: eligible,
+            supportsDolbyVision: false
+        )
+        #else
+        let modes = AVPlayer.availableHDRModes
+        return ApplePlaybackHDRAvailability(
+            hdrPlaybackEligible: AVPlayer.eligibleForHDRPlayback,
+            supportsHDR10: modes.contains(.hdr10),
+            supportsHLG: modes.contains(.hlg),
+            supportsDolbyVision: modes.contains(.dolbyVision)
+        )
+        #endif
+    }
+}
+
 /// Snapshot of the device's playback output capabilities at plan time.
 /// Plumbed into `ApplePlaybackPlannerInput` so the planner can stop
 /// over-promising HDR / Dolby Vision purely from source metadata. Today
@@ -13,6 +57,7 @@ import UIKit
 /// The probe is conservative: any field defaults to `false` / `nil` when
 /// it cannot be determined. "Unknown" never reads as "supported".
 struct ApplePlaybackDisplayCapabilities: Equatable {
+    let hdrPlaybackEligible: Bool
     let supportsDolbyVision: Bool
     let supportsHDR10: Bool
     let supportsHLG: Bool
@@ -28,6 +73,7 @@ struct ApplePlaybackDisplayCapabilities: Equatable {
     }
 
     static let unknown = ApplePlaybackDisplayCapabilities(
+        hdrPlaybackEligible: false,
         supportsDolbyVision: false,
         supportsHDR10: false,
         supportsHLG: false,
@@ -38,10 +84,11 @@ struct ApplePlaybackDisplayCapabilities: Equatable {
 
     /// Best-effort capability snapshot from the host. AVAudioSession's
     /// current route gives us spatial-audio capability on iOS/tvOS;
-    /// AVDisplayManager (tvOS) gives display dynamic-range hints. Where a
-    /// value cannot be obtained, the field stays at its conservative
-    /// default rather than being optimistically populated.
+    /// AVPlayer gives the HDR modes available through the current display
+    /// chain. Where a value cannot be obtained, the field stays at its
+    /// conservative default rather than being optimistically populated.
     static func probe() -> ApplePlaybackDisplayCapabilities {
+        let hdrAvailability = ApplePlaybackHDRAvailability.probe()
         var supportsAtmos = false
         #if !os(macOS)
         let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
@@ -49,17 +96,14 @@ struct ApplePlaybackDisplayCapabilities: Equatable {
             supportsAtmos = outputs.contains { $0.isSpatialAudioEnabled }
         }
         #endif
-        // Display range / resolution probing on tvOS lives behind the
-        // private `AVDisplayCriteria` bridge; surfacing it as typed
-        // capabilities is a follow-up. For now, leave them unknown so
-        // callers don't accidentally consume optimistic defaults.
         return ApplePlaybackDisplayCapabilities(
-            supportsDolbyVision: false,
-            supportsHDR10: false,
-            supportsHLG: false,
+            hdrPlaybackEligible: hdrAvailability.hdrPlaybackEligible,
+            supportsDolbyVision: hdrAvailability.supportsDolbyVision,
+            supportsHDR10: hdrAvailability.supportsHDR10,
+            supportsHLG: hdrAvailability.supportsHLG,
             supportsAtmos: supportsAtmos,
             maxResolution: nil,
-            supportsTenBit: false
+            supportsTenBit: hdrAvailability.supportsAnyHDRMode
         )
     }
 }

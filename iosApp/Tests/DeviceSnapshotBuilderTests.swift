@@ -53,6 +53,27 @@ final class DeviceSnapshotBuilderTests: XCTestCase {
         XCTAssertFalse(encoded.contains(#""device_id""#))
     }
 
+    func testCapabilityProbeRecordsCurrentHDRPlaybackModes() {
+        let snapshot = DiagnosticsCapabilityProbe.snapshot(
+            displayCapabilities: ApplePlaybackDisplayCapabilities(
+                hdrPlaybackEligible: true,
+                supportsDolbyVision: true,
+                supportsHDR10: true,
+                supportsHLG: false,
+                supportsAtmos: false,
+                maxResolution: nil,
+                supportsTenBit: true
+            )
+        )
+
+        guard case .object(let display) = snapshot.display else {
+            return XCTFail("display snapshot was not an object")
+        }
+        XCTAssertEqual(display["hdr_output_eligible"], .bool(true))
+        XCTAssertEqual(display["hdr_types"], .array([.string("HDR10"), .string("DV")]))
+        XCTAssertEqual(display["supports_ten_bit"], .bool(true))
+    }
+
     private func makeBuilder(
         audio: DiagnosticsCapabilityProbe.AudioOutputSnapshot,
         date: Date = Date(timeIntervalSince1970: 100)

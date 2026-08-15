@@ -4,9 +4,8 @@ import Foundation
 
 // Diagnostics-scoped capability probe feeding device.json snapshots.
 // Deliberately named apart from the playback-protocol capability reporter
-// (ApplePlaybackV3Capabilities); the two answer different questions — this
-// one probes the attached display, that one states what the client decodes.
-// Where they overlap (which video codecs), both read `AppleDecodeCapabilities`.
+// (ApplePlaybackV3Capabilities); both use the same live AVPlayer output facts,
+// while this payload also records diagnostic-only device sections.
 enum DiagnosticsCapabilityProbe {
     struct Snapshot: Equatable {
         let display: DiagnosticsJSONValue
@@ -87,6 +86,7 @@ enum DiagnosticsCapabilityProbe {
         return .object([
             "mode": .string("not_collected"),
             "modes_supported": .string("not_collected"),
+            "hdr_output_eligible": .bool(capabilities.hdrPlaybackEligible),
             "hdr_types": .array(hdrTypes),
             "wide_gamut": .string("not_collected"),
             "max_resolution": capabilities.maxResolution.map { .string($0.rawValue) } ?? .string("unknown"),
