@@ -2,6 +2,14 @@ import Foundation
 import XCTest
 @testable import Silo
 
+/// Minimal cross-task observation point for the cancellation-shield tests.
+actor PlaybackTestActorBox<Value: Sendable> {
+    private(set) var value: Value?
+
+    func set(_ newValue: Value) { value = newValue }
+}
+
+@MainActor
 final class PlaybackProtocolV3Tests: XCTestCase {
     func testServerGoldenDecisionDecodesAndPublishesCompleteSubtitleInventory() throws {
         let response = try PlaybackV3FixtureTestSupport.decode(
@@ -50,6 +58,33 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         )
     }
 
+    func testAuthorizedMediaOriginsIsNegotiatedPerAttemptAndNeverByAudio() {
+        // Not a static claim: the capability report and the audiobook surface
+        // must never carry it, and the video start request only adds it when
+        // the server advertised it.
+        XCTAssertFalse(
+            ApplePlaybackV3Capabilities.features
+                .contains(PlaybackProtocolV3.authorizedMediaOriginsFeature)
+        )
+        XCTAssertFalse(
+            ApplePlaybackV3Capabilities.audiobookFeatures
+                .contains(PlaybackProtocolV3.authorizedMediaOriginsFeature)
+        )
+        XCTAssertEqual(
+            ApplePlaybackV3Capabilities.startFeatures(authorizedMediaOrigins: false),
+            ApplePlaybackV3Capabilities.features
+        )
+
+        let negotiated = ApplePlaybackV3Capabilities.startFeatures(authorizedMediaOrigins: true)
+        XCTAssertTrue(negotiated.contains(PlaybackProtocolV3.authorizedMediaOriginsFeature))
+        // Meaningful only alongside header-authenticated media.
+        XCTAssertTrue(negotiated.contains(PlaybackProtocolV3.headerAuthenticatedMediaFeature))
+        XCTAssertEqual(
+            negotiated.filter { $0 != PlaybackProtocolV3.authorizedMediaOriginsFeature },
+            ApplePlaybackV3Capabilities.features
+        )
+    }
+
     func testRecoveredServerRequestAndCapabilityFixturesDecode() throws {
         let capability = try PlaybackV3FixtureTestSupport.decode(
             PlaybackV3CapabilityResponse.self,
@@ -58,6 +93,7 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         )
         XCTAssertEqual(capability.protocolVersions, [3])
         XCTAssertTrue(capability.features.contains(PlaybackProtocolV3.neutralContractFeature))
+        XCTAssertTrue(capability.features.contains(PlaybackProtocolV3.headerAuthenticatedMediaFeature))
         XCTAssertEqual(
             Set(capability.deliveries),
             [
@@ -88,6 +124,7 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         )
         let plan = try XCTUnwrap(decision.playbackPlan)
         XCTAssertTrue(decision.serverFeatures.contains(PlaybackProtocolV3.neutralContractFeature))
+        XCTAssertTrue(decision.serverFeatures.contains(PlaybackProtocolV3.headerAuthenticatedMediaFeature))
         XCTAssertEqual(replan["failed_plan_id"] as? String, plan.planId)
         XCTAssertEqual(replan["plan_attempt_key"] as? String, plan.planAttemptKey)
         XCTAssertEqual(replan["attempted_plan_keys"] as? [String], [plan.planAttemptKey])
@@ -144,44 +181,6 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         XCTAssertNil(object["output_route_generation"])
     }
 
-    func testSilentRenewalAcceptsOnlyTheSameEffectiveDirectRoute() {
-        let current = makePlan(
-            planAttemptKey: "v3:first",
-            playerStart: 10
-        )
-        let renewed = makePlan(
-            planId: "plan:renewed",
-            planAttemptKey: "v3:second",
-            playerStart: 42
-        )
-        XCTAssertTrue(
-            PlaybackSessionBridge.canRetargetDirectSession(from: current, to: renewed),
-            "fresh plan and attempt identities plus a later player start are safe behind the proxy"
-        )
-        XCTAssertFalse(
-            PlaybackSessionBridge.canRetargetDirectSession(
-                from: current,
-                to: makePlan(
-                    planAttemptKey: "v3:changed-recipe",
-                    audioCodec: "eac3",
-                    playerStart: 42
-                )
-            )
-        )
-        XCTAssertFalse(
-            PlaybackSessionBridge.canRetargetDirectSession(
-                from: current,
-                to: makePlan(
-                    planAttemptKey: "v3:changed-delivery",
-                    delivery: "server_remux_hls",
-                    streamProtocol: "hls",
-                    container: "hls",
-                    playerStart: 42
-                )
-            )
-        )
-    }
-
     func testIntentReplansCarryNoFailureAndUseNeutralOperations() throws {
         XCTAssertEqual(
             PlaybackSessionBridge.replanOperation(forClassification: "audio_track_changed"),
@@ -226,6 +225,194 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         XCTAssertEqual(object["attempted_plan_keys"] as? [String], [])
     }
 
+    func testOutputRouteChangeUsesTheIntentOperationWhenTheServerOffersIt() throws {
+        let advertised = [
+            PlaybackProtocolV3.planFeature,
+            PlaybackProtocolV3.outputChangeFeature
+        ]
+        XCTAssertEqual(
+            PlaybackSessionBridge.replanOperation(
+                forClassification: "output_route_changed",
+                serverFeatures: advertised
+            ),
+            PlaybackProtocolV3.ReplanOperation.outputChange,
+            "an output-route change is an intent replan, so the previous route stays eligible"
+        )
+        // "Clients must keep the active route when this feature is absent": a
+        // server without `output_change_v1` rejects the operation outright, so
+        // the historical failure-recovery spelling remains the only option.
+        XCTAssertEqual(
+            PlaybackSessionBridge.replanOperation(
+                forClassification: "output_route_changed",
+                serverFeatures: [PlaybackProtocolV3.planFeature]
+            ),
+            PlaybackProtocolV3.ReplanOperation.failureRecovery
+        )
+        // The feature must never redirect an unrelated classification.
+        XCTAssertEqual(
+            PlaybackSessionBridge.replanOperation(
+                forClassification: "decoder_failed",
+                serverFeatures: advertised
+            ),
+            PlaybackProtocolV3.ReplanOperation.failureRecovery
+        )
+        XCTAssertTrue(
+            ApplePlaybackV3Capabilities.features.contains(
+                PlaybackProtocolV3.outputChangeFeature
+            ),
+            "the client must advertise the operation it intends to send"
+        )
+        // The server rejects an `output_change` that carries a failure block.
+        XCTAssertNil(
+            PlaybackSessionBridge.replanFailure(
+                operation: PlaybackProtocolV3.ReplanOperation.outputChange,
+                classification: "output_route_changed",
+                message: "route changed"
+            )
+        )
+        let request = makeReplanRequest(
+            planAttemptKey: "v3:output",
+            operation: PlaybackProtocolV3.ReplanOperation.outputChange,
+            failure: nil
+        )
+        let object = try encodedObject(request)
+        XCTAssertEqual(object["operation"] as? String, "output_change")
+        XCTAssertNil(object["failure"])
+    }
+
+    func testSubtitleOrdinalsComeFromTheInventoryWheneverOneExists() {
+        let version = makeVersion(
+            container: "mkv",
+            videoCodec: "h264",
+            audioCodec: "aac",
+            subtitleTracks: [
+                makeSubtitle(index: 2, codec: "ass", external: false, path: nil),
+                makeSubtitle(index: 5, codec: "pgs", external: false, path: nil),
+                makeSubtitle(index: nil, codec: "srt", external: true, path: "movie.en.srt")
+            ]
+        )
+        // The catalog knows one external sidecar; the server also carries two
+        // downloaded subtitles it never exposes, so the real embedded base is 3,
+        // not the 1 that counting the catalog produces.
+        let inventory = [
+            makeInventoryItem(combinedIndex: 0, source: "external"),
+            makeInventoryItem(combinedIndex: 1, source: "downloaded"),
+            makeInventoryItem(combinedIndex: 2, source: "downloaded"),
+            makeInventoryItem(combinedIndex: 3, source: "embedded"),
+            makeInventoryItem(combinedIndex: 4, source: "embedded", delivery: "burn_in_only")
+        ]
+
+        XCTAssertEqual(
+            ApplePlaybackV3PlanAdapter.serverCombinedSubtitleIndex(
+                ffmpegStreamIndex: 2,
+                in: version,
+                inventory: inventory
+            ),
+            3
+        )
+        XCTAssertEqual(
+            ApplePlaybackV3PlanAdapter.serverCombinedSubtitleIndex(
+                ffmpegStreamIndex: 5,
+                in: version,
+                inventory: inventory
+            ),
+            4,
+            "a burn-in-only track keeps its ordinal and must stay addressable"
+        )
+        XCTAssertEqual(
+            ApplePlaybackV3PlanAdapter.ffmpegSubtitleStreamIndex(
+                serverCombinedIndex: 4,
+                in: version,
+                inventory: inventory
+            ),
+            5
+        )
+        XCTAssertNil(
+            ApplePlaybackV3PlanAdapter.ffmpegSubtitleStreamIndex(
+                serverCombinedIndex: 1,
+                in: version,
+                inventory: inventory
+            ),
+            "a downloaded ordinal has no embedded FFmpeg stream index"
+        )
+        // A sidecar player track already echoes the server's combined ordinal,
+        // so it is passed through rather than re-mapped.
+        XCTAssertEqual(
+            ApplePlaybackV3PlanAdapter.serverCombinedSubtitleIndex(
+                for: makePlayerSubtitle(
+                    trackId: SubtitleTrackIdSpace.makeSidecarTrackId(urlIndex: 2),
+                    isExternal: true,
+                    ffIndex: nil,
+                    srcId: 2
+                ),
+                in: version,
+                inventory: inventory
+            ),
+            2
+        )
+        // Before any plan exists there is no inventory, and the counted
+        // derivation is the only identity available for the start request.
+        XCTAssertEqual(
+            ApplePlaybackV3PlanAdapter.serverCombinedSubtitleIndex(
+                ffmpegStreamIndex: 2,
+                in: version,
+                inventory: []
+            ),
+            1
+        )
+    }
+
+    func testCancelledStartReclaimsTheSessionItStillAllocated() async {
+        let reclaimed = PlaybackTestActorBox<String>()
+        let requestStarted = XCTestExpectation(description: "shielded request started")
+
+        let caller = Task<String, Error> {
+            try await PlaybackCancellationShield.run {
+                requestStarted.fulfill()
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                // The POST landed despite the caller's cancellation.
+                return "session-allocated"
+            } reclaim: { allocated in
+                await reclaimed.set(allocated)
+            }
+        }
+
+        await fulfillment(of: [requestStarted], timeout: 5)
+        caller.cancel()
+
+        do {
+            _ = try await caller.value
+            XCTFail("a cancelled caller must not receive the shielded outcome")
+        } catch {
+            XCTAssertTrue(
+                error is CancellationError,
+                "the caller must give up promptly so its start timeout still fires"
+            )
+        }
+
+        // The shielded request keeps running and retires what it allocated.
+        var observed: String?
+        for _ in 0..<100 where observed == nil {
+            observed = await reclaimed.value
+            if observed == nil { try? await Task.sleep(nanoseconds: 20_000_000) }
+        }
+        XCTAssertEqual(observed, "session-allocated")
+    }
+
+    func testUncancelledStartDeliversToTheCallerAndNeverReclaims() async throws {
+        let reclaimed = PlaybackTestActorBox<String>()
+        let value = try await PlaybackCancellationShield.run {
+            "session-allocated"
+        } reclaim: { allocated in
+            await reclaimed.set(allocated)
+        }
+
+        XCTAssertEqual(value, "session-allocated")
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        let observed = await reclaimed.value
+        XCTAssertNil(observed, "a delivered outcome has exactly one owner")
+    }
+
     func testOutputRouteReplanRequiresChangedOutputContextIdentity() {
         XCTAssertFalse(
             PlaybackSessionBridge.isMaterialOutputRouteChange(
@@ -255,148 +442,102 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         )
     }
 
-    func testPlaybackCoordinatorReusesEngineForSameImplementationRoute() {
-        var avPlayerBackendCreations = 0
-        let coordinator = PlaybackCoordinator(
-            makeCore: {
-                XCTFail("The AVFoundation route must not construct PlayerCore")
-                return PlayerCore()
-            },
-            makeAVPlayer: { _ in
-                avPlayerBackendCreations += 1
-                return AVPlayerBackend()
-            }
-        )
-        defer { coordinator.dispose() }
-
-        let initial = coordinator.prepareEngine(for: .siloPlayerLoopback)
-        let replacement = coordinator.prepareEngine(for: .siloPlayerLoopback)
-
-        XCTAssertTrue(initial === replacement)
-        XCTAssertEqual(avPlayerBackendCreations, 1)
-    }
-
-    func testLoopbackSessionPublishesTheAudioTrackSelectedForMuxing() {
-        let tracks = [
-            makePlayerAudioTrack(trackId: 10_000, sourceIndex: 0, ffIndex: 1, isSelected: true),
-            makePlayerAudioTrack(trackId: 10_001, sourceIndex: 1, ffIndex: 2, isSelected: false),
-        ]
-
-        let session = LoopbackSessionSpec(
-            sourceURL: URL(string: "https://example.test/video")!,
-            headers: [:],
-            videoMode: .passthroughH264,
-            sourceVideoFrameRate: 24,
-            selectedAudio: LoopbackSessionSpec.SelectedAudio(
-                trackIndex: 1,
-                ffIndex: 2,
-                sourceCodec: "eac3",
-                sourceChannelCount: 6,
-                sourceChannelLayout: "5.1(side)",
-                outputMode: .copy,
-                preservesAtmos: false
-            ),
-            availableAudioTracks: tracks,
-            manifestMetadata: LoopbackSessionSpec.ManifestMetadata(
-                advertisedDolbyVisionProfile: nil,
-                compatibilityBrand: nil,
-                videoRange: "SDR",
-                mayClaimAtmos: false
-            )
-        )
-
-        XCTAssertEqual(session.availableAudioTracks.map(\.isSelected), [false, true])
-        XCTAssertEqual(session.availableAudioTracks.first(where: \.isSelected)?.srcId, 1)
-    }
-
-    func testDeliveryClassesMapToAppleExecutorsWithoutEngineAliases() throws {
-        let streamRequest = makeStreamRequest()
-        let base = makeBaseExecutionPlan(streamRequest: streamRequest)
-        let cases: [(String, String, PlaybackEngineKind, PlaybackDeliveryStrategy)] = [
-            ("original_http", "http_progressive", .playerCoreDirect, .direct),
-            ("server_remux_progressive", "http_progressive", .avPlayerNativeDirect, .remux),
-            ("server_remux_hls", "hls", .avPlayerHLS, .remux),
-            ("server_transcode_hls", "hls", .avPlayerHLS, .transcode)
-        ]
-
-        for (delivery, streamProtocol, expectedEngine, expectedDelivery) in cases {
-            let plan = makePlan(
-                delivery: delivery,
-                streamProtocol: streamProtocol,
-                container: streamProtocol == "hls" ? "hls" : "mp4"
-            )
-            let adapted = try ApplePlaybackV3PlanAdapter.makeExecutionPlan(
-                v3: PreparedPlaybackV3(
-                    playbackAttemptId: "apple:attempt",
-                    planAttemptId: "apple-plan:attempt",
-                    planAttemptKey: plan.planAttemptKey,
-                    outputContextId: "apple:output",
-                    serverFeatures: [
-                        PlaybackProtocolV3.planFeature,
-                        PlaybackProtocolV3.seekReanchorFeature,
-                        PlaybackProtocolV3.directStreamResumeFeature
-                    ],
-                    plan: plan
+    func testDeclaredDolbyVisionClientTransformsAreAcceptedOnOriginalHTTP() throws {
+        for name in ["client_dv7_to_dv81", "client_dv7_to_hdr10"] {
+            XCTAssertNoThrow(
+                try ApplePlaybackV3PlanAdapter.validate(
+                    makePlan(
+                        container: "mkv",
+                        videoCodec: "hevc",
+                        dynamicRange: "dolby_vision",
+                        transformations: [
+                            .init(
+                                name: name,
+                                executor: "client",
+                                recipeVersion: "1",
+                                validatedClaims: []
+                            )
+                        ]
+                    )
                 ),
-                basePlan: base,
-                streamRequest: streamRequest,
-                routeRequirements: .baseline
+                "\(name) is declared in the capability snapshot and must stay executable"
             )
-            XCTAssertEqual(adapted.engine, expectedEngine, delivery)
-            XCTAssertEqual(adapted.delivery.name, expectedDelivery.name, delivery)
-            XCTAssertEqual(adapted.wireDelivery, delivery)
-            XCTAssertEqual(adapted.supportsDirectStreamResume, delivery == "original_http")
-            XCTAssertEqual(adapted.startMode.seconds, 4.5)
-            XCTAssertEqual(adapted.sourceMetadata.colorRange, "tv")
         }
     }
 
-    func testDirectStreamResumeRequiresNegotiatedResponseFeature() throws {
-        let streamRequest = makeStreamRequest()
-        let plan = makePlan()
-        let adapted = try ApplePlaybackV3PlanAdapter.makeExecutionPlan(
-            v3: PreparedPlaybackV3(
-                playbackAttemptId: "apple:attempt",
-                planAttemptId: "apple-plan:attempt",
-                planAttemptKey: plan.planAttemptKey,
-                outputContextId: "apple:output",
-                serverFeatures: [PlaybackProtocolV3.planFeature],
-                plan: plan
+    func testCapabilitySnapshotDeclaresTheDolbyVisionClientTransforms() throws {
+        XCTAssertTrue(
+            ApplePlaybackV3Capabilities.features.contains(
+                PlaybackProtocolV3.clientTransformFeature
             ),
-            basePlan: makeBaseExecutionPlan(streamRequest: streamRequest),
-            streamRequest: streamRequest,
-            routeRequirements: .baseline
+            "the server rejects the whole request if a client executor entry lacks this flag"
+        )
+        XCTAssertEqual(
+            ApplePlaybackV3Capabilities.deviceClientTransformations.map(\.name),
+            ["client_dv7_to_dv81", "client_dv7_to_hdr10"]
+        )
+        XCTAssertEqual(
+            Set(ApplePlaybackV3Capabilities.deviceClientTransformations.map(\.executor)),
+            ["client"]
+        )
+        XCTAssertEqual(
+            ApplePlaybackV3Capabilities.deviceClientTransformations.first?.validatedClaims,
+            [
+                "profile7_rpu_converted_to_profile81",
+                "hdr10_base_layer_preserved",
+                "enhancement_layer_discarded"
+            ]
+        )
+        XCTAssertEqual(
+            ApplePlaybackV3Capabilities.deviceClientTransformations.last?.validatedClaims,
+            [
+                "dolby_vision_metadata_removed",
+                "hdr10_base_layer_preserved",
+                "enhancement_layer_discarded"
+            ]
         )
 
-        XCTAssertFalse(adapted.supportsDirectStreamResume)
+        // The snapshot itself is device-gated: the simulator has no real panel
+        // or hardware HEVC decoder, so it declares nothing.
+        let snapshot = ApplePlaybackV3Capabilities.snapshot()
+        let original = try XCTUnwrap(
+            snapshot.context.deliveries[PlaybackProtocolV3.DeliveryClass.originalHTTP]
+        )
+        XCTAssertEqual(
+            original.transformations,
+            AppleDecodeCapabilities.isSimulator
+                ? []
+                : ApplePlaybackV3Capabilities.deviceClientTransformations
+        )
+        for deliveryClass in [
+            PlaybackProtocolV3.DeliveryClass.progressive,
+            PlaybackProtocolV3.DeliveryClass.hls
+        ] {
+            XCTAssertEqual(
+                snapshot.context.deliveries[deliveryClass]?.transformations,
+                [],
+                "\(deliveryClass) is server-produced and carries no client recipe"
+            )
+        }
     }
 
     func testUnsupportedPlanRequirementsAreRejected() {
-        let unknownTransform = makePlan(transformations: [
+        let clientTransform = makePlan(transformations: [
             .init(
-                name: "client_unknown_transform",
+                name: "client_owned_recipe",
                 executor: "client",
                 recipeVersion: "1",
                 validatedClaims: []
             )
         ])
-        XCTAssertThrowsError(try ApplePlaybackV3PlanAdapter.validate(unknownTransform)) { error in
+        XCTAssertThrowsError(try ApplePlaybackV3PlanAdapter.validate(clientTransform)) { error in
             XCTAssertEqual(
                 error as? ApplePlaybackV3PlanError,
-                .unsupportedClientTransformation("client_unknown_transform")
+                .unsupportedClientTransformation("client_owned_recipe")
             )
         }
 
-        XCTAssertThrowsError(
-            try ApplePlaybackV3PlanAdapter.validate(
-                makePlan(runtimeCorrections: ["client_unknown_correction"])
-            )
-        )
-        XCTAssertThrowsError(
-            try ApplePlaybackV3PlanAdapter.validate(
-                makePlan(streamProtocol: "dash")
-            )
-        )
+        // Mutually exclusive: one plan may name at most one client recipe.
         XCTAssertThrowsError(
             try ApplePlaybackV3PlanAdapter.validate(
                 makePlan(transformations: [
@@ -414,64 +555,49 @@ final class PlaybackProtocolV3Tests: XCTestCase {
                     )
                 ])
             )
-        )
-    }
+        ) { error in
+            XCTAssertEqual(
+                error as? ApplePlaybackV3PlanError,
+                .invalidClientTransformation("multiple mutually exclusive client transformations")
+            )
+        }
 
-    func testClientDolbyVisionTransformExecutesExactServerSelection() throws {
-        let streamRequest = makeStreamRequest(path: "dv7.mkv")
-        let base = makeBaseExecutionPlan(
-            streamRequest: streamRequest,
-            engine: .siloPlayerLoopback,
-            loopbackSession: makeLoopbackSession(
-                streamRequest: streamRequest,
-                videoMode: .passthroughHEVC
+        // A packaged delivery is server-produced; there is no original
+        // bitstream left for Aether to transform.
+        XCTAssertThrowsError(
+            try ApplePlaybackV3PlanAdapter.validate(
+                makePlan(
+                    delivery: "server_remux_hls",
+                    streamProtocol: "hls",
+                    transformations: [
+                        .init(
+                            name: "client_dv7_to_dv81",
+                            executor: "client",
+                            recipeVersion: "1",
+                            validatedClaims: []
+                        )
+                    ]
+                )
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? ApplePlaybackV3PlanError,
+                .invalidClientTransformation(
+                    "client transformations require the original_http delivery"
+                )
+            )
+        }
+
+        XCTAssertThrowsError(
+            try ApplePlaybackV3PlanAdapter.validate(
+                makePlan(runtimeCorrections: ["removed_engine_correction"])
             )
         )
-
-        let dv81 = try adaptedPlan(
-            makePlan(
-                container: "mkv",
-                videoCodec: "hevc",
-                dynamicRange: "dolby_vision",
-                transformations: [
-                    .init(
-                        name: "client_dv7_to_dv81",
-                        executor: "client",
-                        recipeVersion: "1",
-                        validatedClaims: []
-                    )
-                ]
-            ),
-            base: base,
-            streamRequest: streamRequest
+        XCTAssertThrowsError(
+            try ApplePlaybackV3PlanAdapter.validate(
+                makePlan(streamProtocol: "dash")
+            )
         )
-        XCTAssertEqual(dv81.engine, .siloPlayerLoopback)
-        XCTAssertEqual(dv81.loopbackSession?.videoMode, .convertProfile7To81)
-        XCTAssertEqual(dv81.loopbackSession?.manifestMetadata.advertisedDolbyVisionProfile, 8)
-        XCTAssertEqual(dv81.loopbackSession?.manifestMetadata.compatibilityBrand, "db1p")
-
-        let hdr10 = try adaptedPlan(
-            makePlan(
-                container: "mkv",
-                videoCodec: "hevc",
-                dynamicRange: "hdr10",
-                transformations: [
-                    .init(
-                        name: "client_dv7_to_hdr10",
-                        executor: "client",
-                        recipeVersion: "1",
-                        validatedClaims: []
-                    )
-                ]
-            ),
-            base: base,
-            streamRequest: streamRequest
-        )
-        XCTAssertEqual(hdr10.engine, .siloPlayerLoopback)
-        XCTAssertEqual(hdr10.loopbackSession?.videoMode, .passthroughHEVC)
-        XCTAssertNil(hdr10.loopbackSession?.manifestMetadata.advertisedDolbyVisionProfile)
-        XCTAssertNil(hdr10.loopbackSession?.manifestMetadata.compatibilityBrand)
-        XCTAssertEqual(hdr10.loopbackSession?.manifestMetadata.videoRange, "PQ")
     }
 
     func testSubtitleIdentityUsesDenseServerCombinedOrdinals() {
@@ -741,15 +867,24 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         )
         XCTAssertEqual(
             snapshot.capabilities.audioEvidence,
-            PlaybackProtocolV3.Evidence.platformAttested
+            PlaybackProtocolV3.Evidence.declared
         )
-        XCTAssertEqual(snapshot.capabilities.codecsVideo, ["h264"])
+        XCTAssertEqual(snapshot.capabilities.codecsVideo, ["h264", "av1", "vp9", "mpeg2video", "vc1"])
         XCTAssertEqual(snapshot.capabilities.codecsVideoHardware, ["h264"])
+        XCTAssertTrue(
+            ApplePlaybackV3Capabilities.features.contains(
+                PlaybackProtocolV3.softwareVideoDecodeFeature
+            )
+        )
+        XCTAssertEqual(
+            Set(snapshot.capabilities.videoDecode.filter { !$0.hardware }.map(\.codec)),
+            Set(["h264", "av1", "vp9", "mpeg2video", "vc1"])
+        )
         XCTAssertEqual(snapshot.capabilities.videoDecode.first?.profiles, [])
         XCTAssertEqual(snapshot.capabilities.videoDecode.first?.levels, [])
         XCTAssertEqual(
             snapshot.context.deliveries[PlaybackProtocolV3.DeliveryClass.progressive]?.videoCodecs,
-            AppleDecodeCapabilities.videoCodecs
+            AppleDecodeCapabilities.packagedVideoCodecs
         )
         XCTAssertNil(snapshot.capabilities.audioPassthrough)
         XCTAssertNil(snapshot.context.output.audioPassthrough)
@@ -770,18 +905,23 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         )
         XCTAssertTrue(original.subtitles.embeddedBitmap)
         XCTAssertFalse(original.subtitles.sidecarBitmap)
-        XCTAssertTrue(original.subtitles.fontAttachments)
+        XCTAssertFalse(original.subtitles.assStyling)
+        XCTAssertFalse(original.subtitles.fontAttachments)
+        for delivery in snapshot.context.deliveries.values {
+            XCTAssertEqual(delivery.features, [])
+            XCTAssertFalse(delivery.authHeaderRefresh)
+            XCTAssertEqual(delivery.transformations, [])
+        }
     }
 
-    func testAVPlayerDeliveriesExcludeSoftwareOnlyVideoCodecs() throws {
+    func testServerPackagedDeliveriesUseConservativeCodecClaims() throws {
         let snapshot = ApplePlaybackV3Capabilities.snapshot()
         for deliveryClass in [
             PlaybackProtocolV3.DeliveryClass.progressive,
             PlaybackProtocolV3.DeliveryClass.hls
         ] {
             let delivery = try XCTUnwrap(snapshot.context.deliveries[deliveryClass])
-            XCTAssertEqual(delivery.videoCodecs, AppleDecodeCapabilities.videoCodecs)
-            XCTAssertFalse(delivery.videoCodecs.contains(AppleDecodeCapabilities.mpeg2VideoCodec))
+            XCTAssertEqual(delivery.videoCodecs, AppleDecodeCapabilities.packagedVideoCodecs)
         }
     }
 
@@ -849,19 +989,33 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         XCTAssertEqual(object["start_position"] as? Double, 0)
     }
 
-    func testNeutralCapabilityGateAndLegacyEndpointUpgradeMapping() {
+    func testAetherCapabilityGateRequiresNeutralAndHeaderAuthenticatedMedia() {
         let capability = PlaybackV3CapabilityResponse(
             enabled: true,
             protocolVersions: [3],
             features: [
                 PlaybackProtocolV3.planFeature,
-                PlaybackProtocolV3.neutralContractFeature
+                PlaybackProtocolV3.neutralContractFeature,
+                PlaybackProtocolV3.headerAuthenticatedMediaFeature
             ],
             deliveries: ["original_http"],
             transformations: [],
             reason: nil
         )
         XCTAssertTrue(PlaybackSessionBridge.supportsNeutralProtocolV3(capability))
+        XCTAssertFalse(PlaybackSessionBridge.supportsNeutralProtocolV3(
+            PlaybackV3CapabilityResponse(
+                enabled: true,
+                protocolVersions: [3],
+                features: [
+                    PlaybackProtocolV3.planFeature,
+                    PlaybackProtocolV3.neutralContractFeature,
+                ],
+                deliveries: ["original_http"],
+                transformations: [],
+                reason: nil
+            )
+        ))
         XCTAssertFalse(PlaybackSessionBridge.supportsNeutralProtocolV3(
             PlaybackV3CapabilityResponse(
                 enabled: true,
@@ -1025,113 +1179,6 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         )
     }
 
-    func testReplacementLoaderCannotMovePlaybackBackwardsWithoutASeek() {
-        XCTAssertTrue(
-            PlayerViewModel.isUnexpectedBackwardPlaybackTime(
-                32.1,
-                currentTime: 35,
-                explicitSeekInFlight: false
-            )
-        )
-        XCTAssertFalse(
-            PlayerViewModel.isUnexpectedBackwardPlaybackTime(
-                32.1,
-                currentTime: 35,
-                explicitSeekInFlight: true
-            )
-        )
-        XCTAssertFalse(
-            PlayerViewModel.isUnexpectedBackwardPlaybackTime(
-                34.5,
-                currentTime: 35,
-                explicitSeekInFlight: false
-            )
-        )
-    }
-
-    func testLoopbackVODReplanKeepsStablePlaylistTimeline() {
-        XCTAssertEqual(
-            PlayerViewModel.initialLoopbackTimelineOffset(
-                servingMode: .vodPlan,
-                startTime: 21.5
-            ),
-            0
-        )
-        XCTAssertEqual(
-            PlayerViewModel.initialLoopbackTimelineOffset(
-                servingMode: .event,
-                startTime: 21.5
-            ),
-            21.5
-        )
-    }
-
-    func testGrowingTranscodePlaylistCannotReplaceKnownVODDuration() {
-        XCTAssertFalse(
-            PlayerViewModel.shouldAdoptBackendDuration(
-                73,
-                currentDuration: 57,
-                delivery: .transcode
-            )
-        )
-        XCTAssertTrue(
-            PlayerViewModel.shouldAdoptBackendDuration(
-                73,
-                currentDuration: 0,
-                delivery: .transcode
-            )
-        )
-        XCTAssertTrue(
-            PlayerViewModel.shouldAdoptBackendDuration(
-                73,
-                currentDuration: 57,
-                delivery: .direct
-            )
-        )
-        XCTAssertFalse(
-            PlayerViewModel.shouldAdoptBackendDuration(
-                50,
-                currentDuration: 57,
-                delivery: .direct
-            )
-        )
-    }
-
-    func testV3RouteSubtitleFilteringRetainsOnlySelectedEmbeddedSidecar() {
-        let external = makeSubtitleUrl(index: 3, source: "external")
-        let selectedEmbedded = makeSubtitleUrl(index: 9, source: "embedded")
-        let redundantEmbedded = makeSubtitleUrl(index: 10, source: "EmBeDdEd")
-        let urls = [external, selectedEmbedded, redundantEmbedded]
-
-        XCTAssertEqual(
-            PlayerViewModel.protocolV3SubtitleUrlsForCurrentRoute(
-                urls,
-                routeUsesEmbeddedExtraction: true,
-                selectedSubtitleIndex: 9,
-                subtitleMode: "render"
-            ).map(\.index),
-            [3, 9]
-        )
-        XCTAssertEqual(
-            PlayerViewModel.protocolV3SubtitleUrlsForCurrentRoute(
-                urls,
-                routeUsesEmbeddedExtraction: true,
-                selectedSubtitleIndex: 9,
-                subtitleMode: "burn_in"
-            ).map(\.index),
-            [3]
-        )
-        XCTAssertEqual(
-            PlayerViewModel.protocolV3SubtitleUrlsForCurrentRoute(
-                urls,
-                routeUsesEmbeddedExtraction: false,
-                selectedSubtitleIndex: 9,
-                subtitleMode: "render"
-            ),
-            urls
-        )
-    }
-
     func testAudiobookFeaturesDoNotClaimSeekReanchor() {
         XCTAssertFalse(
             ApplePlaybackV3Capabilities.audiobookFeatures.contains(
@@ -1143,9 +1190,19 @@ final class PlaybackProtocolV3Tests: XCTestCase {
                 PlaybackProtocolV3.planFeature
             )
         )
+        XCTAssertTrue(
+            ApplePlaybackV3Capabilities.audiobookFeatures.contains(
+                PlaybackProtocolV3.headerAuthenticatedMediaFeature
+            )
+        )
+        XCTAssertFalse(
+            ApplePlaybackV3Capabilities.audiobookFeatures.contains(
+                PlaybackProtocolV3.softwareVideoDecodeFeature
+            )
+        )
     }
 
-    func testAudiobookSnapshotOnlyAdvertisesAVPlayerExecutableRoutes() throws {
+    func testAudiobookSnapshotOnlyAdvertisesAudioOnlyAetherRoutes() throws {
         let snapshot = ApplePlaybackV3Capabilities.audiobookSnapshot()
         XCTAssertEqual(snapshot.capabilities.codecsVideo, [])
         XCTAssertEqual(snapshot.capabilities.codecsVideoHardware, [])
@@ -1167,7 +1224,8 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         let original = try XCTUnwrap(
             snapshot.context.deliveries[PlaybackProtocolV3.DeliveryClass.originalHTTP]
         )
-        XCTAssertEqual(original.features, ["apple_native_direct"])
+        XCTAssertEqual(original.features, [])
+        XCTAssertFalse(original.authHeaderRefresh)
         XCTAssertFalse(original.audioDecodeCodecs.contains("dts"))
         XCTAssertFalse(original.audioDecodeCodecs.contains("truehd"))
         XCTAssertFalse(original.audioDecodeCodecs.contains("vorbis"))
@@ -1483,116 +1541,6 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         )
     }
 
-    private func adaptedPlan(
-        _ plan: PlaybackV3Plan,
-        base: PlaybackExecutionPlan,
-        streamRequest: StreamRequest
-    ) throws -> PlaybackExecutionPlan {
-        try ApplePlaybackV3PlanAdapter.makeExecutionPlan(
-            v3: PreparedPlaybackV3(
-                playbackAttemptId: "apple:attempt",
-                planAttemptId: "apple-plan:attempt",
-                planAttemptKey: plan.planAttemptKey,
-                outputContextId: "apple:output",
-                serverFeatures: [
-                    PlaybackProtocolV3.planFeature,
-                    PlaybackProtocolV3.seekReanchorFeature
-                ],
-                plan: plan
-            ),
-            basePlan: base,
-            streamRequest: streamRequest,
-            routeRequirements: .baseline
-        )
-    }
-
-    private func makeStreamRequest(path: String = "video") -> StreamRequest {
-        StreamRequest(
-            url: URL(string: "https://example.test/\(path)")!,
-            headers: ["Authorization": "Bearer test"],
-            serverUrl: "https://example.test"
-        )
-    }
-
-    private func makePlayerAudioTrack(
-        trackId: Int64,
-        sourceIndex: Int,
-        ffIndex: Int,
-        isSelected: Bool
-    ) -> PlayerTrack {
-        PlayerTrack(
-            trackId: trackId,
-            kind: .audio,
-            title: nil,
-            lang: nil,
-            codec: "eac3",
-            audioChannelsLayout: "5.1(side)",
-            audioChannelCount: 6,
-            bitrate: nil,
-            isDefault: sourceIndex == 0,
-            isForced: false,
-            isHearingImpaired: false,
-            isVisualImpaired: false,
-            isExternal: false,
-            isSelected: isSelected,
-            ffIndex: ffIndex,
-            srcId: sourceIndex
-        )
-    }
-
-    private func makeBaseExecutionPlan(
-        streamRequest: StreamRequest,
-        engine: PlaybackEngineKind = .playerCoreDirect,
-        loopbackSession: LoopbackSessionSpec? = nil
-    ) -> PlaybackExecutionPlan {
-        let routeCapabilities = engine.routeCapabilities
-        return PlaybackExecutionPlan(
-            delivery: .direct,
-            engine: engine,
-            startMode: .absolutePosition(4.5),
-            streamRequest: streamRequest,
-            loopbackSession: loopbackSession,
-            capabilities: routeCapabilities.backendCapabilities,
-            routeCapabilities: routeCapabilities,
-            requirements: .baseline,
-            featureFlagEnabled: true,
-            parityBlockers: [],
-            decisionTrace: ["test"],
-            degradationWarnings: [],
-            reason: "test",
-            playbackSessionId: "session-v3"
-        )
-    }
-
-    private func makeLoopbackSession(
-        streamRequest: StreamRequest,
-        videoMode: LoopbackSessionSpec.VideoMode
-    ) -> LoopbackSessionSpec {
-        LoopbackSessionSpec(
-            sourceURL: streamRequest.url,
-            headers: streamRequest.headers,
-            sourceBitrateBps: 20_000_000,
-            videoMode: videoMode,
-            sourceVideoFrameRate: 23.976,
-            selectedAudio: LoopbackSessionSpec.SelectedAudio(
-                trackIndex: 0,
-                ffIndex: 1,
-                sourceCodec: "eac3",
-                sourceChannelCount: 6,
-                sourceChannelLayout: "5.1",
-                outputMode: .copy,
-                preservesAtmos: true
-            ),
-            availableAudioTracks: [],
-            manifestMetadata: LoopbackSessionSpec.ManifestMetadata(
-                advertisedDolbyVisionProfile: nil,
-                compatibilityBrand: nil,
-                videoRange: "PQ",
-                mayClaimAtmos: true
-            )
-        )
-    }
-
     private func makeVersion(
         container: String,
         videoCodec: String,
@@ -1672,6 +1620,27 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         )
     }
 
+    private func makeInventoryItem(
+        combinedIndex: Int,
+        source: String,
+        delivery: String = "sidecar"
+    ) -> PlaybackV3SubtitleInventoryItem {
+        PlaybackV3SubtitleInventoryItem(
+            trackId: "file:42:subtitle:\(combinedIndex)",
+            combinedIndex: combinedIndex,
+            source: source,
+            codec: "srt",
+            language: "en",
+            label: "English",
+            forced: false,
+            default: false,
+            hearingImpaired: false,
+            delivery: delivery,
+            url: delivery == "sidecar" ? "/stream/subtitles/\(combinedIndex)" : nil,
+            fontBundleUrl: nil
+        )
+    }
+
     private func makePlayerSubtitle(
         trackId: Int64,
         isExternal: Bool,
@@ -1684,13 +1653,11 @@ final class PlaybackProtocolV3Tests: XCTestCase {
             title: "English",
             lang: "en",
             codec: "srt",
-            audioChannelsLayout: nil,
             audioChannelCount: nil,
             bitrate: nil,
             isDefault: false,
             isForced: false,
             isHearingImpaired: false,
-            isVisualImpaired: false,
             isExternal: isExternal,
             isSelected: true,
             ffIndex: ffIndex,

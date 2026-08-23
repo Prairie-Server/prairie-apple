@@ -12,7 +12,25 @@ enum PlaybackProtocolV3 {
     static let routeDiagnosticsFeature = "playback_route_diagnostics"
     static let deviceQuirksFeature = "device_quirks_v1"
     static let seekReanchorFeature = "seek_reanchor_v1"
+    /// The `output_change` intent replan exists. Per §6 an intent operation
+    /// keeps the previous route eligible; `failure_recovery` would instead
+    /// exclude the current plan key and force a route the device never rejected.
+    static let outputChangeFeature = "output_change_v1"
     static let directStreamResumeFeature = "direct_stream_resume_v1"
+    /// API-local media URLs carry no signed credential. The client attaches
+    /// its current Authorization header to the source and every derived media
+    /// or subtitle request.
+    static let headerAuthenticatedMediaFeature = "header_authenticated_media_v1"
+    /// Opt-in, only meaningful alongside `header_authenticated_media_v1`: the
+    /// plan may hand back absolute, still credential-free media URLs on a
+    /// server-designated proxy origin, and the client attaches the same bearer
+    /// there that it sends the API. Unlike header auth this is optional — a
+    /// server that does not advertise it simply keeps every byte API-local.
+    static let authorizedMediaOriginsFeature = "authorized_media_origins_v1"
+    /// The server may validate bounded `hardware: false` decode entries for
+    /// original delivery. Older servers ignore the opt-in and keep their
+    /// hardware-only strict-tier behavior.
+    static let softwareVideoDecodeFeature = "software_video_decode_v1"
     static let planSourceDurationFeature = "plan_source_duration_v1"
 
     /// Delivery classes are the unit a client negotiates in
@@ -48,7 +66,7 @@ enum PlaybackProtocolV3 {
     }
 
     /// Why the client is asking for a new plan. `failureRecovery` is the
-    /// server's default when the field is absent; the two intent operations
+    /// server's default when the field is absent; the three intent operations
     /// carry no `failure`.
     enum ReplanOperation {
         static let failureRecovery = "failure_recovery"
@@ -56,6 +74,11 @@ enum PlaybackProtocolV3 {
         static let seekFailureRecovery = "seek_failure_recovery"
         static let trackChange = "track_change"
         static let qualityChange = "quality_change"
+        /// The active display/output capabilities changed. Nothing failed, so
+        /// §6 keeps the previous route eligible: neither attempted-key history
+        /// nor the failed-plan exclusion applies. The server rejects this
+        /// operation outright if it carries a `failure`.
+        static let outputChange = "output_change"
     }
 }
 
@@ -85,7 +108,7 @@ struct PlaybackV3AudioPassthrough: Codable, Equatable {
     let entries: [PlaybackV3AudioPassthroughEntry]
 }
 
-struct PlaybackV3VideoDecodeCapability: Codable, Equatable {
+struct PlaybackV3VideoDecodeCapability: Codable, Equatable, Sendable {
     let codec: String
     let decoderName: String?
     let profiles: [String]
@@ -99,10 +122,11 @@ struct PlaybackV3VideoDecodeCapability: Codable, Equatable {
 }
 
 struct PlaybackV3CodecCapabilities: Codable, Equatable {
-    /// How this client knows what it can decode. Apple attests through
-    /// VideoToolbox rather than enumerating a decoder registry, so it claims
-    /// `platform_attested`: codec, bit depth and dimension bounds are real,
-    /// profile/level are not enumerable and the server skips matching them.
+    /// How this client knows what it can decode. Apple's platform-backed
+    /// Aether stack claims `platform_attested`: codec, bit depth and dimension
+    /// bounds are exercised facts, while profile/level are not enumerable and
+    /// the server skips matching them. Software entries participate only with
+    /// the explicit software-video feature token.
     let videoEvidence: String
     let audioEvidence: String
     let codecsVideo: [String]
