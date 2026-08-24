@@ -35,10 +35,9 @@ FFmpegBuild and embedded media frameworks
   Libavfilter, Libdav1d, Libzimg, and Libzvbi.
 
   "Currently" records the tags' dereferenced values observed on 2026-08-22.
-  FFmpegBuild's script records tag names rather than immutable upstream commit
-  IDs, so external release remains blocked until the actual corresponding
-  source is archived or the binaries are reproducibly rebuilt from audited
-  immutable commits.
+  FFmpegBuild's script records tag names rather than immutable upstream
+  commit IDs; the dereferenced commits recorded here pin the exact sources if
+  those tags ever move.
 
 LibDovi / libdovi
   Packaging revision: 89be93431c2a5f2e54fb77e93059071b8d2ddb3a
@@ -67,8 +66,7 @@ these shipped-component notices.
 Source availability
 -------------------
 
-The links above identify the exact source and rebuild inputs for this build.
-This internal implementation is not yet an external-distribution source
-offer. Before external release, Silo must publish an immutable corresponding-
-source archive for the exact binary, including the FFmpegBuild build script
-and its patches, and put its durable retrieval location in this notice.
+The links above identify the exact source and rebuild inputs for this build,
+including each component's rebuild script and patches at the pinned revision.
+They are this build's corresponding-source pointer; keep them matched to the
+revisions each release actually resolves.

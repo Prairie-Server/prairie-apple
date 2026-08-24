@@ -11,9 +11,9 @@ validation contract is the
 
 The source migration is implemented in this worktree, but the complete
 hardware/media matrix, signed release-archive purity audit, privacy gate, and
-external-distribution legal gate are still pending. Do not infer a verified
-format, HDR, Atmos, PiP, AirPlay, lifecycle, or release claim from a successful
-compile.
+the per-release checklist in `THIRD_PARTY_NOTICES.md` are still pending. Do
+not infer a verified format, HDR, Atmos, PiP, AirPlay, lifecycle, or release
+claim from a successful compile.
 
 ## Current source entrypoints
 

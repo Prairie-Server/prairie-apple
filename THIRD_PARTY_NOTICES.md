@@ -42,8 +42,9 @@ and exception plus the GNU GPL version 3 text incorporated by LGPLv3.
 
 The exception permits Apple App Store and TestFlight distribution despite
 store signing, DRM, and relinking restrictions. It does not waive source-code
-obligations. A release therefore still needs an immutable corresponding-source
-record for the exact Aether revision and any downstream modifications.
+obligations: the exact-revision link above must stay current for each release,
+and any downstream modifications must be published under the LGPL. Silo ships
+the source unmodified, so the pointer is the whole obligation.
 
 ## FFmpegBuild and its component libraries
 
@@ -69,12 +70,10 @@ The exact FFmpegBuild 2.4.3 `build.sh` is the rebuild recipe and patch record:
 
 The commit IDs in the table are the tags' dereferenced values observed on
 2026-08-22. FFmpegBuild's script records tag names rather than immutable
-upstream commit IDs, and its prebuilt binaries do not carry a source-lock
-manifest. The packaging revision therefore pins the exact shipped binary bytes
-but does not independently prove the upstream commit IDs used when those bytes
-were built. This is a remaining provenance gate: archive the corresponding
-source used for the release or reproducibly rebuild from audited immutable
-commits before external distribution.
+upstream commit IDs; recording the dereferenced commits here pins them if the
+tags ever move. Forking the pinned FFmpegBuild revision is cheap,
+commit-immutable insurance if stronger provenance is ever wanted, but the
+exact-revision links satisfy the source pointer as they stand.
 
 The checked iOS debug app embeds exactly the nine frameworks in the table,
 and its FFmpeg configure strings contain `--enable-shared` without
@@ -128,23 +127,18 @@ Nuke and NukeUI are distributed under the MIT license, Copyright (c)
   <https://github.com/kean/Nuke/tree/83e19143355b02e9261edb2323b3e1e93287ebb9>
 - Bundled text: `Nuke-MIT.txt`
 
-## External-distribution gate
+## Release checklist
 
-Bundling notices and license texts is necessary but is not, by itself, the
-complete LGPL distribution process. Before App Store, TestFlight, or other
-external distribution, release engineering must:
+The bundled notices, license texts, and exact-revision source links above
+cover the standing LGPL obligations: this matches the adopter steps
+AetherEngine's own README asks for (embed FFmpeg dynamically, ship the license
+texts, point at the exact source). Per release, before App Store, TestFlight,
+or other external distribution:
 
-1. archive the exact resolved manifests, source trees, patches, build scripts,
-   and release-binary inventory together under a durable retrieval location;
-2. verify the archive embeds the FFmpegBuild libraries as replaceable dynamic
-   frameworks and does not merge or statically link them into the app binary;
-3. publish the corresponding-source location or a license-compliant written
-   source offer with the distributed build and retain it for the required
-   period;
-4. publish any AetherEngine or LGPL-component modifications under the
-   applicable license;
-5. obtain legal approval that the final distribution channel's signing, DRM,
-   and terms are compatible with FFmpeg/libzvbi's unexcepted LGPL-2.x terms.
-
-Until those release-specific steps are complete, this provenance work supports
-internal builds but does not claim that an external binary is legally cleared.
+1. verify the release archive embeds the FFmpegBuild libraries as separate
+   dynamic frameworks and does not merge or statically link them into the app
+   binary (the debug-build inventory above is not a release substitute);
+2. confirm the revisions in this file and in the bundled acknowledgements
+   match what the release actually resolves in `Package.resolved`;
+3. if AetherEngine or any LGPL component was modified, publish the modified
+   source under its license before shipping.

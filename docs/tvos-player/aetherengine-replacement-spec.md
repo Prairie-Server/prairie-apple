@@ -562,9 +562,9 @@ Aether-facing adapter and real-media acceptance tests.
 - Exact component notices and full license texts are configured through the
   shared `Resources` source for all three host apps and exposed locally from
   Settings. Generated-project and built-bundle verification remains part of
-  validation. This implements the notice surface, not the external-
-  distribution gate: the final source archive/offer, release-binary linkage
-  scan, and legal approval remain pending.
+  validation. This implements the notice surface; the per-release steps
+  (release-binary linkage scan, revision-pointer match) are the release
+  checklist in `THIRD_PARTY_NOTICES.md`.
 - A coordinated server change now implements the engine-neutral
   `header_authenticated_media_v1` opt-in. Apple refuses online playback when
   that feature is absent, resolves only same-origin API media routes, and
