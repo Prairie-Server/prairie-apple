@@ -2983,8 +2983,12 @@ class PlayerViewModel {
             return
         }
         let handlers = AetherVideoNowPlayingCoordinator.Handlers(
-            play:        { [weak self] in self?.aetherPlaybackController.play() },
-            pause:       { [weak self] in self?.aetherPlaybackController.pause() },
+            // On tvOS the physical Play/Pause button can arrive through the
+            // player-scoped media command center instead of SwiftUI's
+            // `onPlayPauseCommand`. Keep that route visually consistent with
+            // Select by revealing the transport controls as playback changes.
+            play:        { [weak self] in self?.handleNowPlayingPlay() },
+            pause:       { [weak self] in self?.handleNowPlayingPause() },
             isPaused:    { [weak self] in
                 guard let self else { return true }
                 return self.hasReachedEndOfFile || self.aetherPlaybackController.isPaused
@@ -3010,6 +3014,20 @@ class PlayerViewModel {
             useSharedFallback: aetherPlaybackController.shouldUseSharedVideoNowPlayingFallback,
             handlers: handlers
         )
+        #endif
+    }
+
+    private func handleNowPlayingPlay() {
+        aetherPlaybackController.play()
+        #if os(tvOS)
+        scheduleHideControls()
+        #endif
+    }
+
+    private func handleNowPlayingPause() {
+        aetherPlaybackController.pause()
+        #if os(tvOS)
+        scheduleHideControls()
         #endif
     }
 
