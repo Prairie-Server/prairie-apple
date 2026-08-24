@@ -87,10 +87,6 @@ struct PlayerView: View {
                 } else {
                     playerSurface()
 
-                    if viewModel.isLoading {
-                        playbackLoadingIndicator
-                    }
-
                     #if os(tvOS)
                     // Focus sink with UIKit-backed press capture. Mounted
                     // whenever the transport overlay is hidden OR a seek
@@ -234,6 +230,10 @@ struct PlayerView: View {
                         PlayerNoticeOverlay(notice: notice)
                     }
                     #endif
+                }
+
+                if viewModel.isLoading || viewModel.isBuffering {
+                    PlayerBufferingCapsule()
                 }
             }
         }
@@ -529,25 +529,6 @@ struct PlayerView: View {
         .transition(.opacity)
     }
     #endif
-
-    private var playbackLoadingIndicator: some View {
-        ProgressView()
-            .progressViewStyle(.circular)
-            .tint(.white)
-            #if os(tvOS)
-            .scaleEffect(1.7)
-            .frame(width: 86, height: 86)
-            #else
-            .scaleEffect(1.3)
-            .frame(width: 62, height: 62)
-            #endif
-            .siloPlayerGlass(in: .rect(cornerRadius: 8))
-            .shadow(color: .black.opacity(0.45), radius: 24, y: 10)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-            .allowsHitTesting(false)
-            .transition(.opacity)
-            .accessibilityLabel("Loading video")
-    }
 
     @ViewBuilder
     private func errorView(_ error: String) -> some View {

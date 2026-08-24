@@ -277,7 +277,7 @@ struct TVPlayerControls: View {
         ZStack(alignment: .bottom) {
             bottomGradient.ignoresSafeArea()
             statusColumn
-                .padding(.top, 64)
+                .padding(.top, viewModel.isBuffering ? 120 : 64)
                 .padding(.horizontal, 80)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             if viewModel.isScrubbing, let image = viewModel.scrubPreviewImage {
@@ -341,26 +341,10 @@ struct TVPlayerControls: View {
         .shadow(color: .black.opacity(0.5), radius: 18, y: 7)
     }
 
-    /// Buffering + sleep-timer chips float in the top-right when active.
-    /// Everything else that used to live in the hero strip (title, series,
-    /// badges, year, runtime, chapter) is now in the HUD's Info tab.
+    /// The sleep-timer chip floats in the top-right when active. Buffering is
+    /// owned by the player shell so it remains visible outside this overlay.
     private var statusColumn: some View {
         VStack(alignment: .trailing, spacing: 10) {
-            if viewModel.isBuffering {
-                HStack(spacing: 8) {
-                    ProgressView()
-                        .tint(.white)
-                        .progressViewStyle(.circular)
-                        .scaleEffect(0.9)
-                    Text("Buffering")
-                        .font(.continuumSmall.weight(.medium))
-                        .foregroundStyle(.white.opacity(0.8))
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .siloPlayerGlass(in: Capsule())
-            }
-
             if viewModel.sleepTimer.isActive {
                 Label(formatCountdown(viewModel.sleepTimer.remainingSeconds),
                       systemImage: "moon.zzz.fill")
