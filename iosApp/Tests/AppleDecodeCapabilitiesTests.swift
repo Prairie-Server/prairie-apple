@@ -246,14 +246,18 @@ final class AppleDecodeCapabilitiesTests: XCTestCase {
         XCTAssertEqual(audio, Set([
             "aac", "ac3", "eac3", "mp3", "mp2", "flac", "opus", "vorbis", "alac",
             "truehd", "mlp", "dts", "dca", "dts-hd", "dtshd", "pcm", "pcm_s16le",
-            "pcm_s24le", "pcm_f32le",
+            "pcm_s24le", "pcm_f32le", "pcm_bluray",
         ]))
         XCTAssertEqual(containers, Set([
             "mp4", "m4v", "mov", "mkv", "matroska", "avi", "mpegts", "ts", "m2ts",
-            "mts", "3gp", "3g2", "vob", "ogg", "webm", "flv", "mp3", "aac", "m4a",
-            "m4b", "flac", "alac", "wav", "opus",
+            "mts", "3gp", "3g2", "mpeg", "vob", "ogg", "webm", "flv", "mp3", "aac",
+            "m4a", "m4b", "flac", "alac", "wav", "opus",
         ]))
         XCTAssertFalse(containers.contains("asf"))
+        // The scanner normalizes MPEG program streams (`.mpg`/`.vob`) to
+        // `mpeg`; without that token DVD-class sources could never take
+        // `original_http` despite the mpeg2video claim above.
+        XCTAssertTrue(containers.contains("mpeg"))
     }
 
     func testPersistentDownloadsDoNotInheritOptimisticEngineClaims() {

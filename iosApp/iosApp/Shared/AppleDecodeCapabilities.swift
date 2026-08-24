@@ -112,10 +112,12 @@ enum AppleDecodeCapabilities {
 
     /// Audio decoders present in the same Aether/FFmpeg build. Aliases are
     /// intentional because scanners do not all spell DTS-HD or PCM alike.
+    /// `pcm_bluray` is the Blu-ray LPCM decoder FFmpegBuild ships for M2TS;
+    /// `pcm_dvd` stays absent because the build does not enable it.
     static let aetherOriginalHTTPAudioCodecs = [
         "aac", "ac3", "eac3", "mp3", "mp2", "flac", "opus", "vorbis", "alac",
         "truehd", "mlp", "dts", "dca", "dts-hd", "dtshd", "pcm", "pcm_s16le",
-        "pcm_s24le", "pcm_f32le"
+        "pcm_s24le", "pcm_f32le", "pcm_bluray"
     ]
 
     /// Video containers the client demuxes. Both spellings of the two aliased
@@ -136,11 +138,13 @@ enum AppleDecodeCapabilities {
     static let audioContainers = ["mp3", "m4a", "m4b", "aac", "flac", "wav"]
 
     /// Demuxers used by the pinned Aether build for online original HTTP.
+    /// Silo's scanner records MPEG program streams (`.mpg`/`.vob`) as `mpeg`,
+    /// so that token is what carries FFmpegBuild's `mpegps` demuxer claim.
     /// ASF/WMV stays absent even though WMV elementary streams in Matroska are
     /// supported; FFmpegBuild does not ship the corresponding container path.
     private static let aetherVideoContainers = [
         "mp4", "m4v", "mov", "mkv", "matroska", "avi", "mpegts", "ts", "m2ts",
-        "mts", "3gp", "3g2", "vob", "ogg", "webm", "flv"
+        "mts", "3gp", "3g2", "mpeg", "vob", "ogg", "webm", "flv"
     ]
     private static let aetherAudioContainers = [
         "mp3", "aac", "m4a", "m4b", "flac", "alac", "wav", "opus", "ogg"
