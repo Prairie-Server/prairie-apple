@@ -468,6 +468,8 @@ struct PlaybackV3DegradationWarning: Codable, Equatable {
 
 struct PlaybackV3AvailableQuality: Codable, Equatable {
     let label: String
+    /// Optional server-owned presentation label for compound quality rungs.
+    let displayName: String?
     /// Audio-only quality rungs have no meaningful video height.
     let height: Int?
     let bitrateKbps: Int

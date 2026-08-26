@@ -21,7 +21,7 @@ final class PlaybackProtocolV3ConformanceFixtureTests: XCTestCase {
             bundleClass: Self.self
         )
         XCTAssertEqual(matrix.schemaVersion, 1)
-        XCTAssertEqual(matrix.plannerScenarios.count, 18)
+        XCTAssertEqual(matrix.plannerScenarios.count, 20)
         XCTAssertEqual(matrix.replanScenarios.count, 10)
         XCTAssertEqual(matrix.protocolScenarios.count, 8)
 
@@ -97,6 +97,37 @@ final class PlaybackProtocolV3ConformanceFixtureTests: XCTestCase {
         XCTAssertEqual(fallback.source.dolbyVisionProfile, 7)
         XCTAssertEqual(fallback.expected.delivery, "server_remux_progressive")
         XCTAssertEqual(fallback.expected.transformations?.map(\.executor), ["server"])
+
+        let hdrToneMap = try plannerScenario(named: "hdr10_to_sdr_tone_map", in: matrix)
+        XCTAssertEqual(hdrToneMap.source.dynamicRange, "hdr10")
+        XCTAssertEqual(hdrToneMap.expected.delivery, "server_transcode_hls")
+        XCTAssertEqual(
+            hdrToneMap.expected.transformations?.last,
+            PlaybackV3Transformation(
+                name: "hdr_to_sdr_tonemap",
+                executor: "server",
+                recipeVersion: "1",
+                validatedClaims: ["hdr_metadata_removed", "sdr_bt709_output"]
+            )
+        )
+        XCTAssertEqual(
+            hdrToneMap.expected.availableQualities?.first {
+                $0.label == "1080p-medium"
+            }?.displayName,
+            "1080p Medium"
+        )
+
+        let dolbyVisionToneMap = try plannerScenario(
+            named: "dolby_vision_7_id6_to_sdr_tone_map",
+            in: matrix
+        )
+        XCTAssertEqual(dolbyVisionToneMap.source.dolbyVisionProfile, 7)
+        XCTAssertEqual(dolbyVisionToneMap.source.dvBlCompatId, 6)
+        XCTAssertEqual(dolbyVisionToneMap.expected.delivery, "server_transcode_hls")
+        XCTAssertEqual(
+            dolbyVisionToneMap.expected.transformations?.last?.name,
+            "hdr_to_sdr_tonemap"
+        )
 
         let audioConversion = try plannerScenario(named: "truehd_audio_conversion", in: matrix)
         XCTAssertEqual(audioConversion.source.audioCodec, "truehd")

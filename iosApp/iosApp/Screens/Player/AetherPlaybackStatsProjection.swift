@@ -8,19 +8,28 @@ struct AetherPlaybackStatsSourceMetadata: Equatable {
     let container: String?
     let playbackRate: Double?
     let secondarySubtitleLabel: String?
+    let plannedSourceDynamicRange: String?
+    let plannedOutputDynamicRange: String?
+    let plannedSourceDolbyVisionProfile: Int?
 
     init(
         sourceURL: URL?,
         delivery: String?,
         container: String?,
         playbackRate: Double?,
-        secondarySubtitleLabel: String? = nil
+        secondarySubtitleLabel: String? = nil,
+        plannedSourceDynamicRange: String? = nil,
+        plannedOutputDynamicRange: String? = nil,
+        plannedSourceDolbyVisionProfile: Int? = nil
     ) {
         source = Self.sourceLabel(for: sourceURL)
         self.delivery = Self.deliveryLabel(delivery)
         self.container = Self.containerLabel(container)
         self.playbackRate = playbackRate
         self.secondarySubtitleLabel = secondarySubtitleLabel
+        self.plannedSourceDynamicRange = plannedSourceDynamicRange
+        self.plannedOutputDynamicRange = plannedOutputDynamicRange
+        self.plannedSourceDolbyVisionProfile = plannedSourceDolbyVisionProfile
     }
 
     private static func sourceLabel(for url: URL?) -> String? {
@@ -171,7 +180,7 @@ enum AetherPlaybackStatsProjection {
             container: source.container,
             video: videoStream(snapshot),
             audio: audioStream(track: activeAudio, decoder: snapshot.activeAudioDecoder),
-            dynamicRange: dynamicRangeLabel(snapshot),
+            dynamicRange: dynamicRangeLabel(snapshot, source: source),
             subtitles: subtitleLabel(
                 route: snapshot.route,
                 active: snapshot.isSubtitleActive,
@@ -289,13 +298,49 @@ enum AetherPlaybackStatsProjection {
         return "\(coded) (\(displayWidth)×\(height) display)"
     }
 
-    private static func dynamicRangeLabel(_ snapshot: AetherPlaybackStatsSnapshot) -> String? {
+    private static func dynamicRangeLabel(
+        _ snapshot: AetherPlaybackStatsSnapshot,
+        source metadata: AetherPlaybackStatsSourceMetadata
+    ) -> String? {
         guard snapshot.sourceVideoWidth > 0, snapshot.sourceVideoHeight > 0 else { return nil }
+        if let planned = plannedDynamicRangeLabel(metadata) { return planned }
         let source = videoFormatLabel(snapshot.sourceVideoFormat, dvProfile: snapshot.sourceDVProfile)
         let output = videoFormatLabel(snapshot.outputVideoFormat, dvProfile: nil)
         return snapshot.sourceVideoFormat == snapshot.outputVideoFormat
             ? source
             : "\(source) → \(output)"
+    }
+
+    /// A server-transformed stream reaches Aether after conversion, so both of
+    /// Aether's format fields describe the delivered SDR/HDR bytes. Preserve
+    /// the original-to-effective transition from the negotiated V3 plan when
+    /// those ranges differ; equal ranges leave live panel adaptation to Aether.
+    private static func plannedDynamicRangeLabel(
+        _ source: AetherPlaybackStatsSourceMetadata
+    ) -> String? {
+        guard let input = normalized(source.plannedSourceDynamicRange)?.lowercased(),
+              let output = normalized(source.plannedOutputDynamicRange)?.lowercased(),
+              input != output,
+              let inputLabel = plannedVideoFormatLabel(
+                input,
+                dvProfile: source.plannedSourceDolbyVisionProfile
+              ),
+              let outputLabel = plannedVideoFormatLabel(output, dvProfile: nil) else {
+            return nil
+        }
+        return "\(inputLabel) → \(outputLabel)"
+    }
+
+    private static func plannedVideoFormatLabel(_ value: String, dvProfile: Int?) -> String? {
+        switch value {
+        case "sdr": return "SDR"
+        case "hdr10": return "HDR10"
+        case "hdr10_plus", "hdr10+": return "HDR10+"
+        case "hlg": return "HLG"
+        case "dolby_vision":
+            return dvProfile.map { "Dolby Vision Profile \($0)" } ?? "Dolby Vision"
+        default: return nil
+        }
     }
 
     private static func videoFormatLabel(_ format: VideoFormat, dvProfile: Int?) -> String {

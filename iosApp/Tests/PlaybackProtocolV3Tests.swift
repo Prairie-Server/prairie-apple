@@ -103,6 +103,15 @@ final class PlaybackProtocolV3Tests: XCTestCase {
                 "server_transcode_hls"
             ]
         )
+        XCTAssertEqual(
+            capability.transformations.first { $0.name == "hdr_to_sdr_tonemap" },
+            PlaybackV3Transformation(
+                name: "hdr_to_sdr_tonemap",
+                executor: "server",
+                recipeVersion: "1",
+                validatedClaims: ["hdr_metadata_removed", "sdr_bt709_output"]
+            )
+        )
 
         let start = try PlaybackV3FixtureTestSupport.decode(
             PlaybackV3StartRequest.self,
@@ -598,6 +607,27 @@ final class PlaybackProtocolV3Tests: XCTestCase {
                 makePlan(streamProtocol: "dash")
             )
         )
+    }
+
+    func testServerToneMapTransformationIsAcceptedAsPackagedHLS() {
+        let plan = makePlan(
+            delivery: PlaybackProtocolV3.PlanDelivery.transcodeHLS,
+            streamProtocol: "hls",
+            sourceDynamicRange: "hdr10",
+            dynamicRange: "sdr",
+            transformations: [
+                PlaybackV3Transformation(
+                    name: "hdr_to_sdr_tonemap",
+                    executor: "server",
+                    recipeVersion: "1",
+                    validatedClaims: ["hdr_metadata_removed", "sdr_bt709_output"]
+                )
+            ]
+        )
+
+        XCTAssertEqual(plan.source.dynamicRange, "hdr10")
+        XCTAssertEqual(plan.effectiveRecipe.dynamicRange, "sdr")
+        XCTAssertNoThrow(try ApplePlaybackV3PlanAdapter.validate(plan))
     }
 
     func testSubtitleIdentityUsesDenseServerCombinedOrdinals() {
@@ -1247,6 +1277,7 @@ final class PlaybackProtocolV3Tests: XCTestCase {
             serverQualities: [
                 PlaybackV3AvailableQuality(
                     label: "audio_high",
+                    displayName: nil,
                     height: nil,
                     bitrateKbps: 320,
                     preservesSource: false
@@ -1257,6 +1288,43 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         XCTAssertEqual(options.map(\.id), ["auto", "audio_high"])
         XCTAssertEqual(options.last?.resolution, "")
         XCTAssertEqual(options.last?.bitrateKbps, 320)
+    }
+
+    func testServerQualityDisplayNameWinsForCompoundRungs() {
+        let serverQualities = [
+            PlaybackV3AvailableQuality(
+                label: "1080p-medium",
+                displayName: "1080p Medium",
+                height: 1_080,
+                bitrateKbps: 6_000,
+                preservesSource: false
+            )
+        ]
+        let options = ApplePlaybackQuality.playbackOptions(
+            serverQualities: serverQualities,
+            fallbackVersion: nil
+        )
+
+        XCTAssertEqual(options.last?.id, "1080p-medium")
+        XCTAssertEqual(options.last?.label, "1080p Medium")
+        XCTAssertEqual(options.last?.subtitle, "Maximum bitrate: 6 Mbps")
+
+        let selection = ApplePlaybackQuality.protocolV3Selection(
+            requestedQualityId: "1080p-medium",
+            availableQualities: serverQualities
+        )
+        XCTAssertEqual(selection.clientQualityId, "1080p-medium")
+        XCTAssertEqual(selection.serverPreference, "1080p-medium")
+        XCTAssertEqual(selection.bandwidthCapKbps, 6_000)
+        XCTAssertTrue(selection.isServerOwned)
+
+        let settingsFallback = ApplePlaybackQuality.protocolV3Selection(
+            requestedQualityId: "1080p-medium",
+            availableQualities: []
+        )
+        XCTAssertEqual(settingsFallback.serverPreference, "1080p")
+        XCTAssertEqual(settingsFallback.bandwidthCapKbps, 12_000)
+        XCTAssertFalse(settingsFallback.isServerOwned)
     }
 
     func testEmptyServerQualityCatalogOnlyOffersAuto() {
@@ -1275,12 +1343,14 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         let qualities = [
             PlaybackV3AvailableQuality(
                 label: "1080p",
+                displayName: nil,
                 height: 1_080,
                 bitrateKbps: 8_000,
                 preservesSource: false
             ),
             PlaybackV3AvailableQuality(
                 label: "audio_high",
+                displayName: nil,
                 height: nil,
                 bitrateKbps: 320,
                 preservesSource: false
@@ -1422,6 +1492,7 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         width: Int = 1_920,
         height: Int = 1_080,
         bitrateKbps: Int = 8_000,
+        sourceDynamicRange: String? = nil,
         dynamicRange: String = "sdr",
         selectedAudioIndex: Int = 0,
         selectedSubtitleIndex: Int? = nil,
@@ -1434,7 +1505,8 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         timelineOffset: Double = 0,
         sourceDurationSeconds: Double? = 5_400
     ) -> PlaybackV3Plan {
-        PlaybackV3Plan(
+        let sourceDynamicRange = sourceDynamicRange ?? dynamicRange
+        return PlaybackV3Plan(
             protocolVersion: 3,
             planId: planId,
             sessionId: "session-v3",
@@ -1524,15 +1596,15 @@ final class PlaybackProtocolV3Tests: XCTestCase {
                 videoCodec: videoCodec,
                 videoProfile: "high",
                 videoLevel: 41,
-                bitDepth: dynamicRange == "sdr" ? 8 : 10,
+                bitDepth: sourceDynamicRange == "sdr" ? 8 : 10,
                 colorRange: "tv",
                 width: width,
                 height: height,
                 frameRate: 23.976,
                 bitrateKbps: bitrateKbps,
-                dynamicRange: dynamicRange,
+                dynamicRange: sourceDynamicRange,
                 hdr10Plus: false,
-                dolbyVisionProfile: dynamicRange == "dolby_vision" ? 7 : nil,
+                dolbyVisionProfile: sourceDynamicRange == "dolby_vision" ? 7 : nil,
                 dvBlCompatId: nil,
                 dvEnhancementLayer: "none",
                 audioCodec: audioCodec,
@@ -1544,6 +1616,7 @@ final class PlaybackProtocolV3Tests: XCTestCase {
             availableQualities: [
                 PlaybackV3AvailableQuality(
                     label: "original",
+                    displayName: nil,
                     height: height,
                     bitrateKbps: bitrateKbps,
                     preservesSource: true

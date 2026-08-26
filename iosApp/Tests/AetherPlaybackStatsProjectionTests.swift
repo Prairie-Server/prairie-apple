@@ -161,6 +161,29 @@ final class AetherPlaybackStatsProjectionTests: XCTestCase {
         XCTAssertFalse(stats.engineRows.contains { $0.0 == "Producer restarts" })
     }
 
+    func testServerToneMapPlanPreservesOriginalDynamicRangeInStats() {
+        let stats = AetherPlaybackStatsProjection.make(
+            snapshot: AetherPlaybackStatsSnapshot(
+                route: .remoteBypass,
+                phase: .playing,
+                sourceVideoFormat: .sdr,
+                outputVideoFormat: .sdr,
+                sourceVideoWidth: 1_920,
+                sourceVideoHeight: 1_080
+            ),
+            source: AetherPlaybackStatsSourceMetadata(
+                sourceURL: URL(string: "https://media.example.test/transcode/master.m3u8"),
+                delivery: PlaybackProtocolV3.PlanDelivery.transcodeHLS,
+                container: "hls",
+                playbackRate: 1,
+                plannedSourceDynamicRange: "hdr10",
+                plannedOutputDynamicRange: "sdr"
+            )
+        )
+
+        XCTAssertEqual(stats.dynamicRange, "HDR10 → SDR")
+    }
+
     func testIdleSnapshotProducesNoSyntheticEngineRows() {
         let stats = AetherPlaybackStatsProjection.make(
             snapshot: AetherPlaybackStatsSnapshot(route: .none, phase: .idle),

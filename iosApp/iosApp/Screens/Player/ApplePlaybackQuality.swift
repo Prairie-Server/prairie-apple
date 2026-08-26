@@ -29,6 +29,13 @@ struct ApplePlaybackQualityOption: Identifiable, Hashable {
     }
 }
 
+struct ApplePlaybackV3QualitySelection: Equatable {
+    let clientQualityId: String
+    let serverPreference: String
+    let bandwidthCapKbps: Int?
+    let isServerOwned: Bool
+}
+
 enum ApplePlaybackQuality {
     static let autoId = "auto"
     static let originalId = "original"
@@ -130,7 +137,12 @@ enum ApplePlaybackQuality {
             let height = quality.height ?? 0
             return ApplePlaybackQualityOption(
                 id: id,
-                label: playbackLabel(id: id, height: height, isOriginal: isOriginal),
+                label: playbackLabel(
+                    serverDisplayName: quality.displayName,
+                    id: id,
+                    height: height,
+                    isOriginal: isOriginal
+                ),
                 resolution: isOriginal || height <= 0 ? "" : "\(height)p",
                 bitrateKbps: max(0, quality.bitrateKbps),
                 isOriginal: isOriginal,
@@ -158,8 +170,62 @@ enum ApplePlaybackQuality {
         }
     }
 
-    private static func playbackLabel(id: String, height: Int, isOriginal: Bool) -> String {
+    /// Resolve an in-player V3 choice without confusing a server-owned rung
+    /// with a same-named Settings preset. Compound rung labels are exact plan
+    /// identities, and their bitrate comes from that plan rather than Apple's
+    /// independently maintained Settings ladder.
+    static func protocolV3Selection(
+        requestedQualityId: String,
+        availableQualities: [PlaybackV3AvailableQuality]
+    ) -> ApplePlaybackV3QualitySelection {
+        let clientQualityId = protocolV3QualityId(requestedQualityId)
+        if clientQualityId == autoId {
+            return ApplePlaybackV3QualitySelection(
+                clientQualityId: autoId,
+                serverPreference: autoId,
+                bandwidthCapKbps: nil,
+                isServerOwned: true
+            )
+        }
+        if let offered = availableQualities.first(where: {
+            protocolV3QualityId($0.label) == clientQualityId
+        }) {
+            let preservesSource = offered.preservesSource || clientQualityId == originalId
+            return ApplePlaybackV3QualitySelection(
+                clientQualityId: clientQualityId,
+                serverPreference: clientQualityId,
+                bandwidthCapKbps: preservesSource ? nil : positiveBitrate(offered.bitrateKbps),
+                isServerOwned: true
+            )
+        }
+
+        let axes = AppleQualityAxes.split(clientQualityId)
+        let serverPreference = settingsOptions.contains(where: { $0.id == clientQualityId })
+            ? axes.resolution
+            : clientQualityId
+        return ApplePlaybackV3QualitySelection(
+            clientQualityId: clientQualityId,
+            serverPreference: serverPreference,
+            bandwidthCapKbps: axes.bitrateKbps,
+            isServerOwned: false
+        )
+    }
+
+    private static func positiveBitrate(_ bitrateKbps: Int) -> Int? {
+        bitrateKbps > 0 ? bitrateKbps : nil
+    }
+
+    private static func playbackLabel(
+        serverDisplayName: String?,
+        id: String,
+        height: Int,
+        isOriginal: Bool
+    ) -> String {
         if isOriginal { return "Original" }
+        if let serverDisplayName {
+            let normalized = serverDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !normalized.isEmpty { return normalized }
+        }
         switch height {
         case 2_160: return "Up to 4K"
         case 1_080: return "Up to 1080p HD"
