@@ -23,6 +23,9 @@ struct EpisodeThumbCard: View {
     @State private var playedOverride: Bool?
     @State private var uiCustomization = UICustomizationPreferences.shared
     @EnvironmentObject private var overlayStore: OverlayPrefsStore
+    #if os(tvOS)
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    #endif
     /// iOS 26 zoom transition namespace, shared from `MainTabView`. Lets the
     /// tapped thumbnail act as the `.matchedTransitionSource` for the zoom into
     /// the episode's item detail, keyed on `item.contentId`. `nil` (tvOS/macOS
@@ -43,7 +46,12 @@ struct EpisodeThumbCard: View {
     }
 
     #if os(tvOS)
-    @FocusState private var isFocused: Bool
+    @FocusState private var standaloneFocused: Bool
+
+    private var isFocused: Bool {
+        guard let focusedItemId else { return standaloneFocused }
+        return focusedItemId.wrappedValue == item.contentId
+    }
     #endif
 
     var body: some View {
@@ -322,8 +330,18 @@ struct EpisodeThumbCard: View {
             thumbnail
         }
         .buttonStyle(.card)
-        .focused($isFocused)
-        .applyRowFocus(focusedItemId, itemId: item.contentId)
+        .applyEpisodeFocus(
+            focusedItemId,
+            itemId: item.contentId,
+            standaloneBinding: $standaloneFocused
+        )
+        .scaleEffect(isFocused && !reduceMotion ? 1.025 : 1)
+        .shadow(
+            color: .black.opacity(isFocused ? 0.5 : 0.2),
+            radius: isFocused ? 20 : 8,
+            y: isFocused ? 10 : 4
+        )
+        .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
         .applyEpisodePlayPauseAction(playAction)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityDescription)
@@ -388,17 +406,18 @@ private extension View {
         }
     }
 
-    /// Mirrors `MediaCard.applyRowFocus` so episode thumbs participate
-    /// in the row's `defaultFocus(... priority: .userInitiated)` mechanism.
+    /// A card must have one focus binding. Inside a managed row, that binding
+    /// is the row's item ID; standalone usage falls back to a local Boolean.
     @ViewBuilder
-    func applyRowFocus(
+    func applyEpisodeFocus(
         _ binding: FocusState<String?>.Binding?,
-        itemId: String?
+        itemId: String,
+        standaloneBinding: FocusState<Bool>.Binding
     ) -> some View {
-        if let binding, let itemId {
+        if let binding {
             self.focused(binding, equals: itemId)
         } else {
-            self
+            self.focused(standaloneBinding)
         }
     }
 }

@@ -29,6 +29,8 @@ struct SectionRow: View {
     var cardVerticalPadding: CGFloat? = nil
     /// Down at the row boundary — forwarded to `MediaRow` for the section pager.
     var onMoveDown: (() -> Void)? = nil
+    /// Live tvOS ownership gate for context-menu focus restoration.
+    var focusRestorationOwner: Binding<Bool>? = nil
 
     #if os(tvOS)
     @Environment(AppRouter.self) private var router
@@ -102,7 +104,8 @@ struct SectionRow: View {
             onItemFocus: onItemFocus,
             cardWidth: cardWidth,
             cardVerticalPadding: cardVerticalPadding,
-            onMoveDown: onMoveDown
+            onMoveDown: onMoveDown,
+            focusRestorationOwner: focusRestorationOwner
         )
     }
 

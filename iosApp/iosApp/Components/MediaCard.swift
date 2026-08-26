@@ -519,7 +519,12 @@ private struct FocusableMediaCard<Content: View>: View {
     let personalItems: PersonalListMenuItems?
     @ViewBuilder var content: () -> Content
 
-    @FocusState private var isFocused: Bool
+    @FocusState private var standaloneFocused: Bool
+
+    private var isFocused: Bool {
+        guard let focusedItemId, let itemId else { return standaloneFocused }
+        return focusedItemId.wrappedValue == itemId
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
@@ -558,8 +563,11 @@ private struct FocusableMediaCard<Content: View>: View {
             content()
         }
         .buttonStyle(.card)
-        .focused($isFocused)
-        .applyRowFocus(focusedItemId, itemId: itemId)
+        .applyCardFocus(
+            focusedItemId,
+            itemId: itemId,
+            standaloneBinding: $standaloneFocused
+        )
         .applyPlayPauseAction(playAction)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityDescription)
@@ -630,19 +638,18 @@ private extension View {
         }
     }
 
-    /// Conditionally binds this view to the parent row's `@FocusState`
-    /// so `defaultFocus(... priority: .userInitiated)` upstream can land
-    /// focus on it. No-op when either argument is nil (e.g., on iOS or
-    /// when this card isn't inside a row that manages focus).
+    /// Use exactly one focus binding: the parent row's item ID when managed,
+    /// otherwise the card's local Boolean for standalone grids.
     @ViewBuilder
-    func applyRowFocus(
+    func applyCardFocus(
         _ binding: FocusState<String?>.Binding?,
-        itemId: String?
+        itemId: String?,
+        standaloneBinding: FocusState<Bool>.Binding
     ) -> some View {
         if let binding, let itemId {
             self.focused(binding, equals: itemId)
         } else {
-            self
+            self.focused(standaloneBinding)
         }
     }
 }

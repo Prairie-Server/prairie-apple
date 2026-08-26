@@ -62,6 +62,11 @@ struct MediaRow: View {
     /// Down at the row's boundary — used by the Skyline section pager to
     /// page to the next section (there is no row geometrically below).
     var onMoveDown: (() -> Void)? = nil
+    /// tvOS-only ownership gate for focus restoration after membership
+    /// mutations. The host keeps this true while this row owns focus (including
+    /// its context-menu flow) and clears it when focus moves to chrome or a
+    /// different row.
+    var focusRestorationOwner: Binding<Bool>? = nil
 
     @FocusState private var focusedItemId: String?
     #if os(tvOS)
@@ -70,6 +75,11 @@ struct MediaRow: View {
     /// identity per page, so the kick has to land on `onAppear`, not only
     /// on a `focusRequest` change).
     @State private var lastAppliedFocusRequest = 0
+    /// Survives the brief nil produced when a context menu dismisses or its
+    /// focused card is removed, so a membership refresh can hand focus to a
+    /// neighboring card instead of leaving the row without an owner.
+    @State private var lastFocusedItemId: String?
+    @State private var focusRestorationGeneration = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private static let focusLogger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "com.continuum.app",
@@ -89,8 +99,16 @@ struct MediaRow: View {
         .onChange(of: focusedItemId) { _, newValue in
             guard let newValue,
                   let item = items.first(where: { $0.contentId == newValue }) else { return }
+            lastFocusedItemId = newValue
             Self.focusLogger.debug("mediaRow.focus changed")
             onItemFocus?(item)
+        }
+        .onChange(of: items.map(\.contentId)) { oldIds, newIds in
+            restoreFocusAfterItemRemoval(from: oldIds, to: newIds)
+        }
+        .onChange(of: focusRestorationOwner?.wrappedValue ?? false) { _, ownsRestoration in
+            guard !ownsRestoration else { return }
+            focusRestorationGeneration += 1
         }
         #endif
     }
@@ -123,6 +141,7 @@ struct MediaRow: View {
     /// a different value — retry until the scroll settles and ours is last.
     private func claimFirstItemFocus(_ firstItem: SectionItem, attempt: Int = 0) {
         focusedItemId = firstItem.contentId
+        lastFocusedItemId = firstItem.contentId
         onItemFocus?(firstItem)
         // Window must outlast the ~300ms animated ride home plus the engine's
         // settling repairs, or the last mid-flight repair wins after all.
@@ -131,6 +150,64 @@ struct MediaRow: View {
             guard focusedItemId != firstItem.contentId else { return }
             Self.focusLogger.debug("mediaRow.reclaimFocus attempt=\(attempt + 1, privacy: .public)")
             claimFirstItemFocus(firstItem, attempt: attempt + 1)
+        }
+    }
+
+    /// Context-menu mutations can immediately remove the focused card from a
+    /// membership-driven row (Continue Watching, Next Up). Preserve its old
+    /// position and claim the card that slid into that slot, falling back to
+    /// the preceding card when the removed item was last.
+    private func restoreFocusAfterItemRemoval(from oldIds: [String], to newIds: [String]) {
+        guard focusRestorationOwner?.wrappedValue == true,
+              let removedId = lastFocusedItemId,
+              let removedIndex = oldIds.firstIndex(of: removedId),
+              !newIds.contains(removedId),
+              !newIds.isEmpty else { return }
+
+        let replacementId = newIds[min(removedIndex, newIds.count - 1)]
+        focusRestorationGeneration += 1
+        let generation = focusRestorationGeneration
+        Self.focusLogger.debug("mediaRow.restoreFocus after removal")
+        claimReplacementFocus(
+            replacementId,
+            removedId: removedId,
+            generation: generation
+        )
+    }
+
+    /// Defer until the refreshed LazyHStack has mounted the replacement, then
+    /// verify on a later turn after the focus engine has processed the write.
+    /// A bounded retry covers the context-menu dismissal repair without
+    /// fighting a legitimate focus move to another card.
+    private func claimReplacementFocus(
+        _ replacementId: String,
+        removedId: String,
+        generation: Int,
+        attempt: Int = 0
+    ) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + (attempt == 0 ? 0 : 0.08)) {
+            guard generation == focusRestorationGeneration,
+                  focusRestorationOwner?.wrappedValue == true,
+                  focusedItemId == nil || focusedItemId == removedId else { return }
+
+            focusedItemId = replacementId
+            lastFocusedItemId = replacementId
+
+            guard attempt < 8 else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                guard generation == focusRestorationGeneration,
+                      focusRestorationOwner?.wrappedValue == true,
+                      focusedItemId != replacementId else { return }
+                Self.focusLogger.debug(
+                    "mediaRow.reclaimReplacementFocus attempt=\(attempt + 1, privacy: .public)"
+                )
+                claimReplacementFocus(
+                    replacementId,
+                    removedId: removedId,
+                    generation: generation,
+                    attempt: attempt + 1
+                )
+            }
         }
     }
     #endif

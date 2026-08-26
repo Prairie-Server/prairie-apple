@@ -121,7 +121,7 @@ struct TVEpisodeCard: View {
                 captionStyle: captionStyle
             )
         }
-        .buttonStyle(EpisodeCardStyle())
+        .buttonStyle(TVCardFocusButtonStyle())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityDescription)
 
@@ -344,22 +344,14 @@ private struct EpisodeCardLabel: View {
         }
         .frame(width: cardWidth, height: stillHeight)
         .clipShape(RoundedRectangle(cornerRadius: stillCornerRadius))
+        .tvFocusRing(isFocused: isFocused, cornerRadius: stillCornerRadius)
         .overlay(
             RoundedRectangle(cornerRadius: stillCornerRadius)
-                .stroke(borderColor, lineWidth: borderWidth)
+                .stroke(
+                    Color.white.opacity(isCurrent && !isFocused ? 0.7 : 0),
+                    lineWidth: isCurrent && !isFocused ? 2 : 0
+                )
         )
-    }
-
-    private var borderColor: Color {
-        if isFocused { return Color.white.opacity(0.9) }
-        if isCurrent { return Color.white.opacity(0.7) }
-        return .clear
-    }
-
-    private var borderWidth: CGFloat {
-        if isFocused { return 3 }
-        if isCurrent { return 2 }
-        return 0
     }
 
     private var watchedBadge: some View {
@@ -405,35 +397,4 @@ private struct EpisodeCardLabel: View {
     }
 }
 
-/// Custom style so the system doesn't paint its default focus halo over
-/// the card. Scale + drop shadow only; the white overlay ring on the
-/// still (driven by `isFocused` in the label) is the focus cue.
-private struct EpisodeCardStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        EpisodeCardStyleBody(configuration: configuration)
-    }
-}
-
-private struct EpisodeCardStyleBody: View {
-    let configuration: ButtonStyleConfiguration
-
-    @Environment(\.isFocused) private var isFocused
-
-    var body: some View {
-        configuration.label
-            .scaleEffect(scale)
-            .shadow(
-                color: .black.opacity(isFocused ? 0.45 : 0.3),
-                radius: isFocused ? 18 : 8,
-                y: isFocused ? 8 : 4
-            )
-            .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
-            .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: configuration.isPressed)
-    }
-
-    private var scale: CGFloat {
-        let base: CGFloat = isFocused ? 1.04 : 1.0
-        return configuration.isPressed ? base * 0.97 : base
-    }
-}
 #endif
