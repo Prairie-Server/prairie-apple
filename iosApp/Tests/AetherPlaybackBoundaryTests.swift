@@ -73,6 +73,22 @@ final class AetherPlaybackBoundaryTests: XCTestCase {
         XCTAssertEqual(languages, ["en"])
     }
 
+    func testNonDefaultSameLanguageAudioRequiresAnExactFirstOpenProbe() {
+        let tracks = [
+            makeAudioTrack(language: "eng", isDefault: true),
+            makeAudioTrack(language: "eng", isDefault: false),
+        ]
+
+        XCTAssertFalse(AetherInitialAudioPreference.requiresExactStreamProbe(
+            selectedOrdinal: 0,
+            tracks: tracks
+        ))
+        XCTAssertTrue(AetherInitialAudioPreference.requiresExactStreamProbe(
+            selectedOrdinal: 1,
+            tracks: tracks
+        ))
+    }
+
     private func makeAudioTrack(language: String?, isDefault: Bool) -> AudioTrack {
         AudioTrack(
             index: nil,
@@ -430,6 +446,7 @@ final class AetherPlaybackBoundaryTests: XCTestCase {
                 "Authorization": "Bearer current-token",
             ],
             resolveURL: { URL(string: $0, relativeTo: URL(string: "https://dev.example.test")) },
+            audioSourceStreamIndex: 7,
             preferredAudioLanguages: ["eng"],
             preferredSubtitleLanguages: ["eng"]
         )
@@ -442,7 +459,7 @@ final class AetherPlaybackBoundaryTests: XCTestCase {
         ])
         XCTAssertEqual(spec.options.preferredAudioLanguages, ["eng"])
         XCTAssertEqual(spec.options.preferredSubtitleLanguages, ["eng"])
-        XCTAssertNil(spec.audioSourceStreamIndex)
+        XCTAssertEqual(spec.audioSourceStreamIndex, 7)
         XCTAssertFalse(spec.options.audioOnly)
         XCTAssertFalse(spec.options.autoplay)
         XCTAssertFalse(spec.options.nativeRemoteHLS)

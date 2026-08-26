@@ -2319,6 +2319,39 @@ class PlayerViewModel {
             : .field
         let spec: AetherLoadSpec
         if let v3 = prepared.protocolV3 {
+            let audioSourceStreamIndex: Int32?
+            let selectedAudioOrdinal = v3.plan.selectedTracks.audio?.index
+            let catalogAudioTracks = prepared.selectedVersion.audioTracks ?? []
+            if v3.plan.delivery == PlaybackProtocolV3.PlanDelivery.originalHTTP,
+               AetherInitialAudioPreference.requiresExactStreamProbe(
+                   selectedOrdinal: selectedAudioOrdinal,
+                   tracks: catalogAudioTracks
+               ),
+               let selectedAudioOrdinal {
+                // A V3 audio identity is a dense ordinal, but Aether's exact
+                // first-open override is an FFmpeg AVStream id. Resolve it
+                // with the same authenticated source and headers the real
+                // load will use. This extra open is limited to non-default
+                // original-file audio; without it, a same-language
+                // TrueHD/compatibility pair starts on the container default
+                // and depends on a fragile post-load pipeline rebuild.
+                let sourceURL = streamRequest.url
+                let sourceHeaders = streamRequest.headers
+                let probe = try await Task.detached(priority: .userInitiated) {
+                    try AetherEngine.probe(
+                        url: sourceURL,
+                        options: LoadOptions(httpHeaders: sourceHeaders)
+                    )
+                }.value
+                try requireCurrentStreamLoad(expectedStreamLoadGeneration)
+                guard probe.audioTracks.indices.contains(selectedAudioOrdinal),
+                      let exactStreamIndex = Int32(exactly: probe.audioTracks[selectedAudioOrdinal].id) else {
+                    throw AetherLoadSpec.ValidationError.invalidAudioTrackIndex(selectedAudioOrdinal)
+                }
+                audioSourceStreamIndex = exactStreamIndex
+            } else {
+                audioSourceStreamIndex = nil
+            }
             spec = try AetherLoadSpec(
                 validating: v3.plan,
                 sessionID: prepared.session.sessionId,
@@ -2338,6 +2371,7 @@ class PlayerViewModel {
                     )?.url
                 },
                 apiOriginURL: URL(string: streamRequest.serverUrl),
+                audioSourceStreamIndex: audioSourceStreamIndex,
                 preferredAudioLanguages: preferredAudio,
                 preferredSubtitleLanguages: preferredSubtitles,
                 forwardBufferSegments: forwardBufferSegments,
