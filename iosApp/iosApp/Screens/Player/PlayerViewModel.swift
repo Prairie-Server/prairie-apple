@@ -1180,12 +1180,16 @@ class PlayerViewModel {
         let secondaryLabel = selectedSecondarySubtitleId.flatMap { selectedID in
             subtitleTracks.first { $0.trackId == selectedID }?.primaryLabel
         }
+        let playbackPlan = activePreparedProtocolV3?.plan
         let source = AetherPlaybackStatsSourceMetadata(
             sourceURL: spec.sourceURL,
             delivery: spec.delivery,
             container: currentSelectedVersion?.container,
             playbackRate: isHoldFastForwarding ? 2 : settings.playbackSpeed,
-            secondarySubtitleLabel: secondaryLabel
+            secondarySubtitleLabel: secondaryLabel,
+            plannedSourceDynamicRange: playbackPlan?.source.dynamicRange,
+            plannedOutputDynamicRange: playbackPlan?.effectiveRecipe.dynamicRange,
+            plannedSourceDolbyVisionProfile: playbackPlan?.source.dolbyVisionProfile
         )
         let snapshot = AetherPlaybackStatsSnapshot(
             engine: aetherPlaybackController.engine

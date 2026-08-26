@@ -1,7 +1,7 @@
 Source: silo-server internal/playback/testdata/protocol_v3
 Server ref: main
-Server commit: 820eef7792d24e2b5af789e448906481bd560296
-Vendored: 2026-08-23
+Server commit: 745b767f73088309953972de9ea23f33d854496e
+Vendored: 2026-08-25
 
 All nine files come from internal/playback/testdata/protocol_v3. Six of them are
 also published byte-identically under docs/design/schemas/playback-v3/v3/fixtures/valid;

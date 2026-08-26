@@ -130,7 +130,12 @@ enum ApplePlaybackQuality {
             let height = quality.height ?? 0
             return ApplePlaybackQualityOption(
                 id: id,
-                label: playbackLabel(id: id, height: height, isOriginal: isOriginal),
+                label: playbackLabel(
+                    serverDisplayName: quality.displayName,
+                    id: id,
+                    height: height,
+                    isOriginal: isOriginal
+                ),
                 resolution: isOriginal || height <= 0 ? "" : "\(height)p",
                 bitrateKbps: max(0, quality.bitrateKbps),
                 isOriginal: isOriginal,
@@ -158,8 +163,17 @@ enum ApplePlaybackQuality {
         }
     }
 
-    private static func playbackLabel(id: String, height: Int, isOriginal: Bool) -> String {
+    private static func playbackLabel(
+        serverDisplayName: String?,
+        id: String,
+        height: Int,
+        isOriginal: Bool
+    ) -> String {
         if isOriginal { return "Original" }
+        if let serverDisplayName {
+            let normalized = serverDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !normalized.isEmpty { return normalized }
+        }
         switch height {
         case 2_160: return "Up to 4K"
         case 1_080: return "Up to 1080p HD"
