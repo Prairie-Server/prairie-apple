@@ -62,6 +62,11 @@ struct MediaRow: View {
     /// Down at the row's boundary — used by the Skyline section pager to
     /// page to the next section (there is no row geometrically below).
     var onMoveDown: (() -> Void)? = nil
+    /// tvOS-only ownership gate for focus restoration after membership
+    /// mutations. The host keeps this true while this row owns focus (including
+    /// its context-menu flow) and clears it when focus moves to chrome or a
+    /// different row.
+    var focusRestorationOwner: Binding<Bool>? = nil
 
     @FocusState private var focusedItemId: String?
     #if os(tvOS)
@@ -100,6 +105,10 @@ struct MediaRow: View {
         }
         .onChange(of: items.map(\.contentId)) { oldIds, newIds in
             restoreFocusAfterItemRemoval(from: oldIds, to: newIds)
+        }
+        .onChange(of: focusRestorationOwner?.wrappedValue ?? false) { _, ownsRestoration in
+            guard !ownsRestoration else { return }
+            focusRestorationGeneration += 1
         }
         #endif
     }
@@ -149,7 +158,8 @@ struct MediaRow: View {
     /// position and claim the card that slid into that slot, falling back to
     /// the preceding card when the removed item was last.
     private func restoreFocusAfterItemRemoval(from oldIds: [String], to newIds: [String]) {
-        guard let removedId = lastFocusedItemId,
+        guard focusRestorationOwner?.wrappedValue == true,
+              let removedId = lastFocusedItemId,
               let removedIndex = oldIds.firstIndex(of: removedId),
               !newIds.contains(removedId),
               !newIds.isEmpty else { return }
@@ -177,6 +187,7 @@ struct MediaRow: View {
     ) {
         DispatchQueue.main.asyncAfter(deadline: .now() + (attempt == 0 ? 0 : 0.08)) {
             guard generation == focusRestorationGeneration,
+                  focusRestorationOwner?.wrappedValue == true,
                   focusedItemId == nil || focusedItemId == removedId else { return }
 
             focusedItemId = replacementId
@@ -185,6 +196,7 @@ struct MediaRow: View {
             guard attempt < 8 else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
                 guard generation == focusRestorationGeneration,
+                      focusRestorationOwner?.wrappedValue == true,
                       focusedItemId != replacementId else { return }
                 Self.focusLogger.debug(
                     "mediaRow.reclaimReplacementFocus attempt=\(attempt + 1, privacy: .public)"
