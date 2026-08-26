@@ -613,6 +613,8 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         let plan = makePlan(
             delivery: PlaybackProtocolV3.PlanDelivery.transcodeHLS,
             streamProtocol: "hls",
+            sourceDynamicRange: "hdr10",
+            dynamicRange: "sdr",
             transformations: [
                 PlaybackV3Transformation(
                     name: "hdr_to_sdr_tonemap",
@@ -623,6 +625,8 @@ final class PlaybackProtocolV3Tests: XCTestCase {
             ]
         )
 
+        XCTAssertEqual(plan.source.dynamicRange, "hdr10")
+        XCTAssertEqual(plan.effectiveRecipe.dynamicRange, "sdr")
         XCTAssertNoThrow(try ApplePlaybackV3PlanAdapter.validate(plan))
     }
 
@@ -1488,6 +1492,7 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         width: Int = 1_920,
         height: Int = 1_080,
         bitrateKbps: Int = 8_000,
+        sourceDynamicRange: String? = nil,
         dynamicRange: String = "sdr",
         selectedAudioIndex: Int = 0,
         selectedSubtitleIndex: Int? = nil,
@@ -1500,7 +1505,8 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         timelineOffset: Double = 0,
         sourceDurationSeconds: Double? = 5_400
     ) -> PlaybackV3Plan {
-        PlaybackV3Plan(
+        let sourceDynamicRange = sourceDynamicRange ?? dynamicRange
+        return PlaybackV3Plan(
             protocolVersion: 3,
             planId: planId,
             sessionId: "session-v3",
@@ -1590,15 +1596,15 @@ final class PlaybackProtocolV3Tests: XCTestCase {
                 videoCodec: videoCodec,
                 videoProfile: "high",
                 videoLevel: 41,
-                bitDepth: dynamicRange == "sdr" ? 8 : 10,
+                bitDepth: sourceDynamicRange == "sdr" ? 8 : 10,
                 colorRange: "tv",
                 width: width,
                 height: height,
                 frameRate: 23.976,
                 bitrateKbps: bitrateKbps,
-                dynamicRange: dynamicRange,
+                dynamicRange: sourceDynamicRange,
                 hdr10Plus: false,
-                dolbyVisionProfile: dynamicRange == "dolby_vision" ? 7 : nil,
+                dolbyVisionProfile: sourceDynamicRange == "dolby_vision" ? 7 : nil,
                 dvBlCompatId: nil,
                 dvEnhancementLayer: "none",
                 audioCodec: audioCodec,
