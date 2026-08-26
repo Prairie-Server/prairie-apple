@@ -295,12 +295,12 @@ enum ProfileAvatarResolver {
 
         let lowercased = trimmed.lowercased()
 
-        // The Nuke pipeline registers no SVG decoder, so the server's legacy
-        // `/profile-avatars/{id}.svg` preset URLs cannot be rendered here.
-        // Decline them and let the caller's raw-ref fallback chain apply.
-        // Uploads are .webp and DiceBear presets are PNG, so both pass.
+        // The Nuke pipeline registers no SVG decoder. Legacy presets use an
+        // `.svg` extension, while DiceBear uses an `/svg` format path.
+        // Decline both and let the caller's raw-ref fallback build a PNG URL.
+        // Uploaded avatars are WebP and continue through this path.
         let pathOnly = lowercased.split(separator: "?", maxSplits: 1)[0]
-        if pathOnly.hasSuffix(".svg") { return nil }
+        if pathOnly.hasSuffix(".svg") || pathOnly.hasSuffix("/svg") { return nil }
 
         if lowercased.hasPrefix("http://")
             || lowercased.hasPrefix("https://")
