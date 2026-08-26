@@ -29,6 +29,13 @@ struct ApplePlaybackQualityOption: Identifiable, Hashable {
     }
 }
 
+struct ApplePlaybackV3QualitySelection: Equatable {
+    let clientQualityId: String
+    let serverPreference: String
+    let bandwidthCapKbps: Int?
+    let isServerOwned: Bool
+}
+
 enum ApplePlaybackQuality {
     static let autoId = "auto"
     static let originalId = "original"
@@ -161,6 +168,51 @@ enum ApplePlaybackQuality {
         default:
             return value
         }
+    }
+
+    /// Resolve an in-player V3 choice without confusing a server-owned rung
+    /// with a same-named Settings preset. Compound rung labels are exact plan
+    /// identities, and their bitrate comes from that plan rather than Apple's
+    /// independently maintained Settings ladder.
+    static func protocolV3Selection(
+        requestedQualityId: String,
+        availableQualities: [PlaybackV3AvailableQuality]
+    ) -> ApplePlaybackV3QualitySelection {
+        let clientQualityId = protocolV3QualityId(requestedQualityId)
+        if clientQualityId == autoId {
+            return ApplePlaybackV3QualitySelection(
+                clientQualityId: autoId,
+                serverPreference: autoId,
+                bandwidthCapKbps: nil,
+                isServerOwned: true
+            )
+        }
+        if let offered = availableQualities.first(where: {
+            protocolV3QualityId($0.label) == clientQualityId
+        }) {
+            let preservesSource = offered.preservesSource || clientQualityId == originalId
+            return ApplePlaybackV3QualitySelection(
+                clientQualityId: clientQualityId,
+                serverPreference: clientQualityId,
+                bandwidthCapKbps: preservesSource ? nil : positiveBitrate(offered.bitrateKbps),
+                isServerOwned: true
+            )
+        }
+
+        let axes = AppleQualityAxes.split(clientQualityId)
+        let serverPreference = settingsOptions.contains(where: { $0.id == clientQualityId })
+            ? axes.resolution
+            : clientQualityId
+        return ApplePlaybackV3QualitySelection(
+            clientQualityId: clientQualityId,
+            serverPreference: serverPreference,
+            bandwidthCapKbps: axes.bitrateKbps,
+            isServerOwned: false
+        )
+    }
+
+    private static func positiveBitrate(_ bitrateKbps: Int) -> Int? {
+        bitrateKbps > 0 ? bitrateKbps : nil
     }
 
     private static func playbackLabel(

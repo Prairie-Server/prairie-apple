@@ -1287,22 +1287,40 @@ final class PlaybackProtocolV3Tests: XCTestCase {
     }
 
     func testServerQualityDisplayNameWinsForCompoundRungs() {
+        let serverQualities = [
+            PlaybackV3AvailableQuality(
+                label: "1080p-medium",
+                displayName: "1080p Medium",
+                height: 1_080,
+                bitrateKbps: 6_000,
+                preservesSource: false
+            )
+        ]
         let options = ApplePlaybackQuality.playbackOptions(
-            serverQualities: [
-                PlaybackV3AvailableQuality(
-                    label: "1080p-medium",
-                    displayName: "1080p Medium",
-                    height: 1_080,
-                    bitrateKbps: 6_000,
-                    preservesSource: false
-                )
-            ],
+            serverQualities: serverQualities,
             fallbackVersion: nil
         )
 
         XCTAssertEqual(options.last?.id, "1080p-medium")
         XCTAssertEqual(options.last?.label, "1080p Medium")
         XCTAssertEqual(options.last?.subtitle, "Maximum bitrate: 6 Mbps")
+
+        let selection = ApplePlaybackQuality.protocolV3Selection(
+            requestedQualityId: "1080p-medium",
+            availableQualities: serverQualities
+        )
+        XCTAssertEqual(selection.clientQualityId, "1080p-medium")
+        XCTAssertEqual(selection.serverPreference, "1080p-medium")
+        XCTAssertEqual(selection.bandwidthCapKbps, 6_000)
+        XCTAssertTrue(selection.isServerOwned)
+
+        let settingsFallback = ApplePlaybackQuality.protocolV3Selection(
+            requestedQualityId: "1080p-medium",
+            availableQualities: []
+        )
+        XCTAssertEqual(settingsFallback.serverPreference, "1080p")
+        XCTAssertEqual(settingsFallback.bandwidthCapKbps, 12_000)
+        XCTAssertFalse(settingsFallback.isServerOwned)
     }
 
     func testEmptyServerQualityCatalogOnlyOffersAuto() {

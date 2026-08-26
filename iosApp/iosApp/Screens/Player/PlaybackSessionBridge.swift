@@ -386,6 +386,10 @@ actor PlaybackSessionBridge {
         var attemptedPlanKeys: [String]
         var attemptCount: Int
         var clientQualityId: String
+        /// True after the user selects an exact quality identifier advertised
+        /// by the active plan. Recovery replans must keep that identifier
+        /// instead of translating it through the local Settings ladder.
+        var usesServerQualityPreference: Bool
         /// The independent bandwidth ceiling captured for this attempt. Every
         /// replan must repeat it or recovery silently widens the connection.
         var bandwidthCapKbps: Int?
@@ -1089,6 +1093,7 @@ actor PlaybackSessionBridge {
             attemptedPlanKeys: [planAttemptKey],
             attemptCount: 1,
             clientQualityId: staged.clientQualityId,
+            usesServerQualityPreference: false,
             bandwidthCapKbps: staged.bandwidthCapKbps,
             snapshot: staged.snapshot,
             serverFeatures: staged.serverFeatures,
@@ -1330,13 +1335,26 @@ actor PlaybackSessionBridge {
         }()
         let selectedTracks = PlaybackV3SelectedTracks(audio: selectedAudio, subtitle: selectedSubtitle)
         let normalizedPosition = position.isFinite ? max(0, position) : 0
-        let requestedClientQualityId = qualityPreference.map {
-            ApplePlaybackQuality.protocolV3QualityId($0)
-        } ?? active.clientQualityId
-        let requestedBandwidthCapKbps = AppleQualityAxes.resolvedBitrateCap(
-            qualityOverride: qualityPreference,
-            fallbackBitrateKbps: active.bandwidthCapKbps
-        )
+        let qualitySelection = qualityPreference.map {
+            ApplePlaybackQuality.protocolV3Selection(
+                requestedQualityId: $0,
+                availableQualities: active.plan.availableQualities
+            )
+        }
+        let requestedClientQualityId = qualitySelection?.clientQualityId
+            ?? active.clientQualityId
+        let requestedUsesServerQualityPreference = qualitySelection?.isServerOwned
+            ?? active.usesServerQualityPreference
+        let requestedQualityPreference = qualitySelection?.serverPreference
+            ?? (requestedUsesServerQualityPreference
+                ? requestedClientQualityId
+                : protocolV3QualityPreference(requestedClientQualityId))
+        let requestedBandwidthCapKbps: Int?
+        if let qualitySelection {
+            requestedBandwidthCapKbps = qualitySelection.bandwidthCapKbps
+        } else {
+            requestedBandwidthCapKbps = active.bandwidthCapKbps
+        }
         let eventName = isSeekReanchor
             ? "seek_reanchor_requested"
             : (invalidatesIntent ? "plan_invalidated" : "plan_failed")
@@ -1394,7 +1412,7 @@ actor PlaybackSessionBridge {
             planAttemptKey: active.planAttemptKey,
             attemptedPlanKeys: attemptedKeys,
             attemptCount: invalidatesIntent ? 1 : active.attemptCount,
-            qualityPreference: protocolV3QualityPreference(requestedClientQualityId),
+            qualityPreference: requestedQualityPreference,
             positionSeconds: normalizedPosition,
             metered: false,
             bandwidthEstimateKbps: nil,
@@ -1568,6 +1586,7 @@ actor PlaybackSessionBridge {
             active.serverFeatures = response.serverFeatures
             active.plan = nextPlan
             active.clientQualityId = requestedClientQualityId
+            active.usesServerQualityPreference = requestedUsesServerQualityPreference
             active.bandwidthCapKbps = requestedBandwidthCapKbps
             stageProtocolV3Transition(
                 candidateSessionId: nextSessionId,
