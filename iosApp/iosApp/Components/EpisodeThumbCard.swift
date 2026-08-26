@@ -320,8 +320,12 @@ struct EpisodeThumbCard: View {
     private var thumbnailButton: some View {
         let button = Button(action: action) {
             thumbnail
+                .tvFocusRing(
+                    isFocused: isFocused,
+                    cornerRadius: ContinuumTheme.cornerRadius
+                )
         }
-        .buttonStyle(.card)
+        .buttonStyle(TVCardFocusButtonStyle())
         .focused($isFocused)
         .applyRowFocus(focusedItemId, itemId: item.contentId)
         .applyEpisodePlayPauseAction(playAction)
