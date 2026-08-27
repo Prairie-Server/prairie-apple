@@ -5992,6 +5992,51 @@ class PlayerViewModel {
         track.srcId ?? track.ffIndex
     }
 
+    /// Re-registers session-created sidecars (finished AI jobs, downloaded
+    /// subtitles) with a freshly loaded engine under V3.
+    ///
+    /// Their `knownExternalSubtitles` entries were recorded for exactly this
+    /// moment, but the V3 picker-only gate skips the generic re-registration
+    /// path, so without this a quality/route replan leaves the row selected
+    /// in the menu with no Aether resource behind it.
+    private func reregisterLocallyCreatedSidecarsWithAether() {
+        guard backendCapabilities.supportsExternalPrimarySubtitles else { return }
+        var reregistered = false
+        for local in locallyRegisteredSidecarSubtitleTracks {
+            guard !aetherPlaybackController.containsSubtitle(appTrackID: local.trackId),
+                  let known = knownExternalSubtitles.first(where: {
+                      SubtitleTrackIdSpace.makeSidecarTrackId(urlIndex: $0.index) == local.trackId
+                  }),
+                  let url = resolveServerUrl(known.url, serverUrl: resolvedServerUrl) else {
+                continue
+            }
+            aetherPlaybackController.addExternalSubtitleTrack(
+                ExternalSubtitleTrack(
+                    url: url,
+                    name: known.label,
+                    language: known.language,
+                    isForced: known.forced ?? false,
+                    isHearingImpaired: known.hearingImpaired ?? false,
+                    isDefault: known.default ?? false,
+                    httpHeaders: aetherSubtitleRequestHeaders(for: url),
+                    formatHint: known.codec
+                ),
+                appTrackID: local.trackId
+            )
+            reregistered = true
+        }
+        guard reregistered else { return }
+        // If the local row was the active selection, the new engine load lost
+        // it; arm the existing pending path so inventory adoption reasserts
+        // the engine-side selection once the load is established. The plan
+        // cannot contest this id — it does not know the track.
+        if let selectedSubtitleId,
+           locallyRegisteredSidecarSubtitleTracks.contains(where: { $0.trackId == selectedSubtitleId }) {
+            pendingSidecarSubtitleTrackId = selectedSubtitleId
+        }
+        adoptAetherInventory()
+    }
+
     private func loadPendingExternalSubtitles() {
         if activePreparedProtocolV3 != nil {
             // `subtitle.inventory` feeds the V3 picker. Loading all of its URLs
@@ -5999,6 +6044,11 @@ class PlayerViewModel {
             // and lets language/default policy override `subtitle.artifact`.
             // The exact selected artifact was already declared in AetherLoadSpec.
             pendingExternalSubtitles = []
+            // A sidecar this session created itself (finished AI job or
+            // downloaded subtitle) is not in the plan, so a reload rebuilds
+            // the alias table without it while the picker still shows its
+            // row; only those tracks are re-registered here.
+            reregisterLocallyCreatedSidecarsWithAether()
             Self.logger.info("[CMP-SUB] keeping V3 subtitle inventory picker-only")
             return
         }
