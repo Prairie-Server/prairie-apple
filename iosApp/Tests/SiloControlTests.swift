@@ -74,6 +74,39 @@ final class SiloControlTests: XCTestCase {
         XCTAssertNil(offer.serverName)
         XCTAssertNil(offer.profileName)
     }
+
+    func testServerIdentityMatchesURLCapitalizationAcrossDevices() {
+        let phone = ServerRegistry.serverId(for: "https://Media.Example.test")
+        let tv = ServerRegistry.serverId(for: "HTTPS://media.example.test/")
+
+        XCTAssertNotEqual(phone, tv, "persisted registry keys remain unchanged")
+        XCTAssertTrue(ServerRegistry.serverIdsMatch(phone, tv))
+    }
+
+    func testServerIdentityMatchesDefaultPortsButNotDifferentOrigins() {
+        let canonical = ServerRegistry.serverId(for: "https://media.example.test/library")
+        let explicitDefault = ServerRegistry.serverId(for: "https://MEDIA.example.test:443/library/")
+        let otherPort = ServerRegistry.serverId(for: "https://media.example.test:8443/library")
+        let otherScheme = ServerRegistry.serverId(for: "http://media.example.test/library")
+        let pathCase = ServerRegistry.serverId(for: "https://media.example.test/Library")
+
+        XCTAssertTrue(ServerRegistry.serverIdsMatch(canonical, explicitDefault))
+        XCTAssertFalse(ServerRegistry.serverIdsMatch(canonical, otherPort))
+        XCTAssertFalse(ServerRegistry.serverIdsMatch(canonical, otherScheme))
+        XCTAssertFalse(ServerRegistry.serverIdsMatch(canonical, pathCase))
+    }
+
+    func testServerIdentityDecoderRequiresAValidRoundTrippingHTTPURL() {
+        let original = "https://Média.example.test:443/silo?mode=A#top"
+        let serverId = ServerRegistry.serverId(for: original)
+
+        XCTAssertEqual(ServerRegistry.url(forServerId: serverId), original)
+        XCTAssertNil(ServerRegistry.url(forServerId: "not-a-registry-id"))
+        XCTAssertNil(ServerRegistry.url(forServerId: ServerRegistry.serverId(for: "file:///tmp/silo")))
+        XCTAssertFalse(ServerRegistry.serverIdsMatch(nil, serverId))
+        XCTAssertTrue(ServerRegistry.serverIdsMatch("future-format", "future-format"))
+        XCTAssertFalse(ServerRegistry.serverIdsMatch("future-format-a", "future-format-b"))
+    }
 }
 
 extension SiloControlTests {

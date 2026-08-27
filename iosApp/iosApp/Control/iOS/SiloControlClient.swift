@@ -115,7 +115,8 @@ final class SiloControlClient {
             errorMessage = "Choose a server before controlling a TV."
             return false
         }
-        guard target.serverId == activeServerId || (allowCrossServer && target.protocolVersion >= 2) else {
+        let targetsActiveServer = ServerRegistry.serverIdsMatch(target.serverId, activeServerId)
+        guard targetsActiveServer || (allowCrossServer && target.protocolVersion >= 2) else {
             errorMessage = "That TV is connected to a different server."
             return false
         }
@@ -170,7 +171,7 @@ final class SiloControlClient {
         }
         isConnecting = false
         let connected = self.connectionId == connectionId && self.session != nil
-        if connected, target.serverId == activeServerId {
+        if connected, targetsActiveServer {
             persistLastTarget(target)
         }
         return connected
@@ -216,7 +217,8 @@ final class SiloControlClient {
                 profileName: profileName,
                 session: session
             )
-            guard ready.serverId == activeServer.id, ready.profileId == profileId else {
+            guard ServerRegistry.serverIdsMatch(ready.serverId, activeServer.id),
+                  ready.profileId == profileId else {
                 throw SiloControlHandoffError.invalidResponse
             }
             adoptEffectiveTarget(server: activeServer)
@@ -456,7 +458,10 @@ final class SiloControlClient {
               !isReconnecting,
               autoResumeTask == nil,
               let persisted = Self.loadPersistedTarget(),
-              persisted.serverId == ServerRegistry.shared.activeServerId
+              ServerRegistry.serverIdsMatch(
+                  persisted.serverId,
+                  ServerRegistry.shared.activeServerId
+              )
         else { return }
 
         autoResumeGeneration += 1
