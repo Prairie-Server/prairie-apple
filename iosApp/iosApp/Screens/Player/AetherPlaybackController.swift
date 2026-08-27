@@ -442,7 +442,14 @@ final class AetherPlaybackController {
     /// The inverse of `appSubtitleID(forAetherID:)`. Internal so the boundary
     /// tests can assert the translation round-trips.
     func aetherSubtitleID(forAppID id: Int64) -> Int? {
-        aetherSubtitleIDByAppID[id] ?? Int(exactly: id)
+        if let translated = aetherSubtitleIDByAppID[id] {
+            return translated
+        }
+        // A Silo sidecar id is not an Aether id. Passing an unaliased value
+        // through reaches Aether as an unknown external id and is silently
+        // ignored, leaving the previously selected subtitle on screen.
+        guard !SubtitleTrackIdSpace.isSidecar(id) else { return nil }
+        return Int(exactly: id)
     }
 
     private func observeEngine() {
