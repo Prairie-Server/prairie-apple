@@ -1485,7 +1485,7 @@ class PlayerViewModel {
                 // best-effort; the header comparison below is authoritative.
                 _ = await self.sessionBridge.reportProgress(
                     position: resumePosition,
-                    isPaused: !self.isPlaying
+                    isPaused: !self.aetherPlaybackController.shouldPlayWhenReady
                 )
                 try self.requireCurrentStreamLoad(recoveryGeneration)
                 guard self.activePlaybackSessionId == sessionId,
@@ -1532,12 +1532,14 @@ class PlayerViewModel {
                 let reloadPosition = self.currentTime.isFinite
                     ? max(0, self.currentTime)
                     : resumePosition
+                let shouldPlayWhenReady = self.aetherPlaybackController.shouldPlayWhenReady
                 self.resolvedServerUrl = streamRequest.serverUrl
                 try await self.loadAether(
                     prepared: prepared,
                     streamRequest: streamRequest,
                     expectedStreamLoadGeneration: recoveryGeneration,
-                    resumeSourcePosition: reloadPosition
+                    resumeSourcePosition: reloadPosition,
+                    shouldPlayWhenReady: shouldPlayWhenReady
                 )
                 try self.requireCurrentStreamLoad(recoveryGeneration)
                 guard self.activePlaybackSessionId == sessionId,
@@ -2456,7 +2458,8 @@ class PlayerViewModel {
         prepared: PreparedPlayback,
         streamRequest: StreamRequest,
         expectedStreamLoadGeneration: UInt64,
-        resumeSourcePosition: Double? = nil
+        resumeSourcePosition: Double? = nil,
+        shouldPlayWhenReady: Bool = true
     ) async throws {
         try requireCurrentStreamLoad(expectedStreamLoadGeneration)
         let preferredSubtitles = subtitleOrderingLanguage.map { [$0] } ?? []
@@ -2592,7 +2595,10 @@ class PlayerViewModel {
         isBuffering = false
         bufferingProgress = nil
         scrubPreviewProvider.endSession()
-        let loadEpoch = aetherPlaybackController.beginLoad(spec)
+        let loadEpoch = aetherPlaybackController.beginLoad(
+            spec,
+            shouldPlayWhenReady: shouldPlayWhenReady
+        )
         activeAetherLoadEpoch = loadEpoch
         establishedAetherLoadEpoch = nil
         lastAetherAudioTrackSwitchFailure = nil
@@ -2640,7 +2646,11 @@ class PlayerViewModel {
         adoptAetherInventory()
         reapplyAetherGain()
 
-        aetherPlaybackController.play()
+        if aetherPlaybackController.shouldPlayWhenReady {
+            aetherPlaybackController.play()
+        } else {
+            aetherPlaybackController.pause()
+        }
     }
 
     /// Whether the engine may be driven off a deferred (not user-initiated)

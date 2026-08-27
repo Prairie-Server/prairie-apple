@@ -1228,6 +1228,28 @@ final class AetherPlaybackBoundaryTests: XCTestCase {
         )
     }
 
+    func testTransportIntentCanChangeDuringAnUncommittedLoad() throws {
+        let controller = try AetherPlaybackController()
+        defer { controller.stop() }
+        let spec = try AetherLoadSpec(
+            directURL: URL(string: "https://dev.example.test/media.mp4")!,
+            headers: [:],
+            startPosition: 0,
+            audioOnly: false
+        )
+
+        controller.beginLoad(spec, shouldPlayWhenReady: false)
+        XCTAssertFalse(controller.shouldPlayWhenReady)
+
+        // Play is deliberately ignored by the engine until finishLoad, but
+        // the user's intent must still be retained for the commit boundary.
+        controller.play()
+        XCTAssertTrue(controller.shouldPlayWhenReady)
+
+        controller.pause()
+        XCTAssertFalse(controller.shouldPlayWhenReady)
+    }
+
     func testPlayAfterCommitRestoresATornDownSession() {
         XCTAssertEqual(
             AetherPlayIntent.action(
