@@ -156,7 +156,7 @@ final class AetherPlaybackController {
         do {
             try await engine.load(
                 url: spec.sourceURL,
-                startPosition: spec.timeline.aetherStartPosition,
+                startPosition: spec.aetherStartPosition,
                 options: spec.options,
                 audioSourceStreamIndex: spec.audioSourceStreamIndex
             )
