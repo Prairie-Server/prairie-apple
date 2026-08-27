@@ -624,6 +624,9 @@ class PlayerViewModel {
     /// would otherwise have no idea why it was abandoned.
     @ObservationIgnored
     private var lastAetherAudioTrackSwitchFailure: PlaybackErrorInfo?
+    /// Serializes every Protocol V3 source replacement, including a same-plan
+    /// reload whose only change is a refreshed bearer. Reusing this gate keeps
+    /// credential recovery from racing route replans, seeks, or track changes.
     private var protocolV3ReplanTask: Task<Void, Never>?
     private var nextUpLookupTask: Task<Void, Never>?
     private var nextUpOnDeckTask: Task<Void, Never>?
@@ -1252,6 +1255,9 @@ class PlayerViewModel {
             // replans.
             return
         }
+        if attemptProtocolV3AuthenticationReload(after: failure) {
+            return
+        }
         let serverCanAdapt: Set<PlaybackErrorKind> = [
             .sourceRefused,
             .vodSourceFailed,
@@ -1396,6 +1402,164 @@ class PlayerViewModel {
             classification: protocolV3FailureClassification(message),
             message: message
         )
+    }
+
+    /// Rebuilds the committed plan with the account bearer currently held by
+    /// `ContinuumAPI`. Protocol V3 media URLs are stable across access-token
+    /// refreshes, but Aether/AVPlayer freezes request headers at asset load.
+    /// A normal authenticated progress request first gives the shared HTTP
+    /// client a chance to refresh an expired token; the reload proceeds only
+    /// when that produced a different Authorization value.
+    @discardableResult
+    private func attemptProtocolV3AuthenticationReload(
+        after failure: PlaybackErrorInfo
+    ) -> Bool {
+        guard AetherAuthenticationRecoveryPolicy.isExpiredBearerFailure(failure),
+              protocolV3ReplanTask == nil,
+              let protocolV3 = activePreparedProtocolV3,
+              protocolV3.serverFeatures.contains(
+                  PlaybackProtocolV3.headerAuthenticatedMediaFeature
+              ),
+              let sessionId = activePlaybackSessionId,
+              let watchDetail = currentWatchDetail,
+              let selectedVersion = currentSelectedVersion,
+              let failedSpec = aetherPlaybackController.activeSpec,
+              failedSpec.planID == protocolV3.plan.planId,
+              failedSpec.sessionID == sessionId,
+              committedProtocolV3LoadEpoch != nil else {
+            return false
+        }
+
+        let planId = protocolV3.plan.planId
+        let resumePosition = currentTime.isFinite ? max(0, currentTime) : 0
+        let failedHeaders = failedSpec.options.httpHeaders
+        let fallbackClassification = failure.kind.rawValue
+        let fallbackMessage = failure.message
+
+        progressTask?.cancel()
+        progressTask = nil
+        isLoading = true
+        isBuffering = false
+        bufferingProgress = nil
+        streamLoadGeneration &+= 1
+        let recoveryGeneration = streamLoadGeneration
+
+        Self.logger.warning(
+            "Protocol V3 media credential expired; refreshing and reloading plan \(planId, privacy: .public) at source position \(resumePosition, privacy: .public)"
+        )
+
+        protocolV3ReplanTask = Task { @MainActor [weak self] in
+            guard let self, !self.isDisposed else { return }
+            var shouldFallbackToReplan = true
+            defer {
+                self.protocolV3ReplanTask = nil
+                if !self.isDisposed,
+                   recoveryGeneration == self.streamLoadGeneration {
+                    if shouldFallbackToReplan {
+                        if !self.attemptProtocolV3Replan(
+                            position: resumePosition,
+                            classification: fallbackClassification,
+                            message: fallbackMessage
+                        ) {
+                            self.finalizeTerminalPlaybackError(fallbackMessage)
+                        }
+                    } else if let queuedTrackChange = self.pendingProtocolV3TrackChange {
+                        self.pendingProtocolV3TrackChange = nil
+                        self.attemptProtocolV3Replan(
+                            position: self.currentTime,
+                            classification: queuedTrackChange.classification,
+                            message: queuedTrackChange.message,
+                            requeueWhenBusy: true,
+                            trackTarget: queuedTrackChange.target
+                        )
+                    } else if let queuedTarget = self.pendingProtocolV3SeekReanchorPosition {
+                        self.pendingProtocolV3SeekReanchorPosition = nil
+                        self.commitSeek(to: queuedTarget, source: "queuedAuthReloadReanchor")
+                    }
+                }
+            }
+
+            do {
+                // This request uses the normal API transport, whose 401 path
+                // refreshes TokenStore before retrying. Its result is otherwise
+                // best-effort; the header comparison below is authoritative.
+                _ = await self.sessionBridge.reportProgress(
+                    position: resumePosition,
+                    isPaused: !self.aetherPlaybackController.shouldPlayWhenReady
+                )
+                try self.requireCurrentStreamLoad(recoveryGeneration)
+                guard self.activePlaybackSessionId == sessionId,
+                      self.activePreparedProtocolV3?.plan.planId == planId,
+                      let session = await self.sessionBridge.committedProtocolV3Session(
+                          planId: planId,
+                          sessionId: sessionId
+                      ) else {
+                    throw CancellationError()
+                }
+                try self.requireCurrentStreamLoad(recoveryGeneration)
+
+                let prepared = PreparedPlayback(
+                    watchDetail: watchDetail,
+                    selectedVersion: selectedVersion,
+                    session: session,
+                    activeQualityId: self.activeQualityId,
+                    protocolV3: protocolV3
+                )
+                guard let streamRequest = await self.makeStreamRequest(
+                    session: session,
+                    additionalHeaders: protocolV3.plan.stream.headers,
+                    requiresHeaderAuthenticatedMedia: true,
+                    allowsAuthorizedMediaOrigins:
+                        protocolV3.negotiatedAuthorizedMediaOrigins
+                ) else {
+                    throw AetherLoadSpec.ValidationError.invalidStreamURL(session.streamUrl)
+                }
+                try self.requireCurrentStreamLoad(recoveryGeneration)
+                guard AetherAuthenticationRecoveryPolicy.shouldReload(
+                    failedHeaders: failedHeaders,
+                    refreshedHeaders: streamRequest.headers
+                ) else {
+                    Self.logger.warning(
+                        "Protocol V3 media credential did not change; using bounded route recovery"
+                    )
+                    return
+                }
+
+                // A local in-window seek can finish while the refresh request
+                // is suspended. Sample the source-axis position again at the
+                // last synchronous point before beginLoad replaces the epoch,
+                // so credential recovery never jumps back over that seek.
+                let reloadPosition = self.currentTime.isFinite
+                    ? max(0, self.currentTime)
+                    : resumePosition
+                let shouldPlayWhenReady = self.aetherPlaybackController.shouldPlayWhenReady
+                self.resolvedServerUrl = streamRequest.serverUrl
+                try await self.loadAether(
+                    prepared: prepared,
+                    streamRequest: streamRequest,
+                    expectedStreamLoadGeneration: recoveryGeneration,
+                    resumeSourcePosition: reloadPosition,
+                    shouldPlayWhenReady: shouldPlayWhenReady
+                )
+                try self.requireCurrentStreamLoad(recoveryGeneration)
+                guard self.activePlaybackSessionId == sessionId,
+                      self.activePreparedProtocolV3?.plan.planId == planId else {
+                    throw CancellationError()
+                }
+                self.markProtocolV3AetherLoadCommitted()
+                shouldFallbackToReplan = false
+                Self.logger.info(
+                    "Protocol V3 media credential reload succeeded for plan \(planId, privacy: .public)"
+                )
+            } catch is CancellationError {
+                shouldFallbackToReplan = false
+            } catch {
+                Self.logger.error(
+                    "Protocol V3 media credential reload failed; using bounded route recovery: \(MediaLogRedactor.sanitize(error), privacy: .public)"
+                )
+            }
+        }
+        return true
     }
 
     /// The track a queued change is actually asking for. `.subtitle(nil)` is
@@ -2293,7 +2457,9 @@ class PlayerViewModel {
     private func loadAether(
         prepared: PreparedPlayback,
         streamRequest: StreamRequest,
-        expectedStreamLoadGeneration: UInt64
+        expectedStreamLoadGeneration: UInt64,
+        resumeSourcePosition: Double? = nil,
+        shouldPlayWhenReady: Bool = true
     ) async throws {
         try requireCurrentStreamLoad(expectedStreamLoadGeneration)
         let preferredSubtitles = subtitleOrderingLanguage.map { [$0] } ?? []
@@ -2377,7 +2543,8 @@ class PlayerViewModel {
                 forwardBufferSegments: forwardBufferSegments,
                 audioBridgeMode: audioBridgeMode,
                 deinterlaceMode: deinterlaceMode,
-                deinterlaceFieldRate: deinterlaceFieldRate
+                deinterlaceFieldRate: deinterlaceFieldRate,
+                resumeSourcePosition: resumeSourcePosition
             )
         } else if streamRequest.url.isFileURL {
             let audioStreamIndex: Int32?
@@ -2428,7 +2595,10 @@ class PlayerViewModel {
         isBuffering = false
         bufferingProgress = nil
         scrubPreviewProvider.endSession()
-        let loadEpoch = aetherPlaybackController.beginLoad(spec)
+        let loadEpoch = aetherPlaybackController.beginLoad(
+            spec,
+            shouldPlayWhenReady: shouldPlayWhenReady
+        )
         activeAetherLoadEpoch = loadEpoch
         establishedAetherLoadEpoch = nil
         lastAetherAudioTrackSwitchFailure = nil
@@ -2476,7 +2646,11 @@ class PlayerViewModel {
         adoptAetherInventory()
         reapplyAetherGain()
 
-        aetherPlaybackController.play()
+        if aetherPlaybackController.shouldPlayWhenReady {
+            aetherPlaybackController.play()
+        } else {
+            aetherPlaybackController.pause()
+        }
     }
 
     /// Whether the engine may be driven off a deferred (not user-initiated)

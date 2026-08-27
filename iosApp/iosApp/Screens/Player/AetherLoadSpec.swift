@@ -43,6 +43,40 @@ enum AetherInitialAudioPreference {
     }
 }
 
+/// Decides whether a committed Aether load failed because the bearer frozen
+/// into its media request expired, and whether rebuilding it would actually
+/// install a different credential.
+///
+/// Keep this typed and token-agnostic: AVFoundation localizes its messages,
+/// while the error domain/code and Aether's source-refusal status are stable.
+/// Comparing the complete header value bounds recovery to one reload per
+/// credential generation; a revoked current token falls through to the normal
+/// Protocol V3 route ladder instead of looping on the same URL forever.
+enum AetherAuthenticationRecoveryPolicy {
+    static func isExpiredBearerFailure(_ failure: PlaybackErrorInfo) -> Bool {
+        if failure.kind == .sourceRefused {
+            return failure.underlyingDomain == nil && failure.underlyingCode == 401
+        }
+        return failure.kind == .nativeItemFailed
+            && failure.underlyingDomain == NSURLErrorDomain
+            && failure.underlyingCode == NSURLErrorUserAuthenticationRequired
+    }
+
+    static func shouldReload(
+        failedHeaders: [String: String],
+        refreshedHeaders: [String: String]
+    ) -> Bool {
+        guard let refreshed = authorizationHeader(in: refreshedHeaders) else { return false }
+        return authorizationHeader(in: failedHeaders) != refreshed
+    }
+
+    private static func authorizationHeader(in headers: [String: String]) -> String? {
+        headers.first { key, _ in
+            key.caseInsensitiveCompare("Authorization") == .orderedSame
+        }?.value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
 /// Immutable inputs for one Aether load generation.
 ///
 /// The initialisers are main-actor isolated because they sample the display
@@ -64,6 +98,10 @@ struct AetherLoadSpec {
     let delivery: String
     let sourceURL: URL
     let timeline: PlaybackTimelineMapper
+    /// Player-axis position handed to `AetherEngine.load`. Usually the plan's
+    /// declared start, but a same-plan credential reload resumes at the current
+    /// source position translated through the still-active timeline.
+    let aetherStartPosition: Double
     let options: LoadOptions
     let audioSourceStreamIndex: Int32?
     /// App-facing ids for `options.externalSubtitles`, positionally parallel to
@@ -138,6 +176,7 @@ struct AetherLoadSpec {
         delivery = PlaybackProtocolV3.PlanDelivery.originalHTTP
         sourceURL = offlineURL
         timeline = PlaybackTimelineMapper(directStartSeconds: startPosition)
+        aetherStartPosition = timeline.aetherStartPosition
         self.audioSourceStreamIndex = audioSourceStreamIndex
         externalSubtitleAppTrackIDs = sidecars.map { sidecar -> Int64? in
             SubtitleTrackIdSpace.makeSidecarTrackId(urlIndex: sidecar.index)
@@ -203,6 +242,7 @@ struct AetherLoadSpec {
         delivery = PlaybackProtocolV3.PlanDelivery.originalHTTP
         sourceURL = directURL
         timeline = PlaybackTimelineMapper(directStartSeconds: startPosition)
+        aetherStartPosition = timeline.aetherStartPosition
         audioSourceStreamIndex = nil
         externalSubtitleAppTrackIDs = sidecars.map { sidecar -> Int64? in
             SubtitleTrackIdSpace.makeSidecarTrackId(urlIndex: sidecar.index)
@@ -242,6 +282,7 @@ struct AetherLoadSpec {
         audioBridgeMode: AudioBridgeMode = Self.defaultAudioBridgeMode,
         deinterlaceMode: DeinterlaceMode = Self.defaultDeinterlaceMode,
         deinterlaceFieldRate: DeinterlaceFieldRate = Self.defaultDeinterlaceFieldRate,
+        resumeSourcePosition: Double? = nil,
         panelIsInHDRMode: Bool? = nil
     ) throws {
         guard PlaybackProtocolV3.PlanDelivery.supported.contains(plan.delivery) else {
@@ -333,6 +374,13 @@ struct AetherLoadSpec {
         self.delivery = plan.delivery
         self.sourceURL = sourceURL
         self.timeline = timeline
+        if let resumeSourcePosition, resumeSourcePosition.isFinite {
+            aetherStartPosition = timeline.playerPosition(
+                forSourceTime: max(0, resumeSourcePosition)
+            )
+        } else {
+            aetherStartPosition = timeline.aetherStartPosition
+        }
         self.audioSourceStreamIndex = audioSourceStreamIndex
         self.externalSubtitleAppTrackIDs = externalSubtitleAppTrackIDs
         let isServerHLS = [
