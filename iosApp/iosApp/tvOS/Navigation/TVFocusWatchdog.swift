@@ -110,10 +110,10 @@ struct TVFocusWatchdogModifier: ViewModifier {
             level: .warning,
             category: .focus,
             tag: "FocusRepair",
-            message: "no focused item; repairing",
+            message: "no focused item after \(consecutiveMisses) checks; repair attempt \(repairsThisOutage)",
             attrs: [
-                "misses": .int(consecutiveMisses),
-                "attempt": .int(repairsThisOutage),
+                "target": .string("focusSystem"),
+                "action": .string("repair"),
             ]
         )
         onRepair()
@@ -128,10 +128,12 @@ struct TVFocusWatchdogModifier: ViewModifier {
         DiagnosticsCoordinator.recordBreadcrumb(
             category: .focus,
             tag: "FocusRepair",
-            message: repairPending ? "focus restored after repair" : "focus recovered unaided",
+            message: repairPending
+                ? "focus restored after \(consecutiveMisses) checks"
+                : "focus recovered unaided after \(consecutiveMisses) checks",
             attrs: [
-                "misses": .int(consecutiveMisses),
-                "focused": .string(focused),
+                "target": .string(focused),
+                "action": .string(repairPending ? "restoredAfterRepair" : "recoveredUnaided"),
             ]
         )
     }

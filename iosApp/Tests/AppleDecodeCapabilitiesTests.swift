@@ -158,7 +158,7 @@ final class AppleDecodeCapabilitiesTests: XCTestCase {
             originalHTTP.validatedClaims.contains(
                 PlaybackProtocolV3.clientSelectedAudioTrackClaim
             ),
-            "The Aether original-file executor maps the plan's selected audio ordinal after probing."
+            "The Aether original-file executor maps the plan's selected audio ordinal to an exact stream before opening non-default audio."
         )
 
         let progressive = try XCTUnwrap(
