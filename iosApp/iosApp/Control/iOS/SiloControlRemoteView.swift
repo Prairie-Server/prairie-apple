@@ -8,6 +8,7 @@ import SwiftUI
 struct SiloControlRemoteView: View {
     @Bindable var controller: SiloControlClient
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @State private var artwork = SiloControlArtworkResolver()
     @State private var isShowingPicker = false
     @State private var volumeButtons = RemoteHardwareVolumeInterceptor()
@@ -80,17 +81,26 @@ struct SiloControlRemoteView: View {
         .preferredColorScheme(.dark)
         .onAppear {
             volumeButtons.onVolumeStep = { step in
-                guard let state = controller.state else { return }
-                let current = state.isMuted ? 0 : state.volume
-                let next = min(1, max(0, current + Double(step) / 16))
-                if step > 0, state.isMuted { controller.setMuted(false) }
-                controller.setVolume(next)
+                controller.stepVolumeOptimistic(step)
             }
-            volumeButtons.start()
+            updateVolumeInterception()
         }
         .onDisappear { volumeButtons.stop() }
+        .onChange(of: scenePhase) { updateVolumeInterception() }
+        .onChange(of: controller.state == nil) { updateVolumeInterception() }
         .task(id: controller.state?.contentId) {
             await artwork.resolve(contentId: controller.state?.contentId)
+        }
+    }
+
+    /// Hardware-volume interception is live only while the scene is active and
+    /// a usable remote state exists: an inactive scene must return the buttons
+    /// to the phone, and without state a press could not reach the TV anyway.
+    private func updateVolumeInterception() {
+        if scenePhase == .active, controller.state != nil {
+            volumeButtons.start()
+        } else {
+            volumeButtons.stop()
         }
     }
 

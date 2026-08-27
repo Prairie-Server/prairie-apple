@@ -4,8 +4,10 @@ import MediaPlayer
 import SwiftUI
 
 /// Converts hardware volume changes into remote volume steps while its hidden
-/// `MPVolumeView` suppresses the system HUD. Extreme values are nudged to the
-/// midpoint so every subsequent hardware-button press still produces a delta.
+/// `MPVolumeView` suppresses the system HUD. The system volume is held at a
+/// baseline: every user press is detected as a delta from the baseline and then
+/// snapped back, so the buttons act only as remote controls (local audio volume
+/// is left alone) and every subsequent press still produces a delta.
 @MainActor
 final class RemoteHardwareVolumeInterceptor {
     var onVolumeStep: ((Int) -> Void)?
@@ -14,13 +16,15 @@ final class RemoteHardwareVolumeInterceptor {
 
     private(set) var isActive = false
     private var originalSystemVolume: Float?
-    private var suppressUntil: Date = .distantPast
+    private var baselineVolume: Float = 0.5
+    private var pendingProgrammaticVolume: Float?
     private var claim: AetherAudioSessionOwnership.Claim?
     private var observation: NSKeyValueObservation?
 
     func start() {
         guard !isActive else { return }
         isActive = true
+        pendingProgrammaticVolume = nil
 
         let session = AVAudioSession.sharedInstance()
         originalSystemVolume = session.outputVolume
@@ -33,30 +37,38 @@ final class RemoteHardwareVolumeInterceptor {
             self?.isActive ?? false
         })
 
+        // Hold near the current volume, clamped one hardware step away from the
+        // rails so presses in both directions keep producing deltas.
+        baselineVolume = min(max(session.outputVolume, 0.0625), 0.9375)
+
         observation = session.observe(\.outputVolume, options: [.old, .new]) { [weak self] _, change in
             Task { @MainActor [weak self] in
-                guard let self, Date() >= suppressUntil,
+                guard let self, isActive,
                       let old = change.oldValue, let new = change.newValue else { return }
+                if let pending = pendingProgrammaticVolume, abs(new - pending) < 0.001 {
+                    pendingProgrammaticVolume = nil
+                    return
+                }
                 if new > old {
                     onVolumeStep?(1)
                 } else if new < old {
                     onVolumeStep?(-1)
                 }
-                if new <= 0.0625 || new >= 0.9375 {
-                    nudgeSystemVolume(to: 0.5)
-                }
+                setSystemVolume(to: baselineVolume)
             }
         }
 
-        if session.outputVolume <= 0.0625 || session.outputVolume >= 0.9375 {
-            nudgeSystemVolume(to: 0.5)
+        if session.outputVolume != baselineVolume {
+            setSystemVolume(to: baselineVolume)
         }
     }
 
-    private func nudgeSystemVolume(to value: Float) {
-        suppressUntil = Date().addingTimeInterval(0.5)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            guard let self else { return }
+    private func setSystemVolume(to value: Float) {
+        pendingProgrammaticVolume = value
+        // Strong capture: restoration on stop() must run even after SwiftUI has
+        // released this interceptor along with the dismissed sheet.
+        let volumeView = volumeView
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             volumeView.subviews.compactMap { $0 as? UISlider }.first?.value = value
         }
     }
@@ -68,21 +80,25 @@ final class RemoteHardwareVolumeInterceptor {
         observation = nil
 
         if let originalSystemVolume {
-            nudgeSystemVolume(to: originalSystemVolume)
+            setSystemVolume(to: originalSystemVolume)
             self.originalSystemVolume = nil
         }
 
-        let claim = claim
-        let canReleaseSession = claim.map {
-            AetherAudioSessionOwnership.canReleaseSharedSession(excluding: $0)
-        } ?? false
-        self.claim = nil
-        if canReleaseSession {
+        if let claim {
+            self.claim = nil
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                try? AVAudioSession.sharedInstance().setActive(
-                    false,
-                    options: .notifyOthersOnDeactivation
-                )
+                Task { @MainActor in
+                    // Ownership can change during the delay (playback starting,
+                    // this remote reopening), so decide at execution time. The
+                    // captured claim stays registered until this runs, but its
+                    // probe reports inactive, so it blocks no one else.
+                    guard AetherAudioSessionOwnership.canReleaseSharedSession(excluding: claim)
+                    else { return }
+                    try? AVAudioSession.sharedInstance().setActive(
+                        false,
+                        options: .notifyOthersOnDeactivation
+                    )
+                }
             }
         }
     }

@@ -370,6 +370,22 @@ final class SiloControlClient {
     func setVolume(_ v: Double) { send(.setVolume(min(max(v, 0), 1))) }
     func setMuted(_ m: Bool) { send(.setMuted(m)) }
 
+    /// Applies one hardware-button volume step. Updates `state` optimistically
+    /// so rapid presses accumulate instead of re-sending the same absolute
+    /// value while the TV's state acknowledgement is still in flight.
+    func stepVolumeOptimistic(_ step: Int) {
+        guard var s = state else { return }
+        let current = s.isMuted ? 0 : s.volume
+        let next = min(1, max(0, current + Double(step) / 16))
+        if step > 0, s.isMuted {
+            s.isMuted = false
+            send(.setMuted(false))
+        }
+        s.volume = next
+        state = s
+        send(.setVolume(next))
+    }
+
     func hideRemoteControl() {
         isShowingRemoteControl = false
     }
