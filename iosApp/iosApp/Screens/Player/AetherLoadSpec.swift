@@ -237,7 +237,6 @@ struct AetherLoadSpec {
         apiOriginURL: URL? = nil,
         audioSourceStreamIndex: Int32? = nil,
         preferredAudioLanguages: [String] = [],
-        preferredSubtitleLanguages: [String] = [],
         forwardBufferSegments: Int? = nil,
         audioBridgeMode: AudioBridgeMode = Self.defaultAudioBridgeMode,
         deinterlaceMode: DeinterlaceMode = Self.defaultDeinterlaceMode,
@@ -281,7 +280,7 @@ struct AetherLoadSpec {
         var externalSubtitles: [ExternalSubtitleTrack] = []
         var externalSubtitleAppTrackIDs: [Int64?] = []
         if let artifact = plan.subtitle.artifact,
-           ["render", "convert"].contains(plan.subtitle.mode) {
+           PlaybackProtocolV3.SubtitleMode.locallyRendered.contains(plan.subtitle.mode) {
             guard abs(artifact.timingOriginSeconds - plan.timeline.timelineOffsetSeconds) < 0.001 else {
                 throw ValidationError.unsupportedSubtitleTimingOrigin(
                     origin: artifact.timingOriginSeconds,
@@ -298,9 +297,9 @@ struct AetherLoadSpec {
                   ["http", "https", "file"].contains(artifactURL.scheme?.lowercased() ?? "") else {
                 throw ValidationError.invalidSubtitleArtifactURL(artifact.url)
             }
-            let inventoryItem = plan.subtitle.inventory.first { item in
-                item.trackId == plan.subtitle.trackId
-            }
+            // One shared resolution order for the selected row; see
+            // `PlaybackV3Plan.selectedSubtitleInventoryItem`.
+            let inventoryItem = plan.selectedSubtitleInventoryItem
             externalSubtitles.append(ExternalSubtitleTrack(
                 url: artifactURL,
                 name: inventoryItem?.label,
@@ -349,9 +348,12 @@ struct AetherLoadSpec {
             preserveASSMarkup: false,
             prepareNativeSubtitles: true,
             eagerNativeSubtitleReaders: true,
-            nativeSubtitlePreferredLanguages: preferredSubtitleLanguages,
+            // V3 already selected one exact artifact. Language preference is
+            // planning input, not permission for the engine to select a
+            // different embedded or inventory track after the plan arrives.
+            nativeSubtitlePreferredLanguages: [],
             preferredAudioLanguages: preferredAudioLanguages,
-            preferredSubtitleLanguages: preferredSubtitleLanguages,
+            preferredSubtitleLanguages: [],
             externalSubtitles: externalSubtitles,
             forwardBufferSegments: forwardBufferSegments,
             autoplay: false,
