@@ -308,6 +308,8 @@ targets:
           - LAN/FramedJSONSession.swift
       - path: iosApp/Shared/SharedStorage.swift
       - path: iosApp/Shared/AppleDeviceIdentity.swift
+      - path: iosApp/Shared/DateFormatters.swift
+      - path: iosApp/tvOS/Caching/ImageFormats.swift
       - path: iosApp/Screens/Profiles/ProfileModels.swift
       - path: iosApp/Screens/Player/PlayerTrack.swift
       - path: iosApp/Screens/Auth/AuthModels.swift

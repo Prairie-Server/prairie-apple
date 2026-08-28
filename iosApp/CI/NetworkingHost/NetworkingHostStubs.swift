@@ -1,5 +1,10 @@
 import Foundation
 
+extension Notification.Name {
+    static let continuumSessionExpired = Notification.Name("continuumSessionExpired")
+    static let temporaryRemoteAuthExpired = Notification.Name("temporaryRemoteAuthExpired")
+}
+
 /// Minimal stand-ins for app types that gated Networking code references but
 /// that would otherwise pull ContinuumAPI / Diagnostics / player UI into the
 /// FFmpeg-free CI host. Full Prairie.app keeps the real implementations.
@@ -52,6 +57,27 @@ final class RequestsEventBus {
 
 enum DiagLog {
     static func registerSensitiveHost(_ host: String) {}
+}
+
+@MainActor
+@Observable
+final class ConnectionMonitor {
+    static let shared = ConnectionMonitor()
+
+    enum ServerStatus {
+        case unknown
+        case reachable
+        case unreachable
+    }
+
+    private(set) var isDeviceOnline = true
+    private(set) var serverStatus: ServerStatus = .unknown
+
+    var isServerReachable: Bool { isDeviceOnline && serverStatus != .unreachable }
+    var isOffline: Bool { !isDeviceOnline || serverStatus == .unreachable }
+
+    nonisolated static func recordSuccess() {}
+    nonisolated static func recordFailure() {}
 }
 
 /// Referenced by AIModels helpers; real type lives under player subtitles.
