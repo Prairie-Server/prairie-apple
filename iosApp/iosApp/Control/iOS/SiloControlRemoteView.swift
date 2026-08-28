@@ -87,17 +87,24 @@ struct SiloControlRemoteView: View {
         }
         .onDisappear { volumeButtons.stop() }
         .onChange(of: scenePhase) { updateVolumeInterception() }
-        .onChange(of: controller.state == nil) { updateVolumeInterception() }
+        .onChange(of: hasActivePlayback) { updateVolumeInterception() }
         .task(id: controller.state?.contentId) {
             await artwork.resolve(contentId: controller.state?.contentId)
         }
     }
 
+    /// A connected-but-idle TV still publishes state, with no content id. It has
+    /// no player to route volume at, so commands come back `player_not_ready`;
+    /// interception there would only cost the phone its own volume buttons.
+    private var hasActivePlayback: Bool {
+        !(controller.state?.contentId ?? "").isEmpty
+    }
+
     /// Hardware-volume interception is live only while the scene is active and
-    /// a usable remote state exists: an inactive scene must return the buttons
-    /// to the phone, and without state a press could not reach the TV anyway.
+    /// the TV is actually playing something: an inactive scene must return the
+    /// buttons to the phone, and without playback a press reaches nothing.
     private func updateVolumeInterception() {
-        if scenePhase == .active, controller.state != nil {
+        if scenePhase == .active, hasActivePlayback {
             volumeButtons.start()
         } else {
             volumeButtons.stop()

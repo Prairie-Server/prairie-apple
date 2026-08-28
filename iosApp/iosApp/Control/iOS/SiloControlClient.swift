@@ -373,11 +373,16 @@ final class SiloControlClient {
     /// Applies one hardware-button volume step. Updates `state` optimistically
     /// so rapid presses accumulate instead of re-sending the same absolute
     /// value while the TV's state acknowledgement is still in flight.
+    ///
+    /// Steps always start from the retained `volume`, never from the zero the UI
+    /// shows while muted: the TV keeps its level independently of mute, so
+    /// sending `0` would overwrite it and leave a later unmute silent. A step
+    /// down while muted is therefore a no-op — the TV is already silent, and the
+    /// only thing a command could do there is destroy the stored level.
     func stepVolumeOptimistic(_ step: Int) {
-        guard var s = state else { return }
-        let current = s.isMuted ? 0 : s.volume
-        let next = min(1, max(0, current + Double(step) / 16))
-        if step > 0, s.isMuted {
+        guard var s = state, !(s.isMuted && step < 0) else { return }
+        let next = min(1, max(0, s.volume + Double(step) / 16))
+        if s.isMuted {
             s.isMuted = false
             send(.setMuted(false))
         }
