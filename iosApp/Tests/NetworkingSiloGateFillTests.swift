@@ -253,6 +253,37 @@ final class NetworkingSiloGateFillTests: XCTestCase {
         XCTAssertNil(SettingJSONValue.bool(true).stringValue)
         XCTAssertNil(SettingJSONValue.int(1).arrayValue)
         XCTAssertNil(SettingJSONValue.array([]).objectValue)
+
+        let libraryScoped = EffectiveSettingValue(
+            key: "playback.auto_play_next",
+            value: true,
+            source: .scope(.profileLibrary),
+            scope: .profileLibrary,
+            libraryId: 9
+        )
+        XCTAssertEqual(libraryScoped.storedAt, .profileLibrary(libraryId: 9))
+        let seriesScoped = EffectiveSettingValue(
+            key: "playback.auto_play_next",
+            value: true,
+            source: .scope(.profileSeries),
+            scope: .profileSeries,
+            seriesId: "series-1"
+        )
+        XCTAssertEqual(seriesScoped.storedAt, .profileSeries(seriesId: "series-1"))
+        let unknownScoped = EffectiveSettingValue(
+            key: "playback.auto_play_next",
+            value: true,
+            source: .scope(.other("future")),
+            scope: .other("future")
+        )
+        XCTAssertNil(unknownScoped.storedAt)
+
+        let trailerRefresh = try HTTPClient.makeJSONDecoder().decode(
+            TrailerRefreshResponse.self,
+            from: Data(#"{"status":"queued"}"#.utf8)
+        )
+        XCTAssertEqual(trailerRefresh.status, "queued")
+        XCTAssertNil(trailerRefresh.nextAllowedAt)
     }
 }
 
