@@ -81,6 +81,7 @@ enum CacheKey {
     static let favorites = "personal:favorites"
     static let history = "personal:history"
     static let watchlist = "personal:watchlist"
+    static let adminStats = "admin:stats"
     /// Libraries visible to the active profile — drives the Skyline
     /// type-derived tabs on tvOS.
     static let userLibraries = "user:libraries"

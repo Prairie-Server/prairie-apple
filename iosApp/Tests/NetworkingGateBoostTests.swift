@@ -124,7 +124,10 @@ final class NetworkingGateBoostTests: XCTestCase {
             name: "Kids",
             avatar: "🐯",
             pin: "1234",
-            isChild: true
+            isChild: true,
+            maxContentRating: nil,
+            libraryRestrictionsEnabled: false,
+            allowedLibraryIds: []
         )
         let createDict = try encodeSnake(create)
         XCTAssertEqual(createDict["name"] as? String, "Kids")
