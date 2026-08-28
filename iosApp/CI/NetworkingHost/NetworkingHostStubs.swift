@@ -35,6 +35,14 @@ final class AICapabilities {
     func reset() {}
 }
 
+actor ContinuumAI {
+    static let shared = ContinuumAI()
+
+    func subtitleProvidersStatus() async throws -> SubtitleProvidersStatus {
+        SubtitleProvidersStatus(enabled: true)
+    }
+}
+
 @MainActor
 final class RequestsFeatureStore {
     static let shared = RequestsFeatureStore()

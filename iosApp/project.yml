@@ -386,6 +386,8 @@ targets:
       - path: iosApp/Shared/AppleDecodeCapabilities.swift
       - path: iosApp/Shared/ProfileLaunchBehavior.swift
       - path: iosApp/Shared/ProfileLaunchState.swift
+      - path: iosApp/Shared/RememberedProfile.swift
+      - path: iosApp/Shared/ProfileLaunchResolution.swift
       - path: iosApp/Shared/AppleDeviceIdentity.swift
       - path: iosApp/Shared/DateFormatters.swift
       - path: iosApp/tvOS/Caching/ImageFormats.swift
