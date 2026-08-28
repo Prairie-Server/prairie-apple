@@ -48,12 +48,16 @@ private enum SiloControlHandoffError: LocalizedError {
 @Observable
 final class SiloControlClient {
     private(set) var activeTarget: SiloControlTarget?
-    private(set) var state: SiloControlPlaybackState?
+    private(set) var state: SiloControlPlaybackState? {
+        didSet { if state == nil { volumeReconciler.clear() } }
+    }
     private(set) var isConnecting = false
     var errorMessage: String?
     var isShowingRemoteControl = false
 
     let clock = RemotePlaybackClock()
+
+    private var volumeReconciler = RemoteVolumeReconciler()
 
     private let nowPlaying = NowPlayingController()
     private var nowPlayingArtworkTask: Task<Void, Never>?
@@ -367,12 +371,31 @@ final class SiloControlClient {
     }
 
     func playNext() { send(.playNext) }
-    func setVolume(_ v: Double) { send(.setVolume(min(max(v, 0), 1))) }
-    func setMuted(_ m: Bool) { send(.setMuted(m)) }
 
-    /// Applies one hardware-button volume step. Updates `state` optimistically
-    /// so rapid presses accumulate instead of re-sending the same absolute
-    /// value while the TV's state acknowledgement is still in flight.
+    /// Shows the requested level immediately and holds it until the TV reports
+    /// it — see ``RemoteVolumeReconciler`` for why absolute volume commands need
+    /// that hold.
+    func setVolume(_ v: Double) {
+        let clamped = min(max(v, 0), 1)
+        volumeReconciler.requested(clamped)
+        if var s = state {
+            s.volume = clamped
+            state = s
+        }
+        send(.setVolume(clamped))
+    }
+
+    func setMuted(_ m: Bool) {
+        // A held level describes an unmuted volume; an explicit mute supersedes it.
+        volumeReconciler.clear()
+        if var s = state {
+            s.isMuted = m
+            state = s
+        }
+        send(.setMuted(m))
+    }
+
+    /// Applies one hardware-button volume step.
     ///
     /// Steps always start from the retained `volume`, never from the zero the UI
     /// shows while muted: the TV keeps its level independently of mute, so
@@ -380,15 +403,17 @@ final class SiloControlClient {
     /// down while muted is therefore a no-op — the TV is already silent, and the
     /// only thing a command could do there is destroy the stored level.
     func stepVolumeOptimistic(_ step: Int) {
-        guard var s = state, !(s.isMuted && step < 0) else { return }
-        let next = min(1, max(0, s.volume + Double(step) / 16))
-        if s.isMuted {
-            s.isMuted = false
-            send(.setMuted(false))
-        }
-        s.volume = next
-        state = s
-        send(.setVolume(next))
+        guard let s = state, !(s.isMuted && step < 0) else { return }
+        if s.isMuted { setMuted(false) }
+        setVolume(s.volume + Double(step) / 16)
+    }
+
+    private func reconcileOptimisticVolume(
+        _ next: SiloControlPlaybackState
+    ) -> SiloControlPlaybackState {
+        var reconciled = next
+        reconciled.volume = volumeReconciler.reconcile(inbound: next.volume)
+        return reconciled
     }
 
     func hideRemoteControl() {
@@ -570,7 +595,8 @@ final class SiloControlClient {
         case .handoffCancel(let cancel):
             guard cancel.requestId == pendingHandoffRequestId else { return }
             handoffCancellation = cancel
-        case .state(let state):
+        case .state(let inbound):
+            let state = reconcileOptimisticVolume(inbound)
             self.state = state
             clock.ingest(state)
             updateNowPlaying(for: state)

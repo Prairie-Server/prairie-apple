@@ -28,8 +28,19 @@ final class RemoteHardwareVolumeInterceptor {
 
         let session = AVAudioSession.sharedInstance()
         originalSystemVolume = session.outputVolume
+        // Opening the remote must not interrupt another app's audio. The session
+        // can already be `.playback` *without* `.mixWithOthers` — a stopped
+        // Aether engine leaves it that way — and category alone is not enough to
+        // tell: activating a non-mixing session is what does the interrupting.
         if session.category != .playback {
             try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+        } else if !session.categoryOptions.contains(.mixWithOthers) {
+            // Keep the mode and options local playback established; add mixing.
+            try? session.setCategory(
+                .playback,
+                mode: session.mode,
+                options: session.categoryOptions.union(.mixWithOthers)
+            )
         }
         try? session.setActive(true)
 
@@ -64,12 +75,25 @@ final class RemoteHardwareVolumeInterceptor {
     }
 
     private func setSystemVolume(to value: Float) {
-        pendingProgrammaticVolume = value
-        // Strong capture: restoration on stop() must run even after SwiftUI has
-        // released this interceptor along with the dismissed sheet.
+        // Strong capture of the view (not self): restoration on stop() must run
+        // even after SwiftUI has released this interceptor with the dismissed
+        // sheet.
         let volumeView = volumeView
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            volumeView.subviews.compactMap { $0 as? UISlider }.first?.value = value
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let slider = volumeView.subviews.compactMap({ $0 as? UISlider }).first
+                else { return }
+                // Claim the value as ours only here, immediately before a write
+                // that will actually move the volume. Claiming it at schedule
+                // time would swallow a real press that lands on the same value
+                // first — an up press followed by a down press inside the delay
+                // returns to the baseline — and claiming a no-op write would
+                // swallow the next genuine press at that value.
+                if abs(AVAudioSession.sharedInstance().outputVolume - value) >= 0.001 {
+                    self?.pendingProgrammaticVolume = value
+                }
+                slider.value = value
+            }
         }
     }
 
