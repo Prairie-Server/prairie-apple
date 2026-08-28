@@ -1091,7 +1091,8 @@ final class NetworkingSiloTokenStoreGateFillTests: XCTestCase {
             rejectedSnapshot,
             replacingGenerationID: replacement.credentialGenerationID
         )
+        let restoredAccess = await store.getTemporaryScope()?.accessToken
         XCTAssertTrue(restoredRejected)
-        XCTAssertEqual(await store.getTemporaryScope()?.accessToken, "t3")
+        XCTAssertEqual(restoredAccess, "t3")
     }
 }
