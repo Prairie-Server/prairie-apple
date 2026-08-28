@@ -389,6 +389,14 @@ final class NetworkingSiloGateFillTests: XCTestCase {
         XCTAssertTrue(options.contains(where: { $0.code == "mao" || $0.code == "mi" }))
         XCTAssertFalse(options.contains(where: { $0.code.isEmpty }))
     }
+
+    func testRequestMediaTypeIdAndCacheKeyCatalogFilters() {
+        XCTAssertEqual(RequestMediaType.movie.id, RequestMediaType.movie.rawValue)
+        XCTAssertEqual(RequestMediaType.series.id, RequestMediaType.series.rawValue)
+        _ = CacheKey.catalogFilters(libraryId: 7, includeTechnical: true)
+        _ = CacheKey.catalogFilters(libraryId: 7, includeTechnical: false)
+        _ = AppUpdateChecker.displayVersionString()
+    }
 }
 
 @MainActor
@@ -1049,5 +1057,41 @@ final class NetworkingSiloTokenStoreGateFillTests: XCTestCase {
         )
         XCTAssertFalse(skippedNil)
         XCTAssertFalse(skippedTemporaryOwner)
+
+        // Cover the restore path that re-applies a prior rejection bit.
+        let rejected = TemporaryAuthScope(
+            serverId: serverID,
+            serverURL: "https://silo-gate.example",
+            accessToken: "t3",
+            refreshToken: "r3",
+            profileId: "p3",
+            profileToken: "k3",
+            controllerDeviceId: "c3",
+            expiresAt: Date().addingTimeInterval(60)
+        )
+        _ = await store.beginTemporaryScope(rejected)
+        let rejectedAccount = try XCTUnwrap(await store.refreshAccountIdentity())
+        _ = await store.invalidateRejectedRefresh(CapturedRefreshCredential(
+            account: rejectedAccount,
+            refreshToken: "r3",
+            owner: .temporary
+        ))
+        let replacement = TemporaryAuthScope(
+            serverId: serverID,
+            serverURL: "https://silo-gate.example",
+            accessToken: "t4",
+            refreshToken: "r4",
+            profileId: "p4",
+            profileToken: "k4",
+            controllerDeviceId: "c4",
+            expiresAt: Date().addingTimeInterval(60)
+        )
+        let rejectedSnapshot = await store.beginTemporaryScope(replacement)
+        let restoredRejected = await store.restoreTemporaryScope(
+            rejectedSnapshot,
+            replacingGenerationID: replacement.credentialGenerationID
+        )
+        XCTAssertTrue(restoredRejected)
+        XCTAssertEqual(await store.getTemporaryScope()?.accessToken, "t3")
     }
 }
