@@ -391,10 +391,11 @@ final class NetworkingSiloGateFillTests: XCTestCase {
     }
 
     func testRequestMediaTypeIdAndCacheKeyCatalogFilters() {
-        XCTAssertEqual(RequestMediaType.movie.id, RequestMediaType.movie.rawValue)
-        XCTAssertEqual(RequestMediaType.series.id, RequestMediaType.series.rawValue)
+        XCTAssertEqual(RequestMediaType.movie.id, RequestMediaType.movie)
+        XCTAssertEqual(RequestMediaType.series.id, RequestMediaType.series)
+        XCTAssertEqual(RequestMediaType.movie.displayName, "Movie")
         _ = CacheKey.catalogFilters(libraryId: 7, includeTechnical: true)
-        _ = CacheKey.catalogFilters(libraryId: 7, includeTechnical: false)
+        _ = CacheKey.catalogFilters(libraryId: nil, includeTechnical: false)
         _ = AppUpdateChecker.displayVersionString()
     }
 }
@@ -1070,7 +1071,8 @@ final class NetworkingSiloTokenStoreGateFillTests: XCTestCase {
             expiresAt: Date().addingTimeInterval(60)
         )
         _ = await store.beginTemporaryScope(rejected)
-        let rejectedAccount = try XCTUnwrap(await store.refreshAccountIdentity())
+        let rejectedAccountValue = await store.refreshAccountIdentity()
+        let rejectedAccount = try XCTUnwrap(rejectedAccountValue)
         _ = await store.invalidateRejectedRefresh(CapturedRefreshCredential(
             account: rejectedAccount,
             refreshToken: "r3",
