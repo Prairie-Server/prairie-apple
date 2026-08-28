@@ -489,10 +489,13 @@ final class NetworkingSiloTokenStoreGateFillTests: XCTestCase {
         await store.setServerUrl("https://silo-gate.example")
         await store.saveTokens(accessToken: "access-a", refreshToken: "refresh-a")
 
-        let firstEpoch = try XCTUnwrap(await store.getOrCreateAccountEpoch())
-        let firstAccount = try XCTUnwrap(await store.refreshAccountIdentity())
+        let firstEpochValue = await store.getOrCreateAccountEpoch()
+        let firstEpoch = try XCTUnwrap(firstEpochValue)
+        let firstAccountValue = await store.refreshAccountIdentity()
+        let firstAccount = try XCTUnwrap(firstAccountValue)
         await store.saveTokens(accessToken: "access-b", refreshToken: "refresh-b")
-        let secondEpoch = try XCTUnwrap(await store.getOrCreateAccountEpoch())
+        let secondEpochValue = await store.getOrCreateAccountEpoch()
+        let secondEpoch = try XCTUnwrap(secondEpochValue)
         let staleActivation = await store.activateProfile(
             profileID: "profile-a",
             profileToken: nil,
@@ -501,9 +504,12 @@ final class NetworkingSiloTokenStoreGateFillTests: XCTestCase {
 
         XCTAssertNotEqual(firstEpoch, secondEpoch)
         XCTAssertFalse(staleActivation)
-        XCTAssertFalse(await store.hasStoredProfileToken(for: serverID))
-        XCTAssertNil(await store.getOrCreateAccountEpoch(for: ""))
-        XCTAssertFalse(await store.hasStoredProfileToken(for: ""))
+        let hasToken = await store.hasStoredProfileToken(for: serverID)
+        XCTAssertFalse(hasToken)
+        let emptyEpoch = await store.getOrCreateAccountEpoch(for: "")
+        XCTAssertNil(emptyEpoch)
+        let emptyHasToken = await store.hasStoredProfileToken(for: "")
+        XCTAssertFalse(emptyHasToken)
     }
 
     func testProfileCommitIsAtomicAndLateDeactivationCannotClearReplacement() async throws {
@@ -511,31 +517,42 @@ final class NetworkingSiloTokenStoreGateFillTests: XCTestCase {
         await store.switchActiveServer(serverId: serverID)
         await store.setServerUrl("https://silo-gate.example")
         await store.saveTokens(accessToken: "access", refreshToken: "refresh")
-        let account = try XCTUnwrap(await store.refreshAccountIdentity())
+        let accountValue = await store.refreshAccountIdentity()
+        let account = try XCTUnwrap(accountValue)
 
-        XCTAssertTrue(await store.activateProfile(
+        let activatedA = await store.activateProfile(
             profileID: "profile-a",
             profileToken: "proof-a",
             expectedAccount: account
-        ))
-        XCTAssertEqual(await store.getProfileId(), "profile-a")
-        XCTAssertEqual(await store.getProfileToken(), "proof-a")
-        XCTAssertTrue(await store.hasStoredProfileToken(for: serverID))
+        )
+        let profileA = await store.getProfileId()
+        let proofA = await store.getProfileToken()
+        let hasProof = await store.hasStoredProfileToken(for: serverID)
+        XCTAssertTrue(activatedA)
+        XCTAssertEqual(profileA, "profile-a")
+        XCTAssertEqual(proofA, "proof-a")
+        XCTAssertTrue(hasProof)
 
-        XCTAssertTrue(await store.activateProfile(
+        let activatedB = await store.activateProfile(
             profileID: "profile-b",
             profileToken: nil,
             expectedAccount: account
-        ))
-        XCTAssertFalse(await store.deactivateProfile(
+        )
+        let lateDeactivation = await store.deactivateProfile(
             expectedAccount: account,
             expectedProfileID: "profile-a"
-        ))
-        XCTAssertEqual(await store.getProfileId(), "profile-b")
-        XCTAssertNil(await store.getProfileToken())
+        )
+        let profileB = await store.getProfileId()
+        let proofB = await store.getProfileToken()
+        XCTAssertTrue(activatedB)
+        XCTAssertFalse(lateDeactivation)
+        XCTAssertEqual(profileB, "profile-b")
+        XCTAssertNil(proofB)
 
-        XCTAssertTrue(await store.deactivateProfile(expectedAccount: account))
-        XCTAssertNil(await store.getProfileId())
+        let cleared = await store.deactivateProfile(expectedAccount: account)
+        let profileAfterClear = await store.getProfileId()
+        XCTAssertTrue(cleared)
+        XCTAssertNil(profileAfterClear)
     }
 
     func testTemporaryRemoteIdentityRefusesPersistentProfileMutation() async throws {
@@ -543,7 +560,8 @@ final class NetworkingSiloTokenStoreGateFillTests: XCTestCase {
         await store.switchActiveServer(serverId: serverID)
         await store.setServerUrl("https://silo-gate.example")
         await store.saveTokens(accessToken: "access", refreshToken: "refresh")
-        let persistentAccount = try XCTUnwrap(await store.refreshAccountIdentity())
+        let persistentAccountValue = await store.refreshAccountIdentity()
+        let persistentAccount = try XCTUnwrap(persistentAccountValue)
         await store.beginTemporaryScope(TemporaryAuthScope(
             serverId: "remote-server",
             serverURL: "https://remote.example",
@@ -555,14 +573,18 @@ final class NetworkingSiloTokenStoreGateFillTests: XCTestCase {
             expiresAt: Date().addingTimeInterval(60)
         ))
 
-        XCTAssertFalse(await store.activateProfile(
+        let activation = await store.activateProfile(
             profileID: "persistent-profile",
             profileToken: nil,
             expectedAccount: persistentAccount
-        ))
-        XCTAssertFalse(await store.deactivateProfile(expectedAccount: persistentAccount))
-        XCTAssertEqual(await store.getProfileId(), "remote-profile")
-        XCTAssertNil(await store.getOrCreateAccountEpoch())
+        )
+        let deactivation = await store.deactivateProfile(expectedAccount: persistentAccount)
+        let profileID = await store.getProfileId()
+        let epoch = await store.getOrCreateAccountEpoch()
+        XCTAssertFalse(activation)
+        XCTAssertFalse(deactivation)
+        XCTAssertEqual(profileID, "remote-profile")
+        XCTAssertNil(epoch)
     }
 
     func testAccountEpochKeyDerivationHelper() {
@@ -587,7 +609,8 @@ final class NetworkingSiloTokenStoreGateFillTests: XCTestCase {
         XCTAssertEqual(ordinary?.accessToken, "access")
         XCTAssertEqual(ordinary?.profileId, "profile-1")
 
-        let account = try XCTUnwrap(await store.refreshAccountIdentity())
+        let accountValue = await store.refreshAccountIdentity()
+        let account = try XCTUnwrap(accountValue)
         let identity = HTTPRequestIdentity(
             serverId: serverID,
             serverURL: "https://silo-gate.example",
