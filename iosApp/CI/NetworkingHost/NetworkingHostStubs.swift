@@ -68,6 +68,14 @@ final class AICapabilities {
     func reset() {}
 }
 
+/// ContinuumAPI-backed probe; real type is excluded from the FFmpeg-free host
+/// the same way ``AICapabilities`` is. ServerRegistry only needs reset/refresh.
+final class ImageSizeCapability: @unchecked Sendable {
+    static let shared = ImageSizeCapability()
+    func reset() {}
+    func refresh() async {}
+}
+
 actor ContinuumAI {
     static let shared = ContinuumAI()
 
@@ -75,6 +83,16 @@ actor ContinuumAI {
         let data = Data("{\"enabled\":true}".utf8)
         return try JSONDecoder().decode(SubtitleProvidersStatus.self, from: data)
     }
+}
+
+/// Feature-store refresher; excluded from the host like ``RequestsFeatureStore``.
+@MainActor
+@Observable
+final class SubtitleProvidersStore {
+    static let shared = SubtitleProvidersStore()
+    private(set) var isAvailable = true
+    func reset() { isAvailable = true }
+    func refresh() async {}
 }
 
 @MainActor

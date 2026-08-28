@@ -54,8 +54,9 @@ else
 fi
 
 # Built-in excludes: ContinuumAPI / HTTPClient / store refreshers / LAN session
-# I/O. These are integration-heavy; PrairieTests covers the pure-logic sibling
-# modules (models, TokenStore, ServerRegistry migration, PrairieFrame, …).
+# I/O / capability probes. These are integration-heavy; PrairieTests covers the
+# pure-logic sibling modules (models, TokenStore, ServerRegistry migration,
+# PrairieFrame, …).
 DEFAULT_EXCLUDES=(
   "/Networking/ContinuumAPI.swift"
   "/Networking/ContinuumAPI+LiveTV.swift"
@@ -71,6 +72,9 @@ DEFAULT_EXCLUDES=(
   "/Networking/ProfilePrefsStore.swift"
   "/Networking/ProfileSettingsWriter.swift"
   "/Networking/AICapabilities.swift"
+  "/Networking/ImageSizeCapability.swift"
+  "/Networking/SubtitleProvidersStore.swift"
+  "/Networking/ServerIdentityResolver.swift"
   "/Networking/RequestsFeatureStore.swift"
   "/Networking/LiveTVFeatureStore.swift"
 )

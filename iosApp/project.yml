@@ -377,6 +377,9 @@ targets:
           - ConnectionMonitor.swift
           - DiagnosticsAPI.swift
           - AICapabilities.swift
+          - ImageSizeCapability.swift
+          - SubtitleProvidersStore.swift
+          - ServerIdentityResolver.swift
           - RequestsFeatureStore.swift
           - LiveTVFeatureStore.swift
           - LAN/FramedJSONSession.swift
@@ -437,6 +440,7 @@ targets:
           - NetworkingModelsCoverageTests.swift
           - NetworkingModelsGateFillTests.swift
           - TokenStorePersistenceTests.swift
+          - TokenStoreDiagnosticsTests.swift
           - ServerRegistryMigrationTests.swift
           - WireFormatAndRequestsModelTests.swift
           - AuthAndDeviceLoginModelTests.swift
@@ -455,6 +459,8 @@ targets:
           - SettingValuesAPITests.swift
           - SettingsConformanceTests.swift
           - SettingsContractResolve.swift
+          - NetworkingSiloGateFillTests.swift
+          - ItemVideosDecodingTests.swift
       - path: Tests/Fixtures/SettingsContract/conformance.json
         buildPhase: resources
       - path: Tests/Fixtures/SettingsContract/manifest.json

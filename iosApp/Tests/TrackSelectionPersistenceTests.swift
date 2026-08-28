@@ -166,6 +166,47 @@ final class TrackSelectionPersistenceTests: XCTestCase {
         XCTAssertEqual(request.trackSignature?.label, "Signs & Songs")
     }
 
+    func testSubtitleRequestFromExternalPlayerTrack() {
+        let track = playerTrack(
+            kind: .sub,
+            title: "Downloaded",
+            lang: "fr",
+            codec: "subrip",
+            isForced: false,
+            isHearingImpaired: true,
+            isExternal: true,
+            ffIndex: nil
+        )
+        let request = TrackSelectionPersistence.subtitleRequest(track: track, showForced: true)
+        XCTAssertEqual(request.subtitleTrackIndex, -1)
+        XCTAssertEqual(request.subtitleLanguage, "fr")
+        XCTAssertEqual(request.trackSignature?.source, "external")
+        XCTAssertEqual(request.trackSignature?.hearingImpaired, true)
+        XCTAssertEqual(request.showForcedSubtitles, true)
+    }
+
+    /// Fire-and-forget writers hit ContinuumAPI without a server; the
+    /// catch / logger paths must still execute so the scoped gate sees
+    /// those lines (they are best-effort wrappers, not success paths).
+    func testSaveAndClearWritersExecuteFailurePaths() async {
+        let audio = AudioPrefRequest(
+            audioTrackIndex: 0,
+            audioLanguage: "en",
+            trackSignature: nil
+        )
+        let subtitle = TrackSelectionPersistence.subtitleOffRequest(showForced: nil)
+
+        TrackSelectionPersistence.saveAudio(prefKey: "cov-series", request: audio)
+        TrackSelectionPersistence.saveSubtitle(prefKey: "cov-series", request: subtitle)
+        TrackSelectionPersistence.clearAudio(prefKey: "cov-series")
+        TrackSelectionPersistence.clearSubtitle(prefKey: "cov-series")
+
+        // ContinuumAPI → HTTPClient throws serverUrlNotConfigured immediately
+        // when no server is configured; yield so the Tasks hit the catch paths.
+        for _ in 0..<40 { await Task.yield() }
+        try? await Task.sleep(nanoseconds: 250_000_000)
+    }
+
     // MARK: - Helpers
 
     private func decodedVersion(_ json: String) -> FileVersion {
@@ -181,6 +222,8 @@ final class TrackSelectionPersistenceTests: XCTestCase {
         codec: String?,
         channels: Int? = nil,
         isForced: Bool = false,
+        isHearingImpaired: Bool = false,
+        isExternal: Bool = false,
         ffIndex: Int? = nil
     ) -> PlayerTrack {
         PlayerTrack(
@@ -193,8 +236,8 @@ final class TrackSelectionPersistenceTests: XCTestCase {
             bitrate: nil,
             isDefault: false,
             isForced: isForced,
-            isHearingImpaired: false,
-            isExternal: false,
+            isHearingImpaired: isHearingImpaired,
+            isExternal: isExternal,
             isSelected: false,
             ffIndex: ffIndex,
             srcId: nil
