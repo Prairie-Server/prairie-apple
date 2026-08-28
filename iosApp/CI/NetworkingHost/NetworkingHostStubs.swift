@@ -12,6 +12,11 @@ extension Notification.Name {
 final class AuthService: @unchecked Sendable {
     static let shared = AuthService()
 
+    enum SignOutAuthorization: Equatable, Sendable {
+        case allowed(account: RefreshAccountIdentity?)
+        case refused
+    }
+
     var isLoggedIn: Bool { false }
     var profileId: String? { nil }
 
@@ -22,6 +27,27 @@ final class AuthService: @unchecked Sendable {
     func resolveActiveProfileForSession(
         holding transitionLease: HTTPIdentityTransitionLease
     ) async -> Bool { false }
+
+    static func signOutAuthorization(
+        activeServerId: String?,
+        capturedAuth: CapturedOrdinaryRequestAuth?
+    ) -> SignOutAuthorization {
+        if capturedAuth?.credentialOwner == .temporary {
+            return .refused
+        }
+        guard let activeServerId, !activeServerId.isEmpty else {
+            return .allowed(account: capturedAuth?.account)
+        }
+        guard let capturedAuth else {
+            return .allowed(account: nil)
+        }
+        guard capturedAuth.credentialOwner == .persistentServer(
+            serverId: activeServerId
+        ), capturedAuth.account.serverId == activeServerId else {
+            return .refused
+        }
+        return .allowed(account: capturedAuth.account)
+    }
 }
 
 actor DiagnosticsCoordinator {
