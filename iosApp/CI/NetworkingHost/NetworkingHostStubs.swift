@@ -1,5 +1,10 @@
 import Foundation
 
+extension Notification.Name {
+    static let continuumSessionExpired = Notification.Name("continuumSessionExpired")
+    static let temporaryRemoteAuthExpired = Notification.Name("temporaryRemoteAuthExpired")
+}
+
 /// Minimal stand-ins for app types that gated Networking code references but
 /// that would otherwise pull ContinuumAPI / Diagnostics / player UI into the
 /// FFmpeg-free CI host. Full Prairie.app keeps the real implementations.
@@ -54,6 +59,27 @@ enum DiagLog {
     static func registerSensitiveHost(_ host: String) {}
 }
 
+@MainActor
+@Observable
+final class ConnectionMonitor {
+    static let shared = ConnectionMonitor()
+
+    enum ServerStatus {
+        case unknown
+        case reachable
+        case unreachable
+    }
+
+    private(set) var isDeviceOnline = true
+    private(set) var serverStatus: ServerStatus = .unknown
+
+    var isServerReachable: Bool { isDeviceOnline && serverStatus != .unreachable }
+    var isOffline: Bool { !isDeviceOnline || serverStatus == .unreachable }
+
+    func noteServerResponded() {}
+    func noteServerUnreachable() {}
+}
+
 /// Referenced by AIModels helpers; real type lives under player subtitles.
 struct SidecarSubtitleDescriptor: Hashable {
     var index: Int
@@ -63,47 +89,6 @@ struct SidecarSubtitleDescriptor: Hashable {
     var source: String
     var forced: Bool
     var url: URL
-}
-
-enum HTTPError: Error {
-    case http(Int, String?)
-}
-
-/// Enough of ContinuumAPI for TrackSelectionPersistence fire-and-forget writers.
-actor ContinuumAPI {
-    static let shared = ContinuumAPI()
-
-    func setAudioPref(seriesId: String, body: AudioPrefRequest) async throws {}
-    func setSubtitlePref(seriesId: String, body: SubtitlePrefRequest) async throws {}
-    func deleteAudioPref(seriesId: String) async throws {}
-    func deleteSubtitlePref(seriesId: String) async throws {}
-}
-
-/// Enough of HTTPClient for ServerRegistry + unit-test JSON decoding.
-actor HTTPClient {
-    static let shared = HTTPClient()
-
-    static func makeJSONDecoder() -> JSONDecoder {
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        decoder.dateDecodingStrategy = .custom { decoder in
-            let container = try decoder.singleValueContainer()
-            let str = try container.decode(String.self)
-            let fractional = ISO8601DateFormatter()
-            fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            if let date = fractional.date(from: str) { return date }
-            let whole = ISO8601DateFormatter()
-            whole.formatOptions = [.withInternetDateTime]
-            if let date = whole.date(from: str) { return date }
-            throw DecodingError.dataCorruptedError(
-                in: container,
-                debugDescription: "Unparseable ISO-8601 date: \(str)"
-            )
-        }
-        return decoder
-    }
-
-    func cancelInFlightRequests() async {}
 }
 
 enum SubtitleAIController {

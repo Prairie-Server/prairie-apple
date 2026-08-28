@@ -60,7 +60,16 @@ final class PlaybackPrefsModelTests: XCTestCase {
         XCTAssertEqual(PlaybackLanguageOption.label(forCode: "en"), "English")
         XCTAssertEqual(PlaybackLanguageOption.label(forCode: "original"), "Original Language")
         XCTAssertEqual(PlaybackLanguageOption.label(forCode: "xx"), "XX")
-        XCTAssertEqual(PlaybackLanguageOption.all.count, 12)
+        // `all` is the contract suggested-values floor for subtitle language —
+        // pin to the generated catalog, not a stale hard-coded length.
+        let contractFloor = SettingPresentationMetadata.suggestedValues(
+            for: .playbackSubtitleLanguage
+        )
+        XCTAssertEqual(PlaybackLanguageOption.all.count, contractFloor.count)
+        XCTAssertEqual(
+            Set(PlaybackLanguageOption.all.map(\.code)),
+            Set(contractFloor)
+        )
         XCTAssertEqual(PlaybackPrefSentinel.inherit, "__inherit__")
         XCTAssertEqual(PlaybackPrefSentinel.none, "__none__")
     }
