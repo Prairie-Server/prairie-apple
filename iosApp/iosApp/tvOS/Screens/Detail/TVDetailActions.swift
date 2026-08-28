@@ -175,6 +175,168 @@ struct TVCircleActionButton: View {
     }
 }
 
+// MARK: - Detail action row
+
+/// Shared native focus row for movie, episode, season and series detail pages.
+/// The only imperative focus work is a bounded page-entry retry for Play;
+/// directional movement remains owned by the tvOS focus engine.
+struct TVDetailActionRow<MoreMenu: View>: View {
+    enum InitialFocusScope: Equatable {
+        case page
+        case season(key: String?)
+    }
+
+    private enum ActionID: Hashable {
+        case play
+        case startOver
+        case favorite
+        case watchlist
+        case watched
+        case more
+    }
+
+    let playTitle: String?
+    let onPlay: () -> Void
+    let onStartOver: (() -> Void)?
+    let isFavorite: Bool
+    let onToggleFavorite: () -> Void
+    let inWatchlist: Bool
+    let onToggleWatchlist: () -> Void
+    let isWatched: Bool
+    let watchedLabelMark: String
+    let watchedLabelUnmark: String
+    let onToggleWatched: () -> Void
+    let initialFocusScope: InitialFocusScope
+    let focusNamespace: Namespace.ID
+    let playFocused: FocusState<Bool>.Binding
+    let rowFocused: FocusState<Bool>.Binding
+    @ViewBuilder let moreMenu: () -> MoreMenu
+
+    @Environment(\.resetFocus) private var resetFocus
+    @State private var didResetInitialPlayFocus = false
+    @State private var initialFocusSeasonKey: String?
+    @State private var initialPlayFocusTask: Task<Void, Never>?
+    @FocusState private var focusedAction: ActionID?
+
+    var body: some View {
+        HStack(spacing: 36) {
+            if let playTitle {
+                TVPrimaryPillButton(
+                    icon: "play.fill",
+                    title: playTitle,
+                    action: onPlay,
+                    focused: playFocused
+                )
+                .focused($focusedAction, equals: .play)
+                .onGeometryChange(for: Bool.self) { proxy in
+                    proxy.size.width > 0 && proxy.size.height > 0
+                } action: { isLaidOut in
+                    guard isLaidOut else { return }
+                    resetInitialPlayFocus()
+                }
+
+                if let onStartOver {
+                    TVSecondaryPillButton(
+                        icon: "backward.end.fill",
+                        title: "Start Over",
+                        action: onStartOver
+                    )
+                    .focused($focusedAction, equals: .startOver)
+                }
+            }
+
+            TVCircleActionButton(
+                icon: "heart",
+                iconActive: "heart.fill",
+                isActive: isFavorite,
+                accessibilityLabel: isFavorite ? "Remove from favorites" : "Add to favorites",
+                action: onToggleFavorite
+            )
+            .focused($focusedAction, equals: .favorite)
+
+            TVCircleActionButton(
+                icon: "bookmark",
+                iconActive: "bookmark.fill",
+                isActive: inWatchlist,
+                accessibilityLabel: inWatchlist ? "Remove from watchlist" : "Add to watchlist",
+                action: onToggleWatchlist
+            )
+            .focused($focusedAction, equals: .watchlist)
+
+            TVCircleActionButton(
+                icon: "checkmark.circle",
+                iconActive: "checkmark.circle.fill",
+                isActive: isWatched,
+                accessibilityLabel: isWatched ? watchedLabelUnmark : watchedLabelMark,
+                action: onToggleWatched
+            )
+            .focused($focusedAction, equals: .watched)
+
+            moreMenu()
+                .focused($focusedAction, equals: .more)
+        }
+        .focused(rowFocused)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .focusSection()
+        .onChange(of: seasonKey, initial: true) { _, seasonKey in
+            guard let seasonKey else { return }
+            if initialFocusSeasonKey == nil {
+                initialFocusSeasonKey = seasonKey
+            } else if initialFocusSeasonKey != seasonKey {
+                didResetInitialPlayFocus = true
+                cancelInitialPlayFocusRetry()
+            }
+        }
+        .onDisappear {
+            cancelInitialPlayFocusRetry()
+        }
+    }
+
+    private var seasonKey: String? {
+        guard case .season(let key) = initialFocusScope else { return nil }
+        return key
+    }
+
+    private func resetInitialPlayFocus() {
+        guard !didResetInitialPlayFocus else { return }
+        if case .season = initialFocusScope {
+            guard let seasonKey else { return }
+            if initialFocusSeasonKey == nil {
+                initialFocusSeasonKey = seasonKey
+            }
+            guard initialFocusSeasonKey == seasonKey else { return }
+        }
+        didResetInitialPlayFocus = true
+
+        let actionFocus = $focusedAction
+        initialPlayFocusTask = Task { @MainActor in
+            var lastFocusedAction = actionFocus.wrappedValue
+            for attempt in 0..<3 {
+                if Task.isCancelled { return }
+                if playFocused.wrappedValue { return }
+
+                let focusedNow = actionFocus.wrappedValue
+                if lastFocusedAction != nil, focusedNow != lastFocusedAction {
+                    return
+                }
+                lastFocusedAction = focusedNow
+
+                if attempt > 0 {
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                    if Task.isCancelled { return }
+                }
+                resetFocus(in: focusNamespace)
+                await Task.yield()
+            }
+        }
+    }
+
+    private func cancelInitialPlayFocusRetry() {
+        initialPlayFocusTask?.cancel()
+        initialPlayFocusTask = nil
+    }
+}
+
 // MARK: - Pill ButtonStyle
 
 /// Shared ButtonStyle for the hero's pill controls. Owns all focus

@@ -8,7 +8,6 @@ protocol PairingDeviceAuthorizing: Sendable {
     func poll(serverURL: String, deviceCode: String) async throws -> DeviceLoginPollResponse
     func lookup(serverURL: String, bearer: String, userCode: String) async throws -> DeviceLookupResponse
     func approve(serverURL: String, bearer: String, userCode: String) async throws
-    func deny(serverURL: String, bearer: String, userCode: String) async throws
 }
 
 /// Device-authorization calls issued against an EXPLICIT server base URL,
@@ -100,11 +99,6 @@ struct PairingDeviceAPI: PairingDeviceAuthorizing {
                                               bearer: bearer, body: DeviceApproveRequest(code: userCode))
     }
 
-    func deny(serverURL: String, bearer: String, userCode: String) async throws {
-        let _: EmptyResponse = try await post(serverURL, "/api/v1/auth/device/deny",
-                                              bearer: bearer, body: DeviceApproveRequest(code: userCode))
-    }
-
     func approveRemotePlayback(
         serverURL: String,
         bearer: String,
@@ -171,11 +165,7 @@ struct PairingDeviceAPI: PairingDeviceAuthorizing {
         if let bearer { request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization") }
         if let profileId { request.setValue(profileId, forHTTPHeaderField: "X-Profile-Id") }
         if let profileToken { request.setValue(profileToken, forHTTPHeaderField: "X-Profile-Token") }
-        let device = AppleDeviceIdentity.current
-        request.setValue(device.id, forHTTPHeaderField: "X-Prairie-Device-Id")
-        request.setValue(device.name, forHTTPHeaderField: "X-Prairie-Device-Name")
-        request.setValue(device.platform, forHTTPHeaderField: "X-Prairie-Device-Platform")
-        request.setValue(ImageFormats.headerValue, forHTTPHeaderField: "X-Prairie-Image-Formats")
+        AppleDeviceIdentity.current.applyHeaders(to: &request)
     }
 
     private func send<R: Decodable>(_ request: URLRequest) async throws -> R {

@@ -44,6 +44,14 @@ struct ImpersonationInfo: Codable {
 /// Body for POST /api/v1/auth/refresh.
 struct RefreshRequest: Codable {
     let refreshToken: String
+
+    init(refreshToken value: String) {
+        refreshToken = value
+    }
+
+    init(_ value: String) {
+        refreshToken = value
+    }
 }
 
 /// Response from POST /api/v1/auth/refresh.
@@ -51,19 +59,4 @@ struct RefreshResponse: Codable {
     let accessToken: String
     let refreshToken: String
     let expiresIn: Int64
-}
-
-/// Body for POST /api/v1/auth/setup.
-struct SetupRequest: Codable {
-    let username: String
-    let email: String
-    let password: String
-}
-
-/// Body for POST /api/v1/auth/signup.
-struct SignupRequest: Codable {
-    let username: String
-    let email: String
-    let password: String
-    let inviteCode: String
 }

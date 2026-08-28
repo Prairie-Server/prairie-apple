@@ -12,6 +12,13 @@ struct Profile: Codable {
     let id: String
     let name: String
     let avatar: String?
+    /// Server-resolved avatar URL (`avatar_url`). For uploads this is a
+    /// short-lived presigned object-store URL that changes on every fetch, so
+    /// it must not be persisted long-term. For presets it is a DiceBear URL or
+    /// a server-relative `/profile-avatars/{id}.svg` path.
+    let avatarUrl: String?
+    /// `avatar_source`: "upload", "preset", or "none".
+    let avatarSource: String?
     let hasPin: Bool?
     let isChild: Bool?
     let isPrimary: Bool?
@@ -27,6 +34,7 @@ struct Profile: Codable {
     let preferredMetadataLanguage: String?
     let autoSkipIntro: Bool?
     let autoSkipCredits: Bool?
+    let autoSkipRecap: Bool?
     let libraryRestrictionsEnabled: Bool?
     let allowedLibraryIds: [Int]?
     let maxPlaybackQuality: String?
@@ -39,6 +47,7 @@ struct Profile: Codable {
             id: id,
             name: name,
             avatarEmoji: avatar,
+            avatarImageUrl: avatarUrl,
             hasPin: hasPin ?? false,
             isChild: isChild ?? false,
             isPrimary: isPrimary ?? false,
@@ -54,12 +63,18 @@ struct Profile: Codable {
 /// caller can patch one or many at a time. Wire format mirrors the
 /// server's `updateProfileRequest`.
 struct UpdateProfileBody: Encodable {
+    /// Streaming quality ceiling preset ("auto", "1080p", "4k"). Encodes as
+    /// `quality_preference`. Written by the onboarding tour's quality step.
+    var qualityPreference: String?
     var subtitleLanguage: String?
     var subtitleMode: String?
     var showForcedSubtitles: Bool?
     /// Preferred metadata language (ISO 639-1; `""` = inherit the library
     /// default). Encodes as `preferred_metadata_language`.
     var preferredMetadataLanguage: String?
+    var autoSkipIntro: Bool?
+    var autoSkipCredits: Bool?
+    var autoSkipRecap: Bool?
 }
 
 struct ProfilesResponse: Codable {
@@ -85,6 +100,9 @@ struct CreateProfileRequestBody: Codable {
     let avatar: String?
     let pin: String?
     let isChild: Bool?
+    let maxContentRating: String?
+    let libraryRestrictionsEnabled: Bool
+    let allowedLibraryIds: [Int]
 }
 
 // MARK: - Recommendations (wire format for /discover)

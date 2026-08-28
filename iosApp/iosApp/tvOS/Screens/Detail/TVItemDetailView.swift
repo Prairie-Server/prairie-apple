@@ -22,7 +22,14 @@ struct TVItemDetailView: View {
     @State private var nextUpPlaybackDetail: ItemDetail?
     @State private var isLoadingNextUpPlaybackDetail = false
     @State private var didLoadNextUpPlaybackDetail = false
+    /// Whether the YouTube app is installed, probed once per page appearance.
+    /// Remote trailer cards and the "Find Trailers" action are hidden when it
+    /// isn't — tvOS has no in-app web fallback, so content that cannot open
+    /// must not be offered. Always false on the simulator, which has no
+    /// YouTube app.
+    @State private var allowRemoteTrailers = false
     @Environment(AppRouter.self) private var router
+    @Environment(\.scenePhase) private var scenePhase
     private static let focusLogger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "com.continuum.app",
         category: "TVFocus"
@@ -55,9 +62,39 @@ struct TVItemDetailView: View {
         .continuumNavigationBarBackgroundHidden()
         .onAppear {
             Self.focusLogger.debug("itemDetail.appear contentId=\(contentId, privacy: .public) pathDepth=\(router.path.count, privacy: .public)")
+            allowRemoteTrailers = TVTrailerLaunch.isYouTubeAppInstalled()
+            seedSubtitleOverrideIfNeeded()
+            // Returning from the player (or an extra) resumes a poll that
+            // `onDisappear` cancelled — without re-POSTing, since the server
+            // already spent the item's weekly slot. Precedent:
+            // `PersonDetailView.resumeMetadataRefreshIfNeeded`.
+            viewModel.resumeTrailerFetchIfNeeded()
         }
         .onDisappear {
             Self.focusLogger.debug("itemDetail.disappear contentId=\(contentId, privacy: .public) pathDepth=\(router.path.count, privacy: .public)")
+            // The coordinator's poll is not owned by `.task`, so it would
+            // otherwise keep running (and retaining the view model) after
+            // this route pops.
+            viewModel.stopTrailerFetch()
+            // A pop proves the user is navigating in-app, so any handoff
+            // record is dead: if the YouTube launch had actually taken over
+            // the screen, this page could not be popping. Without this, a
+            // failed `open` (app deleted after the probe) leaves a live
+            // record that would ghost-navigate a later cold launch. The
+            // jetsam case this store exists for never pops, so it is
+            // unaffected.
+            TVTrailerReturnStore.shared.clear()
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            // A warm return from the YouTube app lands here with the page
+            // still alive — nothing to restore, so the handoff record must
+            // not survive to be replayed on some later cold launch. Re-probe
+            // YouTube as well because its installation can change while Prairie
+            // is suspended.
+            if newPhase == .active {
+                allowRemoteTrailers = TVTrailerLaunch.isYouTubeAppInstalled()
+                TVTrailerReturnStore.shared.clear()
+            }
         }
         .task(id: contentId) {
             didClearSubtitleOverride = false
@@ -101,6 +138,46 @@ struct TVItemDetailView: View {
     private var preferredNextUpSubtitleTrackIndex: Int? {
         get { viewModel.preferredNextUpSubtitleTrackIndex }
         nonmutating set { viewModel.preferredNextUpSubtitleTrackIndex = newValue }
+    }
+
+    // MARK: - Trailers & extras
+
+    /// Merged rail for the detail on screen. Remote entries are dropped
+    /// when the YouTube app isn't available (see `allowRemoteTrailers`).
+    private func trailerEntries(for detail: ItemDetail) -> [TrailerRailEntry] {
+        TrailerRail.entries(
+            videos: detail.videos,
+            extras: detail.extras,
+            allowRemote: allowRemoteTrailers
+        )
+    }
+
+    /// Local extras go straight to the streaming path — they are ordinary
+    /// watch targets with their own contentId, always from the beginning
+    /// (nothing tracks resume position for an extra). Remote entries hand
+    /// off to the YouTube app.
+    private func playTrailer(_ entry: TrailerRailEntry) {
+        switch entry {
+        case .remote(let video):
+            // Recorded before the deep link so a jetsam during the trailer
+            // can restore this page on the next cold launch (see
+            // `TVTrailerReturnStore`). tvOS cannot bring the user back from
+            // YouTube; this is the fallback for when suspension doesn't
+            // preserve the page either.
+            TVTrailerReturnStore.shared.saveHandoff(contentId: contentId)
+            TVTrailerLaunch.open(siteKey: video.siteKey) { didOpen in
+                guard !didOpen else { return }
+                TVTrailerReturnStore.shared.clear()
+            }
+        case .local(let extra):
+            router.navigate(
+                to: .player(
+                    contentId: extra.contentId,
+                    startFromBeginning: true,
+                    resumePosition: nil
+                )
+            )
+        }
     }
 
     @ViewBuilder
@@ -248,6 +325,19 @@ struct TVItemDetailView: View {
                 isLoadingNextUpPlaybackDetail: isLoadingNextUpPlaybackDetail,
                 didLoadNextUpPlaybackDetail: didLoadNextUpPlaybackDetail,
                 nextUpSubtitleOverrideCleared: didClearNextUpSubtitleOverride,
+                trailerEntries: trailerEntries(for: detail),
+                onSelectTrailer: playTrailer,
+                supportsTrailerFetch: viewModel.supportsTrailerFetch && allowRemoteTrailers,
+                onFindTrailers: {
+                    // Without the YouTube app the rail hides remote cards, so
+                    // new remote videos must not be reported as a find.
+                    viewModel.startTrailerFetch(
+                        remoteVideosDisplayable: allowRemoteTrailers
+                    )
+                },
+                trailerFetchStatus: viewModel.trailerFetch.statusMessage,
+                isFetchingTrailers: viewModel.trailerFetch.isFetching,
+                onTrailerStatusShown: { viewModel.trailerFetch.acknowledge() },
                 onSelectSeason: { season in
                     Task { await viewModel.selectSeason(season) }
                 },
@@ -360,6 +450,19 @@ struct TVItemDetailView: View {
                 seasonEpisodes: viewModel.episodes,
                 episodeFavoriteStates: viewModel.episodeFavoriteStates,
                 isLoadingEpisodes: viewModel.isLoadingEpisodes,
+                trailerEntries: trailerEntries(for: detail),
+                onSelectTrailer: playTrailer,
+                supportsTrailerFetch: viewModel.supportsTrailerFetch && allowRemoteTrailers,
+                onFindTrailers: {
+                    // Without the YouTube app the rail hides remote cards, so
+                    // new remote videos must not be reported as a find.
+                    viewModel.startTrailerFetch(
+                        remoteVideosDisplayable: allowRemoteTrailers
+                    )
+                },
+                trailerFetchStatus: viewModel.trailerFetch.statusMessage,
+                isFetchingTrailers: viewModel.trailerFetch.isFetching,
+                onTrailerStatusShown: { viewModel.trailerFetch.acknowledge() },
                 onPlay: { startFromBeginning in
                     let resumePosition = startFromBeginning ? nil : playableResumePosition(for: detail)
                     if let fileId = playbackFileId(for: detail) {
@@ -411,6 +514,7 @@ struct TVItemDetailView: View {
                 },
                 onSelectSubtitleTrack: { index in
                     didClearSubtitleOverride = (index == nil)
+                    viewModel.preferredSubtitleTrackWasManuallySelected = true
                     preferredSubtitleTrackIndex = sanitizedSubtitleTrackIndex(
                         for: detail,
                         versionFileId: preferredVersionFileId,
@@ -593,11 +697,20 @@ struct TVItemDetailView: View {
     /// the pick was persisted; audio doesn't need an equivalent because
     /// `resolvedAudioOrdinal` falls back to `effectiveAudioTrackIndex`.
     private func seedSubtitleOverrideIfNeeded() {
-        guard preferredSubtitleTrackIndex == nil, let detail = viewModel.detail else { return }
-        preferredSubtitleTrackIndex = DetailPlaybackFormatting.serverPreferredSubtitleIndex(
+        if PlayerSettings.shared.subtitleMatchesSystemAppearance {
+            if !viewModel.preferredSubtitleTrackWasManuallySelected {
+                preferredSubtitleTrackIndex = nil
+            }
+            return
+        }
+        guard !viewModel.preferredSubtitleTrackWasManuallySelected,
+              preferredSubtitleTrackIndex == nil,
+              let detail = viewModel.detail else { return }
+        preferredSubtitleTrackIndex = DetailPlaybackFormatting.launchPreferredSubtitleIndex(
             version: effectiveVersion(for: detail, versionFileId: preferredVersionFileId),
             signature: detail.effectiveSubtitleTrackSignature,
-            mode: detail.effectiveSubtitleMode
+            mode: detail.effectiveSubtitleMode,
+            usesDeviceSettings: PlayerSettings.shared.subtitleMatchesSystemAppearance
         )
     }
 
@@ -686,10 +799,11 @@ struct TVItemDetailView: View {
             let enriched = await enrichPlaybackMetadata(for: item, contentId: nextUp.contentId)
             guard !Task.isCancelled else { return }
             nextUpPlaybackDetail = enriched
-            preferredNextUpSubtitleTrackIndex = DetailPlaybackFormatting.serverPreferredSubtitleIndex(
+            preferredNextUpSubtitleTrackIndex = DetailPlaybackFormatting.launchPreferredSubtitleIndex(
                 version: effectiveVersion(for: enriched, versionFileId: nil),
                 signature: enriched.effectiveSubtitleTrackSignature,
-                mode: enriched.effectiveSubtitleMode
+                mode: enriched.effectiveSubtitleMode,
+                usesDeviceSettings: PlayerSettings.shared.subtitleMatchesSystemAppearance
             )
             didLoadNextUpPlaybackDetail = true
         } catch {
@@ -741,10 +855,11 @@ struct TVItemDetailView: View {
             let enriched = await enrichPlaybackMetadata(for: item, contentId: nextUp.contentId)
             guard !Task.isCancelled else { return }
             nextUpPlaybackDetail = enriched
-            preferredNextUpSubtitleTrackIndex = DetailPlaybackFormatting.serverPreferredSubtitleIndex(
+            preferredNextUpSubtitleTrackIndex = DetailPlaybackFormatting.launchPreferredSubtitleIndex(
                 version: effectiveVersion(for: enriched, versionFileId: nil),
                 signature: enriched.effectiveSubtitleTrackSignature,
-                mode: enriched.effectiveSubtitleMode
+                mode: enriched.effectiveSubtitleMode,
+                usesDeviceSettings: PlayerSettings.shared.subtitleMatchesSystemAppearance
             )
             didLoadNextUpPlaybackDetail = true
         } catch {
@@ -813,7 +928,12 @@ struct TVItemDetailView: View {
                 effectiveSubtitleTrackSignature: watchDetail.effectiveSubtitleTrackSignature,
                 overlaySummary: item.overlaySummary,
                 audiobook: item.audiobook,
-                pendingTranslationLanguage: item.pendingTranslationLanguage
+                pendingTranslationLanguage: item.pendingTranslationLanguage,
+                // Catalog-only fields: the watch detail knows nothing about
+                // them, so they must be carried across or the trailers rail
+                // would disappear the moment enrichment succeeds.
+                videos: item.videos,
+                extras: item.extras
             )
         } catch {
             return item

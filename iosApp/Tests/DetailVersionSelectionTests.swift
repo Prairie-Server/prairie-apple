@@ -3,6 +3,22 @@ import Foundation
 @testable import Prairie
 
 final class DetailVersionSelectionTests: XCTestCase {
+
+    func testDeviceSettingsDoNotForwardServerSubtitleSeedAsManualChoice() {
+        XCTAssertNil(DetailPlaybackFormatting.launchPreferredSubtitleIndex(
+            version: nil,
+            signature: nil,
+            mode: SubtitleMode.off.rawValue,
+            usesDeviceSettings: true
+        ))
+        XCTAssertEqual(DetailPlaybackFormatting.launchPreferredSubtitleIndex(
+            version: nil,
+            signature: nil,
+            mode: SubtitleMode.off.rawValue,
+            usesDeviceSettings: false
+        ), -1)
+    }
+
     func testAutoDisplayPrefersBestVersionOverFirstReturnedVersion() {
         let versions = [
             version(fileId: 10, resolution: "1080p"),
@@ -65,24 +81,6 @@ final class DetailVersionSelectionTests: XCTestCase {
             "2160p · HEVC · DV · EAC3"
         )
         XCTAssertEqual(version.videoTracks?.first?.colorRange, "tv")
-        XCTAssertEqual(ApplePlaybackRoutePlanner.unambiguousColorRange(for: version), "tv")
-    }
-
-    func testColorRangeFallbackRequiresAnUnambiguousVideoTrack() throws {
-        let version = try XCTUnwrap(decodedVersions("""
-        [
-          {
-            "file_id": 22,
-            "file_path": "/media/multi-angle.mkv",
-            "video_tracks": [
-              { "index": 0, "color_range": "tv" },
-              { "index": 1, "color_range": "pc" }
-            ]
-          }
-        ]
-        """).first)
-
-        XCTAssertNil(ApplePlaybackRoutePlanner.unambiguousColorRange(for: version))
     }
 
     func testSourceColorRangeIsNotAppliedToTranscodedOutput() {
@@ -639,6 +637,7 @@ final class DetailVersionSelectionTests: XCTestCase {
                 index: 0,
                 fileId: 7,
                 fileName: nil,
+                version: version(fileId: 7, resolution: nil),
                 durationSeconds: 120,
                 startOffsetSeconds: 0
             ),
@@ -646,6 +645,7 @@ final class DetailVersionSelectionTests: XCTestCase {
                 index: 1,
                 fileId: 8,
                 fileName: nil,
+                version: version(fileId: 8, resolution: nil),
                 durationSeconds: 180,
                 startOffsetSeconds: 120
             ),

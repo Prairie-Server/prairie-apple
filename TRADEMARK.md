@@ -1,6 +1,6 @@
 # Prairie Trademark & Brand Policy
 
-Prairie is a fork of Silo. Prairie's source code is free and open source under
+Prairie is a fork of Prairie. Prairie's source code is free and open source under
 the **GNU Affero General Public License v3.0 or later**
 (`AGPL-3.0-or-later`). You are welcome to use, study, modify, and redistribute
 the code under those terms.
@@ -8,7 +8,7 @@ the code under those terms.
 **That freedom applies to the code, not to the Prairie name and brand.** The
 Prairie marks identify this project and its builds. This policy explains how
 they may and may not be used so users can distinguish Prairie from other forks
-and from the original Silo project.
+and from the original Prairie project.
 
 ## Marks covered
 
@@ -29,7 +29,7 @@ marks.** This reservation is expressly permitted by AGPL-3.0 §7(e).
   or "a plugin for Prairie." Use the word to refer to this project, not to
   brand yours.
 - **Referring to the fork history truthfully** - for example, "Prairie is a
-  fork of Silo" or "based on Silo."
+  fork of Prairie" or "based on Prairie."
 - **Redistributing official, unmodified Prairie builds** under the Prairie
   name, with all notices kept intact.
 - **Running, modifying, and self-hosting** Prairie for yourself or your

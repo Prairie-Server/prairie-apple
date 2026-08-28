@@ -1,6 +1,32 @@
-#if os(tvOS)
 import Foundation
 
+/// Pure entry policy for temporary-identity teardown. Kept outside the tvOS
+/// conditional so the generation rules can be regression-tested without a
+/// simulator-only test target.
+enum RemotePlaybackIdentityEndPolicy {
+    static func endingGenerationID(
+        activeIdentityGenerationID: UUID?,
+        scopeGenerationID: UUID?,
+        expectedGenerationID: UUID?
+    ) -> UUID? {
+        if let expectedGenerationID {
+            guard activeIdentityGenerationID == expectedGenerationID,
+                  scopeGenerationID == nil || scopeGenerationID == expectedGenerationID else {
+                return nil
+            }
+            return expectedGenerationID
+        }
+
+        guard let currentGenerationID = activeIdentityGenerationID ?? scopeGenerationID,
+              activeIdentityGenerationID == nil || activeIdentityGenerationID == currentGenerationID,
+              scopeGenerationID == nil || scopeGenerationID == currentGenerationID else {
+            return nil
+        }
+        return currentGenerationID
+    }
+}
+
+#if os(tvOS)
 @MainActor
 final class RemotePlaybackIdentityManager {
     static let shared = RemotePlaybackIdentityManager()
@@ -43,6 +69,10 @@ final class RemotePlaybackIdentityManager {
 
     private(set) var activeIdentity: ActiveIdentity?
     private let api = PairingDeviceAPI()
+    /// Set synchronously before a replacement begins global request
+    /// cancellation. An older re-entrant `end` must not cancel or remove work
+    /// after this generation has claimed the transition.
+    private var activationGenerationPending: UUID?
 
     private init() {}
 
@@ -56,7 +86,7 @@ final class RemotePlaybackIdentityManager {
 
     func matches(_ offer: PrairieControlHandoffOffer, controllerDeviceId: String) -> Bool {
         guard let activeIdentity else { return false }
-        return activeIdentity.serverId == offer.serverId
+        return ServerRegistry.serverIdsMatch(activeIdentity.serverId, offer.serverId)
             && activeIdentity.profileId == offer.profileId
             && activeIdentity.controllerDeviceId == controllerDeviceId
     }
@@ -124,7 +154,7 @@ final class RemotePlaybackIdentityManager {
                 }
                 let expiresAt = poll.sessionExpiresAt.flatMap(Self.parseISO8601)
                     ?? Date().addingTimeInterval(24 * 60 * 60)
-                await activate(TemporaryAuthScope(
+                guard await activate(TemporaryAuthScope(
                     serverId: offer.serverId,
                     serverURL: normalizedURL,
                     accessToken: accessToken,
@@ -137,7 +167,9 @@ final class RemotePlaybackIdentityManager {
                     serverName: offer.serverName,
                     profileName: offer.profileName,
                     controllerDeviceName: controllerDeviceName
-                )
+                ) else {
+                    throw CancellationError()
+                }
                 return PrairieControlHandoffReady(
                     requestId: offer.requestId,
                     serverId: offer.serverId,
@@ -156,16 +188,70 @@ final class RemotePlaybackIdentityManager {
         throw HandoffError.expired
     }
 
-    func end() async {
-        let hasTemporaryScope = await TokenStore.shared.hasTemporaryScope()
-        guard activeIdentity != nil || hasTemporaryScope else { return }
-        if hasTemporaryScope {
-            try? await HTTPClient.shared.postVoid("/api/v1/auth/logout")
+    @discardableResult
+    func end(
+        expectedGenerationID: UUID? = nil,
+        notifyServer: Bool = true
+    ) async -> Bool {
+        let scope = await TokenStore.shared.getTemporaryScope()
+        guard activationGenerationPending == nil,
+              let endingGenerationID = RemotePlaybackIdentityEndPolicy.endingGenerationID(
+                  activeIdentityGenerationID: activeIdentity?.generationID,
+                  scopeGenerationID: scope?.credentialGenerationID,
+                  expectedGenerationID: expectedGenerationID
+              ) else { return false }
+        if let scope, notifyServer {
+            try? await HTTPClient.shared.postVoid(
+                "/api/v1/auth/logout",
+                expectedAccount: RefreshAccountIdentity(
+                    serverId: scope.serverId,
+                    serverURL: scope.serverURL,
+                    credentialGenerationID: scope.credentialGenerationID
+                )
+            )
+        }
+        // A replacement can start while logout is suspended. It sets the
+        // pending marker before its own queued cancellation pass, so the old
+        // generation must stop here without globally cancelling new work.
+        guard activationGenerationPending == nil,
+              activeIdentity == nil || activeIdentity?.generationID == endingGenerationID,
+              !Task.isCancelled else {
+            return false
+        }
+        guard let transitionLease = await HTTPClient.shared.beginIdentityTransition() else {
+            return false
+        }
+        guard activationGenerationPending == nil,
+              activeIdentity == nil || activeIdentity?.generationID == endingGenerationID,
+              !Task.isCancelled else {
+            return await releaseIdentityTransition(transitionLease, returning: false)
         }
         await HTTPClient.shared.cancelInFlightRequests()
-        _ = await TokenStore.shared.endTemporaryScope()
+        // Every await above can admit a replacement handoff. Re-check both
+        // owners, then make scope removal itself generation-conditional.
+        guard activationGenerationPending == nil,
+              activeIdentity == nil || activeIdentity?.generationID == endingGenerationID else {
+            return await releaseIdentityTransition(transitionLease, returning: false)
+        }
+        switch await TokenStore.shared.endTemporaryScope(
+            expectedGenerationID: endingGenerationID
+        ) {
+        case .ended, .alreadyAbsent:
+            break
+        case .differentGeneration:
+            // A replacement generation owns the credential slot. Its
+            // activation will publish the matching identity after this
+            // transition lease is released, so preserve manager state.
+            return await releaseIdentityTransition(transitionLease, returning: false)
+        }
         activeIdentity = nil
         AuthService.shared.clearCachesForTemporaryIdentityChange()
+        let ended = await releaseIdentityTransition(transitionLease, returning: true)
+        // The persistent scope owns the credential slot again and the gate is
+        // open, so this probes the restored identity. See the helper for why
+        // it can't be folded into `clearCachesForTemporaryIdentityChange()`.
+        refreshSubtitleProvidersAfterIdentityChange()
+        return ended
     }
 
     private func activate(
@@ -173,13 +259,60 @@ final class RemotePlaybackIdentityManager {
         serverName: String?,
         profileName: String?,
         controllerDeviceName: String?
-    ) async {
-        let usesDifferentServer = scope.serverId != ServerRegistry.shared.activeServerId
+    ) async -> Bool {
+        let generationID = scope.credentialGenerationID
+        guard let transitionLease = await HTTPClient.shared.beginIdentityTransition() else {
+            return false
+        }
+        guard !Task.isCancelled,
+              activationGenerationPending == nil else {
+            return await releaseIdentityTransition(transitionLease, returning: false)
+        }
+        activationGenerationPending = generationID
+        let previousIdentity = activeIdentity
+        let usesDifferentServer = !ServerRegistry.serverIdsMatch(
+            scope.serverId,
+            ServerRegistry.shared.activeServerId
+        )
         await HTTPClient.shared.cancelInFlightRequests()
+        guard activationGenerationPending == generationID,
+              !Task.isCancelled else {
+            if activationGenerationPending == generationID {
+                activationGenerationPending = nil
+            }
+            return await releaseIdentityTransition(transitionLease, returning: false)
+        }
         AuthService.shared.clearCachesForTemporaryIdentityChange()
-        await TokenStore.shared.beginTemporaryScope(scope)
+        let previousScope = await TokenStore.shared.beginTemporaryScope(scope)
+        let previousOwnersAligned = previousIdentity?.generationID
+            == previousScope.scope?.credentialGenerationID
+        guard activationGenerationPending == generationID,
+              !Task.isCancelled,
+              previousOwnersAligned else {
+            let restored = await TokenStore.shared.restoreTemporaryScope(
+                previousScope,
+                replacingGenerationID: generationID
+            )
+            if restored {
+                activeIdentity = previousIdentity
+            } else {
+                let currentScope = await TokenStore.shared.getTemporaryScope()
+                if activeIdentity?.generationID != currentScope?.credentialGenerationID {
+                    activeIdentity = nil
+                }
+            }
+            if activationGenerationPending == generationID {
+                activationGenerationPending = nil
+            }
+            AuthService.shared.clearCachesForTemporaryIdentityChange()
+            let rolledBack = await releaseIdentityTransition(transitionLease, returning: false)
+            // Rollback restored (or cleared) the previous scope above, so the
+            // identity that is live now is whatever `activeIdentity` reflects.
+            refreshSubtitleProvidersAfterIdentityChange()
+            return rolledBack
+        }
         activeIdentity = ActiveIdentity(
-            generationID: UUID(),
+            generationID: generationID,
             serverId: scope.serverId,
             serverURL: scope.serverURL,
             serverName: serverName,
@@ -190,6 +323,53 @@ final class RemotePlaybackIdentityManager {
             usesDifferentServer: usesDifferentServer,
             sessionExpiresAt: scope.expiresAt
         )
+        activationGenerationPending = nil
+        let activated = await releaseIdentityTransition(transitionLease, returning: true)
+        // Only now — identity published, pending marker cleared, gate open —
+        // does a request carry the temporary scope's credentials. Probing any
+        // earlier (e.g. at the `clearCachesForTemporaryIdentityChange()` call
+        // above, which runs *before* `beginTemporaryScope`) would answer for
+        // the outgoing identity and cache that answer against the new one.
+        refreshSubtitleProvidersAfterIdentityChange()
+        return activated
+    }
+
+    /// Re-probe the subtitle-provider capability after a temporary-identity
+    /// transition settles.
+    ///
+    /// Needed because `clearCachesForTemporaryIdentityChange()` calls
+    /// `SubtitleProvidersStore.reset()`, and that store fails *open*: reset
+    /// restores `isAvailable = true`. So an affirmative "no providers here"
+    /// learned about the current server is thrown away on every handoff, and
+    /// — unlike sign-in — a temporary-identity swap changes no auth state, so
+    /// no other probe fires. Without this the "Search Subtitles…" row silently
+    /// re-enables and can run the empty 20–30s search this gate exists to
+    /// prevent.
+    ///
+    /// Same shape as `ServerRegistry.refreshFeaturesAfterServerSwitch()`,
+    /// which re-probes after a switch between already-signed-in servers for
+    /// exactly this reason.
+    ///
+    /// Deliberately *not* called from every
+    /// `clearCachesForTemporaryIdentityChange()` site: two of the three run
+    /// while the scope is mid-swap (before `beginTemporaryScope`), where a
+    /// probe would be answered by the outgoing identity. Each call site below
+    /// instead fires this once its scope is fully installed or restored and
+    /// the HTTP identity-transition lease has been released, so the request
+    /// isn't gated shut either. Fire-and-forget: any failure leaves the
+    /// optimistic `true` in place, which is the fail-open contract — including
+    /// the case where a queued transition takes the lease first and blocks
+    /// this probe, since that transition fires its own once it settles.
+    private func refreshSubtitleProvidersAfterIdentityChange() {
+        Task { await SubtitleProvidersStore.shared.refresh() }
+    }
+
+    private func releaseIdentityTransition(
+        _ lease: HTTPIdentityTransitionLease,
+        returning result: Bool
+    ) async -> Bool {
+        await HTTPClient.shared.endIdentityTransition(lease)
+        return result
     }
 
     private static func iso8601(_ date: Date) -> String {

@@ -118,11 +118,16 @@ extension View {
         #elseif os(macOS)
         self.searchable(text: text, prompt: prompt)
         #else
+        // Keep the navigation bar's back button and title visible while the
+        // field is focused, and drop the search bar's Cancel button so the
+        // field's own clear button is the only way to empty the query.
         self.searchable(
             text: text,
             placement: .navigationBarDrawer(displayMode: .always),
             prompt: prompt
         )
+        .searchPresentationToolbarBehavior(.avoidHidingContent)
+        .background(SearchCancelButtonSuppressor().frame(width: 0, height: 0))
         #endif
     }
 
@@ -324,8 +329,8 @@ private struct SecondaryButtonBody: View {
 }
 
 /// Text-only button style for tertiary actions. Focused state fills a
-/// soft pill behind the label so the user can tell whether focus is on
-/// "Create Account" / "Change Server" vs. the primary button above.
+/// soft pill behind the label so the user can distinguish the tertiary action
+/// from the primary button above.
 struct ContinuumTextButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         TextButtonBody(configuration: configuration)

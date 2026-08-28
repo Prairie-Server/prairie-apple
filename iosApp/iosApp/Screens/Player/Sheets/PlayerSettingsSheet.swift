@@ -114,6 +114,11 @@ private struct DoubleRangeSpinner: View {
 struct PlayerSettingsSheet: View {
     let viewModel: PlayerViewModel
     let sleepTimer: SleepTimer
+    /// Visibility of the iOS stats annotation. A binding rather than a
+    /// one-shot action because the overlay itself has no dismiss affordance
+    /// — this row is both the on and the off switch. Nil on platforms with
+    /// no such overlay, which hides the row.
+    var statsOverlayVisible: Binding<Bool>?
 
     #if os(iOS)
     @Environment(\.dismiss) private var dismiss
@@ -137,7 +142,6 @@ struct PlayerSettingsSheet: View {
         NavigationStack {
             List {
                 videoSection
-                audioSection
                 subtitlesSection
                 sessionSection
                 advancedSection
@@ -146,7 +150,7 @@ struct PlayerSettingsSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done", systemImage: "checkmark") { dismiss() }
+                    Button("Done") { dismiss() }
                 }
             }
         }
@@ -175,22 +179,8 @@ struct PlayerSettingsSheet: View {
                     }
                 }
             }
-
-            if viewModel.backendCapabilities.supportsHDRToggle {
-                Toggle("HDR Passthrough", isOn: Binding(
-                    get: { viewModel.settings.hdrEnabled },
-                    set: { newValue in
-                        viewModel.setHDREnabled(newValue)
-                    }
-                ))
-                .tint(.continuumAccent)
-            }
         } header: {
             Text("Video")
-        } footer: {
-            if viewModel.backendCapabilities.supportsHDRToggle {
-                Text("Disable HDR if colors look washed out or your display tone-maps incorrectly.")
-            }
         }
     }
 
@@ -243,27 +233,6 @@ struct PlayerSettingsSheet: View {
     }
 
     @ViewBuilder
-    private var audioSection: some View {
-        if viewModel.backendCapabilities.supportsAudioDelay {
-            Section("Audio") {
-                RangeSpinner(
-                    title: "Audio Delay",
-                    value: Binding(
-                        get: { viewModel.settings.audioSyncMs },
-                        set: { viewModel.settings.audioSyncMs = $0 }
-                    ),
-                    range: -5000...5000,
-                    step: 50,
-                    display: { formatMs($0) },
-                    onCommit: {
-                        viewModel.setAudioSyncMilliseconds(viewModel.settings.audioSyncMs)
-                    }
-                )
-            }
-        }
-    }
-
-    @ViewBuilder
     private var subtitlesSection: some View {
         if viewModel.backendCapabilities.supportsSubtitleStyling
             || viewModel.backendCapabilities.supportsSubtitleDelay {
@@ -298,7 +267,7 @@ struct PlayerSettingsSheet: View {
     /// "Large · Box · Bottom"-style value label for the Appearance row.
     private var appearanceSummary: String {
         if viewModel.settings.subtitleMatchesSystemAppearance {
-            return "Matching Device"
+            return "Using Device"
         }
         let appearance = viewModel.settings.subtitleAppearance
         return [
@@ -321,7 +290,7 @@ struct PlayerSettingsSheet: View {
             }
 
             Section {
-                Toggle("Match device settings", isOn: Binding(
+                Toggle("Use device settings", isOn: Binding(
                     get: { viewModel.settings.subtitleMatchesSystemAppearance },
                     set: { enabled in
                         viewModel.setSubtitleMatchesSystemAppearance(enabled)
@@ -339,7 +308,7 @@ struct PlayerSettingsSheet: View {
                 .disabled(matchesSystem)
             } footer: {
                 Text(matchesSystem
-                     ? "Following this device's caption style from Accessibility settings. Editing any option below switches back to Prairie styling."
+                     ? "Following this device's caption language, behavior, CC/SDH preference, and complete style from Accessibility settings."
                      : "Subtitles with their own built-in styling keep their original appearance; image-based subtitles keep their authored fonts and colors but follow the size, position, and background settings.")
             }
 
@@ -463,16 +432,6 @@ struct PlayerSettingsSheet: View {
                 }
             }
 
-            Toggle("Stats for nerds", isOn: Binding(
-                get: { viewModel.showStatsForNerds },
-                set: { enabled in
-                    if viewModel.showStatsForNerds != enabled {
-                        viewModel.toggleStatsForNerds()
-                    }
-                }
-            ))
-            .tint(.continuumAccent)
-
             Toggle("Auto-Play Next Episode", isOn: Binding(
                 get: { viewModel.settings.autoPlayNextEpisode },
                 set: { viewModel.settings.setAutoPlayNextEpisode($0) }
@@ -483,6 +442,18 @@ struct PlayerSettingsSheet: View {
 
     private var advancedSection: some View {
         Section {
+            if let statsOverlayVisible {
+                Toggle(isOn: statsOverlayVisible) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Stats")
+                        Text("Live overlay on the player")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .tint(.continuumAccent)
+            }
+
             NavigationLink {
                 advancedPage
             } label: {
@@ -539,7 +510,6 @@ struct PlayerSettingsSheet: View {
             routeSection
             qualitySection
             playbackSection
-            hdrSection
             syncSection
             sleepSection
             subtitleStylingSection
@@ -652,63 +622,23 @@ struct PlayerSettingsSheet: View {
         }
     }
 
-    private var hdrSection: some View {
-        Group {
-            if viewModel.backendCapabilities.supportsHDRToggle {
-                Section {
-                    Toggle("HDR passthrough", isOn: Binding(
-                        get: { viewModel.settings.hdrEnabled },
-                        set: { newValue in
-                            viewModel.setHDREnabled(newValue)
-                        }
-                    ))
-                    .tint(.continuumAccent)
-                    Text("Disable if colors look washed out or your display tone-maps incorrectly.")
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.6))
-                } header: {
-                    Text("Display")
-                }
-            }
-        }
-    }
-
     private var syncSection: some View {
         Group {
-            if viewModel.backendCapabilities.supportsAudioDelay
-                || viewModel.backendCapabilities.supportsSubtitleDelay {
+            if viewModel.backendCapabilities.supportsSubtitleDelay {
                 Section("Sync") {
-                    if viewModel.backendCapabilities.supportsAudioDelay {
-                        RangeSpinner(
-                            title: "Audio delay",
-                            value: Binding(
-                                get: { viewModel.settings.audioSyncMs },
-                                set: { viewModel.settings.audioSyncMs = $0 }
-                            ),
-                            range: -5000...5000,
-                            step: 50,
-                            display: { formatMs($0) },
-                            onCommit: {
-                                viewModel.setAudioSyncMilliseconds(viewModel.settings.audioSyncMs)
-                            }
-                        )
-                    }
-
-                    if viewModel.backendCapabilities.supportsSubtitleDelay {
-                        RangeSpinner(
-                            title: "Subtitle delay",
-                            value: Binding(
-                                get: { viewModel.settings.subtitleSyncMs },
-                                set: { viewModel.settings.subtitleSyncMs = $0 }
-                            ),
-                            range: -10000...10000,
-                            step: 100,
-                            display: { formatMs($0) },
-                            onCommit: {
-                                viewModel.setSubtitleSyncMilliseconds(viewModel.settings.subtitleSyncMs)
-                            }
-                        )
-                    }
+                    RangeSpinner(
+                        title: "Subtitle delay",
+                        value: Binding(
+                            get: { viewModel.settings.subtitleSyncMs },
+                            set: { viewModel.settings.subtitleSyncMs = $0 }
+                        ),
+                        range: -10000...10000,
+                        step: 100,
+                        display: { formatMs($0) },
+                        onCommit: {
+                            viewModel.setSubtitleSyncMilliseconds(viewModel.settings.subtitleSyncMs)
+                        }
+                    )
                 }
             }
         }
@@ -738,7 +668,7 @@ struct PlayerSettingsSheet: View {
                     SubtitleAppearancePreview(appearance: viewModel.settings.effectiveSubtitleAppearance)
                         .listRowInsets(EdgeInsets())
 
-                    Toggle("Match device settings", isOn: Binding(
+                    Toggle("Use device settings", isOn: Binding(
                         get: { viewModel.settings.subtitleMatchesSystemAppearance },
                         set: { enabled in
                             viewModel.setSubtitleMatchesSystemAppearance(enabled)
@@ -815,7 +745,7 @@ struct PlayerSettingsSheet: View {
                     Text("Subtitle appearance")
                 } footer: {
                     Text(matchesSystem
-                         ? "Following this device's caption style from Accessibility settings. Editing any option switches back to Prairie styling."
+                         ? "Following this device's caption language, behavior, CC/SDH preference, and complete style from Accessibility settings."
                          : "Subtitles with their own built-in styling keep their original appearance; image-based subtitles keep their authored fonts and colors but follow the size, position, and background settings.")
                 }
             }

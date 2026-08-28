@@ -197,35 +197,42 @@ struct CreateDownloadRequest: Encodable, Sendable {
 /// Device decode capability used to decide whether `original` can be served
 /// directly or should fall back to a compatibility artifact.
 struct DownloadCaps: Encodable, Sendable {
+    let clientFeatures: [String]
+    let videoEvidence: String
     let codecsVideo: [String]
     let codecsAudio: [String]
     let audioPassthroughCodecs: [String]?
     let containers: [String]
     let maxResolution: String?
     let hdr: Bool
+    let videoDecode: [PlaybackV3VideoDecodeCapability]
 
-    /// Reasonable decode caps for the current Apple platform. Matches the
-    /// truthful direct-play surface the playback bootstrap reports.
+    /// Decode caps for the current Apple platform. The legacy flat video list
+    /// contains hardware codecs only, so a server that ignores the additive
+    /// detailed fields fails safely. New servers use `videoDecode` plus the
+    /// feature opt-in to qualify bounded Aether software originals.
+    ///
+    /// Downloads are persistent artifacts, so HDR here is the device's
+    /// maximum decode capability rather than the active display route:
+    /// output-dependent HDR eligibility belongs to playback negotiation.
+    /// Passthrough is this surface's own claim, since a download is decided
+    /// long before there is an output route to ask.
     static func current() -> DownloadCaps {
-        #if os(macOS)
+        let isSimulator = AppleDecodeCapabilities.isSimulator
         return DownloadCaps(
-            codecsVideo: ["h264", "hevc"],
-            codecsAudio: ["aac", "ac3", "eac3", "alac", "mp3"],
-            audioPassthroughCodecs: ["ac3", "eac3"],
-            containers: ["mp4", "mov", "m4v"],
-            maxResolution: nil,
-            hdr: true
+            clientFeatures: [PlaybackProtocolV3.softwareVideoDecodeFeature],
+            videoEvidence: PlaybackProtocolV3.Evidence.platformAttested,
+            codecsVideo: AppleDecodeCapabilities.hardwareVideoCodecs,
+            codecsAudio: AppleDecodeCapabilities.audioCodecs,
+            audioPassthroughCodecs: isSimulator ? [] : ["ac3", "eac3"],
+            containers: AppleDecodeCapabilities.containers,
+            // Old servers understand only this coarse field. Keep it at the
+            // software ceiling; a new server uses the detailed hardware entry
+            // to preserve safe 4K originals on physical devices.
+            maxResolution: "1080p",
+            hdr: !isSimulator,
+            videoDecode: AppleDecodeCapabilities.playbackV3VideoDecodeAttestation()
         )
-        #else
-        return DownloadCaps(
-            codecsVideo: ["h264", "hevc"],
-            codecsAudio: ["aac", "ac3", "eac3", "dts", "truehd", "flac", "mp3", "opus"],
-            audioPassthroughCodecs: ["ac3", "eac3"],
-            containers: ["mkv", "mp4", "mov", "m4v", "webm", "avi", "ts", "m2ts"],
-            maxResolution: nil,
-            hdr: true
-        )
-        #endif
     }
 }
 
@@ -437,18 +444,37 @@ struct OfflineManifest: Codable, Hashable, Sendable {
     }
 }
 
+/// An audio track described by an offline manifest.
+///
+/// `index` is the ordinal within this list, not the ffmpeg stream index — the
+/// server writes the loop counter and drops the probed index, so it must never
+/// be handed to code that means "stream index" by it.
+///
+/// `title` is already the server's collapse of the cleaned title and the raw
+/// embedded title, so the two cannot be told apart again on this side.
 struct OfflineAudioTrack: Codable, Hashable, Sendable {
     let index: Int?
+    let title: String?
     let language: String?
     let codec: String?
+    let layout: String?
     let channels: Int?
+    let bitrate: Int?
+    let sampleRate: Int?
     let isDefault: Bool?
 
     private enum CodingKeys: String, CodingKey {
         case index
+        case title
         case language
         case codec
+        case layout
         case channels
+        case bitrate
+        // Wire key is `sample_rate`; the API decoder's `.convertFromSnakeCase`
+        // has already rewritten it by the time these keys are matched, and the
+        // bare on-disk coder round-trips this camelCase form unchanged.
+        case sampleRate
         case isDefault = "default"
     }
 }

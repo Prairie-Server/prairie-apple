@@ -6,27 +6,40 @@ struct DiagnosticsSettingsView: View {
     let profile: UserProfile?
 
     @State private var selectedMode: DiagnosticsConsentChoice = .ask
+    @State private var selectedDestination: DiagnosticsDestinationChoice = .hosted
     @State private var showAlwaysConfirmation = false
     @State private var showNeverConfirmation = false
 
     var body: some View {
         List {
+            SettingsPageHeader(
+                title: "Diagnostics",
+                subtitle: "Capture, review, and securely send diagnostic reports.",
+                systemImage: "stethoscope",
+                tint: .orange
+            )
+            .settingsPageHeaderRow()
+
             availabilitySection
             preferencesSection
             pendingSection
             manualSection
             sentHistorySection
         }
-        .continuumGroupedListStyle()
-        .navigationTitle("Diagnostics")
-        .continuumNavigationTitleDisplayMode(.large)
+        .settingsListChrome()
+        .navigationTitle("")
+        .continuumNavigationTitleDisplayMode(.inline)
         .continuumToolbarColorSchemeDark()
         .task {
             await model.load(profile: profile)
             selectedMode = model.consentMode
+            selectedDestination = model.selectedDestination
         }
         .onChange(of: model.consentMode) { _, mode in
             selectedMode = mode
+        }
+        .onChange(of: model.selectedDestination) { _, destination in
+            selectedDestination = destination
         }
     }
 
@@ -41,16 +54,28 @@ struct DiagnosticsSettingsView: View {
                 Text("Showing the last known diagnostics state. Reports stay on this device while the server is offline.")
             }
         }
+        .listRowBackground(Color.continuumSurfaceElevated.opacity(0.92))
     }
 
     private var preferencesSection: some View {
         Section {
+            Picker("Send Reports To", selection: $selectedDestination) {
+                Text("Prairie Diagnostics").tag(DiagnosticsDestinationChoice.hosted)
+                Text("My Prairie Server").tag(DiagnosticsDestinationChoice.selfHosted)
+            }
+            .onChange(of: selectedDestination) { oldValue, newValue in
+                guard oldValue != newValue, newValue != model.selectedDestination else { return }
+                Task { await model.setDestination(newValue) }
+            }
+
             Toggle("Debug Logging", isOn: $model.debugLoggingEnabled)
                 .tint(.continuumAccent)
 
             Picker("Crash Reports", selection: $selectedMode) {
                 Text("Ask").tag(DiagnosticsConsentChoice.ask)
-                Text("Always").tag(DiagnosticsConsentChoice.always)
+                if model.allowsAlwaysSend {
+                    Text("Always").tag(DiagnosticsConsentChoice.always)
+                }
                 Text("Never").tag(DiagnosticsConsentChoice.never)
             }
             .disabled(!model.canChangeConsent)
@@ -76,13 +101,22 @@ struct DiagnosticsSettingsView: View {
                 }
                 Button("Cancel", role: .cancel, action: cancelModeChange)
             } message: {
-                Text("Pending reports for this server account will be deleted. The in-memory basic log will continue running and is never sent without an explicit action.")
+                if model.selectedDestination == .hosted {
+                    Text("Pending local reports will be deleted. Reports already received by Prairie Diagnostics will also be queued for deletion. The in-memory basic log will continue running and is never sent without an explicit action.")
+                } else {
+                    Text("Pending reports for this server account will be deleted. The in-memory basic log will continue running and is never sent without an explicit action.")
+                }
             }
         } header: {
             Text("Capture")
         } footer: {
-            Text("Crash report consent is tied to this server account. Debug logging is a setting for this device.")
+            if model.selectedDestination == .hosted {
+                Text(model.hostedPrivacyDisclosure)
+            } else {
+                Text("Crash report consent is tied to this server account. Debug logging is a setting for this device.")
+            }
         }
+        .listRowBackground(Color.continuumSurfaceElevated.opacity(0.92))
     }
 
     private var pendingSection: some View {
@@ -107,6 +141,7 @@ struct DiagnosticsSettingsView: View {
         } header: {
             Text("Pending Reports (\(model.pendingReports.count))")
         }
+        .listRowBackground(Color.continuumSurfaceElevated.opacity(0.92))
     }
 
     private var manualSection: some View {
@@ -136,8 +171,13 @@ struct DiagnosticsSettingsView: View {
                     .textSelection(.enabled)
             }
         } footer: {
-            Text("A manual report includes device capability details, recent playback session identifiers, and recent diagnostic logs for this server.")
+            if model.selectedDestination == .hosted {
+                Text("A hosted report includes device capability details and recent redacted diagnostic logs. It omits account, profile, server address, and playback session identifiers.")
+            } else {
+                Text("A manual report includes device capability details, recent playback session identifiers, and recent diagnostic logs for this server.")
+            }
         }
+        .listRowBackground(Color.continuumSurfaceElevated.opacity(0.92))
     }
 
     private var sentHistorySection: some View {
@@ -162,6 +202,7 @@ struct DiagnosticsSettingsView: View {
                 }
             }
         }
+        .listRowBackground(Color.continuumSurfaceElevated.opacity(0.92))
     }
 
     private func requestModeChange(_ mode: DiagnosticsConsentChoice) {

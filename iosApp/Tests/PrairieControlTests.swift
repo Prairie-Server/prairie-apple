@@ -1,9 +1,6 @@
 import XCTest
 @testable import Prairie
 
-/// NOTE: This project has no unit-test target wired into project.yml yet, so
-/// these tests are not currently compiled or executed. They document the
-/// intended behavior and will run once a PrairieTests target is added.
 final class PrairieControlTests: XCTestCase {
     private func roundTrip(_ message: PrairieControlMessage) throws -> PrairieControlMessage {
         let data = try JSONEncoder().encode(message)
@@ -33,7 +30,7 @@ final class PrairieControlTests: XCTestCase {
         let offer = PrairieControlHandoffOffer(
             requestId: "request-1",
             serverId: "server-1",
-            serverURL: "https://prairie.example",
+            serverURL: "https://silo.example",
             serverName: "Home",
             profileId: "profile-1",
             profileName: "Alex"
@@ -65,7 +62,7 @@ final class PrairieControlTests: XCTestCase {
 
     func testHandoffOfferDecodesWithoutDisplayMetadata() throws {
         let data = Data(
-            #"{"type":"handoff_offer","v":2,"handoffOffer":{"requestId":"request-1","serverId":"server-1","serverURL":"https://prairie.example","profileId":"profile-1"}}"#
+            #"{"type":"handoff_offer","v":2,"handoffOffer":{"requestId":"request-1","serverId":"server-1","serverURL":"https://silo.example","profileId":"profile-1"}}"#
                 .utf8
         )
         guard case .handoffOffer(let offer) = try JSONDecoder().decode(PrairieControlMessage.self, from: data) else {
@@ -73,6 +70,39 @@ final class PrairieControlTests: XCTestCase {
         }
         XCTAssertNil(offer.serverName)
         XCTAssertNil(offer.profileName)
+    }
+
+    func testServerIdentityMatchesURLCapitalizationAcrossDevices() {
+        let phone = ServerRegistry.serverId(for: "https://Media.Example.test")
+        let tv = ServerRegistry.serverId(for: "HTTPS://media.example.test/")
+
+        XCTAssertNotEqual(phone, tv, "persisted registry keys remain unchanged")
+        XCTAssertTrue(ServerRegistry.serverIdsMatch(phone, tv))
+    }
+
+    func testServerIdentityMatchesDefaultPortsButNotDifferentOrigins() {
+        let canonical = ServerRegistry.serverId(for: "https://media.example.test/library")
+        let explicitDefault = ServerRegistry.serverId(for: "https://MEDIA.example.test:443/library/")
+        let otherPort = ServerRegistry.serverId(for: "https://media.example.test:8443/library")
+        let otherScheme = ServerRegistry.serverId(for: "http://media.example.test/library")
+        let pathCase = ServerRegistry.serverId(for: "https://media.example.test/Library")
+
+        XCTAssertTrue(ServerRegistry.serverIdsMatch(canonical, explicitDefault))
+        XCTAssertFalse(ServerRegistry.serverIdsMatch(canonical, otherPort))
+        XCTAssertFalse(ServerRegistry.serverIdsMatch(canonical, otherScheme))
+        XCTAssertFalse(ServerRegistry.serverIdsMatch(canonical, pathCase))
+    }
+
+    func testServerIdentityDecoderRequiresAValidRoundTrippingHTTPURL() {
+        let original = "https://Média.example.test:443/silo?mode=A#top"
+        let serverId = ServerRegistry.serverId(for: original)
+
+        XCTAssertEqual(ServerRegistry.url(forServerId: serverId), original)
+        XCTAssertNil(ServerRegistry.url(forServerId: "not-a-registry-id"))
+        XCTAssertNil(ServerRegistry.url(forServerId: ServerRegistry.serverId(for: "file:///tmp/silo")))
+        XCTAssertFalse(ServerRegistry.serverIdsMatch(nil, serverId))
+        XCTAssertTrue(ServerRegistry.serverIdsMatch("future-format", "future-format"))
+        XCTAssertFalse(ServerRegistry.serverIdsMatch("future-format-a", "future-format-b"))
     }
 }
 
@@ -120,6 +150,44 @@ extension PrairieControlTests {
     }
 }
 
+extension PrairieControlTests {
+    func testHeldVolumeSurvivesAStaleReplyMidBurst() {
+        var reconciler = RemoteVolumeReconciler()
+        let t0 = Date(timeIntervalSince1970: 1000)
+        // Two hardware steps before the TV answers either one.
+        reconciler.requested(0.5625, at: t0)
+        reconciler.requested(0.625, at: t0.addingTimeInterval(0.1))
+        // The reply to the first step must not rewind the level, or the next
+        // step would recompute 0.625 and the second press would be lost.
+        XCTAssertEqual(reconciler.reconcile(inbound: 0.5625, at: t0.addingTimeInterval(0.2)),
+                       0.625, accuracy: 0.0001)
+        // Once the TV catches up, its value is authoritative again.
+        XCTAssertEqual(reconciler.reconcile(inbound: 0.625, at: t0.addingTimeInterval(0.3)),
+                       0.625, accuracy: 0.0001)
+        XCTAssertEqual(reconciler.reconcile(inbound: 0.2, at: t0.addingTimeInterval(0.4)),
+                       0.2, accuracy: 0.0001)
+    }
+
+    func testHeldVolumeIsReleasedWhenTheWindowLapses() {
+        var reconciler = RemoteVolumeReconciler()
+        let t0 = Date(timeIntervalSince1970: 1000)
+        reconciler.requested(0.9, at: t0)
+        // A dropped command, or a change made on the TV itself, must not leave
+        // the remote showing a level the TV does not have.
+        let lapsed = t0.addingTimeInterval(RemoteVolumeReconciler.window + 0.1)
+        XCTAssertEqual(reconciler.reconcile(inbound: 0.3, at: lapsed), 0.3, accuracy: 0.0001)
+    }
+
+    func testMuteClearsTheHeldVolume() {
+        var reconciler = RemoteVolumeReconciler()
+        let t0 = Date(timeIntervalSince1970: 1000)
+        reconciler.requested(0.9, at: t0)
+        reconciler.clear()
+        XCTAssertEqual(reconciler.reconcile(inbound: 0.3, at: t0.addingTimeInterval(0.1)),
+                       0.3, accuracy: 0.0001)
+    }
+}
+
 private extension PrairieControlPlaybackState {
     static func fixture(isPlaying: Bool = true, currentTime: Double = 0, duration: Double = 100,
                         playbackSpeed: Double = 1.0) -> PrairieControlPlaybackState {
@@ -131,7 +199,7 @@ private extension PrairieControlPlaybackState {
             selectedAudioTrackId: nil, selectedSubtitleTrackId: nil,
             qualityOptions: [], activeQualityId: "auto", isQualitySwitching: false,
             playbackSpeed: playbackSpeed, videoGravity: "fit", hdrEnabled: false,
-            supportsVideoGravity: false, supportsHDRToggle: false,
+            supportsVideoGravity: false,
             volume: 1.0, isMuted: false, hasNextEpisode: false, nextEpisodeTitle: nil,
             error: nil)
     }

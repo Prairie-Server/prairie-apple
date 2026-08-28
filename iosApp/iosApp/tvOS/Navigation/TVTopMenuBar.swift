@@ -82,14 +82,46 @@ enum TVRootDestination: Hashable {
     case home
     case recommendations
     case libraryType(TVLibraryTabType)
+    case libraryShortcut(libraryId: Int, label: String)
     case calendar
     case liveTV
+
+    static func == (lhs: TVRootDestination, rhs: TVRootDestination) -> Bool {
+        switch (lhs, rhs) {
+        case (.home, .home), (.recommendations, .recommendations), (.calendar, .calendar):
+            return true
+        case (.libraryType(let lhsType), .libraryType(let rhsType)):
+            return lhsType == rhsType
+        case (.libraryShortcut(let lhsId, _), .libraryShortcut(let rhsId, _)):
+            return lhsId == rhsId
+        default:
+            return false
+        }
+    }
+
+    func hash(into hasher: inout Hasher) {
+        switch self {
+        case .home:
+            hasher.combine(0)
+        case .recommendations:
+            hasher.combine(1)
+        case .libraryType(let type):
+            hasher.combine(2)
+            hasher.combine(type)
+        case .libraryShortcut(let libraryId, _):
+            hasher.combine(3)
+            hasher.combine(libraryId)
+        case .calendar:
+            hasher.combine(4)
+        }
+    }
 
     var title: String {
         switch self {
         case .home: return "Home"
         case .recommendations: return "For You"
         case .libraryType(let type): return type.title
+        case .libraryShortcut(_, let label): return label
         case .calendar: return "Calendar"
         case .liveTV: return "Live TV"
         }
@@ -109,6 +141,11 @@ struct TVTopMenuBar: View {
     @Binding var isMenuFocused: Bool
     let isFocusSuppressed: Bool
     let focusRequest: Int
+    /// Bumped when the shell has determined the bar's `@FocusState` is stale —
+    /// the engine dropped focus without the bar observing it, so no suppression
+    /// transition will clear it. Drops the bar's focus state without asking for
+    /// focus back.
+    var focusResetRequest: Int = 0
     /// Bar element to focus on the next `focusRequest` bump, overriding the
     /// default of the selected tab. The shell sets this so Menu-ing out of a
     /// panel returns focus to the *panel's* tab/avatar (§7), not whatever
@@ -218,6 +255,15 @@ struct TVTopMenuBar: View {
                 dwellSuppressedElement = nil
             }
         }
+        .onChange(of: focusResetRequest) { _, _ in
+            // Clear the re-pin flags first: the bar has no focus to defend
+            // here, and letting the nil write below take the re-pin branch
+            // would have the bar grab focus the shell is handing elsewhere.
+            refocusAfterClose = false
+            dwellSuppressedElement = nil
+            dwellTask?.cancel()
+            focusedItem = nil
+        }
         .onChange(of: focusRequest) { _, _ in
             let target = focusRequestTarget.map { String(describing: $0) } ?? "nil"
             Self.logger.debug("topMenu.focusRequest request=\(focusRequest, privacy: .public) suppressed=\(isFocusSuppressed, privacy: .public) target=\(target, privacy: .public)")
@@ -270,6 +316,18 @@ struct TVTopMenuBar: View {
             // one main-queue turn leaves a visible frame where tvOS repairs
             // focus back to Home. A legit leave (down into the page, Menu out)
             // has neither flag, so it falls through and focus is allowed to go.
+            // A suppressed bar must never take focus back. The shell suppresses
+            // before handing focus down, and the watchdog's reset arrives while
+            // suppression is already true with a passive preview still open —
+            // exactly the `spuriousFromOpenPreview` shape — so an ungated re-pin
+            // would undo the repair and re-strand the remote. Drop the re-pin
+            // flag with it so it can't fire on a later legitimate nil write.
+            if isFocusSuppressed {
+                isMenuFocused = false
+                refocusAfterClose = false
+                dwellTask?.cancel()
+                return
+            }
             let spuriousFromOpenPreview = openPanel != nil && !panelHasFocus
             if (spuriousFromOpenPreview || refocusAfterClose), let target = lastBarFocus {
                 refocusAfterClose = false
@@ -297,6 +355,18 @@ struct TVTopMenuBar: View {
     }
 
     private var tabCluster: some View {
+        ViewThatFits(in: .horizontal) {
+            centeredTabCluster
+            scrollingTabCluster
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
+        .frame(height: ContinuumTheme.Skyline.barHeight)
+    }
+
+    /// Keep the ordinary menu as one native focus row. Besides preserving the
+    /// Skyline screen-centered composition, this gives Search and Home direct
+    /// focus adjacency instead of separating them with a scroll container.
+    private var centeredTabCluster: some View {
         HStack(spacing: ContinuumTheme.Skyline.tabSpacing) {
             searchButton
 
@@ -304,16 +374,50 @@ struct TVTopMenuBar: View {
                 rootButton(root, index: index, count: roots.count)
             }
 
-            // Invisible twin of the search button so the tab group itself
-            // stays centered on screen with search sitting to its left.
+            // Balance Search so the roots themselves remain screen-centered.
             Color.clear
                 .frame(
                     width: ContinuumTheme.Skyline.barIconSize,
                     height: ContinuumTheme.Skyline.barIconSize
                 )
+                .accessibilityHidden(true)
         }
-        .frame(maxWidth: .infinity, alignment: .center)
-        .frame(height: ContinuumTheme.Skyline.barHeight)
+        // `ViewThatFits` must measure the row's intrinsic width so it can
+        // select the scrolling fallback only when customization overflows.
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    /// Long customized menus keep Search fixed and scroll only the roots.
+    private var scrollingTabCluster: some View {
+        HStack(spacing: ContinuumTheme.Skyline.tabSpacing) {
+            searchButton
+
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: ContinuumTheme.Skyline.tabSpacing) {
+                        ForEach(Array(roots.enumerated()), id: \.element) { index, root in
+                            rootButton(root, index: index, count: roots.count)
+                                .id(TVTopMenuFocus.root(root))
+                        }
+                    }
+                    .scrollTargetLayout()
+                }
+                .scrollClipDisabled()
+                .onChange(of: focusedItem) { _, item in
+                    guard let item, case .root = item else { return }
+                    withAnimation(reduceMotion ? nil : .easeOut(duration: ContinuumTheme.fastDuration)) {
+                        proxy.scrollTo(item, anchor: .center)
+                    }
+                }
+                .onChange(of: selectedRoot) { _, root in
+                    proxy.scrollTo(TVTopMenuFocus.root(root), anchor: .center)
+                }
+            }
+        }
+        // Search and Profile stay fixed while only the customizable roots
+        // scroll through the center lane.
+        .padding(.horizontal, 150)
+        .frame(maxWidth: .infinity)
     }
 
     private var trailingCluster: some View {
@@ -337,12 +441,19 @@ struct TVTopMenuBar: View {
                 .font(.system(size: ContinuumTheme.Skyline.tabLabelSize, weight: .semibold))
                 .foregroundStyle(tabForeground(isSelected: isSelected, isFocused: isFocused))
                 .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: 260)
                 .padding(.horizontal, ContinuumTheme.Skyline.tabPaddingHorizontal)
                 .padding(.vertical, ContinuumTheme.Skyline.tabPaddingVertical)
                 .modifier(TVTopMenuCapsuleChrome(isSelected: isSelected, isFocused: isFocused))
         }
         .buttonStyle(.continuumFlat)
         .focused($focusedItem, equals: .root(root))
+        // A ScrollView is its own focus region on tvOS. At its leading edge,
+        // explicitly hand Left back to the fixed Search anchor.
+        .modifier(TVTopMenuLeadingBoundaryHandler(isLeading: index == 0) {
+            focusedItem = .search
+        })
         // Down opens this tab's cascade panel (if a dwell hasn't already)
         // and hands focus straight into it, so the move never escapes to the
         // page content behind the bar. Fires only when the engine can't move
@@ -372,7 +483,11 @@ struct TVTopMenuBar: View {
 
     private func rootPanel(_ root: TVRootDestination) -> TVTopMenuPanel? {
         switch root {
-        case .libraryType, .recommendations:
+        case .libraryType:
+            return TVLibraryMenuRootKind.category.hasSectionCascade ? .root(root) : nil
+        case .libraryShortcut:
+            return TVLibraryMenuRootKind.directShortcut.hasSectionCascade ? .root(root) : nil
+        case .recommendations:
             return .root(root)
         case .home, .calendar, .liveTV:
             return nil
@@ -383,6 +498,8 @@ struct TVTopMenuBar: View {
         switch root {
         case .libraryType:
             return "Rest to choose a library"
+        case .libraryShortcut:
+            return "Rest to choose a section"
         case .recommendations:
             return "Rest to choose Watchlist, Favorites, or Recommendations"
         case .home, .calendar, .liveTV:
@@ -444,6 +561,12 @@ struct TVTopMenuBar: View {
         }
         .buttonStyle(.continuumFlat)
         .focused($focusedItem, equals: .search)
+        // The inverse boundary keeps Search usable in the scrolling fallback;
+        // in the centered layout the native focus graph resolves this first.
+        .onMoveCommand { direction in
+            guard direction == .right, let firstRoot = roots.first else { return }
+            focusedItem = .root(firstRoot)
+        }
         .accessibilityLabel("Search")
     }
 
@@ -462,6 +585,7 @@ struct TVTopMenuBar: View {
         } label: {
             ProfileAvatarView(
                 avatar: currentProfile?.avatarEmoji,
+                imageUrl: currentProfile?.avatarImageUrl,
                 name: currentProfile?.name ?? "",
                 size: ContinuumTheme.Skyline.barIconSize,
                 backgroundColor: Color.white.opacity(0.18),
@@ -704,6 +828,25 @@ private struct TVTopMenuDownHandler: ViewModifier {
     }
 }
 
+/// The scrolling overflow layout puts its roots in a separate focus region
+/// from the fixed Search button. This boundary reconnects the two regions
+/// without taking ownership of ordinary movement inside either one.
+private struct TVTopMenuLeadingBoundaryHandler: ViewModifier {
+    let isLeading: Bool
+    let onMoveLeft: () -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isLeading {
+            content.onMoveCommand { direction in
+                if direction == .left { onMoveLeft() }
+            }
+        } else {
+            content
+        }
+    }
+}
+
 /// Publishes a bar element's bounds into `TVTopMenuAnchorKey` so the shell
 /// can anchor its panel. A `nil` panel publishes nothing (elements with no
 /// panel).
@@ -809,7 +952,7 @@ private enum TVForYouAction: Hashable {
 /// cascades.
 struct TVForYouDropdown: View {
     let entersPanel: Bool
-    let focusEntryToken: Int
+    let focusEntryGeneration: Int
     let onPanelFocusChanged: (Bool) -> Void
     let onClose: () -> Void
     let onExitToContent: () -> Void
@@ -818,11 +961,13 @@ struct TVForYouDropdown: View {
     let onRecommendations: () -> Void
 
     @FocusState private var focusedAction: TVForYouAction?
-    @State private var lastAppliedEntryToken = 0
+    @State private var lastAppliedEntryGeneration = 0
 
     var body: some View {
         panel
-            .onChange(of: focusEntryToken) { _, token in applyEntryToken(token) }
+            .onChange(of: focusEntryGeneration) { _, generation in
+                applyEntryGeneration(generation)
+            }
             .onChange(of: focusedAction) { _, newValue in
                 onPanelFocusChanged(newValue != nil)
             }
@@ -830,13 +975,15 @@ struct TVForYouDropdown: View {
                 if !entered { focusedAction = nil }
             }
             .onAppear {
-                if entersPanel { applyEntryToken(focusEntryToken) }
+                if entersPanel { applyEntryGeneration(focusEntryGeneration) }
             }
     }
 
-    private func applyEntryToken(_ token: Int) {
-        guard entersPanel, token > 0, token != lastAppliedEntryToken else { return }
-        lastAppliedEntryToken = token
+    private func applyEntryGeneration(_ generation: Int) {
+        guard entersPanel,
+              generation > 0,
+              generation != lastAppliedEntryGeneration else { return }
+        lastAppliedEntryGeneration = generation
         focusedAction = .watchlist
     }
 
@@ -966,17 +1113,20 @@ private enum TVProfileAction: Hashable {
 /// Anchored profile dropdown panel (§5.8): the same `glass.strong` level-1
 /// panel as the cascade, hosted by the shell under the avatar. The shell
 /// owns the scrim and Menu-to-close; this view owns only its rows and the
-/// focus hand-off when the host bumps `focusEntryToken`.
+/// focus hand-off when the host bumps `focusEntryGeneration`.
 struct TVProfileDropdown: View {
     let profileName: String
     let avatar: String?
+    /// Server-resolved avatar image URL (`avatar_url`), preferred over the
+    /// raw `avatar` ref when present.
+    var avatarImageUrl: String? = nil
     /// Display name of the active server, shown under the profile name in
     /// the §5.8 mono header style.
     let serverHost: String?
     /// Whether focus has entered the panel.
     let entersPanel: Bool
     /// Bumped by the host when focus should enter — lands on the first row.
-    let focusEntryToken: Int
+    let focusEntryGeneration: Int
     /// Reports whether any row currently holds focus, so the host can drop
     /// the avatar's focus ring once focus descends (§5.8).
     let onPanelFocusChanged: (Bool) -> Void
@@ -990,7 +1140,7 @@ struct TVProfileDropdown: View {
     let onSignOut: () -> Void
 
     @FocusState private var focusedAction: TVProfileAction?
-    @State private var lastAppliedEntryToken = 0
+    @State private var lastAppliedEntryGeneration = 0
 
     /// Capability-gated: the Requests row only exists (and only takes a
     /// focus slot) when the server reports `requests_enabled`.
@@ -1002,7 +1152,9 @@ struct TVProfileDropdown: View {
         panel
             // Dwell previews render passive labels; rows become focusable
             // only after the host explicitly hands focus into the panel.
-            .onChange(of: focusEntryToken) { _, token in applyEntryToken(token) }
+            .onChange(of: focusEntryGeneration) { _, generation in
+                applyEntryGeneration(generation)
+            }
             .onChange(of: focusedAction) { _, newValue in
                 onPanelFocusChanged(newValue != nil)
             }
@@ -1010,13 +1162,15 @@ struct TVProfileDropdown: View {
                 if !entered { focusedAction = nil }
             }
             .onAppear {
-                if entersPanel { applyEntryToken(focusEntryToken) }
+                if entersPanel { applyEntryGeneration(focusEntryGeneration) }
             }
     }
 
-    private func applyEntryToken(_ token: Int) {
-        guard entersPanel, token > 0, token != lastAppliedEntryToken else { return }
-        lastAppliedEntryToken = token
+    private func applyEntryGeneration(_ generation: Int) {
+        guard entersPanel,
+              generation > 0,
+              generation != lastAppliedEntryGeneration else { return }
+        lastAppliedEntryGeneration = generation
         focusedAction = .switchProfile
     }
 
@@ -1063,6 +1217,7 @@ struct TVProfileDropdown: View {
         HStack(spacing: 14) {
             ProfileAvatarView(
                 avatar: avatar,
+                imageUrl: avatarImageUrl,
                 name: profileName,
                 size: 44,
                 backgroundColor: Color.white.opacity(0.16),

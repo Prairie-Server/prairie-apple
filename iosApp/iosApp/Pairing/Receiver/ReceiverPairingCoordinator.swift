@@ -52,7 +52,7 @@ final class ReceiverPairingCoordinator {
     private(set) var state: State = .idle
 
     private let api: any PairingDeviceAuthorizing
-    private let persist: @MainActor (_ url: String, _ fetchedName: String?, _ access: String, _ refresh: String) async -> Void
+    private let persist: @MainActor (_ url: String, _ fetchedName: String?, _ access: String, _ refresh: String) async -> Bool
     private var signedInNames: [String] = []
     private var consented = false
     private var pendingPush: (serverURL: String, serverName: String?)?
@@ -62,11 +62,15 @@ final class ReceiverPairingCoordinator {
     /// cancellable task so the stream reader below is NEVER blocked by polling.
     private var pollTask: Task<Void, Never>?
     private var idleTask: Task<Void, Never>?
+    /// Prevent the stream reader from starting replacement work while an
+    /// explicit TV-side teardown is waiting for the current attempt to reach
+    /// its cancellation-safe boundary.
+    private var isCancelling = false
     private static let logger = Logger(subsystem: "com.continuum.app", category: "pairing.receiver")
 
     init(
         api: any PairingDeviceAuthorizing = PairingDeviceAPI(),
-        persist: @escaping @MainActor (String, String?, String, String) async -> Void = ReceiverPairingCoordinator.persistServer
+        persist: @escaping @MainActor (String, String?, String, String) async -> Bool = ReceiverPairingCoordinator.persistServer
     ) {
         self.api = api
         self.persist = persist
@@ -77,6 +81,7 @@ final class ReceiverPairingCoordinator {
     /// message or a dropped connection aborts the attempt immediately rather
     /// than after the poll loop finishes (design spec §7).
     func run(session: any PairingChannel, stream: AsyncThrowingStream<PairingMessage, Error>) async {
+        isCancelling = false
         signedInNames = []
         consented = false
         pendingPush = nil
@@ -93,6 +98,7 @@ final class ReceiverPairingCoordinator {
             state = .linked
             armIdleTimer(session)
             for try await message in stream {
+                guard !isCancelling else { continue }
                 armIdleTimer(session)
                 switch message {
                 case let .pushServer(serverURL, serverName):
@@ -101,6 +107,7 @@ final class ReceiverPairingCoordinator {
                     // previous server — supersede it, don't ignore the push.
                     pollTask?.cancel()
                     await pollTask?.value
+                    guard !isCancelling else { return }
                     if consented {
                         beginAttempt(serverURL: serverURL, serverName: serverName, session: session)
                     } else {
@@ -117,15 +124,24 @@ final class ReceiverPairingCoordinator {
                     Self.logger.notice("peer cancelled: \(reason, privacy: .public)")
                     pollTask?.cancel()
                     await pollTask?.value
-                    await teardown(session: session, resetState: true)
+                    if signedInNames.isEmpty {
+                        await teardown(session: session, resetState: true)
+                    } else {
+                        // A peer timeout can race the persistence boundary.
+                        // Never discard a sign-in that already committed.
+                        state = .completed(serverNames: signedInNames)
+                        await teardown(session: session, resetState: false)
+                    }
                     return
                 case .hello, .deviceStarted, .serverResult:
                     break // TV → phone kinds; a conforming phone never sends these
                 }
             }
             // Stream ended without a Done (peer closed the connection).
+            guard !isCancelling else { return }
             await onStreamClosed(session)
         } catch {
+            guard !isCancelling else { return }
             // Stream threw: the connection dropped mid-session.
             Self.logger.error("session error: \(String(describing: error), privacy: .public)")
             await onStreamClosed(session)
@@ -180,13 +196,24 @@ final class ReceiverPairingCoordinator {
     /// the failure screen, or leaving the setup screen). The phone is told
     /// this was a deliberate TV-side cancel, not a dropped connection.
     func cancel() async {
-        pollTask?.cancel()
+        guard !isCancelling else { return }
+        isCancelling = true
+        let session = activeSession
+        activeSession = nil
+        let task = pollTask
+        pollTask = nil
+        task?.cancel()
+        // A cancellation can race the non-cancellable half of persistence
+        // after tokens have committed. Let that task publish its signed-in
+        // result before sending the cancel frame, so the phone cannot repaint
+        // a successful setup as cancelled.
+        await task?.value
         idleTask?.cancel()
-        state = .idle
-        if let session = activeSession {
+        idleTask = nil
+        if let session {
             await session.closeGracefully(goodbye: .cancel(reason: "receiver_cancelled"))
         }
-        activeSession = nil
+        state = .idle
     }
 
     /// Cancel any in-flight poll, close the session, and (optionally) return
@@ -207,7 +234,7 @@ final class ReceiverPairingCoordinator {
     /// flight (a poll is bounded by the server's own device-code expiry).
     private func armIdleTimer(_ session: any PairingChannel) {
         idleTask?.cancel()
-        idleTask = Task { [weak self] in
+        idleTask = Task {
             try? await Task.sleep(for: Self.idleTimeout)
             guard !Task.isCancelled else { return }
             Self.logger.notice("pairing session idle timeout; dropping peer")
@@ -229,7 +256,7 @@ final class ReceiverPairingCoordinator {
         idleTask?.cancel()
         pollTask = Task { [weak self] in
             await self?.handlePushServer(serverURL: serverURL, serverName: serverName, session: session, automatic: automatic)
-            await self?.attemptEnded(session)
+            self?.attemptEnded(session)
         }
     }
 
@@ -250,28 +277,46 @@ final class ReceiverPairingCoordinator {
 
             // 2. Poll until approved or the device code expires.
             let deadline = Date().addingTimeInterval(TimeInterval(started.expiresIn))
+            var pollInterval = max(1, started.interval)
             while Date() < deadline {
                 try Task.checkCancellation() // abort promptly on peer cancel / drop
-                let poll = try await api.poll(serverURL: normalized, deviceCode: started.deviceCode)
+                let poll: DeviceLoginPollResponse
+                do {
+                    poll = try await api.poll(serverURL: normalized, deviceCode: started.deviceCode)
+                } catch {
+                    try Task.checkCancellation()
+                    if case PairingDeviceAPI.APIError.http(404) = error {
+                        throw error // the server has expired and removed this request
+                    }
+                    // Match the ordinary device-login flow and Android TV:
+                    // a deploy, proxy hiccup, or brief network loss must not
+                    // invalidate a still-live device code.
+                    Self.logger.notice("transient device-login poll failure; retrying")
+                    try await Task.sleep(for: .seconds(pollInterval))
+                    continue
+                }
                 try Task.checkCancellation() // a cancel that raced the network must win — persist nothing
                 switch poll.status {
                 case "approved":
                     guard let access = poll.accessToken, let refresh = poll.refreshToken else {
                         throw PairingDeviceAPI.APIError.decode
                     }
-                    await persist(normalized, serverName, access, refresh)
+                    guard await persist(normalized, serverName, access, refresh) else {
+                        return
+                    }
                     signedInNames.append(displayName)
                     state = .signedIn(serverCount: signedInNames.count)
                     // Best-effort: the tokens are committed, so a lost
                     // confirmation frame must not repaint a real sign-in as a
                     // failure. If the send is lost the phone may undercount,
                     // but EOF-after-success still completes on both ends.
-                    try? await session.send(.serverResult(serverURL: normalized, status: .signedIn, error: nil))
+                    await session.queue(.serverResult(serverURL: normalized, status: .signedIn, error: nil))
                     return
                 case "denied", "expired", "consumed":
                     throw PairingDeviceAPI.APIError.http(409)
                 default: // "pending"
-                    try await Task.sleep(for: .seconds(max(1, poll.pollAfter ?? started.interval)))
+                    pollInterval = max(1, poll.pollAfter ?? pollInterval)
+                    try await Task.sleep(for: .seconds(pollInterval))
                 }
             }
             throw PairingDeviceAPI.APIError.http(408) // local timeout
@@ -290,18 +335,47 @@ final class ReceiverPairingCoordinator {
     }
 
     /// Commit the now-trusted server + tokens. Runs only after a successful poll.
-    static func persistServer(url: String, fetchedName: String?, access: String, refresh: String) async {
+    static func persistServer(url: String, fetchedName: String?, access: String, refresh: String) async -> Bool {
         let id = ServerRegistry.serverId(for: url)
         let entry = ServerEntry(id: id, url: url, fetchedName: fetchedName, profileId: nil, lastUsedAt: Date())
         // Device authorization can replace the account for an already-saved
         // server URL. Preserve its name, but never carry the previous account's
         // profile selection across that credential boundary.
-        ServerRegistry.shared.addOrUpdate(entry, preservingProfile: false)
+        guard let transitionLease = await HTTPClient.shared.beginIdentityTransition() else {
+            return false
+        }
+        guard !Task.isCancelled else {
+            await HTTPClient.shared.endIdentityTransition(transitionLease)
+            return false
+        }
+        await HTTPClient.shared.cancelInFlightRequests()
+        guard !Task.isCancelled else {
+            await HTTPClient.shared.endIdentityTransition(transitionLease)
+            return false
+        }
+        let previousTokenServerID = await TokenStore.shared.getActiveServerId()
+        // From this first persistent mutation onward the transaction must
+        // finish even if the pairing task is cancelled. Publishing failure
+        // after committed credentials would make the phone and TV disagree.
+        guard ServerRegistry.shared.addOrUpdate(entry, preservingProfile: false) != nil else {
+            await HTTPClient.shared.endIdentityTransition(transitionLease)
+            return false
+        }
         await TokenStore.shared.setServerUrl(url)
         await TokenStore.shared.switchActiveServer(serverId: id)
         await TokenStore.shared.setProfileId(nil)
         await TokenStore.shared.setProfileToken(nil)
         await TokenStore.shared.saveTokens(accessToken: access, refreshToken: refresh)
-        await ServerRegistry.shared.switchTo(serverId: id)
+        guard await ServerRegistry.shared.commitSwitchTo(
+            serverId: id,
+            holding: transitionLease
+        ) else {
+            await TokenStore.shared.switchActiveServer(serverId: previousTokenServerID)
+            await HTTPClient.shared.endIdentityTransition(transitionLease)
+            return false
+        }
+        await HTTPClient.shared.endIdentityTransition(transitionLease)
+        await ServerRegistry.shared.refreshFeaturesAfterGatedServerSwitch()
+        return true
     }
 }

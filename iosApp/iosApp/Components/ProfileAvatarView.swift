@@ -5,6 +5,11 @@ struct ProfileAvatarView: View {
     private static let diceBearBaseURL = "https://api.dicebear.com/9.x"
 
     let avatar: String?
+    /// Server-resolved avatar URL (`avatar_url`). When present it wins over
+    /// the client-side resolution of ``avatar``, which cannot resolve opaque
+    /// `upload:` refs. Absolute URLs are used verbatim; a leading-slash path
+    /// is resolved against the active server.
+    var imageUrl: String? = nil
     let name: String
     var size: CGFloat
     var backgroundColor: Color = .continuumSurfaceVariant
@@ -16,11 +21,11 @@ struct ProfileAvatarView: View {
                 .fill(backgroundColor)
                 .frame(width: size, height: size)
 
-            if let imageURL = resolvedImageURL {
-                AsyncImageView(url: imageURL, contentMode: .fill)
-                    .frame(width: size, height: size)
-                    .clipShape(Circle())
-            } else if let displayAvatar = displayAvatarText {
+            // The text/initial fallback is layered beneath the image so that a
+            // failed load — e.g. an expired presigned `avatar_url` — degrades
+            // to it instead of an error placeholder: `.clear` style renders
+            // nothing on both the loading and error branches.
+            if let displayAvatar = displayAvatarText {
                 Text(displayAvatar)
                     .font(.system(size: fontSize))
             } else if !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -32,6 +37,12 @@ struct ProfileAvatarView: View {
                     .font(.system(size: size * 0.36))
                     .foregroundColor(.continuumSecondaryText)
             }
+
+            if let imageURL = resolvedImageURL {
+                AsyncImageView(url: imageURL, contentMode: .fill, placeholderStyle: .clear)
+                    .frame(width: size, height: size)
+                    .clipShape(Circle())
+            }
         }
         .frame(width: size, height: size)
     }
@@ -39,13 +50,20 @@ struct ProfileAvatarView: View {
     private var displayAvatarText: String? {
         guard let trimmedAvatar = avatar?.trimmingCharacters(in: .whitespacesAndNewlines),
               !trimmedAvatar.isEmpty,
+              !trimmedAvatar.lowercased().hasPrefix("upload:"),
               !isImageAvatar(trimmedAvatar) else {
             return nil
         }
         return trimmedAvatar
     }
 
+    private var resolvedServerImageURL: String? {
+        ProfileAvatarResolver.serverResolvedImageURL(imageUrl)
+    }
+
     private var resolvedImageURL: String? {
+        if let serverURL = resolvedServerImageURL { return serverURL }
+
         guard let trimmedAvatar = avatar?.trimmingCharacters(in: .whitespacesAndNewlines),
               !trimmedAvatar.isEmpty,
               isImageAvatar(trimmedAvatar) else {

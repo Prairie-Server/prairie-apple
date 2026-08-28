@@ -12,13 +12,17 @@ struct DiagnosticsPromptSheet: View {
             List {
                 Section {
                     Text(prompt.message)
+
+                    if model.selectedDestination == .hosted {
+                        Text(model.hostedPrivacyDisclosure)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 Section {
-                    NavigationLink {
+                    NavigationLink("View Report") {
                         DiagnosticsPromptReviewView(prompt: prompt, model: model)
-                    } label: {
-                        Label("View Report", systemImage: "eye")
                     }
 
                     Button("Send", systemImage: "paperplane.fill") {
@@ -26,24 +30,26 @@ struct DiagnosticsPromptSheet: View {
                     }
                     .disabled(model.isWorking)
 
-                    Button("Always Send", systemImage: "paperplane.circle.fill") {
-                        showAlwaysConfirmation = true
-                    }
-                    .disabled(model.isWorking)
-                    .confirmationDialog(
-                        "Always Send Crash Reports?",
-                        isPresented: $showAlwaysConfirmation,
-                        titleVisibility: .visible
-                    ) {
-                        Button("Always Send") {
-                            Task { await model.sendPrompt(always: true) }
+                    if model.allowsAlwaysSend {
+                        Button("Always Send", systemImage: "checkmark.shield.fill") {
+                            showAlwaysConfirmation = true
                         }
-                        Button("Cancel", role: .cancel) {}
-                    } message: {
-                        Text("This report and future crash reports for this server account will be sent automatically.")
+                        .disabled(model.isWorking)
+                        .confirmationDialog(
+                            "Always Send Crash Reports?",
+                            isPresented: $showAlwaysConfirmation,
+                            titleVisibility: .visible
+                        ) {
+                            Button("Always Send") {
+                                Task { await model.sendPrompt(always: true) }
+                            }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("This report and future crash reports for this server account will be sent automatically.")
+                        }
                     }
 
-                    Button("Don't Send", systemImage: "nosign", role: .cancel, action: model.declinePrompt)
+                    Button("Don't Send", role: .cancel, action: model.declinePrompt)
                         .disabled(model.isWorking)
                 }
 
@@ -53,6 +59,11 @@ struct DiagnosticsPromptSheet: View {
             }
             .continuumGroupedListStyle()
             .navigationTitle(prompt.title)
+            .onChange(of: model.allowsAlwaysSend) { _, allowsAlwaysSend in
+                if !allowsAlwaysSend {
+                    showAlwaysConfirmation = false
+                }
+            }
         }
     }
 }

@@ -1,3 +1,4 @@
+import AetherEngine
 import SwiftUI
 
 /// Full-screen video player. Thin shell around `PlayerViewModel` that picks
@@ -29,7 +30,6 @@ struct PlayerView: View {
     @State private var viewModel = PlayerViewModel()
     @State private var didNotifyPlaybackStarted = false
     @Environment(\.dismiss) var dismiss
-    @Environment(\.scenePhase) private var scenePhase
     #if os(iOS)
     @State private var orientationCoordinator = PlayerOrientationCoordinator.shared
     #endif
@@ -86,10 +86,6 @@ struct PlayerView: View {
                     .transition(.opacity)
                 } else {
                     playerSurface()
-
-                    if viewModel.isLoading {
-                        playbackLoadingIndicator
-                    }
 
                     #if os(tvOS)
                     // Focus sink with UIKit-backed press capture. Mounted
@@ -188,7 +184,8 @@ struct PlayerView: View {
                         HoldSeekIndicator(
                             rate: viewModel.holdSeekRate,
                             previewTime: viewModel.scrubPreviewTime,
-                            duration: viewModel.duration
+                            duration: viewModel.duration,
+                            previewImage: viewModel.scrubPreviewImage
                         )
                         .transition(.opacity)
                         .allowsHitTesting(false)
@@ -225,14 +222,18 @@ struct PlayerView: View {
                     if let identity = remoteIdentityNotice {
                         RemotePlaybackIdentityNotice(identity: identity)
                             .transition(.opacity)
-                    } else if let notice = viewModel.activeNotice ?? viewModel.suspendedNotice {
+                    } else if let notice = viewModel.activeNotice {
                         PlayerNoticeOverlay(notice: notice)
                     }
                     #else
-                    if let notice = viewModel.activeNotice ?? viewModel.suspendedNotice {
+                    if let notice = viewModel.activeNotice {
                         PlayerNoticeOverlay(notice: notice)
                     }
                     #endif
+                }
+
+                if viewModel.isLoading || viewModel.isBuffering {
+                    PlayerBufferingCapsule()
                 }
             }
         }
@@ -258,8 +259,6 @@ struct PlayerView: View {
                 }
             } else if viewModel.isHoldSeeking {
                 viewModel.cancelHoldSeek()
-            } else if viewModel.isBackgroundSuspended {
-                dismissPlayer()
             } else if viewModel.isLoading {
                 dismissPlayer()
             } else if viewModel.isHUDPresented {
@@ -275,9 +274,6 @@ struct PlayerView: View {
             }
         }
         #endif
-        .onChange(of: scenePhase) { _, newPhase in
-            viewModel.handleScenePhase(newPhase)
-        }
         .onChange(of: viewModel.isPlaying) { _, isPlaying in
             guard isPlaying, !didNotifyPlaybackStarted else { return }
             didNotifyPlaybackStarted = true
@@ -298,10 +294,32 @@ struct PlayerView: View {
         }
         .onAppear {
             #if os(iOS)
-            orientationCoordinator.activatePlayer()
+            // A Picture in Picture restore re-presents this cover for a session
+            // that is still playing. Adopt that view model instead of minting a
+            // new one, and skip the load — the session never stopped.
+            if let restored = PlayerPresentationRestoration.consumeAdoption(matching: contentId) {
+                viewModel = restored
+                orientationCoordinator.activatePlayer()
+                restored.playerPresentationDidAppear()
+                bindPictureInPicture(to: restored)
+                return
+            }
             #endif
-            viewModel.applyArtworkURLHints(posterURL: posterURLHint, backdropURL: backdropURLHint)
-            viewModel.loadAndPlay(
+            let activeViewModel: PlayerViewModel
+            if viewModel.needsReplacementForPresentation {
+                let replacement = PlayerViewModel()
+                viewModel = replacement
+                activeViewModel = replacement
+            } else {
+                activeViewModel = viewModel
+            }
+            #if os(iOS)
+            orientationCoordinator.activatePlayer()
+            activeViewModel.playerPresentationDidAppear()
+            bindPictureInPicture(to: activeViewModel)
+            #endif
+            activeViewModel.applyArtworkURLHints(posterURL: posterURLHint, backdropURL: backdropURLHint)
+            activeViewModel.loadAndPlay(
                 contentId: contentId,
                 preferredFileId: preferredFileId,
                 preferredAudioTrackIndex: preferredAudioTrackIndex,
@@ -311,7 +329,7 @@ struct PlayerView: View {
                 offlineDownloadId: offlineDownloadId
             )
             #if os(tvOS)
-            TVControlReceiver.shared.registerPlayer(viewModel, contentId: contentId)
+            TVControlReceiver.shared.registerPlayer(activeViewModel, contentId: contentId)
             withAnimation(.easeInOut(duration: 0.2)) {
                 remoteIdentityNotice = RemotePlaybackIdentityManager.shared.activeIdentity
             }
@@ -332,7 +350,11 @@ struct PlayerView: View {
             timelinePreviewHideTask?.cancel()
             timelinePreviewHideTask = nil
             #endif
+            #if os(iOS)
+            viewModel.playerPresentationDidDisappear()
+            #else
             viewModel.cleanup()
+            #endif
             #if os(tvOS)
             TVControlReceiver.shared.unregisterPlayer(viewModel)
             #endif
@@ -365,6 +387,32 @@ struct PlayerView: View {
         viewModel.cleanup()
         dismiss()
     }
+
+    #if os(iOS)
+    /// One binding site so the restore and start-failure hooks can never be
+    /// installed on one path and forgotten on the other.
+    private func bindPictureInPicture(to model: PlayerViewModel) {
+        PictureInPictureCoordinator.shared.bind(
+            engine: model.aetherEngine,
+            owner: model,
+            onEngagementEnded: { [weak model] in
+                model?.pictureInPictureEngagementDidEnd()
+            },
+            onRestoreUserInterface: { [weak model] completion in
+                guard let model else {
+                    // The engaged player is gone; AVKit must not be told the
+                    // interface came back.
+                    completion(false)
+                    return
+                }
+                model.restorePictureInPictureUserInterface(completion)
+            },
+            onStartFailure: { [weak model] failure in
+                model?.reportPictureInPictureStartFailure(failure)
+            }
+        )
+    }
+    #endif
 
     #if os(tvOS)
     private func handleTimelinePreviewContactBegan() {
@@ -432,39 +480,29 @@ struct PlayerView: View {
     /// gestures (tap-to-toggle, pinch, double-tap skip, …) live in
     /// `MobilePlayerGestureLayer`, mounted above this surface.
     ///
-    /// Render the active backend surface directly from the VM's route state.
-    /// AVPlayer now covers HLS, the narrow native-direct allowlist, and the
-    /// Dolby Vision loopback fallback; PlayerCore remains the compatibility
-    /// direct path.
+    /// Aether owns native/software route selection behind this one surface.
     @ViewBuilder
     private func playerSurface(ignoresSafeArea: Bool = true) -> some View {
-        switch viewModel.activePlayer {
-        case .none:
-            if ignoresSafeArea {
-                Color.black.ignoresSafeArea()
-            } else {
-                Color.black
+        let surface = AetherPlayerSurface(engine: viewModel.aetherEngine)
+            .background(Color.black)
+            .overlay {
+                AetherSubtitleOverlay(
+                    engine: viewModel.aetherEngine,
+                    sourceTime: viewModel.currentTime,
+                    livePrimaryCues: viewModel.selectedSubtitleId.map(SubtitleTrackIdSpace.isAILive) == true
+                        ? viewModel.livePrimarySubtitleCues
+                        : [],
+                    liveSecondaryCues: viewModel.selectedSecondarySubtitleId.map(SubtitleTrackIdSpace.isAILive) == true
+                        ? viewModel.liveSecondarySubtitleCues
+                        : [],
+                    appearance: viewModel.settings.effectiveSubtitleAppearance,
+                    subtitleSyncMs: viewModel.settings.subtitleSyncMs
+                )
             }
-        case .avPlayer(let backend):
-            let surface = AVPlayerSurface(
-                backend: backend,
-                videoGravity: viewModel.settings.videoGravity.avGravity
-            )
-            if ignoresSafeArea {
-                surface.ignoresSafeArea()
-            } else {
-                surface
-            }
-        case .coreMedia(let core):
-            let surface = PlayerSurface(
-                player: core,
-                videoGravity: viewModel.settings.videoGravity.avGravity
-            )
-            if ignoresSafeArea {
-                surface.ignoresSafeArea()
-            } else {
-                surface
-            }
+        if ignoresSafeArea {
+            surface.ignoresSafeArea()
+        } else {
+            surface
         }
     }
 
@@ -492,25 +530,6 @@ struct PlayerView: View {
     }
     #endif
 
-    private var playbackLoadingIndicator: some View {
-        ProgressView()
-            .progressViewStyle(.circular)
-            .tint(.white)
-            #if os(tvOS)
-            .scaleEffect(1.7)
-            .frame(width: 86, height: 86)
-            #else
-            .scaleEffect(1.3)
-            .frame(width: 62, height: 62)
-            #endif
-            .prairiePlayerGlass(in: .rect(cornerRadius: 8))
-            .shadow(color: .black.opacity(0.45), radius: 24, y: 10)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-            .allowsHitTesting(false)
-            .transition(.opacity)
-            .accessibilityLabel("Loading video")
-    }
-
     @ViewBuilder
     private func errorView(_ error: String) -> some View {
         VStack(spacing: 16) {
@@ -525,14 +544,14 @@ struct PlayerView: View {
                 .padding(.horizontal)
 
             HStack(spacing: 16) {
-                Button("Retry", systemImage: "arrow.clockwise") {
+                Button("Retry") {
                     viewModel.retry()
                 }
-                .prairiePrimaryButton()
+                .siloPrimaryButton()
                 .frame(minWidth: 140)
 
-                Button("Go Back", systemImage: "chevron.backward") { dismissPlayer() }
-                    .prairiePrimaryButton()
+                Button("Go Back") { dismissPlayer() }
+                    .siloPrimaryButton()
                     .frame(minWidth: 140)
             }
         }
@@ -836,7 +855,7 @@ private struct PlayerNextUpScreen<MiniPlayer: View>: View {
                 Button(action: { viewModel.playNextEpisodeNow() }) {
                     Label("Play Now", systemImage: "play.fill")
                 }
-                .prairiePrimaryButton()
+                .siloPrimaryButton()
                 .frame(maxWidth: .infinity)
             }
 
@@ -844,14 +863,14 @@ private struct PlayerNextUpScreen<MiniPlayer: View>: View {
                 Button(action: { viewModel.keepWatchingCurrentEpisode() }) {
                     Label("Keep Watching", systemImage: "rectangle.inset.filled")
                 }
-                .prairieSecondaryButton()
+                .siloSecondaryButton()
                 .frame(maxWidth: .infinity)
             }
 
             Button(action: onBack) {
                 Label("Back", systemImage: "chevron.left")
             }
-            .prairieSecondaryButton()
+            .siloSecondaryButton()
             .frame(maxWidth: .infinity)
 
             if let seconds = viewModel.nextUpCountdownSeconds {
