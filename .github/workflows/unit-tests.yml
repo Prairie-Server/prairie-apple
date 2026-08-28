@@ -53,7 +53,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: iosApp/DerivedData
-          key: netci-mac-${{ runner.os }}-${{ hashFiles('iosApp/project.yml', 'iosApp/iosApp/Networking/**/*.swift', 'iosApp/iosApp/Shared/SharedStorage.swift', 'iosApp/iosApp/Shared/KeychainAudience.swift', 'iosApp/iosApp/Shared/ImageSizeSelection.swift', 'iosApp/iosApp/Shared/AppleDecodeCapabilities.swift', 'iosApp/iosApp/Shared/ProfileLaunchBehavior.swift', 'iosApp/iosApp/Shared/ProfileLaunchState.swift', 'iosApp/iosApp/Shared/RememberedProfile.swift', 'iosApp/iosApp/Shared/ProfileLaunchResolution.swift', 'iosApp/iosApp/Navigation/UICustomizationPreferences.swift', 'iosApp/iosApp/Navigation/TabRouter.swift', 'iosApp/iosApp/Navigation/AppNavPreferences.swift', 'iosApp/iosApp/Screens/Profiles/ProfileLaunchPreferences.swift', 'iosApp/iosApp/Shared/AppleDeviceIdentity.swift', 'iosApp/iosApp/Screens/Auth/AuthModels.swift', 'iosApp/iosApp/Screens/Calendar/CalendarModels.swift', 'iosApp/iosApp/Screens/Player/Subtitles/SubtitleAppearance.swift', 'iosApp/iosApp/Screens/Player/ProtocolV3/PlaybackProtocolV3Models.swift', 'iosApp/CI/NetworkingHost/**/*.swift', 'iosApp/Tests/Networking*.swift', 'iosApp/Tests/TokenStore*.swift', 'iosApp/Tests/ServerRegistry*.swift', 'iosApp/Tests/WireFormat*.swift', 'iosApp/Tests/AuthAndDevice*.swift', 'iosApp/Tests/ResponseCache*.swift', 'iosApp/Tests/PrairieFrame*.swift', 'iosApp/Tests/TrackSelection*.swift', 'iosApp/Tests/LiveTVModel*.swift', 'iosApp/Tests/AIModel*.swift', 'iosApp/Tests/PlaybackPrefs*.swift', 'iosApp/Tests/SubtitleSearch*.swift', 'iosApp/Tests/AppUpdate*.swift', 'iosApp/Tests/AIJob*.swift', 'iosApp/Tests/LibraryVisibility*.swift', 'iosApp/Tests/SettingValuesAPITests.swift', 'iosApp/Tests/SettingsConformanceTests.swift', 'iosApp/Tests/SettingsContractResolve.swift', 'iosApp/Tests/Fixtures/SettingsContract/**') }}
+          key: netci-mac-${{ runner.os }}-${{ hashFiles('iosApp/project.yml', 'iosApp/iosApp/Networking/**/*.swift', 'iosApp/iosApp/Shared/SharedStorage.swift', 'iosApp/iosApp/Shared/KeychainAudience.swift', 'iosApp/iosApp/Shared/ImageSizeSelection.swift', 'iosApp/iosApp/Shared/AppleDecodeCapabilities.swift', 'iosApp/iosApp/Shared/ProfileLaunchBehavior.swift', 'iosApp/iosApp/Shared/ProfileLaunchState.swift', 'iosApp/iosApp/Shared/RememberedProfile.swift', 'iosApp/iosApp/Shared/ProfileLaunchResolution.swift', 'iosApp/iosApp/Navigation/UICustomizationPreferences.swift', 'iosApp/iosApp/Navigation/TabRouter.swift', 'iosApp/iosApp/Navigation/AppNavPreferences.swift', 'iosApp/iosApp/Screens/Profiles/ProfileLaunchPreferences.swift', 'iosApp/iosApp/Shared/AppleDeviceIdentity.swift', 'iosApp/iosApp/Screens/Auth/AuthModels.swift', 'iosApp/iosApp/Screens/Calendar/CalendarModels.swift', 'iosApp/iosApp/Screens/Player/Subtitles/SubtitleAppearance.swift', 'iosApp/iosApp/Screens/Player/ProtocolV3/PlaybackProtocolV3Models.swift', 'iosApp/CI/NetworkingHost/**/*.swift', 'iosApp/Tests/Networking*.swift', 'iosApp/Tests/TokenStore*.swift', 'iosApp/Tests/ServerRegistry*.swift', 'iosApp/Tests/WireFormat*.swift', 'iosApp/Tests/AuthAndDevice*.swift', 'iosApp/Tests/ResponseCache*.swift', 'iosApp/Tests/PrairieFrame*.swift', 'iosApp/Tests/TrackSelection*.swift', 'iosApp/Tests/LiveTVModel*.swift', 'iosApp/Tests/AIModel*.swift', 'iosApp/Tests/PlaybackPrefs*.swift', 'iosApp/Tests/SubtitleSearch*.swift', 'iosApp/Tests/AppUpdate*.swift', 'iosApp/Tests/AIJob*.swift', 'iosApp/Tests/LibraryVisibility*.swift', 'iosApp/Tests/SettingValuesAPITests.swift', 'iosApp/Tests/SettingsConformanceTests.swift', 'iosApp/Tests/SettingsContractResolve.swift', 'iosApp/Tests/ItemVideosDecodingTests.swift', 'iosApp/Tests/Fixtures/SettingsContract/**') }}
           restore-keys: |
             netci-mac-${{ runner.os }}-
 
@@ -84,7 +84,11 @@ jobs:
             PrairieNetworkingTests/NetworkingGateBoostTests
             PrairieNetworkingTests/NetworkingModelsCoverageTests
             PrairieNetworkingTests/NetworkingModelsGateFillTests
+            PrairieNetworkingTests/NetworkingSiloGateFillTests
+            PrairieNetworkingTests/NetworkingSiloRegistryGateFillTests
+            PrairieNetworkingTests/NetworkingSiloTokenStoreGateFillTests
             PrairieNetworkingTests/TokenStorePersistenceTests
+            PrairieNetworkingTests/TokenStoreDiagnosticsTests
             PrairieNetworkingTests/ServerRegistryMigrationTests
             PrairieNetworkingTests/WireFormatAndRequestsModelTests
             PrairieNetworkingTests/AuthAndDeviceLoginModelTests
@@ -102,6 +106,7 @@ jobs:
             PrairieNetworkingTests/SettingValueModelsGateFillTests
             PrairieNetworkingTests/SettingValuesAPITests
             PrairieNetworkingTests/SettingsConformanceTests
+            PrairieNetworkingTests/ItemVideosDecodingTests
           )
 
           ONLY_TESTING_ARGS=()
