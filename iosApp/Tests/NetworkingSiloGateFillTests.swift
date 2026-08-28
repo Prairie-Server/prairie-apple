@@ -406,6 +406,8 @@ final class NetworkingSiloRegistryGateFillTests: XCTestCase {
         ))
 
         // Fabricate an inactive lease by beginning and ending a transition.
+        // beginIdentityTransition queues when a lease is already held, so never
+        // nest a second acquisition against HTTPClient.shared in these tests.
         let lease = await HTTPClient.shared.beginIdentityTransition()
         if let lease {
             await HTTPClient.shared.endIdentityTransition(lease)
@@ -430,33 +432,12 @@ final class NetworkingSiloRegistryGateFillTests: XCTestCase {
             return
         }
         let committed = await registry.commitSwitchTo(serverId: id, holding: lease)
+        // Always release before asserts so a failure cannot leave HTTPClient.shared
+        // blocked for later suites (beginIdentityTransition queues, it does not fail).
         await HTTPClient.shared.endIdentityTransition(lease)
         XCTAssertTrue(committed)
         XCTAssertEqual(registry.activeServerId, id)
         XCTAssertEqual(defaults.string(forKey: "profileId"), "p-live")
-    }
-
-    func testNestedTransitionMakesSwitchUnavailable() async {
-        let registry = makeRegistry()
-        let a = ServerRegistry.serverId(for: "https://a.example")
-        let b = ServerRegistry.serverId(for: "https://b.example")
-        registry.addOrUpdate(ServerEntry(
-            id: a, url: "https://a.example", fetchedName: "A",
-            profileId: nil, lastUsedAt: Date(timeIntervalSince1970: 2)
-        ))
-        registry.addOrUpdate(ServerEntry(
-            id: b, url: "https://b.example", fetchedName: "B",
-            profileId: nil, lastUsedAt: Date(timeIntervalSince1970: 1)
-        ))
-        await registry.switchTo(serverId: a)
-
-        let lease = await HTTPClient.shared.beginIdentityTransition()
-        XCTAssertNotNil(lease)
-        let switched = await registry.switchTo(serverId: b)
-        XCTAssertFalse(switched)
-        if let lease {
-            await HTTPClient.shared.endIdentityTransition(lease)
-        }
     }
 
     func testUpdateFetchedNameAndProfileIdShim() {
