@@ -44,4 +44,10 @@ final class PrairieQualityPresetsTests: XCTestCase {
         XCTAssertEqual(Set(PrairieQualityPresets.all.map(\.id)).count, 9)
         XCTAssertTrue(PrairieQualityPresets.all.allSatisfy { !$0.label.isEmpty && !$0.description.isEmpty })
     }
+
+    func testPresetLookupUsesNormalizedResolution() {
+        XCTAssertEqual(PrairieQualityPresets.preset(resolution: "1080p-high", bitrateKbps: 10_000)?.id, "1080p-high")
+        XCTAssertEqual(PrairieQualityPresets.describe(resolution: "1080p-high", bitrateKbps: 10_000), "1080p High")
+        XCTAssertEqual(PrairieQualityPresets.describe(resolution: "720p", bitrateKbps: 2_500), "720p at 2.5 Mbps")
+    }
 }

@@ -99,6 +99,7 @@ jobs:
             PrairieNetworkingTests/AIJobPollerTests
             PrairieNetworkingTests/LibraryVisibilityTests
             PrairieNetworkingTests/PrairieQualityPresetsTests
+            PrairieNetworkingTests/SettingValueModelsGateFillTests
             PrairieNetworkingTests/SettingValuesAPITests
             PrairieNetworkingTests/SettingsConformanceTests
           )

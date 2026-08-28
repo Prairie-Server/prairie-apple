@@ -366,6 +366,7 @@ targets:
           - AIJobPollerTests.swift
           - LibraryVisibilityTests.swift
           - PrairieQualityPresetsTests.swift
+          - SettingValueModelsGateFillTests.swift
           - SettingValuesAPITests.swift
           - SettingsConformanceTests.swift
           - SettingsContractResolve.swift
