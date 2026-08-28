@@ -381,10 +381,17 @@ targets:
           - LiveTVFeatureStore.swift
           - LAN/FramedJSONSession.swift
       - path: iosApp/Shared/SharedStorage.swift
+      - path: iosApp/Shared/KeychainAudience.swift
+      - path: iosApp/Shared/ImageSizeSelection.swift
+      - path: iosApp/Shared/AppleDecodeCapabilities.swift
+      - path: iosApp/Shared/ProfileLaunchBehavior.swift
+      - path: iosApp/Shared/ProfileLaunchState.swift
       - path: iosApp/Shared/AppleDeviceIdentity.swift
       - path: iosApp/Shared/DateFormatters.swift
       - path: iosApp/tvOS/Caching/ImageFormats.swift
       - path: iosApp/Screens/Profiles/ProfileModels.swift
+      - path: iosApp/Screens/Profiles/ProfileLaunchPreferences.swift
+      - path: iosApp/Navigation/UICustomizationPreferences.swift
       - path: iosApp/Screens/Player/PlayerTrack.swift
       - path: iosApp/Screens/Auth/AuthModels.swift
       - path: iosApp/Screens/Calendar/CalendarModels.swift
