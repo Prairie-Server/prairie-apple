@@ -20,6 +20,7 @@ final class ServerRegistryMigrationTests: XCTestCase {
     private var standard: UserDefaults!
     private var keychain: SharedKeychain!
     private var defaults: SharedDefaults!
+    private var launchPreferences: ProfileLaunchPreferences!
 
     override func setUp() {
         super.setUp()
@@ -30,6 +31,7 @@ final class ServerRegistryMigrationTests: XCTestCase {
         // In-memory: CI unit tests disable code signing, so SecItem returns -34018.
         keychain = .inMemory(service: "ServerRegistryMigrationTests.keychain.\(UUID().uuidString)")
         defaults = SharedDefaults(suite: suite, standard: standard)
+        launchPreferences = ProfileLaunchPreferences(defaults: defaults)
     }
 
     override func tearDown() {
@@ -53,7 +55,16 @@ final class ServerRegistryMigrationTests: XCTestCase {
         standard = nil
         keychain = nil
         defaults = nil
+        launchPreferences = nil
         super.tearDown()
+    }
+
+    private func makeRegistry() -> ServerRegistry {
+        ServerRegistry(
+            defaults: defaults,
+            keychain: keychain,
+            launchPreferences: launchPreferences
+        )
     }
 
     private func seedLegacySingleServer(
@@ -73,7 +84,7 @@ final class ServerRegistryMigrationTests: XCTestCase {
     func testMigrateLegacyIfNeededRekeysTokensAndDeletesLegacyOnlyAfterSet() {
         seedLegacySingleServer()
 
-        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        let registry = makeRegistry()
         let normalized = ServerRegistry.normalize(url: "https://home.example/")
         let id = ServerRegistry.serverId(for: normalized)
 
@@ -84,8 +95,7 @@ final class ServerRegistryMigrationTests: XCTestCase {
         // row only keeps a transient legacy field until that migration lands.
         XCTAssertNil(registry.activeServer?.profileId)
         XCTAssertEqual(
-            ProfileLaunchPreferences(defaults: defaults)
-                .rememberedProfile(for: id)?.profileID,
+            launchPreferences.rememberedProfile(for: id)?.profileID,
             "profile-1"
         )
         XCTAssertTrue(defaults.bool(forKey: "continuumServerRegistry.migrated.v1"))
@@ -120,11 +130,11 @@ final class ServerRegistryMigrationTests: XCTestCase {
     func testMigrateLegacyIsIdempotentAcrossRelaunch() {
         seedLegacySingleServer(url: "https://media.lan")
 
-        _ = ServerRegistry(defaults: defaults, keychain: keychain)
+        _ = makeRegistry()
         let id = ServerRegistry.serverId(for: "https://media.lan")
 
         // Second init simulates an upgrade relaunch — must not wipe login.
-        let again = ServerRegistry(defaults: defaults, keychain: keychain)
+        let again = makeRegistry()
         XCTAssertEqual(again.entries.count, 1)
         XCTAssertEqual(again.activeServerId, id)
         XCTAssertEqual(keychain.get(TokenStore.accessTokenKey(for: id)), "ACCESS-LEGACY")
@@ -155,7 +165,7 @@ final class ServerRegistryMigrationTests: XCTestCase {
     }
 
     func testAddOrUpdatePreservesProfileByDefault() {
-        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        let registry = makeRegistry()
         let id = ServerRegistry.serverId(for: "https://home.example")
         registry.addOrUpdate(ServerEntry(
             id: id,
@@ -176,7 +186,7 @@ final class ServerRegistryMigrationTests: XCTestCase {
     }
 
     func testPersistedRegistrySurvivesReinitWithoutClearingOnVersionBump() {
-        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        let registry = makeRegistry()
         let id = ServerRegistry.serverId(for: "https://persist.example")
         registry.addOrUpdate(ServerEntry(
             id: id,
@@ -189,20 +199,19 @@ final class ServerRegistryMigrationTests: XCTestCase {
 
         // Re-create with the same stores — no version-bump wipe path exists;
         // registry + token must still be present.
-        let reloaded = ServerRegistry(defaults: defaults, keychain: keychain)
+        let reloaded = makeRegistry()
         XCTAssertEqual(reloaded.entry(with: id)?.fetchedName, "Persist")
         // Access token present → legacy profileId migrates into launch prefs.
         XCTAssertNil(reloaded.entry(with: id)?.profileId)
         XCTAssertEqual(
-            ProfileLaunchPreferences(defaults: defaults)
-                .rememberedProfile(for: id)?.profileID,
+            launchPreferences.rememberedProfile(for: id)?.profileID,
             "prof"
         )
         XCTAssertEqual(keychain.get(TokenStore.accessTokenKey(for: id)), "TOK")
     }
 
     func testEmptyLegacyStateMarksMigratedWithoutEntries() {
-        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        let registry = makeRegistry()
         XCTAssertTrue(registry.entries.isEmpty)
         XCTAssertNil(registry.activeServerId)
         XCTAssertTrue(defaults.bool(forKey: "continuumServerRegistry.migrated.v1"))
@@ -235,7 +244,7 @@ final class ServerRegistryMigrationTests: XCTestCase {
         XCTAssertTrue(keychain.set("REFRESH-HOME", for: "com.continuum.app.refreshToken"))
         XCTAssertTrue(keychain.set("PROFILE-HOME", for: "com.continuum.app.profileToken"))
 
-        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        let registry = makeRegistry()
 
         XCTAssertEqual(keychain.get(TokenStore.accessTokenKey(for: homeId)), "ACCESS-HOME")
         XCTAssertEqual(keychain.get(TokenStore.refreshTokenKey(for: homeId)), "REFRESH-HOME")
@@ -247,7 +256,7 @@ final class ServerRegistryMigrationTests: XCTestCase {
     }
 
     func testSetProfileIdUpdateFetchedNameAndSortedEntries() {
-        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        let registry = makeRegistry()
         let older = ServerEntry(
             id: "old",
             url: "https://old.example",
@@ -308,7 +317,7 @@ final class ServerRegistryMigrationTests: XCTestCase {
         XCTAssertTrue(keychain.set("ACCESS-HOME", for: TokenStore.accessTokenKey(for: homeId)))
         XCTAssertTrue(keychain.set("PROFILE-LEGACY", for: "com.continuum.app.profileToken"))
 
-        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        let registry = makeRegistry()
 
         XCTAssertTrue(defaults.bool(forKey: "continuumServerRegistry.migrated.v1"))
         XCTAssertNil(defaults.string(forKey: "continuumServerRegistry.legacySourceUrl.v1"))
@@ -354,7 +363,7 @@ final class ServerRegistryMigrationTests: XCTestCase {
         XCTAssertTrue(keychain.set("REFRESH-LEGACY", for: "com.continuum.app.refreshToken"))
         XCTAssertTrue(keychain.set("PROFILE-LEGACY", for: "com.continuum.app.profileToken"))
 
-        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        let registry = makeRegistry()
 
         XCTAssertTrue(defaults.bool(forKey: "continuumServerRegistry.migrated.v1"))
         XCTAssertNil(defaults.string(forKey: "continuumServerRegistry.legacySourceUrl.v1"))
@@ -403,7 +412,7 @@ final class ServerRegistryMigrationTests: XCTestCase {
         XCTAssertTrue(keychain.set("REFRESH-HOME", for: "com.continuum.app.refreshToken"))
         XCTAssertTrue(keychain.set("PROFILE-HOME", for: "com.continuum.app.profileToken"))
 
-        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        let registry = makeRegistry()
         // Init may complete migration if it can re-key; force the mid-migration
         // window the switchTo guard protects.
         defaults.set(false, forKey: "continuumServerRegistry.migrated.v1")
@@ -422,7 +431,7 @@ final class ServerRegistryMigrationTests: XCTestCase {
     }
 
     func testSwitchToUnknownIdIsNoOp() async {
-        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        let registry = makeRegistry()
         let id = ServerRegistry.serverId(for: "https://only.example")
         registry.addOrUpdate(ServerEntry(
             id: id,
@@ -442,7 +451,7 @@ final class ServerRegistryMigrationTests: XCTestCase {
     }
 
     func testAddOrUpdateWithoutPreservingProfileAndEmptyFetchedName() {
-        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        let registry = makeRegistry()
         let id = ServerRegistry.serverId(for: "https://home.example")
         registry.addOrUpdate(ServerEntry(
             id: id,
@@ -475,7 +484,7 @@ final class ServerRegistryMigrationTests: XCTestCase {
         // this suite injects an in-memory SharedKeychain into ServerRegistry only.
         // Assert registry/UserDefaults side effects here; TokenStore itself is
         // covered by TokenStoreTests.
-        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        let registry = makeRegistry()
         let a = ServerRegistry.serverId(for: "https://a.example")
         let b = ServerRegistry.serverId(for: "https://b.example")
         registry.addOrUpdate(ServerEntry(
@@ -519,7 +528,7 @@ final class ServerRegistryMigrationTests: XCTestCase {
         defaults.set(home, forKey: "continuumServerRegistry.legacySourceUrl.v1")
         XCTAssertTrue(keychain.set("LEGACY", for: "com.continuum.app.accessToken"))
 
-        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        let registry = makeRegistry()
         // Force mid-migration window after init may have completed re-key.
         defaults.set(false, forKey: "continuumServerRegistry.migrated.v1")
         defaults.set(home, forKey: "continuumServerRegistry.legacySourceUrl.v1")
@@ -531,7 +540,7 @@ final class ServerRegistryMigrationTests: XCTestCase {
     }
 
     func testRemoveActiveFallsBackToMostRecentlyUsed() async {
-        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        let registry = makeRegistry()
         let older = ServerRegistry.serverId(for: "https://old.example")
         let newer = ServerRegistry.serverId(for: "https://new.example")
         registry.addOrUpdate(ServerEntry(
@@ -553,7 +562,7 @@ final class ServerRegistryMigrationTests: XCTestCase {
     }
 
     func testRemoveActiveWithNoFallbackClearsMirrors() async {
-        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        let registry = makeRegistry()
         let only = ServerRegistry.serverId(for: "https://solo.example")
         registry.addOrUpdate(ServerEntry(
             id: only, url: "https://solo.example", fetchedName: "Solo",
@@ -570,7 +579,7 @@ final class ServerRegistryMigrationTests: XCTestCase {
     }
 
     func testRemoveNonActiveLeavesActiveUntouched() async {
-        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        let registry = makeRegistry()
         let keep = ServerRegistry.serverId(for: "https://keep.example")
         let drop = ServerRegistry.serverId(for: "https://drop.example")
         registry.addOrUpdate(ServerEntry(
@@ -591,7 +600,7 @@ final class ServerRegistryMigrationTests: XCTestCase {
     }
 
     func testRemoveActiveFallbackWithoutProfileClearsProfileMirror() async {
-        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        let registry = makeRegistry()
         let active = ServerRegistry.serverId(for: "https://active.example")
         let fallback = ServerRegistry.serverId(for: "https://fallback.example")
         registry.addOrUpdate(ServerEntry(
@@ -632,7 +641,7 @@ final class ServerRegistryMigrationTests: XCTestCase {
         standard.set(true, forKey: "continuumServerRegistry.migrated.v1")
         XCTAssertNil(suite.data(forKey: "continuumServerRegistry.v1"))
 
-        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        let registry = makeRegistry()
         XCTAssertEqual(registry.activeServerId, id)
         // Registry payload no longer owns the active profile mirror; without a
         // remembered launch mapping / AuthService write it stays unset.
@@ -645,7 +654,7 @@ final class ServerRegistryMigrationTests: XCTestCase {
     func testLoadCorruptRegistryStartsEmpty() {
         standard.set(Data("not-json".utf8), forKey: "continuumServerRegistry.v1")
         standard.set(true, forKey: "continuumServerRegistry.migrated.v1")
-        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        let registry = makeRegistry()
         XCTAssertTrue(registry.entries.isEmpty)
         XCTAssertNil(registry.activeServerId)
     }
@@ -653,7 +662,7 @@ final class ServerRegistryMigrationTests: XCTestCase {
     func testDiscardLegacyNoOpWhenAlreadyMigrated() {
         defaults.set(true, forKey: "continuumServerRegistry.migrated.v1")
         XCTAssertTrue(keychain.set("KEEP", for: "com.continuum.app.accessToken"))
-        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        let registry = makeRegistry()
         registry.discardLegacyKeychainAccountsIfUnmigrated()
         XCTAssertEqual(keychain.get("com.continuum.app.accessToken"), "KEEP")
     }
@@ -672,7 +681,7 @@ final class ServerRegistryMigrationTests: XCTestCase {
     }
 
     func testSortedEntriesPutsActiveFirst() async {
-        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        let registry = makeRegistry()
         let older = ServerRegistry.serverId(for: "https://older.example")
         let newer = ServerRegistry.serverId(for: "https://newer.example")
         registry.addOrUpdate(ServerEntry(
@@ -688,7 +697,7 @@ final class ServerRegistryMigrationTests: XCTestCase {
     }
 
     func testSwitchToClearsProfileMirrorWhenEntryHasNone() async {
-        let registry = ServerRegistry(defaults: defaults, keychain: keychain)
+        let registry = makeRegistry()
         let withProfile = ServerRegistry.serverId(for: "https://with.example")
         let without = ServerRegistry.serverId(for: "https://without.example")
         registry.addOrUpdate(ServerEntry(
