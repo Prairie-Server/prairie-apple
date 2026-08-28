@@ -80,13 +80,32 @@ final class ServerRegistryMigrationTests: XCTestCase {
         XCTAssertEqual(registry.entries.count, 1)
         XCTAssertEqual(registry.activeServerId, id)
         XCTAssertEqual(registry.activeServer?.url, normalized)
-        XCTAssertEqual(registry.activeServer?.profileId, "profile-1")
+        // Profile identity now lives in ProfileLaunchPreferences; the registry
+        // row only keeps a transient legacy field until that migration lands.
+        XCTAssertNil(registry.activeServer?.profileId)
+        XCTAssertEqual(
+            ProfileLaunchPreferences(defaults: defaults)
+                .rememberedProfile(for: id)?.profileID,
+            "profile-1"
+        )
         XCTAssertTrue(defaults.bool(forKey: "continuumServerRegistry.migrated.v1"))
 
         // New per-server slots hold the migrated secrets.
-        XCTAssertEqual(keychain.get(TokenStore.accessTokenKey(for: id)), "ACCESS-LEGACY")
-        XCTAssertEqual(keychain.get(TokenStore.refreshTokenKey(for: id)), "REFRESH-LEGACY")
-        XCTAssertEqual(keychain.get(TokenStore.profileTokenKey(for: id)), "PROFILE-LEGACY")
+        XCTAssertEqual(
+            keychain.withAudience(.userIndependent)
+                .get(TokenStore.accessTokenKey(for: id)),
+            "ACCESS-LEGACY"
+        )
+        XCTAssertEqual(
+            keychain.withAudience(.userIndependent)
+                .get(TokenStore.refreshTokenKey(for: id)),
+            "REFRESH-LEGACY"
+        )
+        XCTAssertEqual(
+            keychain.withAudience(.currentUser)
+                .get(TokenStore.profileTokenKey(for: id)),
+            "PROFILE-LEGACY"
+        )
 
         // Legacy fixed-name accounts are gone after successful set.
         XCTAssertNil(keychain.get("com.continuum.app.accessToken"))
@@ -172,7 +191,13 @@ final class ServerRegistryMigrationTests: XCTestCase {
         // registry + token must still be present.
         let reloaded = ServerRegistry(defaults: defaults, keychain: keychain)
         XCTAssertEqual(reloaded.entry(with: id)?.fetchedName, "Persist")
-        XCTAssertEqual(reloaded.entry(with: id)?.profileId, "prof")
+        // Access token present → legacy profileId migrates into launch prefs.
+        XCTAssertNil(reloaded.entry(with: id)?.profileId)
+        XCTAssertEqual(
+            ProfileLaunchPreferences(defaults: defaults)
+                .rememberedProfile(for: id)?.profileID,
+            "prof"
+        )
         XCTAssertEqual(keychain.get(TokenStore.accessTokenKey(for: id)), "TOK")
     }
 
@@ -609,10 +634,12 @@ final class ServerRegistryMigrationTests: XCTestCase {
 
         let registry = ServerRegistry(defaults: defaults, keychain: keychain)
         XCTAssertEqual(registry.activeServerId, id)
-        XCTAssertEqual(registry.activeProfileId, "seed-p")
+        // Registry payload no longer owns the active profile mirror; without a
+        // remembered launch mapping / AuthService write it stays unset.
+        XCTAssertNil(registry.activeProfileId)
         XCTAssertNotNil(suite.data(forKey: "continuumServerRegistry.v1"))
         XCTAssertEqual(defaults.string(forKey: SharedStorage.serverUrlKey), "https://seed.example")
-        XCTAssertEqual(defaults.string(forKey: SharedStorage.profileIdKey), "seed-p")
+        XCTAssertNil(defaults.string(forKey: SharedStorage.profileIdKey))
     }
 
     func testLoadCorruptRegistryStartsEmpty() {

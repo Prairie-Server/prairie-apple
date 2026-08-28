@@ -318,6 +318,16 @@ final class ServerRegistry {
             )
             return false
         }
+        // Incomplete legacy re-key is pinned to one origin. Switching away
+        // must drop leftover fixed-name accounts so a later relaunch cannot
+        // bind them to a different host via the mutable serverUrl mirror.
+        if !defaults.bool(forKey: Self.migratedKey),
+           let pinned = defaults.string(forKey: Self.legacySourceUrlKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !pinned.isEmpty,
+           Self.serverId(for: pinned) != serverId {
+            discardLegacyKeychainAccountsIfUnmigrated()
+        }
         guard let transitionLease = await HTTPClient.shared.beginIdentityTransition() else {
             // No lease means another identity transition owns the client. The
             // tap appears to do nothing, with no error surfaced anywhere else.

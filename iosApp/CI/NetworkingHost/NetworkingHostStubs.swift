@@ -118,8 +118,13 @@ final class ConnectionMonitor {
     var isServerReachable: Bool { isDeviceOnline && serverStatus != .unreachable }
     var isOffline: Bool { !isDeviceOnline || serverStatus == .unreachable }
 
-    func noteServerResponded() {}
-    func noteServerUnreachable() {}
+    func noteServerResponded() {
+        serverStatus = .reachable
+    }
+
+    func noteServerUnreachable() {
+        serverStatus = .unreachable
+    }
 }
 
 /// Referenced by AIModels helpers; real type lives under player subtitles.
