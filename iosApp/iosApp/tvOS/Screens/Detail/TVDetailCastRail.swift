@@ -64,7 +64,17 @@ private struct TVCastCard: View {
         } label: {
             CastCardLabel(member: member, photoSize: photoSize)
         }
-        .buttonStyle(CastCardStyle(photoSize: photoSize))
+        .buttonStyle(
+            TVCardFocusButtonStyle(
+                scale: 1.05,
+                focusedShadowOpacity: 0.35,
+                focusedShadowRadius: 14,
+                focusedShadowY: 6,
+                unfocusedShadowOpacity: 0,
+                unfocusedShadowRadius: 0,
+                unfocusedShadowY: 0
+            )
+        )
     }
 }
 
@@ -123,36 +133,4 @@ private struct CastCardLabel: View {
     }
 }
 
-/// Custom style so the system doesn't paint its default focus halo on
-/// top. Scale + shadow only — the portrait ring handles the focus cue.
-private struct CastCardStyle: ButtonStyle {
-    let photoSize: CGSize
-
-    func makeBody(configuration: Configuration) -> some View {
-        CastCardBody(configuration: configuration)
-    }
-}
-
-private struct CastCardBody: View {
-    let configuration: ButtonStyleConfiguration
-
-    @Environment(\.isFocused) private var isFocused
-
-    var body: some View {
-        configuration.label
-            .scaleEffect(scale)
-            .shadow(
-                color: .black.opacity(isFocused ? 0.35 : 0.0),
-                radius: isFocused ? 14 : 0,
-                y: isFocused ? 6 : 0
-            )
-            .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
-            .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: configuration.isPressed)
-    }
-
-    private var scale: CGFloat {
-        let base: CGFloat = isFocused ? 1.05 : 1.0
-        return configuration.isPressed ? base * 0.97 : base
-    }
-}
 #endif

@@ -74,14 +74,7 @@ struct SubtitleTranslateMenu: View {
     }
 
     static func isBitmap(_ track: PlayerTrack) -> Bool {
-        guard let codec = track.codec?.lowercased(), !codec.isEmpty else { return false }
-        // Canonical set is the route planner's single source of truth.
-        if ApplePlaybackRoutePlanner.prairieBitmapSubtitleCodecs.contains(codec) { return true }
-        // Tolerant substring match — codec strings vary across demuxers
-        // (e.g. "hdmv_pgs_subtitle", "dvb_subtitle (dvbsub)").
-        return codec.contains("pgs") || codec.contains("dvdsub")
-            || codec.contains("dvd_sub") || codec.contains("dvbsub")
-            || codec.contains("dvb_sub") || codec.contains("vobsub")
+        SubtitleCodecClassifier.isBitmap(track.codec)
     }
 
     /// Text subtitle tracks with a resolvable combined index — the only ones
@@ -438,7 +431,7 @@ struct SubtitleTranslateMenu: View {
             .continuumNavigationTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Done", systemImage: "checkmark") { onDismiss() }
+                    Button("Done") { onDismiss() }
                 }
             }
             .task { await controller.refreshQuota() }

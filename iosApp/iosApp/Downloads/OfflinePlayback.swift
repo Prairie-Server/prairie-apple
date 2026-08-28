@@ -35,10 +35,10 @@ struct OfflinePreparedPlayback {
 }
 
 /// Synthesizes the same `PreparedPlayback` the online path produces, but
-/// from a stored offline manifest + local media file, so the player loads
-/// with no server session. The local file plays via the existing engines
-/// (FFmpeg `PlayerCore` for MKV/etc., `AVPlayer` for MP4) and the manifest
-/// drives chapters, intro/credits markers, and subtitles unchanged.
+/// from a stored offline manifest + local media file, so AetherEngine loads
+/// with no server session. Aether probes the delivered file itself; the
+/// manifest remains authoritative for catalog metadata, chapters,
+/// intro/credits markers, track preferences, and downloaded subtitles.
 enum OfflinePlaybackBuilder {
     /// Near-end resume points restart from zero, mirroring the session
     /// bridge's suppression window so offline resume feels identical to
@@ -113,8 +113,7 @@ enum OfflinePlaybackBuilder {
                 label: nil,
                 // Manifest subtitles are always sidecar files
                 // (`external:{i}` / `downloaded:{id}`), never embedded, so
-                // they must survive the player's embedded-track dedup on
-                // AVPlayer routes.
+                // they must survive Aether's embedded-track inventory merge.
                 source: "external",
                 forced: subtitle.forced,
                 url: fileURL.absoluteString
@@ -144,6 +143,59 @@ enum OfflinePlaybackBuilder {
         return candidate >= max(0, duration - nearEndResumeSuppressionSeconds) ? 0 : candidate
     }
 
+    /// Map the manifest's audio tracks into the catalog `AudioTrack` shape the
+    /// player and detail views read.
+    ///
+    /// `index` is deliberately dropped rather than forwarded. `AudioTrack.index`
+    /// means the source stream index, while the manifest's `index` is only the
+    /// ordinal within this list. Aether's probe maps that ordinal to the real
+    /// source stream identifier immediately before the offline load.
+    ///
+    /// `embeddedTitle` stays nil because the server already collapsed the
+    /// cleaned and embedded titles into one field; echoing the same string back
+    /// as both would corrupt the audio-pref signature that compares them
+    /// separately.
+    private static func audioTracks(from manifest: OfflineManifest) -> [AudioTrack]? {
+        manifest.audioTracks.map { tracks in
+            tracks.map { track in
+                AudioTrack(
+                    index: nil,
+                    codec: track.codec,
+                    channels: track.channels,
+                    channelLayout: track.layout,
+                    bitrate: track.bitrate,
+                    sampleRate: track.sampleRate,
+                    language: track.language,
+                    title: track.title,
+                    embeddedTitle: nil,
+                    isDefault: track.isDefault
+                )
+            }
+        }
+    }
+
+    /// Overall bitrate in kbps, matching the probed value the server puts on an
+    /// online `FileVersion` and keeping offline metadata consistent with the
+    /// same file streamed.
+    ///
+    /// The manifest carries no probed bitrate, so derive the real average from
+    /// the delivered file. `targetBitrateKbps` is only a transcode target and
+    /// is absent for original downloads, so it is the fallback, not the source.
+    /// A sub-second duration would be a corrupt manifest, not real content, and
+    /// dividing by it produces a value `Int(_:)` traps on. Both bounds below
+    /// keep a bad manifest falling back rather than crashing playback.
+    private static func averageBitrateKbps(from manifest: OfflineManifest) -> Int? {
+        guard let fileSize = manifest.fileSize, fileSize > 0,
+              let duration = manifest.durationSeconds, duration >= 1 else {
+            return manifest.targetBitrateKbps
+        }
+        let kbps = Double(fileSize) * 8 / duration / 1_000
+        guard kbps.isFinite, kbps >= 1, kbps < Double(Int32.max) else {
+            return manifest.targetBitrateKbps
+        }
+        return Int(kbps)
+    }
+
     static func makePreparedPlayback(
         leafContentId: String,
         manifest: OfflineManifest,
@@ -161,9 +213,11 @@ enum OfflinePlaybackBuilder {
             container: manifest.container,
             fileSize: manifest.fileSize,
             duration: manifest.durationSeconds,
-            bitrate: nil,
+            bitrate: averageBitrateKbps(from: manifest),
+            // AetherEngine probes the actual downloaded file. The manifest
+            // intentionally does not pretend to describe delivered streams.
             videoTracks: nil,
-            audioTracks: nil,
+            audioTracks: audioTracks(from: manifest),
             subtitleTracks: nil,
             chapters: manifest.chapters,
             intro: manifest.intro,
@@ -185,7 +239,7 @@ enum OfflinePlaybackBuilder {
             position: resumePosition ?? 0,
             isPaused: false,
             streamUrl: mediaURL.absoluteString,
-            audioTrackIndex: nil,
+            audioTrackIndex: manifest.selectedAudioTrackIndex,
             durationSeconds: manifest.durationSeconds,
             timelineOffsetSeconds: 0,
             subtitleUrls: subtitleURLs.isEmpty ? nil : subtitleURLs,

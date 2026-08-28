@@ -26,6 +26,7 @@ struct TVEpisodeRail: View {
 
     private let cardSpacing: CGFloat = 36
     @FocusState private var focusedCardId: String?
+    @State private var uiCustomization = UICustomizationPreferences.shared
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -35,6 +36,8 @@ struct TVEpisodeRail: View {
                         TVEpisodeCard(
                             episode: episode,
                             isCurrent: currentContentId == episode.contentId,
+                            posterSize: uiCustomization.cardPresentation.posterSize,
+                            captionStyle: uiCustomization.cardPresentation.caption,
                             onSelect: { onSelect(episode.contentId) },
                             onSetWatched: onSetWatched,
                             initialIsFavorite: currentContentId == episode.contentId
@@ -92,6 +95,8 @@ private extension View {
 struct TVEpisodeCard: View {
     let episode: EpisodeListItem
     var isCurrent: Bool = false
+    var posterSize: CardPosterSize = .standard
+    var captionStyle: CardCaptionStyle = .titleMetadata
     let onSelect: () -> Void
     var onSetWatched: ((_ contentId: String, _ played: Bool) async -> Bool)? = nil
     var initialIsFavorite = false
@@ -100,8 +105,8 @@ struct TVEpisodeCard: View {
     @State private var playedOverride: Bool?
     @State private var favoriteOverride: Bool?
 
-    private let cardWidth: CGFloat = 460
-    private let stillHeight: CGFloat = 260
+    private var cardWidth: CGFloat { 460 * posterSize.scale }
+    private var stillHeight: CGFloat { cardWidth * 9 / 16 }
     private let stillCornerRadius: CGFloat = 10
 
     var body: some View {
@@ -112,10 +117,13 @@ struct TVEpisodeCard: View {
                 isCurrent: isCurrent,
                 cardWidth: cardWidth,
                 stillHeight: stillHeight,
-                stillCornerRadius: stillCornerRadius
+                stillCornerRadius: stillCornerRadius,
+                captionStyle: captionStyle
             )
         }
-        .buttonStyle(EpisodeCardStyle())
+        .buttonStyle(TVCardFocusButtonStyle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityDescription)
 
         Group {
             if onSetWatched != nil || onSetFavorite != nil {
@@ -140,6 +148,32 @@ struct TVEpisodeCard: View {
 
     private var isFavorite: Bool {
         favoriteOverride ?? initialIsFavorite
+    }
+
+    private var accessibilityDescription: String {
+        episodeRailAccessibilityLabel(
+            seasonNumber: episode.seasonNumber,
+            episodeNumber: episode.episodeNumber,
+            title: episode.title,
+            metadata: episodeMetadataLine,
+            isCurrent: isCurrent,
+            isPlayed: isPlayed
+        )
+    }
+
+    private var episodeMetadataLine: String? {
+        var parts: [String] = []
+        if let airDate = DetailDateFormatting.abbreviatedDate(episode.airDate) {
+            parts.append(airDate)
+        }
+        if let runtime = episode.runtime, runtime > 0 {
+            if runtime >= 60 {
+                parts.append("\(runtime / 60)h \(runtime % 60)m")
+            } else {
+                parts.append("\(runtime)m")
+            }
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "  ·  ")
     }
 
     @ViewBuilder
@@ -187,49 +221,54 @@ private struct EpisodeCardLabel: View {
     let cardWidth: CGFloat
     let stillHeight: CGFloat
     let stillCornerRadius: CGFloat
+    let captionStyle: CardCaptionStyle
 
     @Environment(\.isFocused) private var isFocused
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             still
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 10) {
-                    Text(episodeNumberLabel)
-                        .font(.system(size: 18, weight: .bold))
-                        .tracking(2.0)
-                        .foregroundColor(.continuumOnSurface.opacity(0.55))
-                    if isCurrent {
-                        nowViewingTag
+            if captionStyle.showsTitle {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 10) {
+                            Text(episodeNumberLabel)
+                                .font(.system(size: 18, weight: .bold))
+                                .tracking(2.0)
+                                .foregroundStyle(Color.continuumOnSurface.opacity(0.55))
+                        if isCurrent {
+                            nowViewingTag
+                        }
+                    }
+
+                    Text(episode.title ?? "Episode \(episode.episodeNumber)")
+                        .font(.system(size: 26, weight: .semibold))
+                        .foregroundStyle(titleColor)
+                        // Allow up to two lines for long titles, but don't reserve
+                        // the second line — a single-line title (the common case)
+                        // was leaving a full empty line of dead space above the
+                        // description.
+                        .lineLimit(2)
+
+                    if captionStyle.showsMetadata {
+                        if let metadataLine = episodeMetadataLine {
+                            Text(metadataLine)
+                                .font(.system(size: 20, weight: .medium))
+                                .foregroundStyle(Color.continuumSecondaryText)
+                                .lineLimit(1)
+                        }
+
+                        if let overview = episode.overview, !overview.isEmpty {
+                            Text(overview)
+                                .font(.system(size: 20, weight: .regular))
+                                .foregroundStyle(Color.continuumSecondaryText)
+                                .lineLimit(3, reservesSpace: true)
+                                .lineSpacing(3)
+                                .padding(.top, 4)
+                        }
                     }
                 }
-
-                Text(episode.title ?? "Episode \(episode.episodeNumber)")
-                    .font(.system(size: 26, weight: .semibold))
-                    .foregroundColor(titleColor)
-                    // Allow up to two lines for long titles, but don't reserve
-                    // the second line — a single-line title (the common case)
-                    // was leaving a full empty line of dead space above the
-                    // description.
-                    .lineLimit(2)
-
-                if let metadataLine = episodeMetadataLine {
-                    Text(metadataLine)
-                        .font(.system(size: 20, weight: .medium))
-                        .foregroundColor(.continuumSecondaryText)
-                        .lineLimit(1)
-                }
-
-                if let overview = episode.overview, !overview.isEmpty {
-                    Text(overview)
-                        .font(.system(size: 20, weight: .regular))
-                        .foregroundColor(.continuumSecondaryText)
-                        .lineLimit(3, reservesSpace: true)
-                        .lineSpacing(3)
-                        .padding(.top, 4)
-                }
+                .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
             }
-            .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
         }
         .frame(width: cardWidth, alignment: .leading)
     }
@@ -305,22 +344,14 @@ private struct EpisodeCardLabel: View {
         }
         .frame(width: cardWidth, height: stillHeight)
         .clipShape(RoundedRectangle(cornerRadius: stillCornerRadius))
+        .tvFocusRing(isFocused: isFocused, cornerRadius: stillCornerRadius)
         .overlay(
             RoundedRectangle(cornerRadius: stillCornerRadius)
-                .stroke(borderColor, lineWidth: borderWidth)
+                .stroke(
+                    Color.white.opacity(isCurrent && !isFocused ? 0.7 : 0),
+                    lineWidth: isCurrent && !isFocused ? 2 : 0
+                )
         )
-    }
-
-    private var borderColor: Color {
-        if isFocused { return Color.white.opacity(0.9) }
-        if isCurrent { return Color.white.opacity(0.7) }
-        return .clear
-    }
-
-    private var borderWidth: CGFloat {
-        if isFocused { return 3 }
-        if isCurrent { return 2 }
-        return 0
     }
 
     private var watchedBadge: some View {
@@ -366,35 +397,4 @@ private struct EpisodeCardLabel: View {
     }
 }
 
-/// Custom style so the system doesn't paint its default focus halo over
-/// the card. Scale + drop shadow only; the white overlay ring on the
-/// still (driven by `isFocused` in the label) is the focus cue.
-private struct EpisodeCardStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        EpisodeCardStyleBody(configuration: configuration)
-    }
-}
-
-private struct EpisodeCardStyleBody: View {
-    let configuration: ButtonStyleConfiguration
-
-    @Environment(\.isFocused) private var isFocused
-
-    var body: some View {
-        configuration.label
-            .scaleEffect(scale)
-            .shadow(
-                color: .black.opacity(isFocused ? 0.45 : 0.3),
-                radius: isFocused ? 18 : 8,
-                y: isFocused ? 8 : 4
-            )
-            .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
-            .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: configuration.isPressed)
-    }
-
-    private var scale: CGFloat {
-        let base: CGFloat = isFocused ? 1.04 : 1.0
-        return configuration.isPressed ? base * 0.97 : base
-    }
-}
 #endif

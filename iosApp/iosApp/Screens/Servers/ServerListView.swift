@@ -35,14 +35,12 @@ struct ServerListView: View {
                 .zIndex(1)
             }
         }
-        .continuumBackground()
+        .background(SettingsBackdrop())
         .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: removeTarget)
         #else
         contentList
-            .navigationTitle("Servers")
+            .navigationTitle("")
             .continuumNavigationTitleDisplayMode(.inline)
-            .continuumBackground()
-            .continuumScrollContentBackgroundHidden()
             .alert(
                 "Remove this server?",
                 isPresented: Binding(
@@ -173,8 +171,17 @@ struct ServerListView: View {
     }
     #endif
 
+    #if !os(tvOS)
     private var contentList: some View {
         List {
+            SettingsPageHeader(
+                title: "Servers",
+                subtitle: "Manage saved Prairie connections for this device.",
+                systemImage: "server.rack",
+                tint: .teal
+            )
+            .settingsPageHeaderRow()
+
             Section {
                 ForEach(registry.sortedEntries) { entry in
                     row(for: entry)
@@ -195,7 +202,7 @@ struct ServerListView: View {
             }
             .listRowBackground(Color.continuumSurfaceElevated)
         }
-        .continuumGroupedListStyle()
+        .settingsListChrome()
     }
 
     @ViewBuilder
@@ -226,7 +233,6 @@ struct ServerListView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        #if !os(tvOS)
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button(role: .destructive) {
                 removeTarget = entry
@@ -234,18 +240,19 @@ struct ServerListView: View {
                 Label("Remove", systemImage: "trash")
             }
         }
-        #endif
     }
+    #endif
 
     private func switchTo(_ entry: ServerEntry) {
         guard entry.id != registry.activeServerId else {
-            // Already active: re-evaluate in case tokens expired and
-            // the UI just needs to catch up.
             refreshAuthState()
             return
         }
         Task {
-            await registry.switchTo(serverId: entry.id)
+            guard await registry.switchTo(
+                serverId: entry.id,
+                resolveDestinationProfile: true
+            ) else { return }
             await MainActor.run { refreshAuthState() }
         }
     }
@@ -253,7 +260,10 @@ struct ServerListView: View {
     private func remove(_ entry: ServerEntry) {
         let wasActive = entry.id == registry.activeServerId
         Task {
-            await registry.remove(serverId: entry.id)
+            guard await registry.remove(
+                serverId: entry.id,
+                resolveFallbackProfile: wasActive
+            ) else { return }
             await MainActor.run {
                 removeTarget = nil
                 if wasActive { refreshAuthState() }
@@ -265,6 +275,10 @@ struct ServerListView: View {
     /// drop any in-tab navigation that belonged to the previous server.
     private func refreshAuthState() {
         router.popToRoot()
+        // A server switch can land back on `.authenticated`, which the
+        // router's same-value guard drops — so the identity boundary for an
+        // engaged PiP video is enforced here, before the reassignment.
+        PlayerIdentityBoundary.endEngagedVideoPictureInPicture()
         let auth = AuthService.shared
         if !auth.hasServer {
             router.authState = .needsServerSetup

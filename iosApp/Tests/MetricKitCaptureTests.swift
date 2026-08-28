@@ -57,7 +57,12 @@ final class MetricKitCaptureTests: XCTestCase {
     private func makeDeviceSnapshotBuilder() -> DeviceSnapshotBuilder {
         DeviceSnapshotBuilder(
             identityProvider: {
-                AppleDeviceIdentity(id: "device-id", name: "Unit Test iPhone", platform: "iOS")
+                AppleDeviceIdentity(
+                    id: "device-id",
+                    name: "Unit Test iPhone",
+                    platform: "iOS",
+                    clientFamily: "mobile"
+                )
             },
             playbackSnapshotProvider: {
                 DiagnosticsCapabilityProbe.Snapshot(
@@ -84,7 +89,7 @@ final class MetricKitCaptureTests: XCTestCase {
             "binaryName": "Prairie",
             "offsetIntoBinaryTextSegment": 4096,
             "subFrames": [
-              { "binaryName": "PlayerCore", "offsetIntoBinaryTextSegment": 8192 }
+              { "binaryName": "MediaModule", "offsetIntoBinaryTextSegment": 8192 }
             ]
           }
         ]
@@ -104,7 +109,7 @@ final class MetricKitCaptureTests: XCTestCase {
         "callStackRootFrames": [
           {
             "subFrames": [
-              { "offsetIntoBinaryTextSegment": 8192, "binaryName": "PlayerCore" }
+              { "offsetIntoBinaryTextSegment": 8192, "binaryName": "MediaModule" }
             ],
             "offsetIntoBinaryTextSegment": 4096,
             "binaryName": "Prairie"

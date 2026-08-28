@@ -13,6 +13,7 @@ struct HomeFeedRow: View {
     /// Long-press actions, forwarded to every card in the row.
     var onRemoveFromContinueWatching: ((SectionItem) -> Void)? = nil
     var onSetWatched: ((SectionItem, Bool) async -> Bool)? = nil
+    @State private var uiCustomization = UICustomizationPreferences.shared
 
     private var isResume: Bool { HomeFeed.isResume(section) }
 
@@ -39,7 +40,7 @@ struct HomeFeedRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: HomeFeedMetrics.headerGap) {
             HomeSectionHeader(
-                title: displayTitle,
+                title: section.title,
                 icon: isResume ? "play.circle.fill" : nil,
                 style: headerStyle
             )
@@ -50,13 +51,19 @@ struct HomeFeedRow: View {
                         if usesStills {
                             HomeStillCard(
                                 item: item,
+                                width: HomeFeedMetrics.stillWidth
+                                    * uiCustomization.cardPresentation.posterSize.scale,
+                                showsCaption: uiCustomization.cardPresentation.caption.showsTitle,
+                                showsMetadata: uiCustomization.cardPresentation.caption.showsMetadata,
                                 onRemoveFromContinueWatching: removalAction(for: item),
                                 onSetWatched: watchedAction(for: item)
                             )
                         } else {
                             HomePosterCard(
                                 item: item,
-                                width: posterWidth,
+                                width: posterWidth * uiCustomization.cardPresentation.posterSize.scale,
+                                showsCaption: uiCustomization.cardPresentation.caption.showsTitle,
+                                showsMetadata: uiCustomization.cardPresentation.caption.showsMetadata,
                                 showsProgress: isResume,
                                 aspect: isAudiobookRow ? .square : .poster,
                                 episodeBadge: episodeBadge(for: item),
@@ -92,26 +99,6 @@ struct HomeFeedRow: View {
     private func watchedAction(for item: SectionItem) -> ((Bool) async -> Bool)? {
         guard let onSetWatched else { return nil }
         return { played in await onSetWatched(item, played) }
-    }
-
-    /// Server section titles read like query descriptions — "Recently
-    /// Released in Movies", "Recently Added in TV Shows". Trimming the
-    /// "in <library>" tail leaves a curated-sounding label without needing
-    /// a server change, and the library context is already implied by the
-    /// artwork in the row.
-    ///
-    /// Only generated titles are trimmed: an admin-named custom section
-    /// ("Made in Britain") is someone's deliberate choice, and cutting at
-    /// the *last* " in " keeps a generated title whose label itself contains
-    /// "in" from losing more than the library tail. `customized` is not a
-    /// useful guard here — the server sets it for any profile override
-    /// (position, item limit), not just a renamed title.
-    private var displayTitle: String {
-        guard section.isCustom != true,
-              let range = section.title.range(of: " in ", options: [.caseInsensitive, .backwards]) else {
-            return section.title
-        }
-        return String(section.title[..<range.lowerBound])
     }
 }
 #endif

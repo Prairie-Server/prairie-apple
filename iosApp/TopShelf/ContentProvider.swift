@@ -24,9 +24,17 @@ final class ContentProvider: TVTopShelfContentProvider {
         )
 
         let http = TopShelfHTTPClient()
+        guard http.isPersonalizedContentAllowed else {
+            defaults.set(
+                "profile-selection-required",
+                forKey: SharedStorage.topShelfLastStatusKey
+            )
+            return nil
+        }
         let response: TopShelfSectionsResponse
+        let imageSizeQuery = await http.fetchImageSizeQuery()
         do {
-            response = try await http.fetchHomeSections()
+            response = try await http.fetchHomeSections(imageSizeQuery: imageSizeQuery)
         } catch {
             defaults.set(
                 "fetch-failed: \(error)",
@@ -39,7 +47,8 @@ final class ContentProvider: TVTopShelfContentProvider {
         let nuItems = items(from: response, matching: Self.isNextUp)
         let seriesPosters = await fetchSeriesPosters(
             for: cwItems + nuItems,
-            using: http
+            using: http,
+            imageSizeQuery: imageSizeQuery
         )
 
         let continueWatching = collection(
@@ -100,7 +109,8 @@ final class ContentProvider: TVTopShelfContentProvider {
     /// still instead.
     private func fetchSeriesPosters(
         for items: [TopShelfItem],
-        using http: TopShelfHTTPClient
+        using http: TopShelfHTTPClient,
+        imageSizeQuery: [String: String]
     ) async -> EpisodePosters {
         let seriesIds = Set(items.compactMap { item -> String? in
             guard item.type == "episode" else { return nil }
@@ -113,7 +123,13 @@ final class ContentProvider: TVTopShelfContentProvider {
         ) { group in
             for seriesId in seriesIds {
                 group.addTask {
-                    (seriesId, try? await http.fetchSeasons(seriesId: seriesId))
+                    (
+                        seriesId,
+                        try? await http.fetchSeasons(
+                            seriesId: seriesId,
+                            imageSizeQuery: imageSizeQuery
+                        )
+                    )
                 }
             }
             var acc = EpisodePosters()
@@ -140,7 +156,13 @@ final class ContentProvider: TVTopShelfContentProvider {
         ) { group in
             for seriesId in seriesMissingPoster {
                 group.addTask {
-                    (seriesId, (try? await http.fetchItemDetail(contentId: seriesId))?.posterUrl)
+                    (
+                        seriesId,
+                        (try? await http.fetchItemDetail(
+                            contentId: seriesId,
+                            imageSizeQuery: imageSizeQuery
+                        ))?.posterUrl
+                    )
                 }
             }
             for await (seriesId, poster) in group {

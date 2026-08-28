@@ -164,6 +164,12 @@
 </style>
 
 <div class="wrap">
+  <aside style="margin: 24px 0 0; padding: 18px 20px; border: 2px solid var(--med); border-radius: 10px; background: var(--med-bg);">
+    <strong>Historical pre-adoption audit.</strong>
+    This July 2026 comparison is retained for history only; it is not current
+    implementation or validation status. See the
+    <a href="aetherengine-replacement-spec.md">AetherEngine-only replacement specification</a>.
+  </aside>
   <header class="masthead">
     <div class="eyebrow">Defect parity audit &middot; player pipeline</div>
     <h1>What AetherEngine already fixed <span class="dim">that we haven't.</span></h1>
@@ -343,7 +349,7 @@ const GAPS = [
     title: "64KB AVIO buffer leak per writer teardown; no 429 handling",
     tags: "AE #3.3.1 · #71",
     symptom: "AE frees ctx.pointee.buffer explicitly (verified vs aviobuf.c that avio_context_free does NOT). Our LoopbackSegmentWriter.teardown() calls avio_context_free() with a comment wrongly claiming it frees the buffer — so we leak the 64KB muxer AVIO buffer every writer run. Also: PlaybackOriginReconnectPolicy has no 429/rate-limit cause (maps to httpFatal, ~2 attempts).",
-    exposure: "(1) Every loopback writer restart (seek outside plan, track/quality change, blocked-cut escalation, producer restart) leaks 64KB; a seek-heavy multi-hour session on a 2GB Apple TV accumulates megabytes toward jetsam pressure — silent, per-session. (2) A Silo server behind a rate-limiting proxy that answers a startup burst with 429+Retry-After: the window stream gives up in ~1s and the session tears down to Compatibility fallback, where AE would back off and resume seamlessly.",
+    exposure: "(1) Every loopback writer restart (seek outside plan, track/quality change, blocked-cut escalation, producer restart) leaks 64KB; a seek-heavy multi-hour session on a 2GB Apple TV accumulates megabytes toward jetsam pressure — silent, per-session. (2) A Prairie server behind a rate-limiting proxy that answers a startup burst with 429+Retry-After: the window stream gives up in ~1s and the session tears down to Compatibility fallback, where AE would back off and resume seamlessly.",
     fix: "In <span class='path'>LoopbackSegmentWriter.teardown()</span>, <code>av_free(ioContext.pointee.buffer)</code> before <code>avio_context_free(&ioContext)</code> (free the buffer FFmpeg currently holds, not the saved pointer) and fix the comment. Add a <code>.rateLimited(retryAfter:)</code> case to <span class='path'>PlaybackOriginReconnectPolicy</span> (cap ~6, backoff=max(exp, Retry-After)), mapping status 429 in both stream + chunk fetcher."
   },
   {

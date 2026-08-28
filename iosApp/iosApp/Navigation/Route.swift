@@ -6,7 +6,9 @@ enum Route: Hashable {
     case serverSetup
     case login
     case serverNeedsSetup
-    case signup
+
+    /// Server-driven first-run feature tour, shown after profile selection.
+    case onboardingTour
 
     // Profile selection
     case profileSelection
@@ -35,7 +37,6 @@ enum Route: Hashable {
     case collectionDetail(collectionId: String)
     case settings
     case recommendations
-    case admin
     case serverList
     case downloads
 

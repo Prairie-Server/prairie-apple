@@ -45,6 +45,9 @@ struct TVSkylineSectionFeed: View {
     /// async, so the initial hand-down would land on nothing.
     @State private var pendingFocusRequest: Int?
     @State private var lastAppliedRequest = 0
+    /// The row that owns card focus or its context-menu dismissal flow. Unlike
+    /// the marquee preview, this is cleared when focus moves into chrome.
+    @State private var focusRestorationOwnerSectionId: String?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -78,6 +81,11 @@ struct TVSkylineSectionFeed: View {
             requestEntryFocus(focusRequest)
         }
         .onChange(of: focusRequest) { _, request in requestEntryFocus(request) }
+        .onChange(of: isTopMenuFocused) { _, isFocused in
+            if isFocused {
+                focusRestorationOwnerSectionId = nil
+            }
+        }
         // Rows mount only after the async section load; a deferred entry
         // token re-fires once they exist.
         .onChange(of: sections.map(\.id)) { _, _ in
@@ -150,11 +158,16 @@ struct TVSkylineSectionFeed: View {
             focusRequest: isFirstRow ? contentFocusToken : 0,
             onMoveUp: isFirstRow ? onTopMenuFocusRequest : nil,
             onItemFocus: { item in
+                focusRestorationOwnerSectionId = section.id
                 previewFocusedItem(item, in: section)
             },
             cardWidth: ContinuumTheme.Skyline.densePosterCardWidth,
             cardVerticalPadding: ContinuumTheme.Skyline.rowBandCardVerticalPadding,
-            onMoveDown: nil
+            onMoveDown: nil,
+            focusRestorationOwner: Binding(
+                get: { focusRestorationOwnerSectionId == section.id },
+                set: { _ in }
+            )
         )
     }
 

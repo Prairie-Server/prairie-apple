@@ -2,7 +2,7 @@
 
 Native Apple clients for the [Prairie](https://github.com/Prairie-Server/prairie-server) self-hosted media server.
 
-This repo builds iOS, tvOS, and the early macOS target. Prairie is a fork of Silo, re-identified with Prairie bundle IDs, app groups, keychain groups, URL schemes, signing defaults, app names, and brand assets.
+This repo builds iOS, tvOS, and the early macOS target. Prairie is a fork of Prairie, re-identified with Prairie bundle IDs, app groups, keychain groups, URL schemes, signing defaults, app names, and brand assets.
 
 ## TestFlight
 
@@ -134,7 +134,7 @@ Prairie Apple is licensed under `AGPL-3.0-or-later`. See [LICENSE](LICENSE).
 
 The **Prairie name, logo, wordmark, app icons, and other brand assets** are **not**
 covered by the AGPL. You're free to fork and redistribute the code, including with
-truthful notices such as "fork of Silo," but forks and redistributions must not
+truthful notices such as "fork of Prairie," but forks and redistributions must not
 use the Prairie brand as their identity and must remove or replace the Prairie
 brand assets. See [TRADEMARK.md](TRADEMARK.md).
 

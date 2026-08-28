@@ -46,18 +46,26 @@ struct TVPlayerInfoHUD: View {
     /// Audio / Subtitles / Chapters disappear when the stream has none of
     /// those — Infuse hides rather than disables, which keeps the bar tidy.
     ///
-    /// Subtitles also appear when the stream has *no* tracks but the server's
-    /// AI can produce them (ASR transcription, or translating an existing text
-    /// track). Without this, a file with no subtitles would hide the Subtitles
-    /// tab entirely — and with it the only entry point to "AI Subtitles…",
-    /// which is exactly the case where transcription is most useful. Uses the
-    /// same `hasActionableSource` probe the pane gates its AI row on.
+    /// Subtitles also appear when the stream has *no* tracks but the server
+    /// can still produce them: AI (ASR transcription, or translating an
+    /// existing text track), or a provider search. Without this, a file with
+    /// no subtitles would hide the Subtitles tab entirely — and with it the
+    /// only entry point to "AI Subtitles…" / "Search Subtitles…", which is
+    /// exactly the case where they are most useful. Uses the same
+    /// `hasActionableSource` probe the pane gates its AI row on.
+    ///
+    /// The search term is deliberately the **enabled** predicate, not the
+    /// visible one: a row that can't be acted on must never be the sole
+    /// reason its tab exists, or a track-less file on a server with no
+    /// providers would open a Subtitles tab containing one greyed-out row.
+    /// When the tab is present for another reason, the disabled row still
+    /// renders inside it and explains itself.
     private var availableTabs: [Tab] {
         var tabs: [Tab] = [.info, .stats, .video]
         if !viewModel.audioTracks.isEmpty { tabs.append(.audio) }
         if !viewModel.subtitleTracks.isEmpty
             || SubtitleTranslateMenu.hasActionableSource(viewModel)
-            || viewModel.subtitleSearchAvailable {
+            || viewModel.subtitleSearchEnabled {
             tabs.append(.subtitles)
         }
         if !viewModel.chapters.isEmpty { tabs.append(.chapters) }
@@ -73,15 +81,33 @@ struct TVPlayerInfoHUD: View {
             Spacer(minLength: 0)
         }
         .onAppear {
-            if !availableTabs.contains(activeTab), let first = availableTabs.first {
-                activeTab = first
-            }
+            repairActiveTabIfUnavailable()
             // If the parent didn't seed focus (edge case on re-present), at
             // least make sure focus lands on the active tab so Menu has a
             // handler to bubble to.
             if focusedTab == nil {
                 focusedTab = activeTab
             }
+        }
+        // The tab set is not static for the lifetime of the HUD: the subtitle
+        // provider probe is async and fails open, so on a track-less,
+        // non-AI session the Subtitles tab starts present (optimistic
+        // `isAvailable`) and can drop out mid-session when the server answers
+        // "no providers". If that happens while Subtitles is the active tab,
+        // repairing only in `onAppear` would leave the panel rendering a pane
+        // whose pill — and whose focus owner — no longer exists, which on
+        // tvOS means focus can land nowhere at all (docs/tvos-focus.md).
+        //
+        // Repair-on-change rather than pinning `activeTab` into
+        // `availableTabs`: keeping the active tab mounted unconditionally
+        // would make the tab set depend on state this handler writes (a
+        // derived-state feedback loop, the hazard this codebase has been
+        // bitten by), it would defeat the `onAppear` repair entirely, and
+        // because `TVPlayerControls` remembers `activeHUDTab` across HUD
+        // presentations it would strand a Subtitles pill holding nothing but
+        // a greyed-out row for the rest of the session.
+        .onChange(of: availableTabs) { _, _ in
+            repairActiveTabIfUnavailable()
         }
         .onChange(of: activeTab) { _, _ in
             readOnlyPaneIsAtTop = true
@@ -161,6 +187,26 @@ struct TVPlayerInfoHUD: View {
 
     private var isReadOnlyPaneScrolled: Bool {
         (activeTab == .info || activeTab == .stats) && !readOnlyPaneIsAtTop
+    }
+
+    /// Move off a tab that is no longer in `availableTabs`, taking focus with
+    /// it. Run on appear (a remembered `activeHUDTab` may not apply to this
+    /// stream) and whenever the tab set changes underneath us.
+    ///
+    /// Focus is reseeded, not just the selection: whatever owned focus — the
+    /// vanished pill, or a row inside the pane it selected — is leaving the
+    /// hierarchy in this same update, and a tvOS view with no reachable focus
+    /// target also has nothing for Menu to bubble `onExitCommand` from, which
+    /// strands the user in the HUD. `.defaultFocus` only seeds on first
+    /// appearance of the focus scope, so it cannot cover this.
+    ///
+    /// `availableTabs` always contains `.info`, so `first` is effectively
+    /// non-nil; it stays optional to keep this honest if that ever changes.
+    private func repairActiveTabIfUnavailable() {
+        guard !availableTabs.contains(activeTab),
+              let first = availableTabs.first else { return }
+        activeTab = first
+        focusedTab = first
     }
 
     /// Used by the composite Info/Stats panes when Up is pressed at the top
@@ -431,6 +477,10 @@ private struct HUDRowButtonBody: View {
 private struct HUDSettingRow: View {
     let label: String
     let value: String
+    /// Optional secondary line under the label. Used to explain a disabled
+    /// row ("Not set up on this server") — the trailing `value` slot is only
+    /// ~165pt wide at 22pt semibold, which truncates any real sentence.
+    var detail: String? = nil
     var colorHex: String? = nil
     var systemImage: String? = nil
     let action: () -> Void
@@ -440,6 +490,7 @@ private struct HUDSettingRow: View {
             HUDSettingRowLabel(
                 label: label,
                 value: value,
+                detail: detail,
                 colorHex: colorHex,
                 systemImage: systemImage,
                 showsChevron: true
@@ -476,6 +527,7 @@ private struct HUDToggleRow: View {
 private struct HUDSettingRowLabel: View {
     let label: String
     let value: String
+    var detail: String? = nil
     var colorHex: String? = nil
     var systemImage: String? = nil
     let showsChevron: Bool
@@ -488,9 +540,20 @@ private struct HUDSettingRowLabel: View {
                 Image(systemName: systemImage)
                     .font(.system(size: 20, weight: .semibold))
             }
-            Text(label)
-                .font(.system(size: 22, weight: .medium))
-                .lineLimit(1)
+            // Second line mirrors `HUDTrackRowLabel`'s attributes line: 17pt,
+            // dimmed, focus-inverted. Only rendered when a `detail` is given,
+            // so ordinary rows keep their exact single-line metrics.
+            VStack(alignment: .leading, spacing: 3) {
+                Text(label)
+                    .font(.system(size: 22, weight: .medium))
+                    .lineLimit(1)
+                if let detail {
+                    Text(detail)
+                        .font(.system(size: 17))
+                        .foregroundStyle(isFocused ? .black.opacity(0.62) : .white.opacity(0.55))
+                        .lineLimit(1)
+                }
+            }
             Spacer(minLength: 18)
             HStack(spacing: 10) {
                 if let colorHex {
@@ -618,7 +681,7 @@ private struct InfoPane: View {
         if let audio = viewModel.audioTracks.first(where: { $0.trackId == viewModel.selectedAudioId }) {
             var bits: [String] = []
             if let codec = audio.codec, !codec.isEmpty { bits.append(codec.uppercased()) }
-            if let layout = audio.audioChannelsLayout, !layout.isEmpty { bits.append(layout) }
+            if let channels = audio.channelCountLabel { bits.append(channels) }
             if !bits.isEmpty { rows.append(("Audio", bits.joined(separator: " · "))) }
         }
         if let sub = viewModel.subtitleTracks.first(where: { $0.trackId == viewModel.selectedSubtitleId }) {
@@ -682,8 +745,8 @@ private struct StatsPane: View {
         if !viewModel.playbackStats.networkRows.isEmpty {
             ids.append(PlaybackStatsPanel.networkSectionID)
         }
-        if !viewModel.playbackStats.deviceRows.isEmpty {
-            ids.append(PlaybackStatsPanel.deviceSectionID)
+        if !viewModel.playbackStats.engineRows.isEmpty {
+            ids.append(PlaybackStatsPanel.engineSectionID)
         }
         ids.append(Self.bottomAnchor)
         return ids
@@ -708,7 +771,6 @@ private struct VideoPane: View {
         case quality
         case speed
         case aspect
-        case audioDelay
         case subtitleDelay
     }
 
@@ -765,45 +827,12 @@ private struct VideoPane: View {
                             }
                             .focused($focusedField, equals: .aspect)
                         }
-
-                        if viewModel.backendCapabilities.supportsHDRToggle {
-                            HUDToggleRow(label: "HDR passthrough", isOn: viewModel.settings.hdrEnabled) {
-                                viewModel.setHDREnabled($0)
-                            }
-                        }
                     }
                 }
                 .focusSection()
 
                 PaneColumn("Sync") {
                     VStack(spacing: 2) {
-                        if viewModel.backendCapabilities.supportsAudioDelay {
-                            HUDSettingRow(
-                                label: "Audio delay",
-                                value: HUDPickerOptions.delayLabel(viewModel.settings.audioSyncMs)
-                            ) {
-                                presentPicker(
-                                    for: .audioDelay,
-                                    HUDPickerPresentation(
-                                        title: "Audio Delay",
-                                        options: HUDPickerOptions.delayOptions(
-                                            from: -1_000,
-                                            through: 1_000,
-                                            by: 50,
-                                            including: viewModel.settings.audioSyncMs
-                                        ),
-                                        selection: String(viewModel.settings.audioSyncMs),
-                                        onSelect: { value in
-                                            if let ms = Int(value) {
-                                                viewModel.setAudioSyncMilliseconds(ms)
-                                            }
-                                        }
-                                    )
-                                )
-                            }
-                            .focused($focusedField, equals: .audioDelay)
-                        }
-
                         if viewModel.backendCapabilities.supportsSubtitleDelay {
                             HUDSettingRow(
                                 label: "Subtitle delay",
@@ -1125,7 +1154,7 @@ private struct SubtitleAppearanceDialog: View {
                 ScrollView(showsIndicators: true) {
                     VStack(spacing: 2) {
                         HUDToggleRow(
-                            label: "Match device style",
+                            label: "Use device settings",
                             isOn: viewModel.settings.subtitleMatchesSystemAppearance
                         ) { enabled in
                             viewModel.setSubtitleMatchesSystemAppearance(enabled)
@@ -1492,11 +1521,8 @@ private struct AudioPane: View {
             .focusSection()
 
             PaneColumn("Options") {
-                LabelValueRow(label: "Layout", value: selectedLayout ?? "—")
+                LabelValueRow(label: "Channels", value: selectedChannels ?? "—")
                 LabelValueRow(label: "Codec",  value: selectedCodec ?? "—")
-                if viewModel.backendCapabilities.supportsAudioDelay {
-                    LabelValueRow(label: "Delay",  value: delayText)
-                }
             }
         }
     }
@@ -1505,16 +1531,12 @@ private struct AudioPane: View {
         viewModel.audioTracks.first(where: { $0.trackId == viewModel.selectedAudioId })
     }
 
-    private var selectedLayout: String? {
-        selectedTrack?.audioChannelsLayout
+    private var selectedChannels: String? {
+        selectedTrack?.channelCountLabel
     }
 
     private var selectedCodec: String? {
         selectedTrack?.codec?.uppercased()
-    }
-
-    private var delayText: String {
-        HUDPickerOptions.delayLabel(viewModel.settings.audioSyncMs)
     }
 }
 
@@ -1630,9 +1652,19 @@ private struct SubtitlesPane: View {
         focusedOption = .translate
     }
 
+    /// Restore focus to the "Search Subtitles…" row — unless the provider
+    /// probe answered "unavailable" while the menu was open, which swaps that
+    /// row for the disabled variant that carries no `.focused(...)` binding.
+    /// Returning focus to an unreachable target would leave the pane with
+    /// nothing focused, so fall back to the Tracks column's "Off" row, which
+    /// is always present (docs/tvos-focus.md).
     private func closeSubtitleSearchMenu() {
         showSubtitleSearchMenu = false
-        focusedOption = .search
+        if viewModel.subtitleSearchEnabled {
+            focusedOption = .search
+        } else {
+            entryTrackFocused = true
+        }
     }
 
     /// Whether the server's AI capabilities + the current track list offer any
@@ -1759,16 +1791,41 @@ private struct SubtitlesPane: View {
                 .focused($focusedOption, equals: .translate)
                 .id(Option.translate)
             }
-            if viewModel.subtitleSearchAvailable {
-                HUDSettingRow(
-                    label: "Search Subtitles…",
-                    value: "",
-                    systemImage: "magnifyingglass"
-                ) {
-                    showSubtitleSearchMenu = true
+            if viewModel.subtitleSearchVisible {
+                // Two mutually-exclusive variants rather than one row with
+                // modifiers applied conditionally: a non-focusable row must
+                // not carry a `.focused(...)` binding (same idiom as
+                // `TVGeneralSettingsView.presetRow`), or the focus engine
+                // holds a binding for a target it can never reach.
+                //
+                // The disabled variant also needs the explicit `.opacity`:
+                // `HUDSettingRowLabel` derives every color from
+                // `@Environment(\.isFocused)`, so `.disabled(true)` alone
+                // would render pixel-identical to an enabled unfocused row.
+                // Same treatment `HUDTrackRow` uses for its disabled rows.
+                if let reason = viewModel.subtitleSearchUnavailableReason {
+                    HUDSettingRow(
+                        label: "Search Subtitles…",
+                        value: "",
+                        detail: reason,
+                        systemImage: "magnifyingglass",
+                        action: {}
+                    )
+                    .disabled(true)
+                    .opacity(0.35)
+                    .accessibilityHint(reason)
+                    .id(Option.search)
+                } else {
+                    HUDSettingRow(
+                        label: "Search Subtitles…",
+                        value: "",
+                        systemImage: "magnifyingglass"
+                    ) {
+                        showSubtitleSearchMenu = true
+                    }
+                    .focused($focusedOption, equals: .search)
+                    .id(Option.search)
                 }
-                .focused($focusedOption, equals: .search)
-                .id(Option.search)
             }
             if viewModel.backendCapabilities.supportsSubtitleDelay {
                 HUDSettingRow(label: "Delay", value: delayText) {

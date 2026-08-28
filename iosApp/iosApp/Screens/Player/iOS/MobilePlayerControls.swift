@@ -8,7 +8,7 @@ import SwiftUI
 /// - Bottom stack: time row (elapsed / status chips / remaining), capsule
 ///   scrubber with buffered range + intro tint + chapter ticks + scrub
 ///   preview bubble, then a labeled action row (Quality menu, Audio &
-///   Subtitles menu, Chapters menu, orientation Lock, More → settings sheet)
+///   Subtitles sheet, Chapters menu, orientation Lock, More → settings sheet)
 ///
 /// The whole thing is wrapped in a tap-to-toggle gesture; auto-hide after 3 s
 /// of inactivity. The view is stateful only for sheet presentation and the
@@ -25,6 +25,10 @@ struct MobilePlayerControls: View {
     /// duration otherwise. Tap the label to flip — the native player idiom.
     @State private var showsRemainingTime = true
     @State private var pictureInPicture = PictureInPictureCoordinator.shared
+    /// Floating stats card. Kept here rather than on the view model because
+    /// it is purely presentation, and kept outside the `showControls` gate
+    /// below so the auto-hide takes the transport away without it.
+    @State private var showsStats = false
 
 
     var body: some View {
@@ -72,14 +76,18 @@ struct MobilePlayerControls: View {
             if viewModel.showIntroSkip {
                 introSkipPill
             }
-            if viewModel.showStatsForNerds {
-                statsForNerdsOverlay
+            if showsStats {
+                MobilePlaybackStatsOverlay(stats: viewModel.playbackStats)
                     .transition(.opacity)
-                    .allowsHitTesting(false)
             }
         }
+        .animation(.easeOut(duration: 0.18), value: showsStats)
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
+            case .tracks:
+                TrackSelectionSheet(viewModel: viewModel) { activeSheet = nil }
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
             case .aiSubtitles:
                 SubtitleTranslateMenu(
                     viewModel: viewModel,
@@ -99,8 +107,20 @@ struct MobilePlayerControls: View {
                 )
                 .presentationDetents([.large])
             case .settings:
-                PlayerSettingsSheet(viewModel: viewModel, sleepTimer: viewModel.sleepTimer)
-                    .presentationDetents([.large])
+                PlayerSettingsSheet(
+                    viewModel: viewModel,
+                    sleepTimer: viewModel.sleepTimer,
+                    statsOverlayVisible: Binding(
+                        get: { showsStats },
+                        set: { newValue in
+                            showsStats = newValue
+                            // Switching it on closes the sheet: the stats are
+                            // only useful over the picture they describe.
+                            if newValue { activeSheet = nil }
+                        }
+                    )
+                )
+                .presentationDetents([.large])
             }
         }
         .onChange(of: activeSheet) { _, newValue in
@@ -131,37 +151,34 @@ struct MobilePlayerControls: View {
 
             Spacer(minLength: 12)
 
-            if viewModel.avPlayerBackend != nil {
-                if pictureInPicture.isSupported {
-                    controlButton(
-                        systemName: pictureInPicture.isActive ? "pip.exit" : "pip.enter"
-                    ) {
-                        pictureInPicture.toggle()
-                    }
-                    .disabled(!pictureInPicture.isPossible)
-                    .accessibilityLabel(
-                        pictureInPicture.isActive
-                            ? "Stop Picture in Picture"
-                            : "Start Picture in Picture"
-                    )
+            if pictureInPicture.isSupported, pictureInPicture.hasSource {
+                controlButton(
+                    systemName: pictureInPicture.isActive ? "pip.exit" : "pip.enter"
+                ) {
+                    pictureInPicture.toggle()
                 }
+                // AVKit can report `possible == false` during the final active
+                // transition; the user must still be able to stop PiP.
+                .disabled(!pictureInPicture.isPossible && !pictureInPicture.isActive)
+                .accessibilityLabel(
+                    pictureInPicture.isActive
+                        ? "Stop Picture in Picture"
+                        : "Start Picture in Picture"
+                )
+            }
 
-                // Only shown where the receiver could actually fetch the
-                // media. On routes whose URL is authenticated by a request
-                // header, AirPlay video would leave the TV on a 401.
-                if viewModel.supportsExternalPlayback {
-                    AirPlayRoutePicker { isPresentingRoutes in
-                        // The route sheet is a UIKit presentation the auto-hide
-                        // timer knows nothing about; pin the controls so it can't
-                        // dismantle the picker mid-selection.
-                        if isPresentingRoutes {
-                            viewModel.pinControlsVisible()
-                        } else {
-                            viewModel.resumeAutoHide()
-                        }
+            if viewModel.supportsExternalPlayback {
+                AirPlayRoutePicker { isPresentingRoutes in
+                    // The route sheet is a UIKit presentation the auto-hide
+                    // timer knows nothing about; pin the controls so it can't
+                    // dismantle the picker mid-selection.
+                    if isPresentingRoutes {
+                        viewModel.pinControlsVisible()
+                    } else {
+                        viewModel.resumeAutoHide()
                     }
-                    .frame(width: 44, height: 44)
                 }
+                .frame(width: 44, height: 44)
             }
         }
     }
@@ -232,27 +249,18 @@ struct MobilePlayerControls: View {
             Button {
                 viewModel.togglePlayPause()
             } label: {
-                Group {
-                    if viewModel.isBuffering {
-                        ProgressView()
-                            .tint(.black.opacity(0.8))
-                    } else {
-                        Image(systemName: viewModel.isPlaying ? "pause.fill" : "play.fill")
-                            .font(.system(size: 26, weight: .semibold))
-                            .foregroundStyle(.black.opacity(0.85))
-                            // play.fill reads left-heavy inside a circle;
-                            // nudge it toward the optical center.
-                            .offset(x: viewModel.isPlaying ? 0 : 1.5)
-                    }
-                }
-                .frame(width: 64, height: 64)
+                Image(systemName: viewModel.isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: 26, weight: .semibold))
+                    .foregroundStyle(.black.opacity(0.85))
+                    // play.fill reads left-heavy inside a circle;
+                    // nudge it toward the optical center.
+                    .offset(x: viewModel.isPlaying ? 0 : 1.5)
+                    .frame(width: 64, height: 64)
             }
             .buttonStyle(.glassProminent)
             .buttonBorderShape(.circle)
             .tint(.white.opacity(0.9))
-            .accessibilityLabel(
-                viewModel.isBuffering ? "Buffering" : (viewModel.isPlaying ? "Pause" : "Play")
-            )
+            .accessibilityLabel(viewModel.isPlaying ? "Pause" : "Play")
 
             Button {
                 viewModel.skipForward(10)
@@ -353,8 +361,8 @@ struct MobilePlayerControls: View {
                     .fill(Color.white.opacity(0.2))
                     .frame(height: barHeight)
 
-                // Buffered range (AVPlayer routes only; CoreMedia reports 0
-                // so the layer simply never draws).
+                // Buffered range from Aether telemetry. Routes that cannot
+                // report a comparable value leave the layer empty.
                 if let buffered = bufferedFraction, buffered > progress {
                     Capsule()
                         .fill(Color.white.opacity(0.22))
@@ -401,13 +409,14 @@ struct MobilePlayerControls: View {
             )
             .overlay(alignment: .topLeading) {
                 if viewModel.isScrubbing {
+                    let previewInset: CGFloat = viewModel.scrubPreviewImage == nil ? 80 : 102
                     scrubPreviewBubble
                         .position(
-                            x: min(max(width * progress, 96), max(width - 96, 96)),
-                            y: viewModel.trickplay != nil
-                                || viewModel.chapterThumbnailURL(at: viewModel.scrubPreviewTime) != nil
-                                ? -110
-                                : -36
+                            x: min(
+                                max(width * progress, previewInset),
+                                max(width - previewInset, previewInset)
+                            ),
+                            y: viewModel.scrubPreviewImage == nil ? -36 : -92
                         )
                         .transition(.opacity)
                         .allowsHitTesting(false)
@@ -437,20 +446,37 @@ struct MobilePlayerControls: View {
         return min(max(end, 0), 1)
     }
 
-    /// Floating time + chapter + trickplay readout pinned above the touch
-    /// point while scrubbing. Presentation-only: reads the same
-    /// `scrubPreviewTime` the seek machinery already maintains.
+    /// Floating time + chapter readout pinned above the touch point while
+    /// scrubbing. Presentation-only: reads the same `scrubPreviewTime` the
+    /// seek machinery already maintains.
     private var scrubPreviewBubble: some View {
-        ScrubPreviewBubble(
-            time: viewModel.scrubPreviewTime,
-            trickplay: viewModel.trickplay,
-            chapterThumbnailURL: viewModel.chapterThumbnailURL(at: viewModel.scrubPreviewTime),
-            chapterTitle: viewModel.chapterTitle(at: viewModel.scrubPreviewTime)
-        )
+        VStack(spacing: 6) {
+            if let image = viewModel.scrubPreviewImage {
+                Image(decorative: image, scale: 1)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 176, height: 99)
+                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            }
+            Text(PlayerTimeFormatter.formatHMS(viewModel.scrubPreviewTime))
+                .font(.system(size: 19, weight: .bold))
+                .foregroundStyle(.white)
+                .monospacedDigit()
+            if let chapter = chapterTitle(at: viewModel.scrubPreviewTime) {
+                Text(chapter)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.65))
+                    .lineLimit(1)
+            }
+        }
+        .padding(7)
+        .siloGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .fixedSize()
     }
 
     private func chapterTitle(at time: Double) -> String? {
-        viewModel.chapterTitle(at: time)
+        guard let chapter = viewModel.chapters.last(where: { $0.time <= time }) else { return nil }
+        return chapter.title ?? "Chapter \(chapter.index + 1)"
     }
 
     @ViewBuilder
@@ -488,11 +514,21 @@ struct MobilePlayerControls: View {
     }
 
     private func actionRowContent(style: ActionRowStyle) -> some View {
-        let noTracks = viewModel.audioTracks.isEmpty && viewModel.subtitleTracks.isEmpty
+        // The Audio & Subtitles pill is only inert when the picker would have
+        // nothing at all in it. A track-less file can still offer subtitle
+        // search (and the explanation when search isn't configured), so those
+        // entry points keep the sheet reachable. This also closes a pre-existing
+        // reachability gap: before, a file with no audio and no subtitle
+        // tracks disabled the pill outright, making subtitle search — the one
+        // feature that could fix exactly that file — impossible to reach.
+        let noTracks = viewModel.audioTracks.isEmpty
+            && viewModel.subtitleTracks.isEmpty
+            && !viewModel.subtitleSearchVisible
+            && !aiSubtitlesAvailable
         return HStack(spacing: 8) {
             qualityMenu(compact: style != .full)
 
-            trackSelectionMenu(style: style)
+            trackSelectionButton(style: style)
                 .disabled(noTracks)
                 .opacity(noTracks ? 0.4 : 1)
                 .accessibilityLabel("Audio & Subtitles")
@@ -508,16 +544,6 @@ struct MobilePlayerControls: View {
                 activeSheet = .settings
             }
             .accessibilityLabel("Playback Settings")
-
-            controlButton(
-                systemName: viewModel.showStatsForNerds
-                    ? "chart.bar.doc.horizontal.fill"
-                    : "chart.bar.doc.horizontal"
-            ) {
-                viewModel.toggleStatsForNerds()
-            }
-            .accessibilityLabel("Stats for nerds")
-            .accessibilityAddTraits(viewModel.showStatsForNerds ? [.isSelected] : [])
         }
     }
 
@@ -560,7 +586,7 @@ struct MobilePlayerControls: View {
             .frame(height: 34)
         }
         .menuStyle(.button)
-        // Auto at the top, reading down (see trackSelectionMenu).
+        // Keep Auto at the top, reading down.
         .menuOrder(.fixed)
 
         return Group {
@@ -586,7 +612,7 @@ struct MobilePlayerControls: View {
         return active.resolution
     }
 
-    // MARK: - Audio & Subtitles menu
+    // MARK: - Audio & Subtitles sheet
 
     /// Whether any AI subtitle action is available (translate or transcribe),
     /// per the server's capability probes **and** the current track list.
@@ -595,170 +621,23 @@ struct MobilePlayerControls: View {
         SubtitleTranslateMenu.hasActionableSource(viewModel)
     }
 
-    /// Native menu mirroring the Quality pill idiom: sectioned audio and
-    /// subtitle pickers with a leading checkmark on the selection and track
-    /// attributes as the menu-row subtitle — the same shape as AVPlayer's
-    /// built-in captions menu. The AI translate and provider-search entries
-    /// stay sheets; they're multi-step workflows, not pickers.
-    private func trackSelectionMenu(style: ActionRowStyle) -> some View {
-        Menu {
-            trackSelectionMenuContent
-        } label: {
-            menuPillLabel(
-                systemImage: "captions.bubble",
-                title: style == .icons
-                    ? nil
-                    : (style == .compact ? "Audio & Subs" : "Audio & Subtitles")
-            )
-        }
-        .menuStyle(.button)
-        // Bottom-anchored menus open upward and reverse their items by
-        // default; fixed order keeps Audio on top, reading down.
-        .menuOrder(.fixed)
-        .buttonStyle(.glass)
-        .buttonBorderShape(style == .icons ? .circle : .capsule)
-    }
-
-    @ViewBuilder
-    private var trackSelectionMenuContent: some View {
-            if !viewModel.audioTracks.isEmpty {
-                Section("Audio") {
-                    ForEach(viewModel.audioTracks) { track in
-                        trackMenuRow(
-                            title: track.primaryLabel,
-                            subtitle: track.attributesLabel,
-                            isSelected: viewModel.selectedAudioId == track.trackId
-                        ) {
-                            viewModel.selectAudio(track)
-                        }
-                    }
-                }
-            }
-            if !viewModel.subtitleTracks.isEmpty {
-                Section("Subtitles") {
-                    trackMenuRow(
-                        title: "Off",
-                        subtitle: nil,
-                        isSelected: viewModel.selectedSubtitleId == nil
-                    ) {
-                        viewModel.disableSubtitles()
-                    }
-                    ForEach(viewModel.orderedSubtitleTracks) { track in
-                        trackMenuRow(
-                            title: track.languageFirstPrimaryLabel,
-                            subtitle: subtitleMenuDetail(track),
-                            isSelected: viewModel.selectedSubtitleId == track.trackId
-                        ) {
-                            viewModel.selectSubtitle(track)
-                        }
-                    }
-                }
-                // Secondary subs only when a primary is set. The shared
-                // player contract forbids the same track occupying both
-                // subtitle slots, so offering a secondary picker before
-                // the primary slot is chosen would be misleading.
-                if viewModel.supportsSecondarySubtitles,
-                   viewModel.selectedSubtitleId != nil,
-                   !viewModel.availableSecondarySubtitleTracks.isEmpty {
-                    secondarySubtitlesSubmenu
-                }
-            }
-            if aiSubtitlesAvailable || viewModel.subtitleSearchAvailable {
-                Section {
-                    if aiSubtitlesAvailable {
-                        Button {
-                            activeSheet = .aiSubtitles
-                        } label: {
-                            Label("AI Subtitles…", systemImage: "sparkles")
-                        }
-                    }
-                    if viewModel.subtitleSearchAvailable {
-                        Button {
-                            activeSheet = .subtitleSearch
-                        } label: {
-                            Label("Search Subtitles…", systemImage: "magnifyingglass")
-                        }
-                    }
-                }
-            }
-    }
-
-    /// Submenu for the secondary subtitle slot, titled with the current pick
-    /// so the parent menu shows the state without opening it.
-    private var secondarySubtitlesSubmenu: some View {
-        Menu {
-            secondarySubtitlesSubmenuContent
-        } label: {
-            Text("Secondary Subtitles")
-            if let current = viewModel.availableSecondarySubtitleTracks.first(
-                where: { $0.trackId == viewModel.selectedSecondarySubtitleId }
-            ) {
-                Text(current.languageFirstPrimaryLabel)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var secondarySubtitlesSubmenuContent: some View {
-            trackMenuRow(
-                title: "Off",
-                subtitle: nil,
-                isSelected: viewModel.selectedSecondarySubtitleId == nil
-            ) {
-                viewModel.disableSecondarySubtitles()
-            }
-            ForEach(viewModel.availableSecondarySubtitleTracks) { track in
-                trackMenuRow(
-                    title: track.languageFirstPrimaryLabel,
-                    subtitle: subtitleMenuDetail(track),
-                    isSelected: viewModel.selectedSecondarySubtitleId == track.trackId,
-                    // Primary-selected track is disabled in the secondary
-                    // submenu so users can't pick the same sub twice.
-                    isDisabled: viewModel.selectedSubtitleId == track.trackId
-                ) {
-                    viewModel.selectSecondarySubtitle(track)
-                }
-            }
-    }
-
-    /// Menu row with the Quality-menu selection idiom (leading checkmark)
-    /// plus the native title/subtitle pattern for track attributes.
-    private func trackMenuRow(
-        title: String,
-        subtitle: String?,
-        isSelected: Bool,
-        isDisabled: Bool = false,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            if isSelected {
-                Label {
-                    Text(title)
-                    if let subtitle { Text(subtitle) }
-                } icon: {
-                    Image(systemName: "checkmark")
+    /// Track inventories are unbounded, so they use a scrollable sheet rather
+    /// than a native `Menu`, whose landscape popover can clip later rows.
+    private func trackSelectionButton(style: ActionRowStyle) -> some View {
+        Group {
+            if style == .icons {
+                controlButton(systemName: "captions.bubble") {
+                    activeSheet = .tracks
                 }
             } else {
-                Text(title)
-                if let subtitle { Text(subtitle) }
+                actionPill(
+                    systemImage: "captions.bubble",
+                    title: style == .compact ? "Audio & Subs" : "Audio & Subtitles"
+                ) {
+                    activeSheet = .tracks
+                }
             }
         }
-        .disabled(isDisabled)
-    }
-
-    /// One-line menu subtitle: meaningful embedded title first, then the
-    /// attribute summary. Subtitle rows lead with the language — embedded
-    /// titles are unreliable (format names, filenames) so a meaningful title
-    /// demotes to the detail slot and the language pill is dropped.
-    private func subtitleMenuDetail(_ track: PlayerTrack) -> String? {
-        let pills = track.attributePillLabels(includeLanguage: track.normalizedLanguageCode == nil)
-        let combined = [
-            track.languageFirstDetailLabel,
-            pills.isEmpty ? nil : pills.joined(separator: " · ")
-        ]
-        .compactMap { $0 }
-        .joined(separator: " · ")
-        return combined.isEmpty ? nil : combined
     }
 
     // MARK: - Chapters menu
@@ -795,7 +674,7 @@ struct MobilePlayerControls: View {
             )
         }
         .menuStyle(.button)
-        // Chapter 1 at the top, reading down (see trackSelectionMenu).
+        // Keep Chapter 1 at the top, reading down.
         .menuOrder(.fixed)
         .buttonStyle(.glass)
         .buttonBorderShape(style == .icons ? .circle : .capsule)
@@ -929,25 +808,6 @@ struct MobilePlayerControls: View {
         .transition(.opacity)
     }
 
-    private var statsForNerdsOverlay: some View {
-        VStack {
-            HStack {
-                PlaybackStatsPanel(stats: viewModel.playbackStats)
-                    .padding(12)
-                    .frame(maxWidth: 420, alignment: .leading)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color.black.opacity(0.72))
-                    )
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 12)
-            .padding(.top, 56)
-            Spacer(minLength: 0)
-        }
-        .allowsHitTesting(false)
-    }
-
     // MARK: - Helpers
 
     private func controlButton(systemName: String, action: @escaping () -> Void) -> some View {
@@ -966,7 +826,7 @@ struct MobilePlayerControls: View {
     // MARK: - Sheet identifier
 
     private enum PlayerSheet: Identifiable {
-        case aiSubtitles, subtitleSearch, settings
+        case tracks, aiSubtitles, subtitleSearch, settings
         var id: Self { self }
     }
 }
