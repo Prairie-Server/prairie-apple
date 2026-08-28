@@ -28,6 +28,14 @@ struct ServerEntry: Codable, Identifiable, Equatable, Hashable {
         return url
     }
 
+    /// Migration/read compatibility for registry rows that still carry a
+    /// remembered profile id. New writes omit this field once launch prefs
+    /// own the mapping.
+    var profileId: String? {
+        get { legacyProfileId }
+        set { legacyProfileId = newValue }
+    }
+
     /// Read only while migrating the pre-profile-launch registry schema. New
     /// registry writes deliberately omit profile identity because the server
     /// list is shared across Apple TV users while profile choice is not.
@@ -145,6 +153,13 @@ final class ServerRegistry {
 
     private static let defaultsKey = "continuumServerRegistry.v1"
     private static let migratedKey = "continuumServerRegistry.migrated.v1"
+    private static let legacySourceUrlKey = "continuumServerRegistry.legacySourceUrl.v1"
+    private static let legacyAccessTokenAccount = "com.continuum.app.accessToken"
+    private static let legacyRefreshTokenAccount = "com.continuum.app.refreshToken"
+    private static let legacyProfileTokenAccount = "com.continuum.app.profileToken"
+    private static let legacyAccounts = [
+        legacyAccessTokenAccount, legacyRefreshTokenAccount, legacyProfileTokenAccount,
+    ]
     private static let sharedTVRegistryAccount = "com.continuum.serverRegistry.v2"
     private static let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "com.continuum.app",
@@ -217,6 +232,9 @@ final class ServerRegistry {
         let previousEntries = entries
         var merged = entry
         if let existing = self.entries.first(where: { $0.id == entry.id }) {
+            if preservingProfile, merged.legacyProfileId == nil {
+                merged.legacyProfileId = existing.legacyProfileId
+            }
             if merged.fetchedName == nil || merged.fetchedName?.isEmpty == true {
                 merged.fetchedName = existing.fetchedName
             }
@@ -250,9 +268,16 @@ final class ServerRegistry {
             reason: isExistingEntry ? "updatedExisting" : "addedNew"
         )
         if !preservingProfile {
+            merged.legacyProfileId = nil
             launchPreferences.clearRememberedProfile(for: entry.id)
         }
         return merged
+    }
+
+    func setProfileId(_ profileId: String?, for serverId: String) {
+        guard let idx = entries.firstIndex(where: { $0.id == serverId }) else { return }
+        entries[idx].legacyProfileId = profileId
+        _ = persist()
     }
 
     @discardableResult
@@ -431,7 +456,11 @@ final class ServerRegistry {
 
         defaults.set(entry.url, forKey: "serverUrl")
         defaults.set(serverId, forKey: SharedStorage.activeServerIdKey)
-        defaults.removeObject(forKey: SharedStorage.profileIdKey)
+        if let profileId = entry.legacyProfileId, !profileId.isEmpty {
+            defaults.set(profileId, forKey: SharedStorage.profileIdKey)
+        } else {
+            defaults.removeObject(forKey: SharedStorage.profileIdKey)
+        }
         activeServerId = serverId
         if let index = entries.firstIndex(where: { $0.id == serverId }) {
             entries[index].lastUsedAt = Date()
@@ -1094,5 +1123,15 @@ final class ServerRegistry {
         }
         defaults.set(true, forKey: Self.migratedKey)
         Self.logger.info("Migrated legacy single-server state to registry id=\(id, privacy: .public)")
+    }
+
+    /// Drop leftover legacy fixed-name Keychain accounts when the user signs
+    /// out or removes servers before migration completes.
+    func discardLegacyKeychainAccountsIfUnmigrated() {
+        guard !defaults.bool(forKey: Self.migratedKey) else { return }
+        for account in Self.legacyAccounts {
+            _ = keychain.delete(account)
+        }
+        defaults.removeObject(forKey: Self.legacySourceUrlKey)
     }
 }

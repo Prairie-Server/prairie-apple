@@ -175,6 +175,38 @@ struct SharedDefaults: @unchecked Sendable {
     }
 }
 
+/// Thread-safe in-memory stand-in for `SecItem` used by unit tests.
+///
+/// CI runs PrairieNetworkingTests with `CODE_SIGNING_ALLOWED=NO`, so real
+/// Keychain writes return `errSecMissingEntitlement` (-34018). Persistence
+/// tests inject one of these per suite instead of hitting the Security framework.
+final class InMemoryKeychainStore: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String: String] = [:]
+
+    private static func storageKey(service: String, account: String, accessGroup: String?) -> String {
+        "\(service)\u{0}\(account)\u{0}\(accessGroup ?? "")"
+    }
+
+    func set(_ value: String, service: String, account: String, accessGroup: String?) {
+        lock.lock()
+        defer { lock.unlock() }
+        values[Self.storageKey(service: service, account: account, accessGroup: accessGroup)] = value
+    }
+
+    func get(service: String, account: String, accessGroup: String?) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return values[Self.storageKey(service: service, account: account, accessGroup: accessGroup)]
+    }
+
+    func delete(service: String, account: String, accessGroup: String?) {
+        lock.lock()
+        defer { lock.unlock() }
+        values.removeValue(forKey: Self.storageKey(service: service, account: account, accessGroup: accessGroup))
+    }
+}
+
 /// Minimal Keychain reader/writer targeted at the shared access group.
 /// Used by both the main app (via `TokenStore`) and the Top Shelf
 /// extension. Items are stored as generic passwords with accessibility
@@ -190,15 +222,28 @@ struct SharedKeychain {
     let accessGroup: String?
     let audience: KeychainAudience
     let usesUserIndependentKeychain: Bool
+    /// When non-nil, all reads/writes go through this store instead of `SecItem`.
+    private let memoryStore: InMemoryKeychainStore?
 
     init(service: String = SharedStorage.keychainService,
          accessGroup: String? = SharedStorage.keychainAccessGroup,
          audience: KeychainAudience = .currentUser,
-         usesUserIndependentKeychain: Bool = RuntimeConfiguration.usesUserIndependentKeychain) {
+         usesUserIndependentKeychain: Bool = RuntimeConfiguration.usesUserIndependentKeychain,
+         memoryStore: InMemoryKeychainStore? = nil) {
         self.service = service
         self.accessGroup = accessGroup
         self.audience = audience
         self.usesUserIndependentKeychain = usesUserIndependentKeychain
+        self.memoryStore = memoryStore
+    }
+
+    /// Convenience for unit tests that must not depend on code signing /
+    /// Keychain entitlements.
+    static func inMemory(
+        service: String = "PrairieTests.keychain.\(UUID().uuidString)",
+        accessGroup: String? = nil
+    ) -> SharedKeychain {
+        SharedKeychain(service: service, accessGroup: accessGroup, memoryStore: InMemoryKeychainStore())
     }
 
     func withAudience(_ audience: KeychainAudience) -> SharedKeychain {
@@ -206,7 +251,8 @@ struct SharedKeychain {
             service: service,
             accessGroup: accessGroup,
             audience: audience,
-            usesUserIndependentKeychain: usesUserIndependentKeychain
+            usesUserIndependentKeychain: usesUserIndependentKeychain,
+            memoryStore: memoryStore
         )
     }
 
@@ -215,6 +261,10 @@ struct SharedKeychain {
     /// a successful re-save) must gate the delete on this return value.
     @discardableResult
     func set(_ value: String, for account: String) -> Bool {
+        if let memoryStore {
+            memoryStore.set(value, service: service, account: account, accessGroup: accessGroup)
+            return true
+        }
         guard let data = value.data(using: .utf8) else {
             Self.logger.error("Failed to encode keychain value for account \(account, privacy: .public).")
             return false
@@ -238,6 +288,9 @@ struct SharedKeychain {
     }
 
     func get(_ account: String) -> String? {
+        if let memoryStore {
+            return memoryStore.get(service: service, account: account, accessGroup: accessGroup)
+        }
         if let found = read(account: account, accessGroup: accessGroup) {
             return found
         }
@@ -293,6 +346,10 @@ struct SharedKeychain {
 
     @discardableResult
     func delete(_ account: String) -> Bool {
+        if let memoryStore {
+            memoryStore.delete(service: service, account: account, accessGroup: accessGroup)
+            return true
+        }
         let query = baseQuery(account: account)
         let status = SecItemDelete(query as CFDictionary)
         if status == errSecSuccess || status == errSecItemNotFound { return true }
