@@ -69,9 +69,11 @@ final class AICapabilities {
 }
 
 /// ContinuumAPI-backed probe; real type is excluded from the FFmpeg-free host
-/// the same way ``AICapabilities`` is. ServerRegistry only needs reset/refresh.
+/// the same way ``AICapabilities`` is. ServerRegistry / ContinuumAPI only need
+/// reset/refresh/requestQuery.
 final class ImageSizeCapability: @unchecked Sendable {
     static let shared = ImageSizeCapability()
+    var requestQuery: [String: String] { [:] }
     func reset() {}
     func refresh() async {}
 }
