@@ -1003,7 +1003,7 @@ final class NetworkingSiloTokenStoreGateFillTests: XCTestCase {
             controllerDeviceId: "c1",
             expiresAt: Date().addingTimeInterval(60)
         )
-        let snapshot = await store.beginTemporaryScope(first)
+        _ = await store.beginTemporaryScope(first)
         let second = TemporaryAuthScope(
             serverId: serverID,
             serverURL: "https://silo-gate.example",
@@ -1014,7 +1014,9 @@ final class NetworkingSiloTokenStoreGateFillTests: XCTestCase {
             controllerDeviceId: "c2",
             expiresAt: Date().addingTimeInterval(60)
         )
-        _ = await store.beginTemporaryScope(second)
+        // beginTemporaryScope returns the *previous* overlay; capture it when
+        // installing `second` so restore can put `first` back.
+        let snapshot = await store.beginTemporaryScope(second)
         let restored = await store.restoreTemporaryScope(
             snapshot,
             replacingGenerationID: second.credentialGenerationID
