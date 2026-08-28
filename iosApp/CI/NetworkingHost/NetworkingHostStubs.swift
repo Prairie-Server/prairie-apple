@@ -39,7 +39,8 @@ actor ContinuumAI {
     static let shared = ContinuumAI()
 
     func subtitleProvidersStatus() async throws -> SubtitleProvidersStatus {
-        SubtitleProvidersStatus(enabled: true)
+        let data = Data("{\"enabled\":true}".utf8)
+        return try JSONDecoder().decode(SubtitleProvidersStatus.self, from: data)
     }
 }
 
