@@ -1,3 +1,6 @@
+> [!WARNING]
+> **Historical pre-AetherEngine archive.** This document describes the removed custom-player architecture or its pre-migration validation model. It is retained for history only and must not be used as current implementation guidance. See the [AetherEngine-only replacement specification](aetherengine-replacement-spec.md).
+
 # Prairie Cast Remote (iOS → tvOS)
 
 Peer-to-peer LAN remote control: an iPhone discovers a Prairie Apple TV on the
@@ -11,7 +14,7 @@ Android use the same wire protocol.
 
 | Layer | Type | Role |
 |-------|------|------|
-| Wire protocol | `Control/PrairieControlProtocol.swift` | Message enum + Codable framing; v1/v2 negotiation, `serviceType = _prairiecast._tcp` |
+| Wire protocol | `Control/PrairieControlProtocol.swift` | Message enum + Codable framing; v1/v2 negotiation, `serviceType = _silocast._tcp` |
 | Transport | `Control/PrairieControlSession.swift` | `actor` over `NWConnection` (TLS-PSK), TLV-framed JSON, ordered outbound queue |
 | Phone controller | `Control/iOS/PrairieControlClient.swift` | Connect, negotiate, authorize handoff, heartbeat, reconnect, command send |
 | TV receiver | `Control/tvOS/TVControlReceiver.swift` | Advertise, negotiate, authorize, launch, apply controls, broadcast state |
@@ -125,7 +128,7 @@ credentials without the user's participation; it does not cryptographically
 pair the LAN devices.
 
 **Deferred follow-up (recommended):** derive a per-pair / per-server secret from
-the existing companion-pairing trust (`_prairiepair`, see the pairing flow) and bind
+the existing companion-pairing trust (`_silopair`, see the pairing flow) and bind
 it into the cast `hello` handshake (e.g. HMAC the hello/launch with the per-pair
 secret, or a one-time PIN echoed from the TV), so only paired devices can control
 the TV. Until then, treat LAN access as the trust boundary.

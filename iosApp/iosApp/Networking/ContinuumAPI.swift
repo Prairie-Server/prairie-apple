@@ -42,6 +42,38 @@ actor ContinuumAPI {
         await tokenStore.getProfileId()
     }
 
+    // MARK: - Image size selection
+
+    /// Extra query entries asking the server to bake a larger image
+    /// variant into every image URL in the response.
+    ///
+    /// One place decides this for every image-bearing endpoint, so call
+    /// sites just merge it in. Empty off tvOS, and empty until (or
+    /// unless) the capability probe in ``ImageSizeCapability`` lands —
+    /// which makes iOS and macOS requests byte-identical to before.
+    private var imageSizeQuery: [String: String] {
+        get async {
+            // Gate only the artwork request, never launch/profile navigation.
+            // Concurrent startup prefetches join one probe, and older or
+            // unreachable servers fall back to an empty query.
+            await ImageSizeCapability.shared.refresh()
+            return ImageSizeCapability.shared.requestQuery
+        }
+    }
+
+    /// Merge ``imageSizeQuery`` into a caller-built query. Caller-supplied
+    /// values win, so an explicit size is never overwritten.
+    private func withImageSize(_ query: [String: String]) async -> [String: String] {
+        query.merging(await imageSizeQuery) { caller, _ in caller }
+    }
+
+    /// `GET /api/v1/images/capability`. Throws `HTTPError.http(404, _)`
+    /// on servers that predate image-size selection; the caller treats
+    /// that as "feature off".
+    func imageSizeCapability() async throws -> ImageSizeCapabilityResponse {
+        try await http.get("/api/v1/images/capability")
+    }
+
     // MARK: - Path-based dispatcher (legacy)
 
     func get<T: Decodable>(_ path: String, query: [String: String] = [:]) async throws -> T {
@@ -122,11 +154,6 @@ actor ContinuumAPI {
             ))
         }
 
-        // Admin
-        if components == ["api", "v1", "admin", "stats"] {
-            return try cast(try await adminStats())
-        }
-
         // Libraries
         if components == ["api", "v1", "libraries"] || components == ["api", "v1", "user", "libraries"] {
             return try cast(try await libraries())
@@ -179,10 +206,6 @@ actor ContinuumAPI {
             return try cast(try await watchDetail(contentId: components[3]))
         }
 
-        // Auth status
-        if components == ["api", "v1", "auth", "signup"] {
-            return try cast(try await signupStatus())
-        }
         if components == ["api", "v1", "user", "me"] || components == ["api", "v1", "auth", "me"] {
             return try cast(try await currentUser())
         }
@@ -254,13 +277,6 @@ actor ContinuumAPI {
            components[2] == "playback", components[4] == "progress" {
             let report = try requireBody(body, as: ProgressReport.self)
             try await reportPlaybackProgress(sessionId: components[3], report: report)
-            return
-        }
-        if components.count == 5,
-           components[0] == "api", components[1] == "v1",
-           components[2] == "profiles", components[4] == "select" {
-            let request = try requireBody(body, as: SelectProfileBody.self)
-            try await selectProfile(profileId: components[3], pin: request.pin)
             return
         }
         if components.count == 4,
@@ -350,8 +366,21 @@ actor ContinuumAPI {
 
     // --- Auth ---
 
-    func signupStatus() async throws -> SignupStatus {
-        try await http.get("/api/v1/auth/signup")
+    // --- Onboarding tour (profile-scoped) ---
+
+    func onboardingFlow(surface: String) async throws -> OnboardingFlow {
+        try await http.get(
+            "/api/v1/onboarding/flow",
+            query: ["surface": surface]
+        )
+    }
+
+    func onboardingState() async throws -> OnboardingState {
+        try await http.get("/api/v1/onboarding/state")
+    }
+
+    func postOnboardingProgress(_ request: OnboardingProgressRequest) async throws {
+        try await http.postVoid("/api/v1/onboarding/progress", body: request)
     }
 
     func currentUser() async throws -> UserInfo {
@@ -425,7 +454,7 @@ actor ContinuumAPI {
     // --- Home / sections ---
 
     func homeSections() async throws -> SectionsResponse {
-        try await http.get("/api/v1/home/sections")
+        try await http.get("/api/v1/home/sections", query: await imageSizeQuery)
     }
 
     func dismissContinueWatchingItem(contentId: String, progressUpdatedAt: String) async throws {
@@ -440,7 +469,7 @@ actor ContinuumAPI {
     }
 
     func librarySections(libraryId: Int) async throws -> SectionsResponse {
-        try await http.get("/api/v1/library/\(libraryId)/sections")
+        try await http.get("/api/v1/library/\(libraryId)/sections", query: await imageSizeQuery)
     }
 
     /// Fetch the IDs of items the recommendation engine considers
@@ -497,8 +526,11 @@ actor ContinuumAPI {
 
     // --- Catalog ---
 
+    /// Every catalog-shaped list (browse, search, person credits,
+    /// collection items, section paging) funnels through here, so the
+    /// image-size entry only has to be merged in once.
     func catalog(query: [String: String]) async throws -> CatalogResponse {
-        try await http.get("/api/v1/catalog", query: query)
+        try await http.get("/api/v1/catalog", query: await withImageSize(query))
     }
 
     func historyCatalog(
@@ -518,7 +550,7 @@ actor ContinuumAPI {
     }
 
     func itemDetail(contentId: String) async throws -> ItemDetail {
-        try await http.get("/api/v1/catalog/items/\(contentId)")
+        try await http.get("/api/v1/catalog/items/\(contentId)", query: await imageSizeQuery)
     }
 
     func catalogFilters(libraryId: Int?, includeTechnical: Bool = true) async throws -> CatalogFilters {
@@ -530,15 +562,21 @@ actor ContinuumAPI {
     }
 
     func seasons(seriesId: String) async throws -> SeasonsResponse {
-        try await http.get("/api/v1/catalog/series/\(seriesId)/seasons")
+        try await http.get(
+            "/api/v1/catalog/series/\(seriesId)/seasons",
+            query: await imageSizeQuery
+        )
     }
 
     func episodes(seriesId: String, seasonNumber: Int) async throws -> EpisodesResponse {
-        try await http.get("/api/v1/catalog/series/\(seriesId)/seasons/\(seasonNumber)/episodes")
+        try await http.get(
+            "/api/v1/catalog/series/\(seriesId)/seasons/\(seasonNumber)/episodes",
+            query: await imageSizeQuery
+        )
     }
 
     func watchDetail(contentId: String) async throws -> WatchDetail {
-        try await http.get("/api/v1/watch/\(contentId)")
+        try await http.get("/api/v1/watch/\(contentId)", query: await imageSizeQuery)
     }
 
     func person(id: Int) async throws -> Person {
@@ -547,6 +585,21 @@ actor ContinuumAPI {
 
     func refreshPerson(id: Int) async throws -> PersonRefreshQueuedResponse {
         try await http.post("/api/v1/people/\(id)/refresh")
+    }
+
+    /// Ask the server to look for trailers for a movie or series.
+    ///
+    /// Three expected outcomes, all decoded from a body: `202` +
+    /// `{"status":"queued"}` when a refresh started, `200` +
+    /// `{"status":"cooldown","next_allowed_at":…}` when the item was checked
+    /// too recently, and `200` + `{"status":"disabled"}` when remote videos
+    /// are switched off for every library holding the item. Only `429`
+    /// (per-user rate limit) and the usual transport failures throw.
+    ///
+    /// There is no job id: observe completion by re-fetching item detail
+    /// until `videos` / `extras` change — see ``TrailerFetchCoordinator``.
+    func requestTrailersRefresh(contentId: String) async throws -> TrailerRefreshResponse {
+        try await http.post("/api/v1/items/\(contentId)/trailers/refresh")
     }
 
     func personCatalogItems(
@@ -713,25 +766,31 @@ actor ContinuumAPI {
 
     // --- Personal data ---
 
+    // These three build their own query rather than routing through
+    // `catalog(query:)`, so each merges the image-size entry itself.
+    // They back real poster grids on TV, and `historyCatalog` — the
+    // entry point the history screen actually uses — is already covered
+    // by `catalog(query:)`.
+
     func favorites(offset: Int, limit: Int) async throws -> CatalogResponse {
-        try await http.get("/api/v1/favorites", query: [
+        try await http.get("/api/v1/favorites", query: await withImageSize([
             "offset": String(offset),
             "limit": String(limit),
-        ])
+        ]))
     }
 
     func watchlist(offset: Int, limit: Int) async throws -> CatalogResponse {
-        try await http.get("/api/v1/watchlist", query: [
+        try await http.get("/api/v1/watchlist", query: await withImageSize([
             "offset": String(offset),
             "limit": String(limit),
-        ])
+        ]))
     }
 
     func history(offset: Int, limit: Int) async throws -> CatalogResponse {
-        try await http.get("/api/v1/history", query: [
+        try await http.get("/api/v1/history", query: await withImageSize([
             "offset": String(offset),
             "limit": String(limit),
-        ])
+        ]))
     }
 
     /// Server returns 204 when the item is a favorite and 404 otherwise.
@@ -842,12 +901,6 @@ actor ContinuumAPI {
         )
     }
 
-    // --- Admin ---
-
-    func adminStats() async throws -> AdminStats {
-        try await http.get("/api/v1/admin/stats")
-    }
-
     // --- Profiles ---
 
     func listProfiles() async throws -> [UserProfile] {
@@ -855,7 +908,11 @@ actor ContinuumAPI {
         return response.profiles.map(\.asUserProfile)
     }
 
-    func selectProfile(profileId: String, pin: String?) async throws {
+    /// Verifies a protected profile without mutating process-wide identity.
+    /// `AuthService` uses this to finish the network round trip first, then
+    /// commit profile ID and proof together behind HTTPClient's transition
+    /// barrier.
+    func verifyProfileSelection(profileId: String, pin: String?) async throws -> String? {
         // Profiles without a PIN: just record the selection locally; there's
         // nothing to verify and the server's /verify-pin rejects empty PINs
         // with 400. Mirrors `ProfileSelectionViewModel.onProfileTapped` on
@@ -868,20 +925,19 @@ actor ContinuumAPI {
             guard response.valid else {
                 throw APIError.httpError(statusCode: 401)
             }
-            if let token = response.profileToken {
-                await tokenStore.setProfileToken(token)
-            }
-        } else {
-            await tokenStore.setProfileToken(nil)
+            return response.profileToken
         }
-        await tokenStore.setProfileId(profileId)
+        return nil
     }
 
     func createProfile(
         name: String,
         avatarEmoji: String?,
         pin: String?,
-        isChild: Bool
+        isChild: Bool,
+        maxContentRating: String? = nil,
+        libraryRestrictionsEnabled: Bool = false,
+        allowedLibraryIds: [Int] = []
     ) async throws -> UserProfile {
         let profile: Profile = try await http.post(
             "/api/v1/profiles",
@@ -889,7 +945,10 @@ actor ContinuumAPI {
                 name: name,
                 avatar: avatarEmoji,
                 pin: pin,
-                isChild: isChild
+                isChild: isChild,
+                maxContentRating: maxContentRating,
+                libraryRestrictionsEnabled: libraryRestrictionsEnabled,
+                allowedLibraryIds: allowedLibraryIds
             )
         )
         return profile.asUserProfile

@@ -10,7 +10,7 @@ struct TVDiagnosticsConsentScreen: View {
 
     var body: some View {
         ZStack {
-            Color.continuumBackground.ignoresSafeArea()
+            SettingsBackdrop()
 
             VStack(alignment: .leading, spacing: 24) {
                 Text("Crash Reports")
@@ -19,19 +19,21 @@ struct TVDiagnosticsConsentScreen: View {
                     .font(.system(size: 24))
                     .foregroundStyle(Color.continuumSecondaryText)
 
-                Button("Cancel", systemImage: "xmark", action: dismiss.callAsFunction)
+                Button("Cancel", action: dismiss.callAsFunction)
                     .buttonStyle(TVSettingsPaneRowStyle())
                     .focused($focusedAction, equals: .cancel)
 
-                Button("Ask", systemImage: "questionmark.circle") { select(.ask) }
+                Button("Ask") { select(.ask) }
                     .buttonStyle(TVSettingsPaneRowStyle())
                     .focused($focusedAction, equals: .ask)
 
-                Button("Always", systemImage: "paperplane.circle.fill") { proposedMode = .always }
-                    .buttonStyle(TVSettingsPaneRowStyle())
-                    .focused($focusedAction, equals: .always)
+                if model.allowsAlwaysSend {
+                    Button("Always") { proposedMode = .always }
+                        .buttonStyle(TVSettingsPaneRowStyle())
+                        .focused($focusedAction, equals: .always)
+                }
 
-                Button("Never", systemImage: "nosign") { proposedMode = .never }
+                Button("Never") { proposedMode = .never }
                     .buttonStyle(TVSettingsPaneRowStyle(isDestructive: true))
                     .focused($focusedAction, equals: .never)
             }
@@ -50,7 +52,9 @@ struct TVDiagnosticsConsentScreen: View {
             } else if proposedMode == .never {
                 TVSettingsConfirmationOverlay(
                     title: "Turn Off Crash Reports?",
-                    message: "Pending reports for this server account will be deleted.",
+                    message: model.selectedDestination == .hosted
+                        ? "Pending local reports will be deleted. Reports already received by Prairie Diagnostics will also be queued for deletion."
+                        : "Pending reports for this server account will be deleted.",
                     confirmTitle: "Turn Off and Delete",
                     cancel: cancelConfirmation,
                     confirm: { confirm(.never) }

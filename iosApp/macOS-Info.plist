@@ -29,5 +29,7 @@
 	<true/>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>
 	<true/>
+	<key>PrairieBuildChannel</key>
+	<string>$(PRAIRIE_BUILD_CHANNEL)</string>
 </dict>
 </plist>

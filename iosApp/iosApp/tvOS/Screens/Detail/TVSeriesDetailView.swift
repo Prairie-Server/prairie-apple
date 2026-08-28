@@ -25,6 +25,20 @@ struct TVSeriesDetailView<BelowSynopsis: View>: View {
     /// next refetch — suppress it so the "Auto: …" preview doesn't echo the
     /// cleared selection.
     var nextUpSubtitleOverrideCleared: Bool = false
+    /// Merged remote-video + local-extra rail, already shaped by the call
+    /// site (which owns the YouTube-app availability probe that decides
+    /// whether remote cards exist at all). Empty hides the rail.
+    let trailerEntries: [TrailerRailEntry]
+    let onSelectTrailer: (TrailerRailEntry) -> Void
+    /// Whether the manual "Find Trailers" action can be offered. The caller
+    /// also requires the YouTube app because tvOS has no browser fallback.
+    let supportsTrailerFetch: Bool
+    let onFindTrailers: () -> Void
+    /// Copy from the fetch coordinator; nil while idle.
+    let trailerFetchStatus: String?
+    let isFetchingTrailers: Bool
+    /// Called once a terminal fetch message has been on screen long enough.
+    let onTrailerStatusShown: () -> Void
     let onSelectSeason: (Season) -> Void
     let onPlayEpisode: (_ contentId: String, _ fileId: Int?, _ startFromBeginning: Bool) -> Void
     let onEpisodeTap: (_ contentId: String) -> Void
@@ -54,12 +68,6 @@ struct TVSeriesDetailView<BelowSynopsis: View>: View {
     /// (Play / Start Over / circle buttons). Backing up into it restores the
     /// page-entry framing by scrolling the hero back to the top.
     @FocusState private var actionRowFocused: Bool
-    /// Season whose next-up Play button has already auto-claimed focus. Keyed on
-    /// the season (not a bare Bool) so we auto-focus Play once per season: the
-    /// first async next-up resolve AND an in-place season switch — same view
-    /// instance, `selectedSeason` mutates — both re-focus Play, while never
-    /// yanking focus back within the same season once the viewer moves on.
-    @State private var autoFocusedSeasonKey: String?
 
     var body: some View {
         ScrollViewReader { scrollProxy in
@@ -74,6 +82,7 @@ struct TVSeriesDetailView<BelowSynopsis: View>: View {
                         if let cast = detail.cast, !cast.isEmpty {
                             castSection(cast: cast)
                         }
+                        trailersSection
                         detailsSection
                         similarSection
                     }
@@ -84,13 +93,6 @@ struct TVSeriesDetailView<BelowSynopsis: View>: View {
             .ignoresSafeArea()
             .focusScope(detailFocusNamespace)
             .defaultFocus($playFocused, true, priority: .userInitiated)
-            .onChange(of: nextUpEpisode?.contentId) { _, newValue in
-                guard newValue != nil else { return }
-                let seasonKey = selectedSeason?.contentId ?? ""
-                guard autoFocusedSeasonKey != seasonKey else { return }
-                autoFocusedSeasonKey = seasonKey
-                playFocused = true
-            }
             .detailFocusScroll(
                 proxy: scrollProxy,
                 seasonRowFocused: seasonRowFocused,
@@ -146,6 +148,15 @@ struct TVSeriesDetailView<BelowSynopsis: View>: View {
                     onSelectSubtitleTrack: onSelectNextUpSubtitleTrack
                 )
             }
+            if let trailerFetchStatus {
+                // Non-focusable readout, so it adds no stop to the action
+                // column's focus traversal.
+                TVTrailerStatusPill(
+                    message: trailerFetchStatus,
+                    isFetching: isFetchingTrailers,
+                    onAutoDismiss: onTrailerStatusShown
+                )
+            }
         }
     }
 
@@ -154,57 +165,50 @@ struct TVSeriesDetailView<BelowSynopsis: View>: View {
     }
 
     private var actionRow: some View {
-        HStack(spacing: 36) {
-            if let nextUp = nextUpEpisode {
-                TVPrimaryPillButton(
-                    icon: "play.fill",
-                    title: playButtonLabel(for: nextUp),
-                    action: { onPlayEpisode(nextUp.contentId, selectedFileId(for: nextUp), false) },
-                    focused: $playFocused
-                )
-                if nextUp.userData?.isInProgress == true {
-                    TVSecondaryPillButton(
-                        icon: "backward.end.fill",
-                        title: "Start Over",
-                        action: { onPlayEpisode(nextUp.contentId, selectedFileId(for: nextUp), true) }
-                    )
+        TVDetailActionRow(
+            playTitle: nextUpEpisode.map(playButtonLabel(for:)),
+            onPlay: {
+                guard let nextUp = nextUpEpisode else { return }
+                onPlayEpisode(nextUp.contentId, selectedFileId(for: nextUp), false)
+            },
+            onStartOver: nextUpEpisode?.userData?.isInProgress == true
+                ? {
+                    guard let nextUp = nextUpEpisode else { return }
+                    onPlayEpisode(nextUp.contentId, selectedFileId(for: nextUp), true)
+                }
+                : nil,
+            isFavorite: isFavorite,
+            onToggleFavorite: onToggleFavorite,
+            inWatchlist: inWatchlist,
+            onToggleWatchlist: onToggleWatchlist,
+            isWatched: isWatched,
+            watchedLabelMark: "Mark Series Watched",
+            watchedLabelUnmark: "Mark Series Unwatched",
+            onToggleWatched: onToggleWatched,
+            initialFocusScope: .season(key: selectedSeason?.contentId),
+            focusNamespace: detailFocusNamespace,
+            playFocused: $playFocused,
+            rowFocused: $actionRowFocused,
+            moreMenu: {
+                if supportsTrailerFetch {
+                    moreMenu
                 }
             }
+        )
+    }
 
-            TVCircleActionButton(
-                icon: "heart",
-                iconActive: "heart.fill",
-                isActive: isFavorite,
-                accessibilityLabel: isFavorite ? "Remove from favorites" : "Add to favorites",
-                action: onToggleFavorite
-            )
+    // MARK: - More menu
 
-            TVCircleActionButton(
-                icon: "bookmark",
-                iconActive: "bookmark.fill",
-                isActive: inWatchlist,
-                accessibilityLabel: inWatchlist ? "Remove from watchlist" : "Add to watchlist",
-                action: onToggleWatchlist
-            )
-
-            TVCircleActionButton(
-                icon: "checkmark.circle",
-                iconActive: "checkmark.circle.fill",
-                isActive: isWatched,
-                accessibilityLabel: isWatched ? "Mark Series Unwatched" : "Mark Series Watched",
-                action: onToggleWatched
-            )
+    /// The series action row had no overflow button before "Find Trailers";
+    /// it is the only entry today. Lives inside the row's existing
+    /// `.focusSection()`, so it needs no focus work of its own.
+    @ViewBuilder
+    private var moreMenu: some View {
+        TVCircleMenuButton(accessibilityLabel: "More options") {
+            Button(action: onFindTrailers) {
+                Label("Find Trailers", systemImage: "film.stack")
+            }
         }
-        // Container binding — flips true when any button in the row has
-        // focus, driving the scroll-to-top in `body`.
-        .focused($actionRowFocused)
-        // Mirror of the selector row's full-width focus section: the subtitle
-        // pill below can extend past the last circle button, and an Up press
-        // from that overhang would otherwise skip this row for the synopsis.
-        // Full-width bounds put the row under every selector pill so Up lands
-        // on the nearest action button. Buttons stay left-aligned.
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .focusSection()
     }
 
     /// Best "Play" target for the series: an in-progress episode if there
@@ -331,6 +335,14 @@ struct TVSeriesDetailView<BelowSynopsis: View>: View {
             contentId: detail.contentId,
             onSelect: onNavigateToItem
         )
+    }
+
+    // MARK: - Trailers & More
+
+    private var trailersSection: some View {
+        // Header lives inside the rail so it disappears with the cards when
+        // the item has neither remote videos nor local extras.
+        TVTrailersRail(entries: trailerEntries, onSelect: onSelectTrailer)
     }
 
     // MARK: - Cast

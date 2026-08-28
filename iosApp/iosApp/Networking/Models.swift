@@ -462,12 +462,115 @@ struct ItemDetail: Codable {
     /// language. Drives the on-view "translate this description"
     /// affordance; clears once the localized overview lands.
     let pendingTranslationLanguage: String?
+    /// Remote provider videos (YouTube trailers, teasers, …) for movies and
+    /// series, pre-ordered by the server (trailers first, official first).
+    /// Never populated for episodes.
+    ///
+    /// `var` with a default (rather than `let`) purely so the synthesized
+    /// memberwise initializer keeps a default for this parameter: the
+    /// detail views rebuild an `ItemDetail` field-by-field when folding in
+    /// watch metadata, and those call sites must keep compiling. Optional
+    /// `var`s are still decoded normally (unlike `let`s with an initial
+    /// value, which Codable skips).
+    var videos: [ItemVideo]? = nil
+    /// Local extras discovered by the scanner. Each carries its own
+    /// `contentId`, playable through the normal `/watch` flow.
+    var extras: [ItemExtra]? = nil
 }
 
 extension ItemDetail {
     var isAudiobook: Bool {
         audiobook != nil || PrairieMediaType.isAudiobook(type)
     }
+}
+
+/// A remote provider video reference (server `ItemVideoInfo`). The site
+/// reference (`site` + `siteKey`) is all a client needs to build thumbnail,
+/// watch, and embed URLs — see ``TrailerRail``.
+struct ItemVideo: Codable, Hashable {
+    let kind: String
+    let site: String
+    let siteKey: String
+    let name: String?
+    let language: String?
+    let isOfficial: Bool
+
+    init(
+        kind: String,
+        site: String,
+        siteKey: String,
+        name: String? = nil,
+        language: String? = nil,
+        isOfficial: Bool = false
+    ) {
+        self.kind = kind
+        self.site = site
+        self.siteKey = siteKey
+        self.name = name
+        self.language = language
+        self.isOfficial = isOfficial
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try c.decode(String.self, forKey: .kind)
+        site = try c.decode(String.self, forKey: .site)
+        siteKey = try c.decode(String.self, forKey: .siteKey)
+        name = try c.decodeIfPresent(String.self, forKey: .name)
+        language = try c.decodeIfPresent(String.self, forKey: .language)
+        // Defensive: a missing `is_official` must not fail the whole item
+        // detail decode.
+        isOfficial = try c.decodeIfPresent(Bool.self, forKey: .isOfficial) ?? false
+    }
+}
+
+/// A local extras file (server `ItemExtraInfo`). `contentId` is a playable
+/// watch target like any other item; `fileId` backs direct-stream affordances.
+struct ItemExtra: Codable, Hashable, Identifiable {
+    let contentId: String
+    let kind: String
+    let title: String?
+    let durationSeconds: Int?
+    let fileId: Int?
+    var id: String { contentId }
+
+    init(
+        contentId: String,
+        kind: String,
+        title: String? = nil,
+        durationSeconds: Int? = nil,
+        fileId: Int? = nil
+    ) {
+        self.contentId = contentId
+        self.kind = kind
+        self.title = title
+        self.durationSeconds = durationSeconds
+        self.fileId = fileId
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        contentId = try c.decode(String.self, forKey: .contentId)
+        kind = try c.decode(String.self, forKey: .kind)
+        title = try c.decodeIfPresent(String.self, forKey: .title)
+        // Both are `omitempty` server-side, so they are simply absent at zero.
+        durationSeconds = try c.decodeIfPresent(Int.self, forKey: .durationSeconds)
+        fileId = try c.decodeIfPresent(Int.self, forKey: .fileId)
+    }
+}
+
+/// Outcome of `POST /api/v1/items/{id}/trailers/refresh`.
+///
+/// `status` is `queued` (HTTP 202 — a refresh started), `cooldown` (200 — the
+/// item was checked recently, `nextAllowedAt` says when it can be retried),
+/// or `disabled` (200 — every library containing the item has remote videos
+/// turned off). Only `queued` is worth polling for; the other two are
+/// rendered states rather than errors.
+struct TrailerRefreshResponse: Codable, Hashable {
+    let status: String
+    /// RFC-3339 on the wire; parsed by the shared decoder's custom ISO-8601
+    /// strategy (fractional seconds tolerated).
+    let nextAllowedAt: Date?
 }
 
 struct AudiobookDetail: Codable, Hashable {
@@ -804,16 +907,6 @@ struct FileVersion: Codable, Identifiable, Hashable {
     }
 }
 
-struct VersionChapter: Codable, Hashable {
-    let index: Int
-    let title: String?
-    let startSeconds: Double
-    let endSeconds: Double?
-    let source: String?
-    let thumbnailUrl: String?
-    let thumbnailThumbhash: String?
-}
-
 /// Sprite-sheet metadata for seek scrubbing, matching prairie-server
 /// `VersionTrickplay` / web `PlayerTrickplay`.
 struct VersionTrickplay: Codable, Hashable, Equatable {
@@ -829,6 +922,16 @@ struct VersionTrickplay: Codable, Hashable, Equatable {
 struct VersionTrickplaySheet: Codable, Hashable, Equatable {
     var index: Int
     var url: String
+}
+
+struct VersionChapter: Codable, Hashable {
+    let index: Int
+    let title: String?
+    let startSeconds: Double
+    let endSeconds: Double?
+    let source: String?
+    let thumbnailUrl: String?
+    let thumbnailThumbhash: String?
 }
 
 struct VideoTrack: Codable, Identifiable, Hashable {
@@ -1041,8 +1144,35 @@ struct SubtitleUrl: Codable, Identifiable, Hashable {
     let label: String?
     let source: String?
     let forced: Bool?
+    let `default`: Bool?
+    let hearingImpaired: Bool?
+    let fontBundleUrl: String?
     let url: String
     var id: Int { index }
+
+    init(
+        index: Int,
+        language: String?,
+        codec: String?,
+        label: String?,
+        source: String?,
+        forced: Bool?,
+        `default`: Bool? = nil,
+        hearingImpaired: Bool? = nil,
+        fontBundleUrl: String? = nil,
+        url: String
+    ) {
+        self.index = index
+        self.language = language
+        self.codec = codec
+        self.label = label
+        self.source = source
+        self.forced = forced
+        self.default = `default`
+        self.hearingImpaired = hearingImpaired
+        self.fontBundleUrl = fontBundleUrl
+        self.url = url
+    }
 }
 
 // MARK: - Transcode Start Response
@@ -1170,6 +1300,14 @@ struct Library: Codable, Identifiable, Hashable {
     var isSeriesLibrary: Bool { PrairieMediaType.isSeries(type) }
     var isMixedLibrary: Bool { PrairieMediaType.isMixedLibrary(type) }
     var isSupportedLibrary: Bool { PrairieMediaType.isSupportedLibrary(type) }
+
+    var navigationIcon: String {
+        isMixedLibrary ? "square.stack.3d.up" : "rectangle.stack"
+    }
+
+    var selectedNavigationIcon: String {
+        isMixedLibrary ? "square.stack.3d.up.fill" : "rectangle.stack.fill"
+    }
 }
 
 struct LibrariesResponse: Codable {

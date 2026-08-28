@@ -2,21 +2,18 @@
 import SwiftUI
 
 /// Playback pane of tvOS Settings, rendered inline in the right pane of
-/// the two-pane `TVSettingsView`. Option pickers present as full-screen
-/// covers (plain sheets render as narrow clipped cards on tvOS 26).
+/// the two-pane `TVSettingsView`. The root view owns modal picker
+/// presentation so only one focus graph is active at a time.
 struct TVPlaybackSettingsPane: View {
     @Bindable var viewModel: TVSettingsViewModel
     let detailFocus: FocusState<TVSettingsDetailFocus?>.Binding
-    @State private var activePicker: PickerKind?
+    let presentPicker: (TVSettingsPickerRequest) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             streamingSection
             episodesSection
             resetSection
-        }
-        .fullScreenCover(item: $activePicker) { kind in
-            pickerSheet(for: kind)
         }
     }
 
@@ -29,7 +26,7 @@ struct TVPlaybackSettingsPane: View {
         TVSettingsPickerRow(
             title: "Quality",
             value: viewModel.preferredQualityLabel
-        ) { activePicker = .quality }
+        ) { showPicker(.quality) }
         .focused(detailFocus, equals: .top)
 
         TVSettingsPickerRow(
@@ -38,7 +35,8 @@ struct TVPlaybackSettingsPane: View {
                 for: viewModel.preferredAudioLanguage,
                 in: TVSettingsOptions.audioLanguage(viewModel.audioLanguageOptions)
             )
-        ) { activePicker = .audioLanguage }
+        ) { showPicker(.audioLanguage) }
+        .focused(detailFocus, equals: .playbackAudioLanguage)
 
         TVSettingsToggleRow(
             title: "Dolby Vision",
@@ -49,17 +47,6 @@ struct TVPlaybackSettingsPane: View {
             Task { await viewModel.setDolbyVisionEnabled(value) }
         }
 
-        if viewModel.dolbyVisionEnabled {
-            TVSettingsToggleRow(
-                title: "Profile 7 HDR10 Fallback",
-                isOn: viewModel.preferProfile7HDR10Fallback
-            ) {
-                let value = !viewModel.preferProfile7HDR10Fallback
-                viewModel.preferProfile7HDR10Fallback = value
-                Task { await viewModel.setPreferProfile7HDR10Fallback(value) }
-            }
-        }
-
         TVSettingsToggleRow(
             title: "Seek Cache",
             isOn: viewModel.seekCacheEnabled
@@ -68,6 +55,33 @@ struct TVPlaybackSettingsPane: View {
             viewModel.seekCacheEnabled = value
             Task { await viewModel.setSeekCacheEnabled(value) }
         }
+
+        TVSettingsPickerRow(
+            title: "Buffer Ahead",
+            value: viewModel.bufferAhead.label
+        ) { showPicker(.bufferAhead) }
+        .focused(detailFocus, equals: .playbackBufferAhead)
+
+        TVSettingsToggleRow(
+            title: "Lossless Multichannel Audio",
+            isOn: viewModel.losslessAudioEnabled
+        ) {
+            let value = !viewModel.losslessAudioEnabled
+            viewModel.losslessAudioEnabled = value
+            Task { await viewModel.setLosslessAudioEnabled(value) }
+        }
+
+        TVSettingsPickerRow(
+            title: "Deinterlacing",
+            value: viewModel.deinterlaceMode.label
+        ) { showPicker(.deinterlaceMode) }
+        .focused(detailFocus, equals: .playbackDeinterlaceMode)
+
+        TVSettingsPickerRow(
+            title: "Deinterlacing Field Rate",
+            value: viewModel.deinterlaceFieldRate.label
+        ) { showPicker(.deinterlaceFieldRate) }
+        .focused(detailFocus, equals: .playbackDeinterlaceFieldRate)
 
         TVSettingsFooter(streamingFooterText)
     }
@@ -80,10 +94,10 @@ struct TVPlaybackSettingsPane: View {
             text = "\(preset.description) "
         }
         text += "Turn off Dolby Vision to play Dolby Vision titles as HDR10 instead. Profile 5 titles have no HDR10-compatible layer and always play in Dolby Vision."
-        if viewModel.dolbyVisionEnabled {
-            text += " The fallback plays Dolby Vision Profile 7 as HDR10 on this Apple TV."
-        }
         text += " Seek Cache keeps recently streamed video in temporary storage during playback so skipping forward and back is instant."
+        text += " Buffer Ahead controls how much video is downloaded ahead of the playhead; longer windows ride out network dropouts, and Unlimited buffers as much as fits in temporary storage, which is cleared when playback ends."
+        text += " Lossless Multichannel Audio delivers TrueHD and DTS-HD audio as lossless multichannel PCM, and needs a receiver or soundbar that accepts multichannel PCM over eARC. If surround plays as stereo, turn it off to use a surround-compatible Dolby Digital Plus bridge instead."
+        text += " Deinterlacing applies to interlaced sources such as DVDs and broadcast recordings; Automatic uses this Apple TV's hardware deinterlacer and falls back to software, while Software always deinterlaces on the CPU. Field Rate applies to the hardware deinterlacer only: Full Motion doubles the frame rate (50/60 fps), and Film keeps one frame per field pair."
         return text
     }
 
@@ -103,7 +117,8 @@ struct TVPlaybackSettingsPane: View {
         TVSettingsPickerRow(
             title: "Show Next Up",
             value: TVSettingsOptions.label(for: String(viewModel.nextUpPromptSeconds), in: TVSettingsOptions.nextUpPrompt)
-        ) { activePicker = .nextUpPrompt }
+        ) { showPicker(.nextUpPrompt) }
+        .focused(detailFocus, equals: .playbackNextUpPrompt)
 
         TVSettingsToggleRow(
             title: "Skip Intros",
@@ -146,11 +161,15 @@ struct TVPlaybackSettingsPane: View {
 
     // MARK: - Pickers
 
-    @ViewBuilder
-    private func pickerSheet(for kind: PickerKind) -> some View {
+    private func showPicker(_ kind: PickerKind) {
+        presentPicker(pickerRequest(for: kind))
+    }
+
+    private func pickerRequest(for kind: PickerKind) -> TVSettingsPickerRequest {
         switch kind {
         case .quality:
-            TVSettingsPickerSheet(
+            TVSettingsPickerRequest(
+                id: kind.id,
                 title: "Quality",
                 options: TVSettingsOptions.quality(
                     // A stored pair no preset covers gets its own entry
@@ -166,10 +185,12 @@ struct TVPlaybackSettingsPane: View {
                         guard value != TVSettingsOptions.customQualityId else { return }
                         Task { await viewModel.setQualityPreset(value) }
                     }
-                )
+                ),
+                returnFocus: .top
             )
         case .audioLanguage:
-            TVSettingsPickerSheet(
+            TVSettingsPickerRequest(
+                id: kind.id,
                 title: "Audio Language",
                 options: TVSettingsOptions.audioLanguage(viewModel.audioLanguageOptions),
                 selection: Binding(
@@ -178,10 +199,59 @@ struct TVPlaybackSettingsPane: View {
                         viewModel.preferredAudioLanguage = value
                         Task { await viewModel.setPreferredAudioLanguage(value) }
                     }
-                )
+                ),
+                returnFocus: .playbackAudioLanguage
+            )
+        case .bufferAhead:
+            TVSettingsPickerRequest(
+                id: kind.id,
+                title: "Buffer Ahead",
+                options: TVSettingsOptions.bufferAhead,
+                selection: Binding(
+                    get: { viewModel.bufferAhead.rawValue },
+                    set: { value in
+                        guard let mode = BufferAheadMode(rawValue: value) else { return }
+                        viewModel.bufferAhead = mode
+                        Task { await viewModel.setBufferAhead(mode) }
+                    }
+                ),
+                returnFocus: .playbackBufferAhead
+            )
+        case .deinterlaceMode:
+            TVSettingsPickerRequest(
+                id: kind.id,
+                title: "Deinterlacing",
+                options: TVSettingsOptions.deinterlaceMode,
+                selection: Binding(
+                    get: { viewModel.deinterlaceMode.rawValue },
+                    set: { value in
+                        guard let mode = DeinterlacePreference(rawValue: value) else { return }
+                        viewModel.deinterlaceMode = mode
+                        Task { await viewModel.setDeinterlaceMode(mode) }
+                    }
+                ),
+                returnFocus: .playbackDeinterlaceMode
+            )
+        case .deinterlaceFieldRate:
+            TVSettingsPickerRequest(
+                id: kind.id,
+                title: "Deinterlacing Field Rate",
+                options: TVSettingsOptions.deinterlaceFieldRate,
+                selection: Binding(
+                    get: { viewModel.deinterlaceFieldRate.rawValue },
+                    set: { value in
+                        guard let rate = DeinterlaceFieldRatePreference(rawValue: value) else {
+                            return
+                        }
+                        viewModel.deinterlaceFieldRate = rate
+                        Task { await viewModel.setDeinterlaceFieldRate(rate) }
+                    }
+                ),
+                returnFocus: .playbackDeinterlaceFieldRate
             )
         case .nextUpPrompt:
-            TVSettingsPickerSheet(
+            TVSettingsPickerRequest(
+                id: kind.id,
                 title: "Show Next Up",
                 options: TVSettingsOptions.nextUpPrompt,
                 selection: Binding(
@@ -191,7 +261,8 @@ struct TVPlaybackSettingsPane: View {
                         viewModel.nextUpPromptSeconds = seconds
                         Task { await viewModel.setNextUpPromptSeconds(seconds) }
                     }
-                )
+                ),
+                returnFocus: .playbackNextUpPrompt
             )
         }
     }
@@ -199,6 +270,9 @@ struct TVPlaybackSettingsPane: View {
     enum PickerKind: String, Identifiable {
         case quality
         case audioLanguage
+        case bufferAhead
+        case deinterlaceMode
+        case deinterlaceFieldRate
         case nextUpPrompt
 
         var id: String { rawValue }

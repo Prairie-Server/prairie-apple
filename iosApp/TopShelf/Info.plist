@@ -21,9 +21,9 @@
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>ContinuumKeychainAccessGroup</key>
-	<string>$(AppIdentifierPrefix)$(PRAIRIE_KEYCHAIN_ACCESS_GROUP_ID)</string>
-	<key>ContinuumKeychainAccessGroupID</key>
-	<string>$(PRAIRIE_KEYCHAIN_ACCESS_GROUP_ID)</string>
+	<string>$(AppIdentifierPrefix)org.prairieserver.prairie.shared</string>
+	<key>ContinuumUsesUserIndependentKeychain</key>
+	<string>$(SILO_USER_INDEPENDENT_KEYCHAIN)</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
@@ -36,6 +36,8 @@
 		<key>NSExtensionPrincipalClass</key>
 		<string>$(PRODUCT_MODULE_NAME).ContentProvider</string>
 	</dict>
+	<key>PrairieBuildChannel</key>
+	<string>$(PRAIRIE_BUILD_CHANNEL)</string>
 	<key>UIRequiredDeviceCapabilities</key>
 	<array>
 		<string>arm64</string>

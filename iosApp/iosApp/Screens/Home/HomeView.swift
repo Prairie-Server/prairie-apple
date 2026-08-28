@@ -134,8 +134,7 @@ struct HomeView: View {
                         onOpenSettings: { router.navigate(to: .settings) },
                         onOpenRequests: { router.navigate(to: .requestsHub) },
                         onSwitchProfile: {
-                            AuthService.shared.profileId = nil
-                            router.showProfileSelection()
+                            router.switchProfile()
                         },
                         onSwitchServer: { router.navigate(to: .serverList) },
                         onSignOut: { router.signOutAndReset() }
@@ -268,7 +267,10 @@ struct HomeView: View {
             showRefreshStatus()
         }
 
-        await viewModel.loadSections()
+        async let homeRefresh: Void = viewModel.loadSections()
+        async let libraryRefresh: LibrariesResponse? = try? await StartupContentPrefetcher
+            .fetchUserLibraries()
+        _ = await (homeRefresh, libraryRefresh)
 
         await MainActor.run {
             scheduleRefreshStatusHide()

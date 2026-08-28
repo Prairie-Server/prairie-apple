@@ -9,6 +9,7 @@ final class DiagnosticsViewModel {
     private(set) var pendingReports: [PendingReport] = []
     private(set) var sentHistory: [DiagnosticsSentReport] = []
     private(set) var consentMode: DiagnosticsConsentChoice = .ask
+    private(set) var selectedDestination: DiagnosticsDestinationChoice
     private(set) var canManageDiagnostics = false
     private(set) var isWorking = false
     var notice: DiagnosticsNotice?
@@ -27,13 +28,30 @@ final class DiagnosticsViewModel {
         statusSnapshot != nil
     }
 
+    var allowsAlwaysSend: Bool {
+        selectedDestination == .selfHosted
+    }
+
     var destinationServerName: String {
-        ServerRegistry.shared.activeServer?.displayName ?? "Current Prairie server"
+        if selectedDestination == .hosted {
+            return "Prairie Diagnostics"
+        }
+        return ServerRegistry.shared.activeServer?.displayName ?? "Current Prairie server"
+    }
+
+    var hostedPrivacyDisclosure: String {
+        let retentionDays = statusSnapshot?.status.retentionDays
+            ?? HostedDiagnosticsCapabilities.conservativeCaptureStatus.retentionDays
+        let dayLabel = retentionDays == 1 ? "day" : "days"
+        return "Hosted reports use a pseudonymous installation credential that is not linked to your Prairie account. They omit account, profile, server address, and playback session identifiers, are retained for up to \(retentionDays) \(dayLabel), and are never sent automatically."
     }
 
     private let coordinator: DiagnosticsCoordinator
     private let consentStore: DiagnosticsConsentStore
     private let pendingStore: PendingReportStore
+    private let destinationStore: DiagnosticsDestinationStore
+    private let statusRefresher: (DiagnosticsDestinationChoice) async throws -> DiagnosticsStatusSnapshot
+    private let cachedStatusProvider: (DiagnosticsDestinationChoice) async -> DiagnosticsStatusSnapshot?
     private var statusSnapshot: DiagnosticsStatusSnapshot?
     private var generation = 0
     private var isHandlingForeground = false
@@ -41,15 +59,28 @@ final class DiagnosticsViewModel {
     init(
         coordinator: DiagnosticsCoordinator = .shared,
         consentStore: DiagnosticsConsentStore = .shared,
-        pendingStore: PendingReportStore = .shared
+        pendingStore: PendingReportStore = .shared,
+        destinationStore: DiagnosticsDestinationStore = .shared,
+        statusRefresher: ((DiagnosticsDestinationChoice) async throws -> DiagnosticsStatusSnapshot)? = nil,
+        cachedStatusProvider: ((DiagnosticsDestinationChoice) async -> DiagnosticsStatusSnapshot?)? = nil
     ) {
         self.coordinator = coordinator
         self.consentStore = consentStore
         self.pendingStore = pendingStore
+        self.destinationStore = destinationStore
+        self.statusRefresher = statusRefresher ?? { destination in
+            try await coordinator.refreshStatus(destination: destination)
+        }
+        self.cachedStatusProvider = cachedStatusProvider ?? { destination in
+            await coordinator.cachedStatusForActiveServer(destination: destination)
+        }
+        self.selectedDestination = destinationStore.selectedDestination
         self.debugLoggingEnabled = consentStore.debugLoggingEnabled
     }
 
     func load(profile: UserProfile?) async {
+        synchronizeSelectedDestination()
+        await coordinator.scheduleHostedDeletionMaintenance()
         canManageDiagnostics = DiagnosticsConsentStore.canManageDiagnostics(profile: profile)
         guard canManageDiagnostics else {
             prompt = nil
@@ -66,6 +97,7 @@ final class DiagnosticsViewModel {
         pendingReports = []
         sentHistory = []
         consentMode = .ask
+        selectedDestination = destinationStore.selectedDestination
         canManageDiagnostics = false
         isWorking = false
         notice = nil
@@ -74,6 +106,8 @@ final class DiagnosticsViewModel {
     }
 
     func handleForeground() async {
+        synchronizeSelectedDestination()
+        await coordinator.scheduleHostedDeletionMaintenance()
         guard prompt == nil else { return }
         // Collapse overlapping triggers (auth-state, server/profile,
         // notification, scene-phase) into a single refresh. The guard is set
@@ -114,6 +148,7 @@ final class DiagnosticsViewModel {
             report.binding.type != .manual
                 && !report.state.isPermanentFailure
                 && !report.state.promptDeclined
+                && !report.state.isAwaitingHostedStatus
                 && DiagnosticsPromptPolicy.isEligible(
                     reportBinding: report.binding.binding,
                     currentBinding: snapshot.binding,
@@ -138,21 +173,63 @@ final class DiagnosticsViewModel {
 
     func setConsentMode(_ mode: DiagnosticsConsentChoice) async {
         guard canManageDiagnostics, let snapshot = statusSnapshot else { return }
+        guard mode != .always || allowsAlwaysSend else { return }
+        let operationGeneration = generation
         consentStore.setMode(
             mode,
             for: snapshot.binding,
-            noticeVersion: snapshot.status.consentNoticeVersion
+            noticeVersion: snapshot.status.consentNoticeVersion,
+            purgeImmediately: mode != .never
         )
         consentMode = mode
         if mode == .never {
+            isWorking = true
+            let erased = await coordinator.turnOffAndDelete(binding: snapshot.binding)
+            guard generation == operationGeneration,
+                  statusSnapshot?.binding == snapshot.binding else {
+                return
+            }
+            isWorking = false
             pendingReports = []
             prompt = nil
+            if !erased {
+                let hasLocalEvidence = !pendingStore.listReports(
+                    for: snapshot.binding,
+                    now: Date()
+                ).isEmpty
+                notice = DiagnosticsNotice(
+                    message: hasLocalEvidence
+                        ? "Crash Reports is off. Some local reports could not be deleted and will retry."
+                        : "Crash Reports is off. Remote deletion is queued and will retry."
+                )
+            }
         } else {
             await reloadLocalState(for: snapshot)
             if mode == .always, featureState.isUploadAvailable {
                 await uploadAutomaticallyEligibleReports(binding: snapshot.binding)
             }
         }
+    }
+
+    func setDestination(_ destination: DiagnosticsDestinationChoice) async {
+        guard destination != selectedDestination else { return }
+        generation &+= 1
+        let refreshGeneration = generation
+        destinationStore.select(destination)
+        DiagnosticsCoordinator.diagnosticsDestinationWillChange()
+        selectedDestination = destination
+        statusSnapshot = nil
+        featureState = .loading
+        consentMode = .ask
+        pendingReports = []
+        sentHistory = []
+        prompt = nil
+        notice = nil
+        isWorking = false
+        await refreshStatusAndLocalState(
+            destination: destination,
+            expectedGeneration: refreshGeneration
+        )
     }
 
     func createAndSendManualReport() async {
@@ -162,7 +239,7 @@ final class DiagnosticsViewModel {
         defer { isWorking = false }
 
         do {
-            let report = try await coordinator.createManualReport()
+            let report = try await coordinator.createManualReport(destination: selectedDestination)
             _ = try await coordinator.buildBundle(for: report)
             let decision = await coordinator.upload(report: report)
             handle(decision, report: report)
@@ -174,7 +251,15 @@ final class DiagnosticsViewModel {
     }
 
     func delete(_ report: PendingReport) async {
-        pendingStore.delete(report)
+        isWorking = true
+        let erased = await coordinator.delete(report: report)
+        isWorking = false
+        if !erased {
+            let message = pendingStore.report(id: report.id) == nil
+                ? "The local report was deleted. Remote deletion is queued and will retry."
+                : "The report could not be deleted. Please try again."
+            notice = DiagnosticsNotice(message: message)
+        }
         await reloadLocalStateIfPossible()
     }
 
@@ -201,9 +286,10 @@ final class DiagnosticsViewModel {
 
     func sendPrompt(always: Bool) async {
         guard let prompt, let snapshot = statusSnapshot else { return }
+        let shouldAlwaysSend = always && allowsAlwaysSend
         let startingGeneration = generation
         isWorking = true
-        if always {
+        if shouldAlwaysSend {
             consentStore.setMode(
                 .always,
                 for: snapshot.binding,
@@ -243,26 +329,56 @@ final class DiagnosticsViewModel {
             deviceIdentity: "\(device.manufacturer) \(device.model) · \(device.os) · \(device.formFactor)",
             categories: logSummary.categories,
             lineCount: logSummary.lines,
-            destinationServerName: destinationServerName
+            destinationServerName: report.binding.binding.destinationChoice == .hosted
+                ? "Prairie Diagnostics"
+                : destinationServerName
         )
     }
 
     private func refreshStatusAndLocalState() async {
+        await refreshStatusAndLocalState(
+            destination: selectedDestination,
+            expectedGeneration: generation
+        )
+    }
+
+    private func refreshStatusAndLocalState(
+        destination: DiagnosticsDestinationChoice,
+        expectedGeneration: Int
+    ) async {
         do {
-            let snapshot = try await coordinator.refreshStatus()
+            let snapshot = try await statusRefresher(destination)
+            guard isCurrent(destination: destination, generation: expectedGeneration) else {
+                return
+            }
             statusSnapshot = snapshot
             featureState = Self.featureState(for: snapshot.status.status)
-            await reloadLocalState(for: snapshot)
+            await reloadLocalState(
+                for: snapshot,
+                destination: destination,
+                expectedGeneration: expectedGeneration
+            )
         } catch let error as HTTPError where error.statusCode == 404 {
+            guard isCurrent(destination: destination, generation: expectedGeneration) else {
+                return
+            }
             statusSnapshot = nil
             featureState = .permanentlyHidden
             pendingReports = []
             sentHistory = []
         } catch {
-            statusSnapshot = await coordinator.cachedStatusForActiveServer()
+            let cachedStatus = await cachedStatusProvider(destination)
+            guard isCurrent(destination: destination, generation: expectedGeneration) else {
+                return
+            }
+            statusSnapshot = cachedStatus
             featureState = .offline
-            if let statusSnapshot {
-                await reloadLocalState(for: statusSnapshot)
+            if let cachedStatus {
+                await reloadLocalState(
+                    for: cachedStatus,
+                    destination: destination,
+                    expectedGeneration: expectedGeneration
+                )
             } else {
                 pendingReports = []
                 sentHistory = []
@@ -272,18 +388,71 @@ final class DiagnosticsViewModel {
 
     private func reloadLocalStateIfPossible() async {
         guard let statusSnapshot else { return }
-        await reloadLocalState(for: statusSnapshot)
+        await reloadLocalState(
+            for: statusSnapshot,
+            destination: selectedDestination,
+            expectedGeneration: generation
+        )
     }
 
     private func reloadLocalState(for snapshot: DiagnosticsStatusSnapshot) async {
-        pendingReports = await coordinator.pendingReports(for: snapshot.binding)
+        await reloadLocalState(
+            for: snapshot,
+            destination: selectedDestination,
+            expectedGeneration: generation
+        )
+    }
+
+    private func reloadLocalState(
+        for snapshot: DiagnosticsStatusSnapshot,
+        destination: DiagnosticsDestinationChoice,
+        expectedGeneration: Int
+    ) async {
+        guard isCurrent(destination: destination, generation: expectedGeneration) else {
+            return
+        }
         let record = consentStore.record(
             for: snapshot.binding,
             currentNoticeVersion: snapshot.status.consentNoticeVersion
         )
+        let reports: [PendingReport]
+        if record.mode == .never {
+            _ = await coordinator.turnOffAndDelete(binding: snapshot.binding)
+            reports = []
+        } else {
+            reports = await coordinator.pendingReports(for: snapshot.binding)
+        }
+        guard isCurrent(destination: destination, generation: expectedGeneration) else {
+            return
+        }
         consentMode = record.mode
+        pendingReports = reports
         sentHistory = consentStore.sentHistory(for: snapshot.binding)
         debugLoggingEnabled = consentStore.debugLoggingEnabled
+    }
+
+    private func isCurrent(
+        destination: DiagnosticsDestinationChoice,
+        generation expectedGeneration: Int
+    ) -> Bool {
+        generation == expectedGeneration && selectedDestination == destination
+    }
+
+    /// Settings and the app-level crash prompt own separate view models. Read
+    /// through their shared store at every hydration boundary so neither can
+    /// keep presenting or sending against a destination changed by the other.
+    private func synchronizeSelectedDestination() {
+        let persistedDestination = destinationStore.selectedDestination
+        guard persistedDestination != selectedDestination else { return }
+        generation &+= 1
+        selectedDestination = persistedDestination
+        statusSnapshot = nil
+        featureState = .loading
+        pendingReports = []
+        sentHistory = []
+        consentMode = .ask
+        prompt = nil
+        notice = nil
     }
 
     private func uploadAutomaticallyEligibleReports(binding: DiagnosticsBinding) async {
@@ -329,7 +498,17 @@ final class DiagnosticsViewModel {
     private func message(for decision: DiagnosticsUploadDecision) -> String {
         switch decision {
         case .uploaded(let response):
+            if let state = response.state {
+                return "Sent as \(response.shortID) (\(state.rawValue))."
+            }
             return "Sent as \(response.shortID)."
+        case .keptProcessing(let shortID):
+            return "Received as \(shortID); Prairie Diagnostics is validating it."
+        case .keptRejected(let code):
+            if let code, !code.isEmpty {
+                return "Collector rejected the report (\(code)); the local copy was kept."
+            }
+            return "Collector rejected the report; the local copy was kept."
         case .keptRetryable:
             return "Report kept; Prairie will retry."
         case .keptNeedsServerUpdate:

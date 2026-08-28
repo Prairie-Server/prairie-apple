@@ -3,7 +3,7 @@ import Foundation
 enum PrairieControlProtocol {
     static let version = 2
     static let supportedVersions = [1, 2]
-    static let serviceType = "_prairiecast._tcp"
+    static let serviceType = "_silocast._tcp"
 
     static func negotiatedVersion(with peer: [Int]) -> Int? {
         supportedVersions.filter(peer.contains).max()
@@ -105,16 +105,38 @@ struct PrairieControlPlaybackState: Codable, Equatable, Sendable {
     let videoGravity: String
     let hdrEnabled: Bool
     let supportsVideoGravity: Bool
-    let supportsHDRToggle: Bool
+    /// v2 WIRE COMPATIBILITY — do not remove without bumping
+    /// `PrairieControlProtocol.version`.
+    ///
+    /// This build dropped the HDR toggle, but v2 peers that predate the removal
+    /// still require the key: Android's `PrairieCastPlaybackState.supportsHDRToggle`
+    /// is a non-null `Boolean` with no kotlinx default, and older Apple builds
+    /// declared it non-optional too, so omitting it makes their whole state
+    /// frame fail to decode — which tears the session down, not just the field.
+    /// Always encoded as `false`, which is also the truth: this build has no
+    /// toggle to offer, so old peers correctly hide the control. Declared
+    /// `Optional` so an inbound frame that omits it still decodes. Nothing on
+    /// this side reads it.
+    var supportsHDRToggle: Bool? = false
     var subtitleSyncMs: Int? = nil
     var subtitlePosition: String? = nil
     var supportsSubtitleDelay: Bool? = nil
     var supportsSubtitlePosition: Bool? = nil
-    let volume: Double
-    let isMuted: Bool
+    // `var` so the iOS remote can apply optimistic volume/mute updates between
+    // TV state acknowledgements.
+    var volume: Double
+    var isMuted: Bool
     let hasNextEpisode: Bool
     let nextEpisodeTitle: String?
     let error: String?
+}
+
+/// Thrown by `PrairieControlCommand.init(from:)` for a command name this build
+/// doesn't implement. `PrairieControlMessage`'s decoder catches it and yields
+/// `.unsupportedControl`, so an unknown name degrades to one ignored command
+/// instead of a fatal frame decode error.
+struct PrairieControlUnsupportedCommand: Error, Equatable, Sendable {
+    let name: String
 }
 
 struct PrairieControlCommand: Codable, Equatable, Sendable {
@@ -129,7 +151,6 @@ struct PrairieControlCommand: Codable, Equatable, Sendable {
         case setPlaybackSpeed = "set_playback_speed"
         case setQuality = "set_quality"
         case setVideoGravity = "set_video_gravity"
-        case setHDREnabled = "set_hdr_enabled"
         case setSubtitleSyncMs = "set_subtitle_sync_ms"
         case setSubtitlePosition = "set_subtitle_position"
         case setVolume = "set_volume"
@@ -166,6 +187,35 @@ struct PrairieControlCommand: Codable, Equatable, Sendable {
         self.milliseconds = milliseconds
     }
 
+    // Explicit keys matching the previously synthesized ones, so the wire
+    // format is unchanged. `encode(to:)` stays synthesized against them.
+    fileprivate enum CodingKeys: String, CodingKey {
+        case name, seconds, trackId, speed, volume, value, enabled, milliseconds
+    }
+
+    /// Decodes `name` as a raw string rather than letting the `Name` enum
+    /// reject it. A v2 peer built before a command was retired (e.g. the
+    /// removed `set_hdr_enabled`) still sends it after a successful v2
+    /// handshake; the synthesized enum decoder would throw a
+    /// `DecodingError`, and `FramedJSONSession` tears the whole connection
+    /// down on any decode error. Surfacing a typed error instead lets the
+    /// message decoder downgrade it to an ignorable command.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let rawName = try c.decode(String.self, forKey: .name)
+        guard let name = Name(rawValue: rawName) else {
+            throw PrairieControlUnsupportedCommand(name: rawName)
+        }
+        self.name = name
+        self.seconds = try c.decodeIfPresent(Double.self, forKey: .seconds)
+        self.trackId = try c.decodeIfPresent(Int64.self, forKey: .trackId)
+        self.speed = try c.decodeIfPresent(Double.self, forKey: .speed)
+        self.volume = try c.decodeIfPresent(Double.self, forKey: .volume)
+        self.value = try c.decodeIfPresent(String.self, forKey: .value)
+        self.enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled)
+        self.milliseconds = try c.decodeIfPresent(Int.self, forKey: .milliseconds)
+    }
+
     static let play = PrairieControlCommand(name: .play)
     static let pause = PrairieControlCommand(name: .pause)
     static let playPause = PrairieControlCommand(name: .playPause)
@@ -193,10 +243,6 @@ struct PrairieControlCommand: Codable, Equatable, Sendable {
 
     static func setVideoGravity(_ value: String) -> PrairieControlCommand {
         PrairieControlCommand(name: .setVideoGravity, value: value)
-    }
-
-    static func setHDREnabled(_ enabled: Bool) -> PrairieControlCommand {
-        PrairieControlCommand(name: .setHDREnabled, enabled: enabled)
     }
 
     static func setSubtitleSyncMs(_ milliseconds: Int) -> PrairieControlCommand {
@@ -231,6 +277,10 @@ enum PrairieControlMessage: Equatable, Sendable {
     case handoffCancel(PrairieControlHandoffCancel)
     case launch(PrairieControlLaunchRequest)
     case control(PrairieControlCommand)
+    /// A well-formed `control` frame naming a command this build doesn't
+    /// implement — typically a v2 peer that predates the command's removal.
+    /// Receivers ignore it; the connection survives.
+    case unsupportedControl(name: String)
     case state(PrairieControlPlaybackState)
     case error(PrairieControlErrorMessage)
     case ping
@@ -285,6 +335,14 @@ extension PrairieControlMessage: Codable {
         case .control(let control):
             try c.encode(Kind.control, forKey: .type)
             try c.encode(control, forKey: .control)
+        case .unsupportedControl(let name):
+            // Re-emit the original name so the frame stays a valid `control`
+            // and round-trips back to `.unsupportedControl`. Arguments are
+            // dropped: this build can't interpret them.
+            try c.encode(Kind.control, forKey: .type)
+            var command = c.nestedContainer(keyedBy: PrairieControlCommand.CodingKeys.self,
+                                            forKey: .control)
+            try command.encode(name, forKey: .name)
         case .state(let state):
             try c.encode(Kind.state, forKey: .type)
             try c.encode(state, forKey: .state)
@@ -317,7 +375,11 @@ extension PrairieControlMessage: Codable {
         case .launch:
             self = .launch(try c.decode(PrairieControlLaunchRequest.self, forKey: .launch))
         case .control:
-            self = .control(try c.decode(PrairieControlCommand.self, forKey: .control))
+            do {
+                self = .control(try c.decode(PrairieControlCommand.self, forKey: .control))
+            } catch let unsupported as PrairieControlUnsupportedCommand {
+                self = .unsupportedControl(name: unsupported.name)
+            }
         case .state:
             self = .state(try c.decode(PrairieControlPlaybackState.self, forKey: .state))
         case .error:

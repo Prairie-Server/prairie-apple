@@ -21,35 +21,87 @@ struct TopShelfHTTPClient {
     }
 
     let defaults: SharedDefaults
-    let keychain: SharedKeychain
+    let accountKeychain: SharedKeychain
+    let profileKeychain: SharedKeychain
     let session: URLSession
 
     init(defaults: SharedDefaults = .shared,
          keychain: SharedKeychain = SharedKeychain(),
          session: URLSession = .shared) {
         self.defaults = defaults
-        self.keychain = keychain
+        self.accountKeychain = keychain.withAudience(.userIndependent)
+        self.profileKeychain = keychain.withAudience(.currentUser)
         self.session = session
     }
 
-    func fetchHomeSections() async throws -> TopShelfSectionsResponse {
-        try await get("/api/v1/home/sections")
+    var isPersonalizedContentAllowed: Bool {
+        guard let serverID = defaults.string(forKey: SharedStorage.activeServerIdKey) else {
+            return false
+        }
+        let state = ProfileLaunchState.load(from: defaults)
+        return TopShelfProfilePolicy.allowsPersonalizedContent(
+            state: state,
+            serverID: serverID,
+            activeProfileID: defaults.string(forKey: SharedStorage.profileIdKey),
+            accountEpoch: accountKeychain.get(
+                SharedStorage.accountEpochAccount(for: serverID)
+            ),
+            hasStoredProfileToken: profileKeychain.get(
+                SharedStorage.profileTokenAccount(for: serverID)
+            ) != nil
+        )
     }
 
-    func fetchSeasons(seriesId: String) async throws -> TopShelfSeasonsResponse {
-        try await get("/api/v1/catalog/series/\(seriesId)/seasons")
+    /// Negotiate the same large-image contract as the main tvOS app. Older
+    /// servers and transient failures return an empty query, preserving the
+    /// extension's existing fallback behavior.
+    func fetchImageSizeQuery() async -> [String: String] {
+        let capability: ImageSizeCapabilityResponse? = try? await get(
+            "/api/v1/images/capability"
+        )
+        return ImageSizeSelection.queryEntries(
+            capability: capability,
+            prefersLargeImages: true
+        )
     }
 
-    func fetchItemDetail(contentId: String) async throws -> TopShelfItemDetail {
-        try await get("/api/v1/catalog/items/\(contentId)")
+    func fetchHomeSections(imageSizeQuery: [String: String]) async throws -> TopShelfSectionsResponse {
+        try await get("/api/v1/home/sections", query: imageSizeQuery)
+    }
+
+    func fetchSeasons(
+        seriesId: String,
+        imageSizeQuery: [String: String]
+    ) async throws -> TopShelfSeasonsResponse {
+        try await get(
+            "/api/v1/catalog/series/\(seriesId)/seasons",
+            query: imageSizeQuery
+        )
+    }
+
+    func fetchItemDetail(
+        contentId: String,
+        imageSizeQuery: [String: String]
+    ) async throws -> TopShelfItemDetail {
+        try await get(
+            "/api/v1/catalog/items/\(contentId)",
+            query: imageSizeQuery
+        )
     }
 
     // MARK: - Private
 
-    private func get<T: Decodable>(_ path: String) async throws -> T {
-        guard let serverUrl = defaults.string(forKey: SharedStorage.serverUrlKey),
+    private func get<T: Decodable>(
+        _ path: String,
+        query: [String: String] = [:]
+    ) async throws -> T {
+        guard let serverID = defaults.string(forKey: SharedStorage.activeServerIdKey),
+              isPersonalizedContentAllowed,
+              let serverUrl = defaults.string(forKey: SharedStorage.serverUrlKey),
               !serverUrl.isEmpty,
-              let accessToken = keychain.get(SharedStorage.mirroredAccessTokenAccount)
+              let accessToken = accountKeychain.get(
+                SharedStorage.accessTokenAccount(for: serverID)
+              )
         else {
             throw Error.notAuthenticated
         }
@@ -60,6 +112,9 @@ struct TopShelfHTTPClient {
         let base = components.percentEncodedPath
         let trimmed = base.hasSuffix("/") ? String(base.dropLast()) : base
         components.percentEncodedPath = trimmed + path
+        components.queryItems = query
+            .sorted { $0.key < $1.key }
+            .map { URLQueryItem(name: $0.key, value: $0.value) }
         guard let url = components.url else { throw Error.invalidURL }
 
         var request = URLRequest(url: url, timeoutInterval: 5)
@@ -69,7 +124,9 @@ struct TopShelfHTTPClient {
         if let profileId = defaults.string(forKey: SharedStorage.profileIdKey) {
             request.setValue(profileId, forHTTPHeaderField: "X-Profile-Id")
         }
-        if let profileToken = keychain.get(SharedStorage.mirroredProfileTokenAccount) {
+        if let profileToken = profileKeychain.get(
+            SharedStorage.profileTokenAccount(for: serverID)
+        ) {
             request.setValue(profileToken, forHTTPHeaderField: "X-Profile-Token")
         }
 

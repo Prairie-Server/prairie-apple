@@ -4,9 +4,8 @@ import Foundation
 
 // Diagnostics-scoped capability probe feeding device.json snapshots.
 // Deliberately named apart from the playback-protocol capability reporter
-// (ApplePlaybackV3Capabilities, in flight on another branch); once that
-// lands, DeviceSnapshotBuilder's providers can delegate to its
-// outputSnapshot() internals instead of probing here.
+// (ApplePlaybackV3Capabilities); both use the same live AVPlayer output facts,
+// while this payload also records diagnostic-only device sections.
 enum DiagnosticsCapabilityProbe {
     struct Snapshot: Equatable {
         let display: DiagnosticsJSONValue
@@ -36,11 +35,16 @@ enum DiagnosticsCapabilityProbe {
     }
 
     static func snapshot(
-        displayCapabilities: ApplePlaybackDisplayCapabilities = .probe()
+        displayCapabilities: ApplePlaybackDisplayCapabilities = .probe(),
+        videoCapabilityMode requestedMode: AppleDecodeCapabilities.StreamingVideoCapabilityMode? = nil
     ) -> Snapshot {
-        Snapshot(
+        let videoCapabilityMode = requestedMode ?? AppleDecodeCapabilities.streamingVideoCapabilityMode
+        return Snapshot(
             display: displaySnapshot(displayCapabilities),
-            videoCodecs: videoCodecSnapshot(displayCapabilities),
+            videoCodecs: videoCodecSnapshot(
+                displayCapabilities,
+                videoCapabilityMode: videoCapabilityMode
+            ),
             network: .object(["transport": .string("not_collected")])
         )
     }
@@ -87,6 +91,7 @@ enum DiagnosticsCapabilityProbe {
         return .object([
             "mode": .string("not_collected"),
             "modes_supported": .string("not_collected"),
+            "hdr_output_eligible": .bool(capabilities.hdrPlaybackEligible),
             "hdr_types": .array(hdrTypes),
             "wide_gamut": .string("not_collected"),
             "max_resolution": capabilities.maxResolution.map { .string($0.rawValue) } ?? .string("unknown"),
@@ -94,26 +99,55 @@ enum DiagnosticsCapabilityProbe {
         ])
     }
 
-    private static func videoCodecSnapshot(_ capabilities: ApplePlaybackDisplayCapabilities) -> DiagnosticsJSONValue {
-        #if targetEnvironment(simulator)
-        let codecs = ["video/avc"]
-        let maxResolution = "1080p"
-        let hdr = false
-        #else
-        let codecs = ["video/avc", "video/hevc"]
-        let maxResolution = capabilities.maxResolution?.rawValue ?? "unknown"
-        let hdr = capabilities.supportsHDR10 || capabilities.supportsHLG || capabilities.supportsDolbyVision
-        #endif
+    private static func videoCodecSnapshot(
+        _ capabilities: ApplePlaybackDisplayCapabilities,
+        videoCapabilityMode: AppleDecodeCapabilities.StreamingVideoCapabilityMode
+    ) -> DiagnosticsJSONValue {
+        // Which codecs is the shared client answer; the rest of each entry is
+        // this probe's own. Declared evidence intentionally carries no
+        // per-codec performance or HDR prediction: the display section still
+        // records panel facts, while Aether probes the exact source at load.
+        let codecs = AppleDecodeCapabilities.streamingVideoCodecs(
+            for: videoCapabilityMode
+        ).map(diagnosticsMIME(for:))
+        let maxResolution: DiagnosticsJSONValue
+        let hdr: DiagnosticsJSONValue
+        if videoCapabilityMode == .aetherDeclared {
+            maxResolution = .string("not_collected")
+            hdr = .string("not_collected")
+        } else {
+            #if targetEnvironment(simulator)
+            maxResolution = .string("1080p")
+            hdr = .bool(false)
+            #else
+            maxResolution = .string(capabilities.maxResolution?.rawValue ?? "unknown")
+            hdr = .bool(
+                capabilities.supportsHDR10
+                    || capabilities.supportsHLG
+                    || capabilities.supportsDolbyVision
+            )
+            #endif
+        }
 
         return .array(codecs.map { codec in
             .object([
                 "mime": .string(codec),
                 "hw": .string("unknown"),
                 "profiles": .string("not_collected"),
-                "max": .string(maxResolution),
-                "hdr": .bool(hdr),
+                "max": maxResolution,
+                "hdr": hdr,
             ])
         })
+    }
+
+    /// device.json reports codecs as MIME types (the schema is shared with
+    /// the Android client, which gets them from MediaCodec).
+    private static func diagnosticsMIME(for codec: String) -> String {
+        switch codec {
+        case "h264": return "video/avc"
+        case "hevc": return "video/hevc"
+        default: return "video/\(codec)"
+        }
     }
 
     private static func hashedRouteUID(_ uid: String) -> String {

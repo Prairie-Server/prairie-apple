@@ -183,7 +183,11 @@ final class TokenStorePersistenceTests: XCTestCase {
         XCTAssertEqual(tempProfile, "TEMP-P2")
 
         let ended = await store.endTemporaryScope()
-        XCTAssertEqual(ended?.accessToken, "TEMP2")
+        guard case .ended(let scope) = ended else {
+            XCTFail("expected temporary scope to end")
+            return
+        }
+        XCTAssertEqual(scope.accessToken, "TEMP2")
         let value22 = await store.getAccessToken()
         XCTAssertEqual(value22, "PERM")
         XCTAssertEqual(keychain.get(TokenStore.accessTokenKey(for: serverId)), "PERM")

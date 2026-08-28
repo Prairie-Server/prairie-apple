@@ -5,11 +5,21 @@
 //  Cached card-overlay configuration for the signed-in profile.
 //  Resolves a single rendered `CardOverlayPrefs` from one of two
 //  sources, in this priority:
-//    1. The user's saved prefs (`GET /settings/card_overlays`) — if
-//       present, this is the entire source of truth.
+//    1. The user's saved prefs — the contract key `ui.card_overlays`
+//       at profile scope, read through the canonical
+//       `GET /settings/values/effective` endpoint. If present, this is
+//       the entire source of truth.
 //    2. Otherwise, the admin-configured baseline JSON from
 //       `GET /settings/overlay-config` (`defaults` field).
 //    3. Otherwise, registry defaults (`OverlaySchema.buildDefaults()`).
+//
+//  The contract stores the document as a JSON object (jsonb), not the
+//  JSON string the retired legacy endpoint carried, so reads and
+//  writes bridge between `SettingJSONValue` and `OverlaySchema`'s
+//  string codec here. Servers that predate the canonical settings API
+//  are detected via `SettingsAPIError.serverUpgradeRequired` and fall
+//  back to the legacy `card_overlays` user setting, which those
+//  servers still accept.
 //
 //  This is winner-take-all, not layered merging — `setPrefs(_:)`
 //  always saves a full document (not a diff), and the matching
@@ -50,6 +60,10 @@ final class OverlayPrefsStore: ObservableObject {
 
     private var hasHydrated = false
     private var adminDefaultsRaw: String?
+    /// `true` once a read established that this server predates the
+    /// canonical settings API. Writes then target the legacy endpoint
+    /// the old server still accepts instead of failing every save.
+    private var usesLegacyAPI = false
     /// Invalidates an older refresh when the active server changes or a newer
     /// refresh starts, preventing late responses from repopulating stale prefs.
     private var refreshGeneration: UInt = 0
@@ -75,9 +89,18 @@ final class OverlayPrefsStore: ObservableObject {
     /// Idempotent first-load. Safe to call from `.task {}` on every
     /// view that wants overlays — subsequent invocations are no-ops
     /// until `clear()` runs.
-    func hydrateIfNeeded() async {
-        guard !hasHydrated, !isLoading else { return }
+    ///
+    /// Returns `true` only when this call actually ran the fetch, so a
+    /// caller that instruments the outcome can tell "I hydrated and it
+    /// resolved" apart from "somebody else's hydration was already
+    /// hydrated or still in flight". Without that distinction a
+    /// short-circuited call reads the *next* refresh's freshly-cleared
+    /// `lastError` and reports a success it never observed.
+    @discardableResult
+    func hydrateIfNeeded() async -> Bool {
+        guard !hasHydrated, !isLoading else { return false }
         await refresh()
+        return true
     }
 
     /// Re-fetch both the admin config and the user setting from the
@@ -85,9 +108,9 @@ final class OverlayPrefsStore: ObservableObject {
     /// local state matches what the server just stored.
     ///
     /// Failure semantics:
-    /// - A 404 on the user setting means "not set yet" and is treated
-    ///   as success — `userRaw` stays nil and we render from admin
-    ///   defaults or registry defaults.
+    /// - "No value stored yet" (a contract default answer, or a legacy
+    ///   404) is success — `userRaw` stays nil and we render from
+    ///   admin defaults or registry defaults.
     /// - Any other transport error (on either endpoint) leaves
     ///   `hasHydrated` false so the next `hydrateIfNeeded()` retries.
     ///   This matters most for the admin kill switch: if
@@ -128,11 +151,30 @@ final class OverlayPrefsStore: ObservableObject {
 
         var userRaw: String?
         var userFetchFailed = false
+        var resolvedLegacyAPI = usesLegacyAPI
         do {
-            let entry = try await api.getUserSetting(key: OverlayPrefsStore.settingKey)
-            userRaw = entry.value
-        } catch HTTPError.http(let code, _) where code == 404 {
-            userRaw = nil
+            let response = try await api.getEffectiveValues(keys: [.uiCardOverlays])
+            if let entry = response.value(for: .uiCardOverlays),
+               entry.source == .scope(.profile),
+               entry.value != .null {
+                userRaw = Self.jsonString(from: entry.value)
+            }
+            resolvedLegacyAPI = false
+        } catch SettingsAPIError.serverUpgradeRequired {
+            // Pre-contract server: the canonical routes don't exist.
+            // Read the legacy string-valued user setting instead, where
+            // a 404 is the documented "not set yet".
+            resolvedLegacyAPI = true
+            do {
+                let entry = try await api.getUserSetting(key: Self.legacySettingKey)
+                userRaw = entry.value
+            } catch HTTPError.http(let code, _) where code == 404 {
+                userRaw = nil
+            } catch {
+                resolvedError = (error as? LocalizedError)?.errorDescription
+                    ?? String(describing: error)
+                userFetchFailed = true
+            }
         } catch {
             resolvedError = (error as? LocalizedError)?.errorDescription
                 ?? String(describing: error)
@@ -151,6 +193,9 @@ final class OverlayPrefsStore: ObservableObject {
         if !configFetchFailed {
             self.enabled = resolvedEnabled
             self.adminDefaultsRaw = resolvedAdminDefaults
+        }
+        if !userFetchFailed {
+            self.usesLegacyAPI = resolvedLegacyAPI
         }
         self.hasUserOverride = userFetchFailed ? hasUserOverride : (userRaw != nil)
         if !userFetchFailed {
@@ -213,12 +258,8 @@ final class OverlayPrefsStore: ObservableObject {
         while let snapshot = pendingSnapshot {
             if Task.isCancelled { return }
             pendingSnapshot = nil
-            let json = OverlaySchema.serialize(snapshot)
             do {
-                try await ContinuumAPI.shared.setSetting(
-                    key: OverlayPrefsStore.settingKey,
-                    value: json
-                )
+                try await persist(snapshot)
             } catch {
                 // `clear()` was called mid-write (e.g. sign-out). Bail
                 // before touching state that no longer belongs to this
@@ -231,6 +272,33 @@ final class OverlayPrefsStore: ObservableObject {
                 // next loop iteration handles a queued snapshot, or
                 // exits if pendingSnapshot is still nil.
             }
+        }
+    }
+
+    /// One full-document write, routed to whichever settings API this
+    /// server speaks. A canonical attempt that discovers a legacy
+    /// server mid-session (`serverUpgradeRequired`) retries the legacy
+    /// endpoint once rather than surfacing an error for a save the old
+    /// API can still honor.
+    private func persist(_ snapshot: CardOverlayPrefs) async throws {
+        let json = OverlaySchema.serialize(snapshot)
+        if usesLegacyAPI {
+            try await ContinuumAPI.shared.setSetting(key: Self.legacySettingKey, value: json)
+            return
+        }
+        guard let value = Self.jsonValue(from: json) else {
+            throw SettingsAPIError.invalidValue(message: "Overlay prefs did not serialize to JSON.")
+        }
+        do {
+            try await ContinuumAPI.shared.putValue(
+                key: .uiCardOverlays,
+                scope: .profile,
+                value: value,
+                mutationId: newSettingMutationId()
+            )
+        } catch SettingsAPIError.serverUpgradeRequired {
+            usesLegacyAPI = true
+            try await ContinuumAPI.shared.setSetting(key: Self.legacySettingKey, value: json)
         }
     }
 
@@ -256,10 +324,17 @@ final class OverlayPrefsStore: ObservableObject {
         }
 
         do {
-            try await ContinuumAPI.shared.deleteSetting(key: OverlayPrefsStore.settingKey)
+            if usesLegacyAPI {
+                try await ContinuumAPI.shared.deleteSetting(key: Self.legacySettingKey)
+            } else {
+                try await ContinuumAPI.shared.deleteValue(key: .uiCardOverlays, scope: .profile)
+            }
+            hasUserOverride = false
+        } catch SettingsAPIError.noValueAtScope {
+            // Already gone.
             hasUserOverride = false
         } catch HTTPError.http(let code, _) where code == 404 {
-            // Already gone.
+            // Already gone (legacy endpoint).
             hasUserOverride = false
         } catch {
             lastError = (error as? LocalizedError)?.errorDescription
@@ -291,10 +366,32 @@ final class OverlayPrefsStore: ObservableObject {
         enabled = true
         prefs = OverlaySchema.buildDefaults()
         adminDefaultsRaw = nil
+        usesLegacyAPI = false
         hasUserOverride = false
         hasHydrated = false
         lastError = nil
     }
 
-    static let settingKey = "card_overlays"
+    // MARK: - Wire bridging
+
+    /// The contract stores the document as a JSON object; `OverlaySchema`
+    /// speaks JSON strings (shared with the admin `overlay-config`
+    /// baseline, which still travels as a string). These two hops keep
+    /// one codec — `OverlaySchema` — as the single interpreter of the
+    /// document shape.
+    private static func jsonString(from value: SettingJSONValue) -> String? {
+        guard let data = try? SettingsWireCoding.makeEncoder().encode(value) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private static func jsonValue(from raw: String) -> SettingJSONValue? {
+        guard let data = raw.data(using: .utf8) else { return nil }
+        return try? SettingsWireCoding.makeDecoder().decode(SettingJSONValue.self, from: data)
+    }
+
+    /// The pre-contract account-scoped user-setting key. Only used
+    /// against servers that predate the canonical settings API; new
+    /// servers reject it (the contract renamed it `ui.card_overlays`
+    /// and migrates stored rows server-side).
+    static let legacySettingKey = "card_overlays"
 }

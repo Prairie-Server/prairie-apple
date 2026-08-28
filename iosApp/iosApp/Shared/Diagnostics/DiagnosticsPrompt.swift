@@ -12,17 +12,20 @@ struct DiagnosticsPrompt: Identifiable, Equatable {
     var message: String {
         let count = reports.count
         let types = Set(reports.map(\.binding.type))
+        let recipient = reports.allSatisfy { $0.binding.binding.destinationChoice == .hosted }
+            ? "the Prairie Diagnostics team"
+            : "your server administrator"
         if count == 1, let type = reports.first?.binding.type {
-            return Self.singleMessage(for: type)
+            return Self.singleMessage(for: type, recipient: recipient)
         }
         if types.count == 1, let type = types.first {
             switch type {
             case .crash, .nativeCrash:
-                return "Prairie crashed \(count) times. You can review the reports before sending them to your server."
+                return "Prairie crashed \(count) times. You can review the reports before sending them to \(recipient)."
             case .hang, .anr:
-                return "Prairie was not responding \(count) times. You can review the reports before sending them to your server."
+                return "Prairie was not responding \(count) times. You can review the reports before sending them to \(recipient)."
             case .abnormalExit:
-                return "Prairie did not shut down cleanly \(count) times. You can review the reports before sending them to your server."
+                return "Prairie did not shut down cleanly \(count) times. You can review the reports before sending them to \(recipient)."
             case .manual:
                 return "Prairie has \(count) pending diagnostics reports."
             }
@@ -32,14 +35,14 @@ struct DiagnosticsPrompt: Identifiable, Equatable {
         return "Prairie has \(count) pending reports covering \(descriptions). You can review them before sending."
     }
 
-    private static func singleMessage(for type: ReportType) -> String {
+    private static func singleMessage(for type: ReportType, recipient: String) -> String {
         switch type {
         case .crash, .nativeCrash:
-            return "Prairie crashed recently. Sending a diagnostics report can help your server administrator understand what happened."
+            return "Prairie crashed recently. Sending a diagnostics report can help \(recipient) understand what happened."
         case .hang, .anr:
-            return "Prairie was not responding recently. Sending a diagnostics report can help your server administrator understand what happened."
+            return "Prairie was not responding recently. Sending a diagnostics report can help \(recipient) understand what happened."
         case .abnormalExit:
-            return "Prairie did not shut down cleanly last time. Sending a diagnostics report can help your server administrator understand what happened."
+            return "Prairie did not shut down cleanly last time. Sending a diagnostics report can help \(recipient) understand what happened."
         case .manual:
             return "Prairie has a pending diagnostics report."
         }

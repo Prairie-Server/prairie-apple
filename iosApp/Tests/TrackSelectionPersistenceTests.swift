@@ -76,7 +76,6 @@ final class TrackSelectionPersistenceTests: XCTestCase {
             title: "Commentary",
             lang: "en",
             codec: "ac3",
-            layout: "stereo",
             channels: 2
         )
 
@@ -167,64 +166,6 @@ final class TrackSelectionPersistenceTests: XCTestCase {
         XCTAssertEqual(request.trackSignature?.label, "Signs & Songs")
     }
 
-    func testAudioRequestNilTracksAndEmptyLanguageFallbacks() {
-        let noTracks = decodedVersion("""
-        { "file_id": 1 }
-        """)
-        XCTAssertNil(TrackSelectionPersistence.audioRequest(version: noTracks, ordinal: 0))
-
-        let emptyLang = decodedVersion("""
-        { "file_id": 1, "audio_tracks": [ { "codec": "aac", "default": true } ] }
-        """)
-        let request = TrackSelectionPersistence.audioRequest(version: emptyLang, ordinal: 0)
-        XCTAssertEqual(request?.audioLanguage, "")
-        XCTAssertEqual(request?.trackSignature?.isDefault, true)
-        XCTAssertNil(request?.trackSignature?.language)
-    }
-
-    func testAudioRequestFromPlayerTrackWithOrdinal() {
-        let track = playerTrack(
-            kind: .audio,
-            title: nil,
-            lang: nil,
-            codec: "aac",
-            layout: "stereo",
-            channels: 2
-        )
-        let request = TrackSelectionPersistence.audioRequest(track: track, ordinal: 3)
-        XCTAssertEqual(request.audioTrackIndex, 3)
-        XCTAssertEqual(request.audioLanguage, "")
-        XCTAssertNil(request.trackSignature?.language)
-        XCTAssertEqual(request.trackSignature?.title, nil)
-    }
-
-    func testSubtitleOffRequestAndExternalPathFallback() {
-        let off = TrackSelectionPersistence.subtitleOffRequest(showForced: true)
-        XCTAssertEqual(off.subtitleTrackIndex, -1)
-        XCTAssertEqual(off.subtitleMode, SubtitleMode.off.rawValue)
-        XCTAssertEqual(off.showForcedSubtitles, true)
-        XCTAssertNil(off.trackSignature)
-
-        let version = decodedVersion("""
-        {
-          "file_id": 1,
-          "subtitle_tracks": [
-            { "index": 7, "codec": "subrip", "external": true, "forced": true, "hearing_impaired": false }
-          ]
-        }
-        """)
-        let request = TrackSelectionPersistence.subtitleRequest(
-            version: version,
-            ffIndex: 7,
-            showForced: false
-        )
-        XCTAssertEqual(request?.subtitleLanguage, "")
-        XCTAssertEqual(request?.externalSubtitlePath, "")
-        XCTAssertEqual(request?.trackSignature?.source, "external")
-        XCTAssertEqual(request?.trackSignature?.forced, true)
-        XCTAssertNil(request?.trackSignature?.label)
-    }
-
     func testSubtitleRequestFromExternalPlayerTrack() {
         let track = playerTrack(
             kind: .sub,
@@ -279,7 +220,6 @@ final class TrackSelectionPersistenceTests: XCTestCase {
         title: String?,
         lang: String?,
         codec: String?,
-        layout: String? = nil,
         channels: Int? = nil,
         isForced: Bool = false,
         isHearingImpaired: Bool = false,
@@ -292,13 +232,11 @@ final class TrackSelectionPersistenceTests: XCTestCase {
             title: title,
             lang: lang,
             codec: codec,
-            audioChannelsLayout: layout,
             audioChannelCount: channels,
             bitrate: nil,
             isDefault: false,
             isForced: isForced,
             isHearingImpaired: isHearingImpaired,
-            isVisualImpaired: false,
             isExternal: isExternal,
             isSelected: false,
             ffIndex: ffIndex,

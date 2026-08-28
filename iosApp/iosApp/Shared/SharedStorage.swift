@@ -13,20 +13,9 @@ import Security
 /// server's access token + profile token under stable, server-independent
 /// keys. The extension doesn't know the active server's ID, so it reads
 /// these fixed-name slots instead of reconstructing the registry scheme.
-///
-/// ## Upgrade / identity stability (do not change casually)
-/// `appGroup` (`group.org.prairieserver.prairie`) and `keychainService`
-/// (`com.continuum.app`) are **stable across app upgrades**. Renaming either
-/// orphans every installed user's server list and login tokens. There is
-/// intentionally **no clear-on-version-bump**: neither `SharedDefaults` nor
-/// `SharedKeychain` wipe storage when `CFBundleShortVersionString` changes.
-/// Schema migrations (e.g. `ServerRegistry.migrateLegacyIfNeeded`) must
-/// re-key in place and only delete legacy Keychain accounts after a
-/// successful write to the new account.
 enum SharedStorage {
     /// Must match the `com.apple.security.application-groups` entitlement
     /// on both the main app and the extension.
-    /// **Stable identity — do not rename** (see type comment above).
     static let appGroup = "group.org.prairieserver.prairie"
 
     /// Must match the `keychain-access-groups` entitlement on both sides.
@@ -35,18 +24,35 @@ enum SharedStorage {
     static let keychainAccessGroup = RuntimeConfiguration.sharedKeychainAccessGroup
 
     /// Shared Keychain service name. Same on both sides.
-    /// **Stable identity — do not rename** (see type comment above).
     static let keychainService = "com.continuum.app"
 
     /// Stable account names for the mirrored active-server tokens.
     static let mirroredAccessTokenAccount = "com.continuum.topshelf.accessToken"
     static let mirroredProfileTokenAccount = "com.continuum.topshelf.profileToken"
 
+    static func accessTokenAccount(for serverID: String) -> String {
+        "com.continuum.\(serverID).accessToken"
+    }
+
+    static func refreshTokenAccount(for serverID: String) -> String {
+        "com.continuum.\(serverID).refreshToken"
+    }
+
+    static func profileTokenAccount(for serverID: String) -> String {
+        "com.continuum.\(serverID).profileToken"
+    }
+
+    static func accountEpochAccount(for serverID: String) -> String {
+        "com.continuum.\(serverID).accountEpoch"
+    }
+
     /// UserDefaults keys shared between the app and the Top Shelf
     /// extension. Centralised here so the extension, `AuthService`,
     /// `TokenStore`, and `ServerRegistry` can't drift.
     static let serverUrlKey = "serverUrl"
+    static let activeServerIdKey = "activeServerId"
     static let profileIdKey = "profileId"
+    static let profileLaunchStateKey = "profileLaunchState.v1"
 
     /// Breadcrumb keys the Top Shelf extension writes after each run.
     /// The main app prints these on launch so device builds without a log
@@ -76,34 +82,31 @@ private enum RuntimeConfiguration {
             logger.error("Missing ContinuumKeychainAccessGroup Info.plist value; shared auth tokens may not persist.")
             return nil
         }
-        // Marker comes from Signing/Shared.xcconfig via ContinuumKeychainAccessGroupID
-        // so runtime validation stays aligned with entitlements.
-        let marker = Bundle.main.object(
-            forInfoDictionaryKey: "ContinuumKeychainAccessGroupID"
-        ) as? String
-        let expected = (marker?.isEmpty == false) ? marker! : "org.prairieserver.prairie.shared"
-        // Paid-team builds expand to `<TeamID>.<marker>`. Unsigned CI
-        // (`CODE_SIGNING_ALLOWED=NO`) leaves AppIdentifierPrefix empty, so the
-        // plist value is the bare marker — still valid when it matches the
-        // entitlement string used for that build.
-        if group == expected || group.hasSuffix("." + expected) {
+        if group.hasSuffix(".org.prairieserver.prairie.shared") {
             return group
         }
         logger.error("Unexpected ContinuumKeychainAccessGroup value: \(group, privacy: .public)")
         return nil
     }()
 
+    static let usesUserIndependentKeychain: Bool = {
+        if let value = Bundle.main.object(
+            forInfoDictionaryKey: "ContinuumUsesUserIndependentKeychain"
+        ) as? Bool {
+            return value
+        }
+        guard let value = Bundle.main.object(
+            forInfoDictionaryKey: "ContinuumUsesUserIndependentKeychain"
+        ) as? String else {
+            return false
+        }
+        return ["1", "true", "yes"].contains(value.lowercased())
+    }()
+
     static let legacyTeamPrefix: String? = {
-        // Only `<TeamID>.<marker>` yields a team prefix. Bare marker (unsigned CI) has no TeamID.
-        let marker = Bundle.main.object(
-            forInfoDictionaryKey: "ContinuumKeychainAccessGroupID"
-        ) as? String
-        let expected = (marker?.isEmpty == false) ? marker! : "org.prairieserver.prairie.shared"
         if let group = sharedKeychainAccessGroup,
-           group.hasSuffix(expected),
-           group.count > expected.count + 1,
-           group.dropLast(expected.count).hasSuffix(".") {
-            return String(group.dropLast(expected.count)) // e.g. "ABCDE12345."
+           let dot = group.firstIndex(of: ".") {
+            return String(group[...dot])
         }
         logger.error("Could not derive team prefix from ContinuumKeychainAccessGroup; legacy keychain migration will only try the default access group.")
         return nil
@@ -119,10 +122,6 @@ private enum RuntimeConfiguration {
 /// Reads prefer the suite and fall back to `.standard` so the first
 /// launch after the upgrade transparently uses pre-existing values until
 /// the next write mirrors them forward.
-///
-/// Suite name is ``SharedStorage/appGroup``
-/// (`group.org.prairieserver.prairie`) — keep stable across upgrades; do
-/// not clear the suite on version bumps.
 struct SharedDefaults: @unchecked Sendable {
     static let shared = SharedDefaults()
 
@@ -178,9 +177,9 @@ struct SharedDefaults: @unchecked Sendable {
 
 /// Thread-safe in-memory stand-in for `SecItem` used by unit tests.
 ///
-/// CI runs PrairieTests with `CODE_SIGNING_ALLOWED=NO`, so real Keychain
-/// writes return `errSecMissingEntitlement` (-34018). Persistence tests
-/// inject one of these per suite instead of hitting the Security framework.
+/// CI runs PrairieNetworkingTests with `CODE_SIGNING_ALLOWED=NO`, so real
+/// Keychain writes return `errSecMissingEntitlement` (-34018). Persistence
+/// tests inject one of these per suite instead of hitting the Security framework.
 final class InMemoryKeychainStore: @unchecked Sendable {
     private let lock = NSLock()
     private var values: [String: String] = [:]
@@ -213,11 +212,6 @@ final class InMemoryKeychainStore: @unchecked Sendable {
 /// extension. Items are stored as generic passwords with accessibility
 /// `AfterFirstUnlock` so the extension can read them when tvOS launches
 /// it on the Home Screen (i.e. before any user interaction with the app).
-///
-/// Default `service` is ``SharedStorage/keychainService``
-/// (`com.continuum.app`) — **stable across upgrades**. Do not rename and
-/// do not wipe items on version bumps; legacy→shared-group migration in
-/// `get(_:)` only deletes the legacy copy after `set` returns true.
 struct SharedKeychain {
     private static let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "com.continuum.app",
@@ -226,14 +220,20 @@ struct SharedKeychain {
 
     let service: String
     let accessGroup: String?
+    let audience: KeychainAudience
+    let usesUserIndependentKeychain: Bool
     /// When non-nil, all reads/writes go through this store instead of `SecItem`.
     private let memoryStore: InMemoryKeychainStore?
 
     init(service: String = SharedStorage.keychainService,
          accessGroup: String? = SharedStorage.keychainAccessGroup,
+         audience: KeychainAudience = .currentUser,
+         usesUserIndependentKeychain: Bool = RuntimeConfiguration.usesUserIndependentKeychain,
          memoryStore: InMemoryKeychainStore? = nil) {
         self.service = service
         self.accessGroup = accessGroup
+        self.audience = audience
+        self.usesUserIndependentKeychain = usesUserIndependentKeychain
         self.memoryStore = memoryStore
     }
 
@@ -244,6 +244,16 @@ struct SharedKeychain {
         accessGroup: String? = nil
     ) -> SharedKeychain {
         SharedKeychain(service: service, accessGroup: accessGroup, memoryStore: InMemoryKeychainStore())
+    }
+
+    func withAudience(_ audience: KeychainAudience) -> SharedKeychain {
+        SharedKeychain(
+            service: service,
+            accessGroup: accessGroup,
+            audience: audience,
+            usesUserIndependentKeychain: usesUserIndependentKeychain,
+            memoryStore: memoryStore
+        )
     }
 
     /// Returns `true` when the value was successfully written. Callers
@@ -284,6 +294,22 @@ struct SharedKeychain {
         if let found = read(account: account, accessGroup: accessGroup) {
             return found
         }
+        #if os(tvOS)
+        // Account credentials written before Runs-as-Current-User were stored
+        // in the ordinary persona Keychain. Copy them into the shared account
+        // audience only after a verified write, then retire that one legacy
+        // copy. Profile tokens never take this path because their audience is
+        // intentionally current-user scoped.
+        if audience == .userIndependent {
+            let legacyKeychain = withAudience(.currentUser)
+            if let legacy = legacyKeychain.get(account) {
+                if set(legacy, for: account) {
+                    legacyKeychain.delete(account)
+                }
+                return legacy
+            }
+        }
+        #endif
         // Transparent migration: pre-access-group entries live in the
         // app's bundle-id-based default access group. Once the app has
         // a `keychain-access-groups` entitlement, SecItemCopyMatching
@@ -318,13 +344,17 @@ struct SharedKeychain {
         return groups
     }
 
-    func delete(_ account: String) {
+    @discardableResult
+    func delete(_ account: String) -> Bool {
         if let memoryStore {
             memoryStore.delete(service: service, account: account, accessGroup: accessGroup)
-            return
+            return true
         }
         let query = baseQuery(account: account)
-        SecItemDelete(query as CFDictionary)
+        let status = SecItemDelete(query as CFDictionary)
+        if status == errSecSuccess || status == errSecItemNotFound { return true }
+        Self.logger.error("Keychain delete failed for account \(account, privacy: .public): status=\(status, privacy: .public)")
+        return false
     }
 
     // MARK: - Private
@@ -357,6 +387,11 @@ struct SharedKeychain {
         if let accessGroup {
             query[kSecAttrAccessGroup as String] = accessGroup
         }
+        #if os(tvOS)
+        if audience == .userIndependent, usesUserIndependentKeychain {
+            query[kSecUseUserIndependentKeychain as String] = kCFBooleanTrue
+        }
+        #endif
         return query
     }
 }

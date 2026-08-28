@@ -2,71 +2,75 @@ import SwiftUI
 
 /// App settings screen.
 ///
-/// iOS/macOS: a native Settings-style inset-grouped `List` — account
-/// header up top, icon-badged rows grouped into sections, and
-/// drilldowns to dedicated sub-screens for compound preferences like
-/// Playback and Subtitles.
+/// iOS: a searchable, card-based overview aligned with the web app's
+/// information hierarchy. macOS retains the compact native Settings list.
 ///
 /// On tvOS this view delegates to ``TVSettingsView``, a root-menu Form
 /// with drill-in sub-screens tuned for the 10-foot experience.
 struct SettingsView: View {
     @State private var viewModel = SettingsViewModel()
+    @State private var uiCustomization = UICustomizationPreferences.shared
+    @State private var launchPreferences = ProfileLaunchPreferences.shared
     @Environment(AppRouter.self) private var router
     @State private var showSignOutConfirm = false
     #if os(iOS)
-    @State private var navPrefs = AppNavPreferences.shared
     @State private var diagnosticsModel = DiagnosticsViewModel()
-    #endif
-    #if !os(tvOS)
-    @State private var appUpdateStatus: AppUpdateStatus = .checking
     #endif
 
     var body: some View {
         #if os(tvOS)
         TVSettingsView()
+        #elseif os(iOS)
+        iOSOverview
         #else
-        iosBody
+        macOSBody
         #endif
     }
 
-    #if !os(tvOS)
-    private var iosBody: some View {
+    #if os(iOS)
+    private var iOSOverview: some View {
+        IOSSettingsOverview(
+            viewModel: viewModel,
+            diagnosticsModel: diagnosticsModel,
+            uiCustomization: uiCustomization,
+            showSignOutConfirm: $showSignOutConfirm
+        )
+        .task {
+            await viewModel.loadSettings()
+            await diagnosticsModel.load(profile: viewModel.activeProfile)
+        }
+        .alert("Sign Out", isPresented: $showSignOutConfirm) {
+            Button("Sign Out", role: .destructive) {
+                router.signOutAndReset()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Are you sure you want to sign out?")
+        }
+    }
+    #endif
+
+    #if os(macOS)
+    private var macOSBody: some View {
         List {
             accountSection
-            connectionSection
             preferencesSection
-            #if os(iOS)
-            if diagnosticsModel.shouldShowSettings {
-                diagnosticsSection
-            }
-            #endif
-            librarySection
+            connectionSection
             aboutSection
             signOutSection
         }
-        // iOS-26 restyle (plan 010, PENDING REVIEW): let the native grouped-list
-        // glass show through instead of forcing flat OLED black. The previous
-        // `.continuumScrollContentBackgroundHidden()` + `Color.continuumBackground`
-        // page override and per-section `.listRowBackground(Color.continuumSurfaceElevated)`
-        // were intentionally dropped here. If brand-black must win, restore those.
         .continuumGroupedListStyle()
         .navigationTitle("Settings")
         .continuumNavigationTitleDisplayMode(.large)
         .continuumToolbarColorSchemeDark()
         .task {
-            #if os(iOS)
-            navPrefs.refresh()
-            #endif
             await viewModel.loadSettings()
-            #if os(iOS)
-            await diagnosticsModel.load(profile: viewModel.activeProfile)
-            #endif
         }
         .alert("Sign Out", isPresented: $showSignOutConfirm) {
-            Button("Sign Out", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive) {
+            Button("Sign Out", role: .destructive) {
                 router.signOutAndReset()
             }
-            Button("Cancel", systemImage: "xmark", role: .cancel) {}
+            Button("Cancel", role: .cancel) {}
         } message: {
             Text("Are you sure you want to sign out?")
         }
@@ -80,6 +84,7 @@ struct SettingsView: View {
                 HStack(spacing: 14) {
                     ProfileAvatarView(
                         avatar: viewModel.activeProfile?.avatarEmoji,
+                        imageUrl: viewModel.activeProfile?.avatarImageUrl,
                         name: viewModel.activeProfile?.name
                             ?? viewModel.userInfo?.username
                             ?? "",
@@ -116,8 +121,7 @@ struct SettingsView: View {
     }
 
     private func switchProfile() {
-        AuthService.shared.profileId = nil
-        router.showProfileSelection()
+        router.switchProfile()
     }
 
     private var displayName: String {
@@ -156,6 +160,28 @@ struct SettingsView: View {
 
     private var preferencesSection: some View {
         Section {
+            NavigationLink {
+                GeneralSettingsView()
+            } label: {
+                SettingsRowLabel(
+                    title: "General",
+                    systemImage: "gearshape.fill",
+                    color: .purple,
+                    value: launchPreferences.behavior.title
+                )
+            }
+
+            NavigationLink {
+                InterfaceCustomizationView()
+            } label: {
+                SettingsRowLabel(
+                    title: "Interface",
+                    systemImage: "rectangle.3.group.fill",
+                    color: .indigo,
+                    value: uiCustomization.cardPresentation.preset?.title ?? "Custom"
+                )
+            }
+
             NavigationLink {
                 PlaybackSettingsView(viewModel: viewModel)
             } label: {
@@ -197,80 +223,10 @@ struct SettingsView: View {
         return PlaybackLanguageOption.label(forCode: tag)
     }
 
-    #if os(iOS)
-    private var diagnosticsSection: some View {
-        Section("Diagnostics") {
-            NavigationLink {
-                DiagnosticsSettingsView(
-                    model: diagnosticsModel,
-                    profile: viewModel.activeProfile
-                )
-            } label: {
-                SettingsRowLabel(
-                    title: "Diagnostics",
-                    systemImage: "stethoscope",
-                    color: .orange,
-                    value: diagnosticsModel.featureState.title
-                )
-            }
-        }
-    }
-    #endif
-
-    // MARK: - Library
-
-    private var librarySection: some View {
-        Section("Library") {
-            #if os(iOS)
-            Toggle(isOn: Binding(
-                get: { navPrefs.showAudiobooks },
-                set: { navPrefs.setShowAudiobooks($0) }
-            )) {
-                SettingsRowLabel(title: "Show Audiobooks", systemImage: "book.closed.fill", color: .indigo)
-            }
-            .tint(.continuumAccent)
-            #endif
-
-            NavigationLink {
-                WatchlistView()
-            } label: {
-                SettingsRowLabel(title: "Watchlist", systemImage: "bookmark.fill", color: .orange)
-            }
-
-            NavigationLink {
-                FavoritesView()
-            } label: {
-                SettingsRowLabel(title: "Favorites", systemImage: "heart.fill", color: .red)
-            }
-
-            NavigationLink {
-                HistoryView()
-            } label: {
-                SettingsRowLabel(title: "Watch History", systemImage: "clock.fill", color: .gray)
-            }
-
-            NavigationLink {
-                CollectionsView()
-            } label: {
-                SettingsRowLabel(title: "Collections", systemImage: "square.stack.fill", color: .purple)
-            }
-        }
-    }
-
     // MARK: - Connection
 
     private var connectionSection: some View {
         Section {
-            NavigationLink {
-                QuickConnectView()
-            } label: {
-                SettingsRowLabel(
-                    title: "Quick Connect",
-                    systemImage: "qrcode.viewfinder",
-                    color: .green
-                )
-            }
-
             Button {
                 router.navigate(to: .serverList)
             } label: {
@@ -289,7 +245,7 @@ struct SettingsView: View {
         }
     }
 
-    private var versionString: String { AppUpdateChecker.displayVersionString() }
+    // MARK: - About
 
     private var aboutSection: some View {
         Section("About") {
@@ -300,38 +256,27 @@ struct SettingsView: View {
                 Text("Version")
                     .foregroundStyle(Color.continuumOnSurface)
             }
-            LabeledContent {
-                Text(appUpdateStatus.statusLabel)
-                    .foregroundStyle(Color.continuumSecondaryText)
+
+            Link("Privacy Policy", destination: PrairieLegalLinks.privacyPolicy)
+
+            NavigationLink {
+                OpenSourceAcknowledgementsView()
             } label: {
-                Text("Update status")
-                    .foregroundStyle(Color.continuumOnSurface)
-            }
-            if let latest = appUpdateStatus.latestVersionLabel {
-                LabeledContent {
-                    Text(latest)
-                        .foregroundStyle(Color.continuumSecondaryText)
-                } label: {
-                    Text("Latest version")
-                        .foregroundStyle(Color.continuumOnSurface)
-                }
-            }
-            if let changelogURL = appUpdateStatus.changelogURL {
-                Link(destination: changelogURL) {
-                    Text("Changelog")
-                        .foregroundStyle(Color.continuumOnSurface)
-                }
-            }
-            if let releaseURL = appUpdateStatus.releaseURL {
-                Link(destination: releaseURL) {
-                    Text("View update")
-                        .foregroundStyle(Color.continuumOnSurface)
-                }
+                SettingsRowLabel(
+                    title: "Open Source Licenses",
+                    systemImage: "curlybraces",
+                    color: .indigo
+                )
             }
         }
-        .task {
-            appUpdateStatus = await AppUpdateChecker.check()
+    }
+
+    private var versionString: String {
+        let short = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+        if let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String, build != short {
+            return "\(short) (\(build))"
         }
+        return short
     }
 
     // MARK: - Sign Out
@@ -349,7 +294,7 @@ struct SettingsView: View {
     #endif
 }
 
-#if !os(tvOS)
+#if os(macOS)
 
 // MARK: - Row primitives
 

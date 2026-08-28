@@ -28,18 +28,22 @@
 		<dict>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>prairie</string>
+				<string>continuum</string>
 			</array>
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>ContinuumKeychainAccessGroup</key>
-	<string>$(AppIdentifierPrefix)$(PRAIRIE_KEYCHAIN_ACCESS_GROUP_ID)</string>
-	<key>ContinuumKeychainAccessGroupID</key>
-	<string>$(PRAIRIE_KEYCHAIN_ACCESS_GROUP_ID)</string>
+	<string>$(AppIdentifierPrefix)org.prairieserver.prairie.shared</string>
+	<key>ContinuumUsesUserIndependentKeychain</key>
+	<string>$(SILO_USER_INDEPENDENT_KEYCHAIN)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>youtube</string>
+	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
@@ -47,11 +51,13 @@
 	</dict>
 	<key>NSBonjourServices</key>
 	<array>
-		<string>_prairiepair._tcp</string>
-		<string>_prairiecast._tcp</string>
+		<string>_silopair._tcp</string>
+		<string>_silocast._tcp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Prairie uses your local network to find, set up, and control Prairie on your Apple TV.</string>
+	<key>PrairieBuildChannel</key>
+	<string>$(PRAIRIE_BUILD_CHANNEL)</string>
 	<key>TVTopShelfImage</key>
 	<dict>
 		<key>TVTopShelfPrimaryImage</key>

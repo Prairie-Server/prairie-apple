@@ -49,8 +49,7 @@ private let focusScale: CGFloat = 1.05
 /// tile lifts with a white ring and a colored halo matching its tint.
 struct ProfileTile: View {
     let profile: UserProfile
-    var prefersDefaultFocus: Bool = false
-    var defaultFocusNamespace: Namespace.ID? = nil
+    var isRemembered: Bool = false
     let action: () -> Void
 
     @FocusState private var isFocused: Bool
@@ -60,45 +59,39 @@ struct ProfileTile: View {
     }
 
     var body: some View {
-        VStack(spacing: 20) {
-            tileBody
-                .frame(width: tileSize, height: tileSize)
-                // Focus ring sits *outside* the tile so it never crops
-                // content. Inset by a negative amount so the stroke
-                // extends past the tile bounds.
-                .overlay(
-                    RoundedRectangle(cornerRadius: tileCornerRadius + 4, style: .continuous)
-                        .inset(by: -4)
-                        .stroke(isFocused ? Color.white : Color.clear, lineWidth: 4)
-                )
-                .scaleEffect(isFocused ? focusScale : 1.0)
-                // Stacked shadows: a colored halo from the tint + a
-                // neutral drop shadow for lift. The halo is what sells
-                // the "this profile is alive" feel when focused.
-                .shadow(color: tint.opacity(isFocused ? 0.55 : 0),
-                        radius: isFocused ? 44 : 0, y: 0)
-                .shadow(color: .black.opacity(isFocused ? 0.5 : 0),
-                        radius: isFocused ? 22 : 0, y: isFocused ? 14 : 0)
+        Button(action: action) {
+            VStack(spacing: 20) {
+                tileBody
+                    .frame(width: tileSize, height: tileSize)
+                    // Focus ring sits *outside* the tile so it never crops
+                    // content. Inset by a negative amount so the stroke
+                    // extends past the tile bounds.
+                    .overlay {
+                        RoundedRectangle(cornerRadius: tileCornerRadius + 4)
+                            .inset(by: -4)
+                            .stroke(isFocused ? Color.white : Color.clear, lineWidth: 4)
+                    }
+                    .scaleEffect(isFocused ? focusScale : 1.0)
+                    // Stacked shadows: a colored halo from the tint + a
+                    // neutral drop shadow for lift. The halo is what sells
+                    // the "this profile is alive" feel when focused.
+                    .shadow(color: tint.opacity(isFocused ? 0.55 : 0),
+                            radius: isFocused ? 44 : 0, y: 0)
+                    .shadow(color: .black.opacity(isFocused ? 0.5 : 0),
+                            radius: isFocused ? 22 : 0, y: isFocused ? 14 : 0)
 
-            Text(profile.name)
-                .font(.system(size: nameSize, weight: isFocused ? .semibold : .medium))
-                .foregroundStyle(isFocused ? .white : .white.opacity(0.72))
-                .lineLimit(1)
+                Text(profile.name)
+                    .font(.system(size: nameSize, weight: isFocused ? .semibold : .medium))
+                    .foregroundStyle(isFocused ? .white : .white.opacity(0.72))
+                    .lineLimit(1)
+            }
+            .contentShape(.rect)
         }
+        .buttonStyle(.plain)
         .animation(.spring(response: 0.32, dampingFraction: 0.72), value: isFocused)
-        .contentShape(Rectangle())
-        .focusable(true)
         .focused($isFocused)
-        .onTapGesture(perform: action)
-        #if os(tvOS)
-        // Lets the first profile tile claim initial focus instead of the
-        // engine landing on the top-right Sign Out / Change Server chips.
-        .applyDefaultFocusIfNeeded(prefersDefaultFocus, namespace: defaultFocusNamespace)
-        .focusEffectDisabled()
-        #endif
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isButton)
         .accessibilityLabel(profile.name)
+        .accessibilityValue(accessibilityValue)
     }
 
     @ViewBuilder
@@ -141,6 +134,24 @@ struct ProfileTile: View {
                 }
                 .padding(12)
             }
+
+            if isRemembered {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Text(rememberedBadgeLabel)
+                            .font(.caption.bold())
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(.black.opacity(0.48), in: .capsule)
+                        Spacer()
+                    }
+                }
+                .padding(12)
+            }
         }
         .clipShape(RoundedRectangle(cornerRadius: tileCornerRadius, style: .continuous))
     }
@@ -148,7 +159,10 @@ struct ProfileTile: View {
     @ViewBuilder
     private var avatarContent: some View {
         let avatar = profile.avatarEmoji?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if ProfileAvatarResolver.isImage(avatar) {
+        if let serverURL = ProfileAvatarResolver.serverResolvedImageURL(profile.avatarImageUrl) {
+            AsyncImageView(url: serverURL, contentMode: .fill)
+                .frame(width: tileSize, height: tileSize)
+        } else if ProfileAvatarResolver.isImage(avatar) {
             // Image avatars (DiceBear preset or URL) clip to the full tile
             // bounds for a cinematic poster effect.
             if let url = ProfileAvatarResolver.imageURL(for: avatar) {
@@ -184,6 +198,30 @@ struct ProfileTile: View {
             .padding(8)
             .background(Circle().fill(Color.black.opacity(0.35)))
     }
+
+    private var accessibilityValue: String {
+        var values: [String] = []
+        if isRemembered { values.append(rememberedAccessibilityValue) }
+        if profile.hasPin { values.append("PIN protected") }
+        if profile.isChild { values.append("Child profile") }
+        return values.joined(separator: ", ")
+    }
+
+    private var rememberedBadgeLabel: String {
+        #if os(tvOS)
+        "APPLE TV USER"
+        #else
+        "LAST USED"
+        #endif
+    }
+
+    private var rememberedAccessibilityValue: String {
+        #if os(tvOS)
+        "Paired with this Apple TV user"
+        #else
+        "Last used"
+        #endif
+    }
 }
 
 /// Add-profile tile. Matches the real profile tiles in size and focus
@@ -196,45 +234,45 @@ struct AddProfileTile: View {
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        VStack(spacing: 20) {
-            ZStack {
-                RoundedRectangle(cornerRadius: tileCornerRadius, style: .continuous)
-                    .fill(Color.white.opacity(isFocused ? 0.14 : 0.06))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: tileCornerRadius, style: .continuous)
-                            .strokeBorder(
-                                style: StrokeStyle(lineWidth: 2, dash: [8, 6])
-                            )
-                            .foregroundStyle(Color.white.opacity(isFocused ? 0.7 : 0.28))
-                    )
+        Button(action: action) {
+            VStack(spacing: 20) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: tileCornerRadius)
+                        .fill(Color.white.opacity(isFocused ? 0.14 : 0.06))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: tileCornerRadius)
+                                .strokeBorder(
+                                    style: StrokeStyle(lineWidth: 2, dash: [8, 6])
+                                )
+                                .foregroundStyle(Color.white.opacity(isFocused ? 0.7 : 0.28))
+                        }
 
-                Image(systemName: "plus")
-                    .font(.system(size: 84, weight: .light))
-                    .foregroundStyle(.white.opacity(isFocused ? 1.0 : 0.6))
+                    Image(systemName: "plus")
+                        .font(.system(size: 84, weight: .light))
+                        .foregroundStyle(.white.opacity(isFocused ? 1.0 : 0.6))
+                }
+                .frame(width: tileSize, height: tileSize)
+                .overlay {
+                    RoundedRectangle(cornerRadius: tileCornerRadius + 4)
+                        .inset(by: -4)
+                        .stroke(isFocused ? Color.white : Color.clear, lineWidth: 4)
+                }
+                .scaleEffect(isFocused ? focusScale : 1.0)
+                .shadow(color: .black.opacity(isFocused ? 0.5 : 0),
+                        radius: isFocused ? 22 : 0, y: isFocused ? 14 : 0)
+
+                Text("Add Profile")
+                    .font(.system(size: nameSize, weight: isFocused ? .semibold : .medium))
+                    .foregroundStyle(isFocused ? .white : .white.opacity(0.55))
             }
-            .frame(width: tileSize, height: tileSize)
-            .overlay(
-                RoundedRectangle(cornerRadius: tileCornerRadius + 4, style: .continuous)
-                    .inset(by: -4)
-                    .stroke(isFocused ? Color.white : Color.clear, lineWidth: 4)
-            )
-            .scaleEffect(isFocused ? focusScale : 1.0)
-            .shadow(color: .black.opacity(isFocused ? 0.5 : 0),
-                    radius: isFocused ? 22 : 0, y: isFocused ? 14 : 0)
-
-            Text("Add Profile")
-                .font(.system(size: nameSize, weight: isFocused ? .semibold : .medium))
-                .foregroundStyle(isFocused ? .white : .white.opacity(0.55))
+            .contentShape(.rect)
         }
+        .buttonStyle(.plain)
         .animation(.spring(response: 0.32, dampingFraction: 0.72), value: isFocused)
-        .contentShape(Rectangle())
-        .focusable(true)
         .focused($isFocused)
-        .onTapGesture(perform: action)
         #if os(tvOS)
         .focusEffectDisabled()
         #endif
-        .accessibilityAddTraits(.isButton)
         .accessibilityLabel("Add Profile")
     }
 }
@@ -245,6 +283,40 @@ struct AddProfileTile: View {
 /// avatars in a tile shape rather than a circle. Kept as a small local
 /// utility rather than adjusting the shared view's API surface.
 enum ProfileAvatarResolver {
+    /// Resolve the server-supplied `avatar_url`. Absolute URLs (presigned
+    /// upload URLs, DiceBear) are used verbatim; a server-relative path is
+    /// prefixed with the active server URL. Returns nil when absent or when
+    /// no active server is known for a relative path.
+    static func serverResolvedImageURL(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+
+        let lowercased = trimmed.lowercased()
+
+        // The Nuke pipeline registers no SVG decoder. Legacy presets use an
+        // `.svg` extension, while DiceBear uses an `/svg` format path.
+        // Decline both and let the caller's raw-ref fallback build a PNG URL.
+        // Uploaded avatars are WebP and continue through this path.
+        let pathOnly = lowercased.split(separator: "?", maxSplits: 1)[0]
+        if pathOnly.hasSuffix(".svg") || pathOnly.hasSuffix("/svg") { return nil }
+
+        if lowercased.hasPrefix("http://")
+            || lowercased.hasPrefix("https://")
+            || lowercased.hasPrefix("data:image/")
+            || lowercased.hasPrefix("file://") {
+            return trimmed
+        }
+
+        guard trimmed.hasPrefix("/") else { return nil }
+        let serverURL = ServerRegistry.shared.activeServerUrl
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !serverURL.isEmpty else { return nil }
+        return serverURL + trimmed
+    }
+
     static func isImage(_ value: String) -> Bool {
         let lowercased = value.lowercased()
         return lowercased.hasPrefix("preset:dicebear:")
@@ -296,6 +368,6 @@ enum ProfileAvatarResolver {
         guard !style.isEmpty, !seed.isEmpty else { return nil }
         let s = style.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? style
         let d = seed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? seed
-        return "https://api.dicebear.com/9.x/\(s)/png?seed=\(d)&size=512"
+        return "https://api.dicebear.com/9.x/\(s)/png?seed=\(d)&size=256"
     }
 }

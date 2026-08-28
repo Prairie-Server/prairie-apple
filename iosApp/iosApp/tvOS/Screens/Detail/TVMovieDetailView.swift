@@ -24,6 +24,20 @@ struct TVMovieDetailView<BelowSynopsis: View>: View {
     let seasonEpisodes: [EpisodeListItem]
     let episodeFavoriteStates: [String: Bool]
     let isLoadingEpisodes: Bool
+    /// Merged remote-video + local-extra rail, already shaped by the call
+    /// site (which owns the YouTube-app availability probe that decides
+    /// whether remote cards exist at all). Empty hides the rail.
+    let trailerEntries: [TrailerRailEntry]
+    let onSelectTrailer: (TrailerRailEntry) -> Void
+    /// Whether the manual "Find Trailers" action can be offered — false on
+    /// episode pages and when the YouTube app is unavailable.
+    let supportsTrailerFetch: Bool
+    let onFindTrailers: () -> Void
+    /// Copy from the fetch coordinator; nil while idle.
+    let trailerFetchStatus: String?
+    let isFetchingTrailers: Bool
+    /// Called once a terminal fetch message has been on screen long enough.
+    let onTrailerStatusShown: () -> Void
     let onPlay: (_ startFromBeginning: Bool) -> Void
     let onSelectVersion: (Int?) -> Void
     let onSelectAudioTrack: (Int?) -> Void
@@ -49,7 +63,6 @@ struct TVMovieDetailView<BelowSynopsis: View>: View {
     /// True while focus sits anywhere in the hero's primary action row —
     /// drives the scroll back to the page-entry (hero at top) framing.
     @FocusState private var actionRowFocused: Bool
-
     // Plain constants (not `static`) — the generic BelowSynopsis parameter
     // forbids static stored properties on this type.
     private let episodeSectionScrollId = "detail-episode-section"
@@ -84,6 +97,7 @@ struct TVMovieDetailView<BelowSynopsis: View>: View {
                         if let cast = detail.cast, !cast.isEmpty {
                             castSection(cast: cast)
                         }
+                        trailersSection
                         detailsSection
                         if showsSimilarRail {
                             similarSection
@@ -126,64 +140,41 @@ struct TVMovieDetailView<BelowSynopsis: View>: View {
                 onSelectAudioTrack: onSelectAudioTrack,
                 onSelectSubtitleTrack: onSelectSubtitleTrack
             )
+            if let trailerFetchStatus {
+                // Non-focusable readout, so it adds no stop to the action
+                // column's focus traversal.
+                TVTrailerStatusPill(
+                    message: trailerFetchStatus,
+                    isFetching: isFetchingTrailers,
+                    onAutoDismiss: onTrailerStatusShown
+                )
+            }
         }
     }
 
     private var actionRow: some View {
-        HStack(spacing: 36) {
-            TVPrimaryPillButton(
-                icon: "play.fill",
-                title: primaryPlayLabel,
-                action: { onPlay(false) },
-                focused: $playFocused
-            )
-
-            if hasResumeProgress {
-                TVSecondaryPillButton(
-                    icon: "backward.end.fill",
-                    title: "Start Over",
-                    action: { onPlay(true) }
-                )
+        TVDetailActionRow(
+            playTitle: primaryPlayLabel,
+            onPlay: { onPlay(false) },
+            onStartOver: hasResumeProgress ? { onPlay(true) } : nil,
+            isFavorite: isFavorite,
+            onToggleFavorite: onToggleFavorite,
+            inWatchlist: inWatchlist,
+            onToggleWatchlist: onToggleWatchlist,
+            isWatched: isWatched,
+            watchedLabelMark: watchedLabelMark,
+            watchedLabelUnmark: watchedLabelUnmark,
+            onToggleWatched: onToggleWatched,
+            initialFocusScope: .page,
+            focusNamespace: detailFocusNamespace,
+            playFocused: $playFocused,
+            rowFocused: $actionRowFocused,
+            moreMenu: {
+                if hasMoreMenu {
+                    moreMenu
+                }
             }
-
-            TVCircleActionButton(
-                icon: "heart",
-                iconActive: "heart.fill",
-                isActive: isFavorite,
-                accessibilityLabel: isFavorite ? "Remove from favorites" : "Add to favorites",
-                action: onToggleFavorite
-            )
-
-            TVCircleActionButton(
-                icon: "bookmark",
-                iconActive: "bookmark.fill",
-                isActive: inWatchlist,
-                accessibilityLabel: inWatchlist ? "Remove from watchlist" : "Add to watchlist",
-                action: onToggleWatchlist
-            )
-
-            TVCircleActionButton(
-                icon: "checkmark.circle",
-                iconActive: "checkmark.circle.fill",
-                isActive: isWatched,
-                accessibilityLabel: isWatched ? watchedLabelUnmark : watchedLabelMark,
-                action: onToggleWatched
-            )
-
-            if hasMoreMenu {
-                moreMenu
-            }
-        }
-        // Container binding — flips true when any button in the row has
-        // focus, driving the scroll-to-top in `detailFocusScroll`.
-        .focused($actionRowFocused)
-        // Mirror of the selector row's full-width focus section: the subtitle
-        // pill below can extend past the last circle button, and an Up press
-        // from that overhang would otherwise skip this row for the synopsis.
-        // Full-width bounds put the row under every selector pill so Up lands
-        // on the nearest action button. Buttons stay left-aligned.
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .focusSection()
+        )
     }
 
     // MARK: - More menu
@@ -192,13 +183,20 @@ struct TVMovieDetailView<BelowSynopsis: View>: View {
         detail.type == "episode" && detail.seriesId != nil
     }
 
+    /// The ellipsis now also appears on movie pages, which previously had
+    /// no overflow entries at all — "Find Trailers" is the first.
     private var hasMoreMenu: Bool {
-        hasOverflowNavigation
+        hasOverflowNavigation || supportsTrailerFetch
     }
 
     @ViewBuilder
     private var moreMenu: some View {
         TVCircleMenuButton(accessibilityLabel: "More options") {
+            if supportsTrailerFetch {
+                Button(action: onFindTrailers) {
+                    Label("Find Trailers", systemImage: "film.stack")
+                }
+            }
             if let seriesId = detail.seriesId,
                let seasonNumber = detail.seasonNumber,
                seasonNumber > 0 {
@@ -327,6 +325,14 @@ struct TVMovieDetailView<BelowSynopsis: View>: View {
             contentId: detail.contentId,
             onSelect: onNavigateToItem
         )
+    }
+
+    // MARK: - Trailers & More
+
+    private var trailersSection: some View {
+        // Header lives inside the rail so it disappears with the cards when
+        // the item has neither remote videos nor local extras.
+        TVTrailersRail(entries: trailerEntries, onSelect: onSelectTrailer)
     }
 
     // MARK: - Cast

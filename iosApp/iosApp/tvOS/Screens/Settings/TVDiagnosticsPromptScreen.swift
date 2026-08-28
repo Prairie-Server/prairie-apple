@@ -11,7 +11,7 @@ struct TVDiagnosticsPromptScreen: View {
 
     var body: some View {
         ZStack {
-            Color.continuumBackground.ignoresSafeArea()
+            SettingsBackdrop()
 
             VStack(alignment: .leading, spacing: 28) {
                 Text(isReviewing ? "Report Summary" : prompt.title)
@@ -24,6 +24,12 @@ struct TVDiagnosticsPromptScreen: View {
                         .font(.system(size: 26))
                         .foregroundStyle(Color.continuumSecondaryText)
                         .frame(maxWidth: 1050, alignment: .leading)
+                    if model.selectedDestination == .hosted {
+                        Text(model.hostedPrivacyDisclosure)
+                            .font(.body)
+                            .foregroundStyle(Color.continuumSecondaryText.opacity(0.82))
+                            .frame(maxWidth: 1050, alignment: .leading)
+                    }
                 }
 
                 Spacer(minLength: 20)
@@ -62,30 +68,32 @@ struct TVDiagnosticsPromptScreen: View {
         .frame(maxHeight: 560)
     }
 
-            private var actionButtons: some View {
+    private var actionButtons: some View {
         HStack(spacing: 18) {
-            Button("Don't Send", systemImage: "nosign", action: model.declinePrompt)
+            Button("Don't Send", action: model.declinePrompt)
                 .buttonStyle(TVSettingsPaneRowStyle())
                 .focused($focusedAction, equals: .dontSend)
 
-            Button(isReviewing ? "Back" : "View Report", systemImage: isReviewing ? "chevron.backward" : "eye") {
+            Button(isReviewing ? "Back" : "View Report") {
                 isReviewing.toggle()
                 focusedAction = .dontSend
             }
             .buttonStyle(TVSettingsPaneRowStyle())
             .focused($focusedAction, equals: .review)
 
-            Button("Send", systemImage: "paperplane.fill") {
+            Button("Send") {
                 Task { await model.sendPrompt(always: false) }
             }
             .buttonStyle(TVSettingsPaneRowStyle())
             .focused($focusedAction, equals: .send)
 
-            Button("Always Send", systemImage: "paperplane.circle.fill") {
-                showAlwaysConfirmation = true
+            if model.allowsAlwaysSend {
+                Button("Always Send") {
+                    showAlwaysConfirmation = true
+                }
+                .buttonStyle(TVSettingsPaneRowStyle())
+                .focused($focusedAction, equals: .always)
             }
-            .buttonStyle(TVSettingsPaneRowStyle())
-            .focused($focusedAction, equals: .always)
         }
     }
 

@@ -53,13 +53,66 @@ final class DeviceSnapshotBuilderTests: XCTestCase {
         XCTAssertFalse(encoded.contains(#""device_id""#))
     }
 
+    func testCapabilityProbeRecordsCurrentHDRPlaybackModes() {
+        let snapshot = DiagnosticsCapabilityProbe.snapshot(
+            displayCapabilities: ApplePlaybackDisplayCapabilities(
+                hdrPlaybackEligible: true,
+                supportsDolbyVision: true,
+                supportsHDR10: true,
+                supportsHLG: false,
+                supportsAtmos: false,
+                maxResolution: nil,
+                supportsTenBit: true
+            )
+        )
+
+        guard case .object(let display) = snapshot.display else {
+            return XCTFail("display snapshot was not an object")
+        }
+        XCTAssertEqual(display["hdr_output_eligible"], .bool(true))
+        XCTAssertEqual(display["hdr_types"], .array([.string("HDR10"), .string("DV")]))
+        XCTAssertEqual(display["supports_ten_bit"], .bool(true))
+    }
+
+    func testDeclaredEngineDiagnosticsDoNotInventPerCodecDisplayFacts() {
+        let snapshot = DiagnosticsCapabilityProbe.snapshot(
+            displayCapabilities: ApplePlaybackDisplayCapabilities(
+                hdrPlaybackEligible: true,
+                supportsDolbyVision: true,
+                supportsHDR10: true,
+                supportsHLG: true,
+                supportsAtmos: false,
+                maxResolution: .uhd4K,
+                supportsTenBit: true
+            ),
+            videoCapabilityMode: .aetherDeclared
+        )
+
+        guard case .array(let codecs) = snapshot.videoCodecs else {
+            return XCTFail("video codec diagnostics were not an array")
+        }
+        XCTAssertEqual(codecs.count, AppleDecodeCapabilities.aetherOriginalHTTPVideoCodecs.count)
+        for codec in codecs {
+            guard case .object(let fields) = codec else {
+                return XCTFail("video codec diagnostic was not an object")
+            }
+            XCTAssertEqual(fields["max"], .string("not_collected"))
+            XCTAssertEqual(fields["hdr"], .string("not_collected"))
+        }
+    }
+
     private func makeBuilder(
         audio: DiagnosticsCapabilityProbe.AudioOutputSnapshot,
         date: Date = Date(timeIntervalSince1970: 100)
     ) -> DeviceSnapshotBuilder {
         DeviceSnapshotBuilder(
             identityProvider: {
-                AppleDeviceIdentity(id: "device-id", name: "Unit Test iPhone", platform: "iOS")
+                AppleDeviceIdentity(
+                    id: "device-id",
+                    name: "Unit Test iPhone",
+                    platform: "iOS",
+                    clientFamily: "mobile"
+                )
             },
             playbackSnapshotProvider: {
                 DiagnosticsCapabilityProbe.Snapshot(
