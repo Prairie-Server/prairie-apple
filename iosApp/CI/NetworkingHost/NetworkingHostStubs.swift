@@ -76,8 +76,8 @@ final class ConnectionMonitor {
     var isServerReachable: Bool { isDeviceOnline && serverStatus != .unreachable }
     var isOffline: Bool { !isDeviceOnline || serverStatus == .unreachable }
 
-    nonisolated static func recordSuccess() {}
-    nonisolated static func recordFailure() {}
+    func noteServerResponded() {}
+    func noteServerUnreachable() {}
 }
 
 /// Referenced by AIModels helpers; real type lives under player subtitles.
