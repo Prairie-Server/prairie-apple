@@ -61,8 +61,6 @@ packages:
   ViewInspector:
     url: https://github.com/nalexn/ViewInspector
     from: "0.10.3"
-
-targets:
   Nuke:
     url: https://github.com/kean/Nuke
     from: "12.8.0"
@@ -460,7 +458,8 @@ targets:
         CODE_SIGNING_ALLOWED: "NO"
         MACOSX_DEPLOYMENT_TARGET: "15.0"
 
-
+schemes:
+  # CI-only: Networking coverage gate without linking FFmpeg into Prairie.app.
   PrairieNetworkingCI:
     build:
       targets:
@@ -474,25 +473,6 @@ targets:
         - PrairieNetworkingTests
     analyze:
       config: Debug
-  Prairie:
-    build:
-      targets:
-        Prairie: all
-        PrairieTests: [test]
-    run:
-      config: Debug
-    test:
-      config: Debug
-      targets:
-        - PrairieTests
-    archive:
-      config: Release
-    analyze:
-      config: Debug
-    profile:
-      config: Release
-
-schemes:
   Prairie:
     build:
       targets:
