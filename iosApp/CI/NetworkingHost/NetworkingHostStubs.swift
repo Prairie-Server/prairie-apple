@@ -17,7 +17,7 @@ final class AuthService: @unchecked Sendable {
         case refused
     }
 
-    var isLoggedIn: Bool { false }
+    var isLoggedIn: Bool = false
     var profileId: String? { nil }
 
     func clearCachesForServerChange() async {}

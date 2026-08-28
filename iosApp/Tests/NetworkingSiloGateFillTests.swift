@@ -377,6 +377,17 @@ final class NetworkingSiloGateFillTests: XCTestCase {
         XCTAssertTrue(resolved?.absoluteString.contains("tok") == true)
         XCTAssertTrue(resolved?.absoluteString.contains("prof") == true)
     }
+
+    func testPlaybackLanguageOptionAliasReplacementAndIdentity() {
+        let options = PlaybackLanguageOption.options(
+            for: .playbackSubtitleLanguage,
+            currentValue: "mao",
+            runtimeValues: ["mi", "fre", " "]
+        )
+        XCTAssertTrue(options.contains(where: { $0.code == "mao" || $0.code == "mi" }))
+        XCTAssertEqual(options.first(where: { $0.code == "mao" || $0.code == "mi" })?.id.count ?? 0 > 0, true)
+        XCTAssertFalse(options.contains(where: { $0.code.isEmpty }))
+    }
 }
 
 @MainActor
@@ -585,11 +596,85 @@ final class NetworkingSiloRegistryGateFillTests: XCTestCase {
             profileId: "solo", lastUsedAt: Date()
         ))
         await registry.switchTo(serverId: only)
-        // AuthService stub is never logged in, so the resolve branch is a no-op
-        // but still executes the gated remove path with the flag set.
+        AuthService.shared.isLoggedIn = true
+        defer { AuthService.shared.isLoggedIn = false }
+        // AuthService stub resolve returns false, but still executes the gated
+        // remove path with the flag set while logged in.
         let removed = await registry.remove(serverId: only, resolveFallbackProfile: true)
         XCTAssertTrue(removed)
         XCTAssertTrue(registry.entries.isEmpty)
+    }
+
+    func testAddOrUpdateAndFetchedNamePersistFailuresRollBack() {
+        var allowPersist = true
+        let registry = makeRegistry { _, _ in allowPersist }
+        let id = ServerRegistry.serverId(for: "https://persist-fail.example")
+
+        allowPersist = false
+        let added = registry.addOrUpdate(ServerEntry(
+            id: id,
+            url: "https://persist-fail.example",
+            fetchedName: "Fail",
+            profileId: "p",
+            lastUsedAt: Date()
+        ))
+        XCTAssertNil(added)
+        XCTAssertNil(registry.entry(with: id))
+
+        allowPersist = true
+        XCTAssertNotNil(registry.addOrUpdate(ServerEntry(
+            id: id,
+            url: "https://persist-fail.example",
+            fetchedName: "Ok",
+            profileId: "p",
+            lastUsedAt: Date()
+        )))
+        allowPersist = false
+        XCTAssertFalse(registry.updateFetchedName(for: id, fetchedName: "Nope"))
+        XCTAssertEqual(registry.entry(with: id)?.fetchedName, "Ok")
+    }
+
+    func testSwitchToUnknownPersistFailureAndLegacyPinDiscard() async {
+        let registry = makeRegistry()
+        XCTAssertFalse(await registry.switchTo(serverId: "missing"))
+
+        let keep = ServerRegistry.serverId(for: "https://keep-pin.example")
+        let other = ServerRegistry.serverId(for: "https://other-pin.example")
+        registry.addOrUpdate(ServerEntry(
+            id: keep, url: "https://keep-pin.example", fetchedName: "Keep",
+            profileId: "pk", lastUsedAt: Date(timeIntervalSince1970: 2)
+        ))
+        registry.addOrUpdate(ServerEntry(
+            id: other, url: "https://other-pin.example", fetchedName: "Other",
+            profileId: "po", lastUsedAt: Date(timeIntervalSince1970: 1)
+        ))
+        // Incomplete legacy migration pin: switching away discards leftover
+        // fixed-name keychain accounts.
+        defaults.set(false, forKey: "continuumServerRegistry.migrated.v1")
+        defaults.set("https://keep-pin.example", forKey: "continuumServerRegistry.legacySourceUrl.v1")
+        AuthService.shared.isLoggedIn = true
+        defer { AuthService.shared.isLoggedIn = false }
+        XCTAssertTrue(await registry.switchTo(serverId: other, resolveDestinationProfile: true))
+        XCTAssertEqual(registry.activeServerId, other)
+    }
+
+    func testSwitchToPersistFailureRollsBackDestination() async {
+        var allowPersist = true
+        let registry = makeRegistry { _, _ in allowPersist }
+        let a = ServerRegistry.serverId(for: "https://switch-a.example")
+        let b = ServerRegistry.serverId(for: "https://switch-b.example")
+        registry.addOrUpdate(ServerEntry(
+            id: a, url: "https://switch-a.example", fetchedName: "A",
+            profileId: "pa", lastUsedAt: Date(timeIntervalSince1970: 2)
+        ))
+        registry.addOrUpdate(ServerEntry(
+            id: b, url: "https://switch-b.example", fetchedName: "B",
+            profileId: "pb", lastUsedAt: Date(timeIntervalSince1970: 1)
+        ))
+        XCTAssertTrue(await registry.switchTo(serverId: a))
+        allowPersist = false
+        XCTAssertFalse(await registry.switchTo(serverId: b))
+        XCTAssertEqual(registry.activeServerId, a)
     }
 }
 
@@ -894,5 +979,67 @@ final class NetworkingSiloTokenStoreGateFillTests: XCTestCase {
         )
         let disposition = await store.invalidateRejectedRefresh(rotatedCaptured)
         XCTAssertEqual(disposition, .temporarySessionExpired)
+    }
+
+    func testRestoreTemporaryScopeAndRejectedRefreshShapeGuards() async throws {
+        let store = makeStore()
+        await store.switchActiveServer(serverId: serverID)
+        await store.setServerUrl("https://silo-gate.example")
+        await store.saveTokens(accessToken: "access", refreshToken: "refresh")
+
+        let first = TemporaryAuthScope(
+            serverId: serverID,
+            serverURL: "https://silo-gate.example",
+            accessToken: "t1",
+            refreshToken: "r1",
+            profileId: "p1",
+            profileToken: "k1",
+            controllerDeviceId: "c1",
+            expiresAt: Date().addingTimeInterval(60)
+        )
+        let snapshot = await store.beginTemporaryScope(first)
+        let second = TemporaryAuthScope(
+            serverId: serverID,
+            serverURL: "https://silo-gate.example",
+            accessToken: "t2",
+            refreshToken: "r2",
+            profileId: "p2",
+            profileToken: "k2",
+            controllerDeviceId: "c2",
+            expiresAt: Date().addingTimeInterval(60)
+        )
+        _ = await store.beginTemporaryScope(second)
+        let restored = await store.restoreTemporaryScope(
+            snapshot,
+            replacingGenerationID: second.credentialGenerationID
+        )
+        let scope = await store.getTemporaryScope()
+        XCTAssertTrue(restored)
+        XCTAssertEqual(scope?.accessToken, "t1")
+
+        let stale = await store.restoreTemporaryScope(
+            snapshot,
+            replacingGenerationID: UUID()
+        )
+        XCTAssertFalse(stale)
+
+        let identity = HTTPRequestIdentity(
+            serverId: serverID,
+            serverURL: "https://silo-gate.example",
+            profileId: "p1",
+            clientFamily: "ios"
+        )
+        let skippedNil = await store.clearTokensAfterRejectedRefresh(
+            replacing: nil,
+            expected: identity,
+            credentialOwner: .persistentServer(serverId: serverID)
+        )
+        let skippedTemporaryOwner = await store.clearTokensAfterRejectedRefresh(
+            replacing: "r1",
+            expected: identity,
+            credentialOwner: .temporary
+        )
+        XCTAssertFalse(skippedNil)
+        XCTAssertFalse(skippedTemporaryOwner)
     }
 }
