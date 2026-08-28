@@ -12,9 +12,16 @@ extension Notification.Name {
 final class AuthService: @unchecked Sendable {
     static let shared = AuthService()
 
+    var isLoggedIn: Bool { false }
+    var profileId: String? { nil }
+
     func clearCachesForServerChange() async {}
 
     func getProfiles() async throws -> [UserProfile] { [] }
+
+    func resolveActiveProfileForSession(
+        holding transitionLease: HTTPIdentityTransitionLease
+    ) async -> Bool { false }
 }
 
 actor DiagnosticsCoordinator {

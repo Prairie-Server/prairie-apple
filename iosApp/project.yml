@@ -394,6 +394,8 @@ targets:
       - path: iosApp/Screens/Profiles/ProfileModels.swift
       - path: iosApp/Screens/Profiles/ProfileLaunchPreferences.swift
       - path: iosApp/Navigation/UICustomizationPreferences.swift
+      - path: iosApp/Navigation/TabRouter.swift
+      - path: iosApp/Navigation/AppNavPreferences.swift
       - path: iosApp/Screens/Player/PlayerTrack.swift
       - path: iosApp/Screens/Auth/AuthModels.swift
       - path: iosApp/Screens/Calendar/CalendarModels.swift
