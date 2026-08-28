@@ -539,6 +539,10 @@ final class ServerRegistry {
         #endif
         await TokenStore.shared.deleteTokens(for: serverId)
         launchPreferences.clearRememberedProfile(for: serverId)
+        if let idx = entries.firstIndex(where: { $0.id == serverId }) {
+            entries[idx].legacyProfileId = nil
+            _ = persist()
+        }
         // Read *after* the awaits above, not snapshotted at entry: the legacy
         // `profileId` key always describes whichever server is active right
         // now. If a switch lands during those suspensions, this server is no
@@ -549,6 +553,9 @@ final class ServerRegistry {
         let signsOutActiveServer = serverId == activeServerId
         if signsOutActiveServer {
             defaults.removeObject(forKey: SharedStorage.profileIdKey)
+        }
+        if isPinnedLegacySource(serverId: serverId) {
+            discardLegacyKeychainAccountsIfUnmigrated()
         }
         // Deliberately after the purge above, matching `remove`: the purge
         // wipes the whole journal, so a line written before it is lost, while
@@ -695,12 +702,17 @@ final class ServerRegistry {
         let previousProfileID = defaults.string(forKey: SharedStorage.profileIdKey)
 
         entries.removeAll(where: { $0.id == serverId })
+        let discardingPinnedLegacy = isPinnedLegacySource(serverId: serverId)
         if removesActiveServer {
             let fallback = entries.sorted { $0.lastUsedAt > $1.lastUsedAt }.first
             if let fallback {
                 defaults.set(fallback.url, forKey: "serverUrl")
                 defaults.set(fallback.id, forKey: SharedStorage.activeServerIdKey)
-                defaults.removeObject(forKey: SharedStorage.profileIdKey)
+                if let profileId = fallback.legacyProfileId, !profileId.isEmpty {
+                    defaults.set(profileId, forKey: SharedStorage.profileIdKey)
+                } else {
+                    defaults.removeObject(forKey: SharedStorage.profileIdKey)
+                }
             } else {
                 defaults.removeObject(forKey: "serverUrl")
                 defaults.removeObject(forKey: SharedStorage.activeServerIdKey)
@@ -751,6 +763,9 @@ final class ServerRegistry {
                 outcome: "succeeded",
                 reason: "otherServer"
             )
+        }
+        if discardingPinnedLegacy {
+            discardLegacyKeychainAccountsIfUnmigrated()
         }
         if removesActiveServer {
             await TokenStore.shared.switchActiveServer(serverId: activeServerId ?? "")
@@ -1067,62 +1082,97 @@ final class ServerRegistry {
     /// act as the active-server mirror read by sync callers.
     private func migrateLegacyIfNeeded() {
         guard !defaults.bool(forKey: Self.migratedKey) else { return }
-        guard entries.isEmpty else {
-            defaults.set(true, forKey: Self.migratedKey)
-            return
-        }
 
-        guard let raw = defaults.string(forKey: "serverUrl")?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-              !raw.isEmpty else {
+        let hasLegacyTokens =
+            keychain.get(Self.legacyAccessTokenAccount) != nil
+            || keychain.get(Self.legacyRefreshTokenAccount) != nil
+            || keychain.get(Self.legacyProfileTokenAccount) != nil
+
+        let raw: String
+        if let pinned = defaults.string(forKey: Self.legacySourceUrlKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !pinned.isEmpty {
+            raw = pinned
+        } else if let fromDefaults = defaults.string(forKey: "serverUrl")?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !fromDefaults.isEmpty,
+            hasLegacyTokens || entries.isEmpty {
+            raw = fromDefaults
+            defaults.set(Self.normalize(url: fromDefaults), forKey: Self.legacySourceUrlKey)
+        } else if let match = entries.first(where: { entry in
+            keychain.get(TokenStore.accessTokenKey(for: entry.id)) != nil
+                || keychain.get(TokenStore.refreshTokenKey(for: entry.id)) != nil
+        }) {
+            raw = match.url
+            defaults.set(match.url, forKey: Self.legacySourceUrlKey)
+        } else if !hasLegacyTokens {
             defaults.set(true, forKey: Self.migratedKey)
+            defaults.removeObject(forKey: Self.legacySourceUrlKey)
+            return
+        } else if let first = entries.first {
+            raw = first.url
+            defaults.set(first.url, forKey: Self.legacySourceUrlKey)
+        } else {
+            defaults.set(true, forKey: Self.migratedKey)
+            defaults.removeObject(forKey: Self.legacySourceUrlKey)
             return
         }
 
         let normalized = Self.normalize(url: raw)
         let id = Self.serverId(for: normalized)
+        defaults.set(normalized, forKey: Self.legacySourceUrlKey)
 
         let legacyToNew: [(legacy: String, new: String, audience: KeychainAudience)] = [
-            ("com.continuum.app.accessToken", TokenStore.accessTokenKey(for: id), .userIndependent),
-            ("com.continuum.app.refreshToken", TokenStore.refreshTokenKey(for: id), .userIndependent),
-            ("com.continuum.app.profileToken", TokenStore.profileTokenKey(for: id), .currentUser),
+            (Self.legacyAccessTokenAccount, TokenStore.accessTokenKey(for: id), .userIndependent),
+            (Self.legacyRefreshTokenAccount, TokenStore.refreshTokenKey(for: id), .userIndependent),
+            (Self.legacyProfileTokenAccount, TokenStore.profileTokenKey(for: id), .currentUser),
         ]
-        var copiedLegacyAccounts: [String] = []
+        var tokenMigrationFailed = false
         for (legacy, new, audience) in legacyToNew {
-            if let v = keychain.get(legacy) {
-                let destination = keychain.withAudience(audience)
-                guard destination.set(v, for: new), destination.get(new) == v else { return }
-                copiedLegacyAccounts.append(legacy)
+            guard let value = keychain.get(legacy) else { continue }
+            let destination = keychain.withAudience(audience)
+            if destination.get(new) == value {
+                _ = keychain.delete(legacy)
+                continue
+            }
+            if destination.set(value, for: new), destination.get(new) == value {
+                _ = keychain.delete(legacy)
+            } else {
+                tokenMigrationFailed = true
             }
         }
 
-        let entry = ServerEntry(
-            id: id,
-            url: normalized,
-            fetchedName: nil,
-            profileId: defaults.string(forKey: "profileId"),
-            lastUsedAt: Date()
-        )
-        self.entries = [entry]
-        self.activeServerId = id
-        // load() registers persisted entries for redaction, but migration
-        // installs this entry directly and returns before that path. Register
-        // it here so the legacy host is hashed in diagnostics logs on the very
-        // first post-upgrade launch.
-        registerDiagnosticsSensitiveHosts([entry])
-        if normalized != raw {
+        if entries.isEmpty {
+            let entry = ServerEntry(
+                id: id,
+                url: normalized,
+                fetchedName: nil,
+                profileId: defaults.string(forKey: "profileId"),
+                lastUsedAt: Date()
+            )
+            self.entries = [entry]
+            self.activeServerId = id
+            registerDiagnosticsSensitiveHosts([entry])
             defaults.set(normalized, forKey: "serverUrl")
+            _ = persist()
+            Self.logger.info("Migrated legacy single-server state to registry id=\(id, privacy: .public)")
+        } else if !entries.contains(where: { $0.id == id }), hasLegacyTokens {
+            let entry = ServerEntry(
+                id: id,
+                url: normalized,
+                fetchedName: nil,
+                profileId: defaults.string(forKey: "profileId"),
+                lastUsedAt: Date()
+            )
+            self.entries.append(entry)
+            registerDiagnosticsSensitiveHosts([entry])
+            _ = persist()
         }
-        guard persist() else {
-            self.entries = []
-            self.activeServerId = nil
-            return
+
+        if !tokenMigrationFailed {
+            defaults.set(true, forKey: Self.migratedKey)
+            defaults.removeObject(forKey: Self.legacySourceUrlKey)
         }
-        for legacy in copiedLegacyAccounts {
-            guard keychain.delete(legacy) else { return }
-        }
-        defaults.set(true, forKey: Self.migratedKey)
-        Self.logger.info("Migrated legacy single-server state to registry id=\(id, privacy: .public)")
     }
 
     /// Drop leftover legacy fixed-name Keychain accounts when the user signs
@@ -1133,5 +1183,18 @@ final class ServerRegistry {
             _ = keychain.delete(account)
         }
         defaults.removeObject(forKey: Self.legacySourceUrlKey)
+    }
+
+    /// True when `serverId` is the frozen legacy-migration origin (or would be
+    /// derived from it). Used to drop unmigrated fixed-name Keychain accounts
+    /// when that host is signed out / removed mid-migration.
+    private func isPinnedLegacySource(serverId: String) -> Bool {
+        if let pinned = defaults.string(forKey: Self.legacySourceUrlKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !pinned.isEmpty {
+            return Self.serverId(for: pinned) == serverId
+        }
+        return entry(with: serverId)?.url == defaults.string(forKey: "serverUrl")
+            && keychain.get(Self.legacyAccessTokenAccount) != nil
     }
 }
