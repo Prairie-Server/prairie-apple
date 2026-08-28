@@ -11,6 +11,8 @@ extension PlayerCore {
         let index: Int
         let title: String?
         let time: Double
+        /// Optional chapter still URL from catalog / `chapter_thumbnail_ready`.
+        var thumbnailURL: String? = nil
         var id: Int { index }
     }
 

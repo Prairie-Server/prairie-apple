@@ -100,12 +100,34 @@ struct TVPlayerScrubber: View {
         // button delivers a tap to the focused view.
         barLayer
             .contentShape(Rectangle())
-            .overlay(alignment: .topTrailing) {
-                if isTimelineAutoSeeking {
-                    timelineAutoSeekChip
-                        .offset(y: -34)
-                        .transition(.opacity.combined(with: .scale(scale: 0.96)))
+            .overlay {
+                GeometryReader { geo in
+                    let width = geo.size.width
+                    ZStack(alignment: .topLeading) {
+                        if isTimelineAutoSeeking {
+                            timelineAutoSeekChip
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                                .offset(y: -34)
+                                .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                        } else if viewModel.isScrubbing || isTimelineScrubbing {
+                            ScrubPreviewBubble(
+                                time: displayTime,
+                                trickplay: viewModel.trickplay,
+                                chapterThumbnailURL: viewModel.chapterThumbnailURL(at: displayTime),
+                                chapterTitle: viewModel.chapterTitle(at: displayTime),
+                                compact: true
+                            )
+                            .position(
+                                x: min(max(width * progressFraction, 110), max(width - 110, 110)),
+                                y: -96
+                            )
+                            .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                            .allowsHitTesting(false)
+                        }
+                    }
+                    .frame(width: width, height: geo.size.height, alignment: .top)
                 }
+                .allowsHitTesting(false)
             }
             .focusable(true)
             .focused($isFocused)

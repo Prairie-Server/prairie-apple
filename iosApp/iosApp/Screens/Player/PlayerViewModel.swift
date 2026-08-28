@@ -408,6 +408,10 @@ class PlayerViewModel {
     /// the scrubber simply doesn't draw the buffered layer.
     var bufferedAheadSeconds: Double = 0
     var playbackStats: PlaybackStats = .empty
+    /// Interval sprite sheets for scrub previews (from the active file version).
+    var trickplay: VersionTrickplay?
+    /// Toggle for the floating "Stats for nerds" overlay (iOS + optional HUD).
+    var showStatsForNerds = false
     var showNextUpScreen = false
     var nextUpEpisode: PlayerNextUpEpisode?
     var nextUpOnDeckItems: [PlayerOnDeckItem] = []
@@ -1302,7 +1306,10 @@ class PlayerViewModel {
         }
         cb.onChaptersChange = { [weak self] chapters in
             guard let self, !self.isDisposed else { return }
-            self.chapters = chapters
+            self.chapters = Self.mergingChapterThumbnails(
+                chapters,
+                from: self.serverProvidedChapters
+            )
         }
         cb.onBufferingChange = { [weak self] buffering in
             guard let self, !self.isDisposed else { return }
@@ -1541,6 +1548,7 @@ class PlayerViewModel {
                 self.duration = prepared.session.durationSeconds ?? prepared.selectedVersion.duration ?? self.duration
                 self.currentTime = self.movieTime(for: prepared.session)
                 self.activeQualityId = prepared.activeQualityId
+                self.applyVersionMediaExtras(prepared.selectedVersion)
 
                 if previousSessionId != prepared.session.sessionId {
                     await self.realtimeClient.unbind()
@@ -2108,6 +2116,7 @@ class PlayerViewModel {
         currentWatchDetail = watchDetailSnapshot
         currentSelectedVersion = selectedVersionSnapshot
         serverProvidedChapters = chapterSnapshot
+        applyVersionMediaExtras(selectedVersionSnapshot)
         prefsForCurrentItem = subtitlePrefsSnapshot
         pendingExternalSubtitles = externalSubtitleSnapshot
         knownExternalSubtitles = externalSubtitleSnapshot
@@ -2652,9 +2661,69 @@ class PlayerViewModel {
                 PlayerChapterInfo(
                     index: chapter.index,
                     title: chapter.title,
-                    time: chapter.startSeconds
+                    time: chapter.startSeconds,
+                    thumbnailURL: chapter.thumbnailUrl
                 )
             }
+    }
+
+    /// Chapter still URL at `time`, if the catalog/realtime path supplied one.
+    func chapterThumbnailURL(at time: Double) -> String? {
+        chapters.last(where: { $0.time <= time })?.thumbnailURL
+    }
+
+    func chapterTitle(at time: Double) -> String? {
+        guard let chapter = chapters.last(where: { $0.time <= time }) else { return nil }
+        return chapter.title ?? "Chapter \(chapter.index + 1)"
+    }
+
+    func toggleStatsForNerds() {
+        showStatsForNerds.toggle()
+        if showStatsForNerds {
+            pinControlsVisible()
+        } else {
+            resumeAutoHide()
+        }
+    }
+
+    private func applyVersionMediaExtras(_ version: FileVersion?) {
+        trickplay = version?.trickplay
+    }
+
+    private func applyChapterThumbnail(index: Int, url: String, thumbhash: String?) {
+        _ = thumbhash // reserved for future chapter-list still placeholders
+        let update: (inout PlayerChapterInfo) -> Void = { chapter in
+            guard chapter.index == index else { return }
+            chapter.thumbnailURL = url
+        }
+        if let i = chapters.firstIndex(where: { $0.index == index }) {
+            update(&chapters[i])
+        }
+        if let i = serverProvidedChapters.firstIndex(where: { $0.index == index }) {
+            update(&serverProvidedChapters[i])
+        }
+    }
+
+    private static func mergingChapterThumbnails(
+        _ chapters: [PlayerChapterInfo],
+        from serverChapters: [PlayerChapterInfo]
+    ) -> [PlayerChapterInfo] {
+        guard !serverChapters.isEmpty else { return chapters }
+        let byIndex = Dictionary(
+            serverChapters.compactMap { chapter -> (Int, String)? in
+                guard let url = chapter.thumbnailURL, !url.isEmpty else { return nil }
+                return (chapter.index, url)
+            },
+            uniquingKeysWith: { _, latest in latest }
+        )
+        guard !byIndex.isEmpty else { return chapters }
+        return chapters.map { chapter in
+            var next = chapter
+            if next.thumbnailURL == nil, let url = byIndex[chapter.index] {
+                next.thumbnailURL = url
+            }
+            return next
+        }
     }
 
     /// Decide what to do when PlayerCore rejects a stream. Direct playback
@@ -3075,6 +3144,8 @@ class PlayerViewModel {
         audioTracks = []
         subtitleTracks = []
         chapters = []
+        trickplay = nil
+        showStatsForNerds = false
         introRange = nil
         creditsRange = nil
         cancelPendingIntroAutoSkip()
@@ -3354,6 +3425,8 @@ class PlayerViewModel {
                 self.isQualitySwitching = false
                 self.qualitySwitchError = nil
                 self.serverProvidedChapters = self.chapterInfoList(from: prepared.selectedVersion)
+                self.chapters = self.serverProvidedChapters
+                self.applyVersionMediaExtras(prepared.selectedVersion)
                 self.duration = session.durationSeconds ?? prepared.selectedVersion.duration ?? 0
                 self.currentTime = self.movieTime(for: session)
                 self.applyMarkerRanges(
@@ -4845,6 +4918,7 @@ class PlayerViewModel {
                 self.qualityOptions = ApplePlaybackQuality.playbackOptions(for: selectedVersion)
                 self.activeQualityId = prepared.activeQualityId
                 self.qualitySwitchError = nil
+                self.applyVersionMediaExtras(selectedVersion)
 
                 guard let streamRequest = await self.makeStreamRequest(session: session) else {
                     self.finalizeTerminalPlaybackError("Invalid stream URL")
@@ -5960,7 +6034,21 @@ class PlayerViewModel {
                 credits: payload.creditsUpdate.resolving(current: creditsRange)
             )
         case .chapterThumbnailReady:
-            break
+            guard let payload = PlaybackRealtimeChapterThumbnailReadyPayload(payload: event.payload) else {
+                Self.logger.warning("[CMP-CHAPTERS] ignored malformed chapter_thumbnail_ready event")
+                return
+            }
+            if let payloadSessionId = payload.sessionId, payloadSessionId != event.sessionId {
+                return
+            }
+            guard payload.fileId == currentSelectedVersion?.fileId else {
+                return
+            }
+            applyChapterThumbnail(
+                index: payload.chapterIndex,
+                url: payload.thumbnailURL,
+                thumbhash: payload.thumbnailThumbhash
+            )
         case .subtitleTranslationStarted,
              .subtitleTranslationCues,
              .subtitleTranslationCompleted,

@@ -462,6 +462,16 @@ struct PlayerSettingsSheet: View {
                 }
             }
 
+            Toggle("Stats for nerds", isOn: Binding(
+                get: { viewModel.showStatsForNerds },
+                set: { enabled in
+                    if viewModel.showStatsForNerds != enabled {
+                        viewModel.toggleStatsForNerds()
+                    }
+                }
+            ))
+            .tint(.continuumAccent)
+
             Toggle("Auto-Play Next Episode", isOn: Binding(
                 get: { viewModel.settings.autoPlayNextEpisode },
                 set: { viewModel.settings.setAutoPlayNextEpisode($0) }
