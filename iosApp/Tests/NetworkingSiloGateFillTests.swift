@@ -284,6 +284,23 @@ final class NetworkingSiloGateFillTests: XCTestCase {
         )
         XCTAssertEqual(trailerRefresh.status, "queued")
         XCTAssertNil(trailerRefresh.nextAllowedAt)
+
+        let subtitleURL = SubtitleUrl(
+            index: 2,
+            language: "en",
+            codec: "subrip",
+            label: "English",
+            source: "embedded",
+            forced: false,
+            default: true,
+            hearingImpaired: false,
+            fontBundleUrl: nil,
+            url: "https://example.invalid/sub.srt"
+        )
+        XCTAssertEqual(subtitleURL.id, 2)
+        let search = SubtitleSearchResponse(results: [], warnings: ["none"])
+        XCTAssertTrue(search.results.isEmpty)
+        XCTAssertEqual(search.warnings, ["none"])
     }
 }
 
