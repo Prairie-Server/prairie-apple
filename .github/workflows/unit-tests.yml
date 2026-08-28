@@ -98,6 +98,7 @@ jobs:
             PrairieNetworkingTests/AppUpdateCheckerTests
             PrairieNetworkingTests/AIJobPollerTests
             PrairieNetworkingTests/LibraryVisibilityTests
+            PrairieNetworkingTests/PrairieQualityPresetsTests
             PrairieNetworkingTests/SettingValuesAPITests
             PrairieNetworkingTests/SettingsConformanceTests
           )
