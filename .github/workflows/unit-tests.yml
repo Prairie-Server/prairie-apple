@@ -122,7 +122,6 @@ jobs:
             -enableCodeCoverage YES \
             -resultBundlePath TestResults.xcresult \
             -parallel-testing-enabled NO \
-            -quiet \
             "${ONLY_TESTING_ARGS[@]}" \
             CODE_SIGNING_ALLOWED=NO
 

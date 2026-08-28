@@ -104,14 +104,18 @@ final class NetworkingSiloGateFillTests: XCTestCase {
     func testServerIdentityMatchesDefaultPortsButNotDifferentOrigins() {
         let canonical = ServerRegistry.serverId(for: "https://media.example.test/library")
         let explicitDefault = ServerRegistry.serverId(for: "https://MEDIA.example.test:443/library/")
+        let httpCanonical = ServerRegistry.serverId(for: "http://media.example.test/library")
+        let httpExplicitDefault = ServerRegistry.serverId(for: "http://MEDIA.example.test:80/library/")
         let otherPort = ServerRegistry.serverId(for: "https://media.example.test:8443/library")
         let otherScheme = ServerRegistry.serverId(for: "http://media.example.test/library")
         let pathCase = ServerRegistry.serverId(for: "https://media.example.test/Library")
 
         XCTAssertTrue(ServerRegistry.serverIdsMatch(canonical, explicitDefault))
+        XCTAssertTrue(ServerRegistry.serverIdsMatch(httpCanonical, httpExplicitDefault))
         XCTAssertFalse(ServerRegistry.serverIdsMatch(canonical, otherPort))
         XCTAssertFalse(ServerRegistry.serverIdsMatch(canonical, otherScheme))
         XCTAssertFalse(ServerRegistry.serverIdsMatch(canonical, pathCase))
+        XCTAssertNil(ServerRegistry.url(forServerId: ""))
     }
 
     func testServerIdentityDecoderRequiresAValidRoundTrippingHTTPURL() {
@@ -302,6 +306,77 @@ final class NetworkingSiloGateFillTests: XCTestCase {
         XCTAssertTrue(search.results.isEmpty)
         XCTAssertEqual(search.warnings, ["none"])
     }
+
+    func testLibrariesResponseAcceptsBareArrayAndUnsupportedTypes() throws {
+        let decoder = HTTPClient.makeJSONDecoder()
+        let bare = try decoder.decode(
+            LibrariesResponse.self,
+            from: Data("""
+            [
+              {"id":1,"name":"Movies","type":"movies"},
+              {"id":2,"name":"Weird","type":"unsupported-future"}
+            ]
+            """.utf8)
+        )
+        XCTAssertEqual(bare.libraries.map(\.id), [1])
+
+        let wrapped = try decoder.decode(
+            LibrariesResponse.self,
+            from: Data("""
+            {
+              "libraries": [
+                {"id":3,"name":"Shows","type":"series"},
+                {"id":4,"name":"Skip","type":"nope"}
+              ]
+            }
+            """.utf8)
+        )
+        XCTAssertEqual(wrapped.libraries.map(\.id), [3])
+        XCTAssertEqual(
+            LibrariesResponse(libraries: [
+                Library(id: 9, name: "Mixed", type: "mixed", sortOrder: nil, posterUrl: nil),
+                Library(id: 10, name: "Bad", type: "nope", sortOrder: nil, posterUrl: nil),
+            ]).libraries.map(\.id),
+            [9]
+        )
+    }
+
+    func testAppUpdateDisplayVersionAndLiveTVAuthQueryHelpers() {
+        _ = AppUpdateChecker.displayVersionString()
+        _ = AppUpdateChecker.marketingVersionString()
+
+        let hls = LiveTVSessionStartResponse(
+            sessionId: "s1",
+            playbackTicket: "ticket",
+            hlsUrl: "https://live.example/index.m3u8",
+            streamUrl: nil,
+            transport: "mpegts",
+            note: nil
+        )
+        XCTAssertTrue(hls.isHLS)
+        XCTAssertEqual(hls.playableURLString, "https://live.example/index.m3u8")
+
+        let fallback = LiveTVSessionStartResponse(
+            sessionId: "s2",
+            playbackTicket: "ticket",
+            hlsUrl: "   ",
+            streamUrl: "https://live.example/stream.ts",
+            transport: "mpegts",
+            note: nil
+        )
+        XCTAssertFalse(fallback.isHLS)
+        XCTAssertEqual(fallback.playableURLString, "https://live.example/stream.ts")
+
+        let resolved = LiveTVURLResolver.resolve(
+            "/livetv/channels/1/stream",
+            serverBaseURL: "https://live.example",
+            accessToken: "tok",
+            profileId: "prof"
+        )
+        XCTAssertEqual(resolved?.host, "live.example")
+        XCTAssertTrue(resolved?.absoluteString.contains("tok") == true)
+        XCTAssertTrue(resolved?.absoluteString.contains("prof") == true)
+    }
 }
 
 @MainActor
@@ -452,10 +527,54 @@ final class NetworkingSiloRegistryGateFillTests: XCTestCase {
         registry.addOrUpdate(entry)
         XCTAssertTrue(registry.updateFetchedName(for: id, fetchedName: "Named"))
         XCTAssertEqual(registry.entry(with: id)?.fetchedName, "Named")
-        XCTAssertFalse(registry.updateFetchedName(for: id, fetchedName: "Named"))
+        // No equality short-circuit: repeating the same name still persists.
+        XCTAssertTrue(registry.updateFetchedName(for: id, fetchedName: "Named"))
+        // Nil / empty leave the existing display name in place.
         XCTAssertTrue(registry.updateFetchedName(for: id, fetchedName: nil))
+        XCTAssertEqual(registry.entry(with: id)?.fetchedName, "Named")
+        XCTAssertTrue(registry.updateFetchedName(for: id, fetchedName: ""))
+        XCTAssertEqual(registry.entry(with: id)?.fetchedName, "Named")
+        XCTAssertFalse(registry.updateFetchedName(for: "missing-server", fetchedName: "Nope"))
         registry.setProfileId("next-profile", for: id)
         XCTAssertEqual(registry.entry(with: id)?.profileId, "next-profile")
+    }
+
+    func testAddOrUpdatePreservesOrReplacesLegacyProfileAndFetchedName() {
+        let registry = makeRegistry()
+        let id = ServerRegistry.serverId(for: "https://merge.example")
+        registry.addOrUpdate(ServerEntry(
+            id: id,
+            url: "https://merge.example",
+            fetchedName: "Original",
+            profileId: "legacy-a",
+            lastUsedAt: Date(timeIntervalSince1970: 1)
+        ))
+
+        let preserved = registry.addOrUpdate(
+            ServerEntry(
+                id: id,
+                url: "https://merge.example",
+                fetchedName: nil,
+                profileId: nil,
+                lastUsedAt: Date(timeIntervalSince1970: 2)
+            ),
+            preservingProfile: true
+        )
+        XCTAssertEqual(preserved?.fetchedName, "Original")
+        XCTAssertEqual(preserved?.profileId, "legacy-a")
+
+        let replaced = registry.addOrUpdate(
+            ServerEntry(
+                id: id,
+                url: "https://merge.example",
+                fetchedName: "",
+                profileId: nil,
+                lastUsedAt: Date(timeIntervalSince1970: 3)
+            ),
+            preservingProfile: false
+        )
+        XCTAssertEqual(replaced?.fetchedName, "Original")
+        XCTAssertNil(replaced?.profileId)
     }
 
     func testRemoveWithResolveFallbackProfileFlag() async {
@@ -663,5 +782,117 @@ final class NetworkingSiloTokenStoreGateFillTests: XCTestCase {
         } catch HTTPError.requestIdentityChanged {
             // expected
         }
+    }
+
+    func testClearTokensCoversTemporaryAndEmptyActiveServerBranches() async {
+        let store = makeStore()
+        await store.beginTemporaryScope(TemporaryAuthScope(
+            serverId: "remote-server",
+            serverURL: "https://remote.example",
+            accessToken: "remote-access",
+            refreshToken: "remote-refresh",
+            profileId: "remote-profile",
+            profileToken: "remote-proof",
+            controllerDeviceId: "controller",
+            expiresAt: Date().addingTimeInterval(60)
+        ))
+        await store.clearTokens()
+        let temporaryAfterClear = await store.getTemporaryScope()
+        XCTAssertNil(temporaryAfterClear)
+
+        // No active server: still clears in-memory state and records the branch.
+        await store.clearTokens()
+        let access = await store.getAccessToken()
+        XCTAssertNil(access)
+    }
+
+    func testPersistentRefreshRotationAndRejectedRefreshClear() async throws {
+        let store = makeStore()
+        await store.switchActiveServer(serverId: serverID)
+        await store.setServerUrl("https://silo-gate.example")
+        await store.setProfileId("profile-1")
+        await store.saveTokens(accessToken: "access", refreshToken: "refresh")
+
+        let identity = HTTPRequestIdentity(
+            serverId: serverID,
+            serverURL: "https://silo-gate.example",
+            profileId: "profile-1",
+            clientFamily: "ios"
+        )
+
+        let rotated = await store.saveRefreshedTokens(
+            "access-2",
+            "refresh-2",
+            replacing: "refresh",
+            expected: identity,
+            credentialOwner: .persistentServer(serverId: serverID)
+        )
+        let accessAfterRotate = await store.getAccessToken()
+        let refreshAfterRotate = await store.getRefreshToken()
+        XCTAssertTrue(rotated)
+        XCTAssertEqual(accessAfterRotate, "access-2")
+        XCTAssertEqual(refreshAfterRotate, "refresh-2")
+
+        let liveAccountValue = await store.refreshAccountIdentity()
+        let liveAccount = try XCTUnwrap(liveAccountValue)
+        let liveCapturedValue = await store.captureRefreshCredential(expected: liveAccount)
+        let liveCaptured = try XCTUnwrap(liveCapturedValue)
+        XCTAssertEqual(liveCaptured.refreshToken, "refresh-2")
+
+        let cleared = await store.clearTokensAfterRejectedRefresh(
+            replacing: "refresh-2",
+            expected: identity,
+            credentialOwner: .persistentServer(serverId: serverID)
+        )
+        let refreshAfterClear = await store.getRefreshToken()
+        XCTAssertTrue(cleared)
+        XCTAssertNil(refreshAfterClear)
+
+        // Stale capture from before the clear must not wipe a later session.
+        let disposition = await store.invalidateRejectedRefresh(liveCaptured)
+        XCTAssertNil(disposition)
+    }
+
+    func testTemporaryRefreshRotationAndClearTokensShapes() async throws {
+        let store = makeStore()
+        await store.switchActiveServer(serverId: serverID)
+        await store.setServerUrl("https://silo-gate.example")
+        await store.saveTokens(accessToken: "access", refreshToken: "refresh")
+
+        let temporary = TemporaryAuthScope(
+            serverId: serverID,
+            serverURL: "https://silo-gate.example",
+            accessToken: "temp-access",
+            refreshToken: "temp-refresh",
+            profileId: "temp-profile",
+            profileToken: "temp-proof",
+            controllerDeviceId: "controller",
+            expiresAt: Date().addingTimeInterval(60)
+        )
+        await store.beginTemporaryScope(temporary)
+        let accountValue = await store.refreshAccountIdentity()
+        let account = try XCTUnwrap(accountValue)
+        let captured = CapturedRefreshCredential(
+            account: account,
+            refreshToken: "temp-refresh",
+            owner: .temporary
+        )
+        let rotated = await store.saveRefreshedTokens(
+            "temp-access-2",
+            "temp-refresh-2",
+            replacing: captured
+        )
+        let scopeAfterRotate = await store.getTemporaryScope()
+        XCTAssertTrue(rotated)
+        XCTAssertEqual(scopeAfterRotate?.accessToken, "temp-access-2")
+        XCTAssertEqual(scopeAfterRotate?.refreshToken, "temp-refresh-2")
+
+        let rotatedCaptured = CapturedRefreshCredential(
+            account: account,
+            refreshToken: "temp-refresh-2",
+            owner: .temporary
+        )
+        let disposition = await store.invalidateRejectedRefresh(rotatedCaptured)
+        XCTAssertEqual(disposition, .temporarySessionExpired)
     }
 }

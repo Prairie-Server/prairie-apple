@@ -1017,6 +1017,7 @@ final class ServerRegistry {
         #endif
     }
 
+#if os(tvOS)
     private func mirrorActiveServer() {
         guard let active = activeServer else {
             defaults.removeObject(forKey: SharedStorage.serverUrlKey)
@@ -1026,6 +1027,7 @@ final class ServerRegistry {
         defaults.set(active.url, forKey: SharedStorage.serverUrlKey)
         defaults.set(active.id, forKey: SharedStorage.activeServerIdKey)
     }
+#endif
 
     /// Move the old registry-owned profile ID into the current user's launch
     /// store. The legacy field remains encoded until the destination mapping
