@@ -293,12 +293,9 @@ targets:
       # few symbols ServerRegistry still calls.
       - path: iosApp/Networking
         excludes:
-          - ContinuumAPI.swift
           - ContinuumAPI+LiveTV.swift
           - ContinuumAPI+Requests.swift
-          - ContinuumAPI+Settings.swift
           - ContinuumAI.swift
-          - HTTPClient.swift
           - OverlayPrefsStore.swift
           - PlaybackPrefsStore.swift
           - ProfilePrefsStore.swift
@@ -362,6 +359,13 @@ targets:
           - AppUpdateCheckerTests.swift
           - AIJobPollerTests.swift
           - LibraryVisibilityTests.swift
+          - SettingValuesAPITests.swift
+          - SettingsConformanceTests.swift
+          - SettingsContractResolve.swift
+      - path: Tests/Fixtures/SettingsContract/conformance.json
+        buildPhase: resources
+      - path: Tests/Fixtures/SettingsContract/manifest.json
+        buildPhase: resources
     dependencies:
       - target: PrairieNetworkingHost
     settings:
