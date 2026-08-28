@@ -384,8 +384,9 @@ final class NetworkingSiloGateFillTests: XCTestCase {
             currentValue: "mao",
             runtimeValues: ["mi", "fre", " "]
         )
+        XCTAssertFalse(options.isEmpty)
+        XCTAssertTrue(options.contains(where: { $0.id == $0.code }))
         XCTAssertTrue(options.contains(where: { $0.code == "mao" || $0.code == "mi" }))
-        XCTAssertEqual(options.first(where: { $0.code == "mao" || $0.code == "mi" })?.id.count ?? 0 > 0, true)
         XCTAssertFalse(options.contains(where: { $0.code.isEmpty }))
     }
 }
@@ -412,6 +413,7 @@ final class NetworkingSiloRegistryGateFillTests: XCTestCase {
     }
 
     override func tearDown() {
+        AuthService.shared.isLoggedIn = false
         suite.removePersistentDomain(forName: suiteName)
         standard.removePersistentDomain(forName: standardName)
         suite = nil
@@ -636,7 +638,8 @@ final class NetworkingSiloRegistryGateFillTests: XCTestCase {
 
     func testSwitchToUnknownPersistFailureAndLegacyPinDiscard() async {
         let registry = makeRegistry()
-        XCTAssertFalse(await registry.switchTo(serverId: "missing"))
+        let missingSwitched = await registry.switchTo(serverId: "missing")
+        XCTAssertFalse(missingSwitched)
 
         let keep = ServerRegistry.serverId(for: "https://keep-pin.example")
         let other = ServerRegistry.serverId(for: "https://other-pin.example")
@@ -654,7 +657,8 @@ final class NetworkingSiloRegistryGateFillTests: XCTestCase {
         defaults.set("https://keep-pin.example", forKey: "continuumServerRegistry.legacySourceUrl.v1")
         AuthService.shared.isLoggedIn = true
         defer { AuthService.shared.isLoggedIn = false }
-        XCTAssertTrue(await registry.switchTo(serverId: other, resolveDestinationProfile: true))
+        let switched = await registry.switchTo(serverId: other, resolveDestinationProfile: true)
+        XCTAssertTrue(switched)
         XCTAssertEqual(registry.activeServerId, other)
     }
 
@@ -671,9 +675,11 @@ final class NetworkingSiloRegistryGateFillTests: XCTestCase {
             id: b, url: "https://switch-b.example", fetchedName: "B",
             profileId: "pb", lastUsedAt: Date(timeIntervalSince1970: 1)
         ))
-        XCTAssertTrue(await registry.switchTo(serverId: a))
+        let switchedA = await registry.switchTo(serverId: a)
+        XCTAssertTrue(switchedA)
         allowPersist = false
-        XCTAssertFalse(await registry.switchTo(serverId: b))
+        let switchedB = await registry.switchTo(serverId: b)
+        XCTAssertFalse(switchedB)
         XCTAssertEqual(registry.activeServerId, a)
     }
 }
