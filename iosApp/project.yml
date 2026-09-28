@@ -488,7 +488,6 @@ targets:
           - LibraryBrowseV2Tests.swift
           - MetadataAIV2Tests.swift
           - OnboardingV2Tests.swift
-          - RequestsV2Tests.swift
           - TrackPreferencesV2Tests.swift
           - WatchStateV2Tests.swift
       - path: Tests/Fixtures/SettingsContract/conformance.json

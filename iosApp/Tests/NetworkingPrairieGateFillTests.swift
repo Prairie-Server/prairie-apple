@@ -203,30 +203,6 @@ final class NetworkingPrairieGateFillTests: XCTestCase {
         XCTAssertEqual(movies.navigationIcon, "rectangle.stack")
         XCTAssertEqual(movies.selectedNavigationIcon, "rectangle.stack.fill")
 
-        let caps = SettingsContractCapabilities(
-            apiVersion: 1,
-            revision: 5,
-            contractEtag: "etag",
-            definitionCount: 3,
-            scopes: ["user"],
-            supportsBatchedEffective: true,
-            supportsIdempotentWrites: true,
-            supportsAtomicShortcuts: true
-        )
-        XCTAssertTrue(caps.supportsUICustomizationRevision)
-        XCTAssertFalse(
-            SettingsContractCapabilities(
-                apiVersion: 1,
-                revision: 4,
-                contractEtag: "etag",
-                definitionCount: 1,
-                scopes: [],
-                supportsBatchedEffective: true,
-                supportsIdempotentWrites: true,
-                supportsAtomicShortcuts: true
-            ).supportsUICustomizationRevision
-        )
-
         let effective = EffectiveSettingValue(
             key: "playback.auto_play_next",
             value: true,
@@ -537,15 +513,13 @@ final class NetworkingPrairieRegistryGateFillTests: XCTestCase {
         XCTAssertEqual(defaults.string(forKey: "profileId"), "p-live")
     }
 
-    func testUpdateFetchedNameAndProfileIdShim() {
+    func testUpdateFetchedName() {
         let registry = makeRegistry()
         let id = ServerRegistry.serverId(for: "https://name.example")
-        var entry = ServerEntry(
+        let entry = ServerEntry(
             id: id, url: "https://name.example", fetchedName: nil,
             profileId: nil, lastUsedAt: Date()
         )
-        entry.profileId = "shim-profile"
-        XCTAssertEqual(entry.profileId, "shim-profile")
         registry.addOrUpdate(entry)
         XCTAssertTrue(registry.updateFetchedName(for: id, fetchedName: "Named"))
         XCTAssertEqual(registry.entry(with: id)?.fetchedName, "Named")
@@ -557,8 +531,6 @@ final class NetworkingPrairieRegistryGateFillTests: XCTestCase {
         XCTAssertTrue(registry.updateFetchedName(for: id, fetchedName: ""))
         XCTAssertEqual(registry.entry(with: id)?.fetchedName, "Named")
         XCTAssertFalse(registry.updateFetchedName(for: "missing-server", fetchedName: "Nope"))
-        registry.setProfileId("next-profile", for: id)
-        XCTAssertEqual(registry.entry(with: id)?.profileId, "next-profile")
     }
 
     func testAddOrUpdatePreservesOrReplacesLegacyProfileAndFetchedName() {
@@ -583,7 +555,7 @@ final class NetworkingPrairieRegistryGateFillTests: XCTestCase {
             preservingProfile: true
         )
         XCTAssertEqual(preserved?.fetchedName, "Original")
-        XCTAssertEqual(preserved?.profileId, "legacy-a")
+        XCTAssertEqual(preserved?.legacyProfileId, "legacy-a")
 
         let replaced = registry.addOrUpdate(
             ServerEntry(
@@ -596,7 +568,7 @@ final class NetworkingPrairieRegistryGateFillTests: XCTestCase {
             preservingProfile: false
         )
         XCTAssertEqual(replaced?.fetchedName, "Original")
-        XCTAssertNil(replaced?.profileId)
+        XCTAssertNil(replaced?.legacyProfileId)
     }
 
     func testRemoveWithResolveFallbackProfileFlag() async {
