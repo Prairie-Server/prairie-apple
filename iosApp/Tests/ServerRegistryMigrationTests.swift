@@ -81,6 +81,9 @@ final class ServerRegistryMigrationTests: XCTestCase {
         XCTAssertTrue(keychain.set(profileToken, for: "com.continuum.app.profileToken"))
     }
 
+    // tvOS keeps the registry in the shared Keychain, and this suite's
+    // fixture only seeds the iOS/macOS defaults-backed store.
+    #if !os(tvOS)
     func testMigrateLegacyIsIdempotentAcrossRelaunch() {
         seedLegacySingleServer(url: "https://media.lan")
 
@@ -95,6 +98,7 @@ final class ServerRegistryMigrationTests: XCTestCase {
         XCTAssertEqual(keychain.get(TokenStore.refreshTokenKey(for: id)), "REFRESH-LEGACY")
         XCTAssertEqual(keychain.get(TokenStore.profileTokenKey(for: id)), "PROFILE-LEGACY")
     }
+    #endif
 
     func testNormalizeAndServerIdAreStable() {
         XCTAssertEqual(ServerRegistry.normalize(url: "  https://a.example///  "), "https://a.example")

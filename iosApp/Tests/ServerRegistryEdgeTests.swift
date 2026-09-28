@@ -117,6 +117,8 @@ final class ServerRegistryEdgeTests: XCTestCase {
         XCTAssertNotNil(registry.entry(with: other.id), "the entry comes back when sign-out cannot persist")
     }
 
+    // tvOS keeps the registry in the shared Keychain instead of the suite.
+    #if !os(tvOS)
     func testLoadSeedsTheSharedSuiteFromTheStandardFallback() async throws {
         let firstSuite = suite()
         let first = registry(defaults: SharedDefaults(suite: firstSuite, standard: firstSuite))
@@ -135,6 +137,7 @@ final class ServerRegistryEdgeTests: XCTestCase {
         XCTAssertNotNil(emptySuite.data(forKey: ServerRegistry.defaultsKey))
         XCTAssertEqual(emptySuite.string(forKey: SharedStorage.serverUrlKey), "https://seed.example")
     }
+    #endif
 
     func testExistingEntriesMarkTheLegacyMigrationDone() {
         let shared = SharedDefaults(suite: suite(), standard: suite())
