@@ -35,7 +35,7 @@ struct QuickConnectView: View {
                     HStack {
                         ProgressView()
                         Text("Looking up device…")
-                            .foregroundStyle(Color.continuumSecondaryText)
+                            .foregroundStyle(Color.prairieSecondaryText)
                     }
                 }
             }
@@ -53,12 +53,12 @@ struct QuickConnectView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Match code")
                                 .font(.caption)
-                                .foregroundStyle(Color.continuumSecondaryText)
+                                .foregroundStyle(Color.prairieSecondaryText)
                             Text(match)
                                 .font(.title3.weight(.semibold))
                             Text("Confirm this phrase matches the other screen before approving.")
                                 .font(.footnote)
-                                .foregroundStyle(Color.continuumSecondaryText)
+                                .foregroundStyle(Color.prairieSecondaryText)
                         }
                         .padding(.vertical, 4)
                     }
@@ -101,6 +101,6 @@ struct QuickConnectView: View {
             }
         }
         .navigationTitle("Quick Connect")
-        .continuumNavigationTitleDisplayMode(.inline)
+        .prairieNavigationTitleDisplayMode(.inline)
     }
 }

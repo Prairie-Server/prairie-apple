@@ -63,7 +63,7 @@ struct LiveTVPlayerView: View {
                 .font(.system(size: 44))
                 .foregroundStyle(.white.opacity(0.85))
             Text(message)
-                .font(.continuumBody)
+                .font(.prairieBody)
                 .foregroundStyle(.white)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
@@ -122,7 +122,7 @@ struct LiveTVPlayerView: View {
         didRelease = true
         let sessionId = session.sessionId
         Task {
-            try? await ContinuumAPI.shared.releaseLiveTVSession(sessionId: sessionId)
+            try? await PrairieAPI.shared.releaseLiveTVSession(sessionId: sessionId)
         }
     }
 }

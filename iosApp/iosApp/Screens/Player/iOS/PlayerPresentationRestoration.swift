@@ -18,7 +18,7 @@ import OSLog
 @MainActor
 enum PlayerPresentationRestoration {
     private static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "com.continuum.app",
+        subsystem: Bundle.main.bundleIdentifier ?? "org.prairieserver.prairie",
         category: "PictureInPicture"
     )
 
@@ -48,10 +48,21 @@ enum PlayerPresentationRestoration {
             logger.error("No player presentation owner available for a PiP restore")
             return false
         }
+        // The user engaged a TV while PiP was up (or the session reconnected
+        // underneath it): the phone player must not come back over it.
+        if presenter.isRemotePlaybackEngaged?() == true {
+            logger.info("Skipping PiP restore: a TV is engaged")
+            return false
+        }
         pendingAdoption = (viewModel, payload.contentId)
         // A fresh identity is what makes `fullScreenCover(item:)` re-present
         // even if the router is still holding the outgoing payload.
-        presenter.presentedPlayer = payload.reopened()
+        var reopened = payload.reopened()
+        reopened.libraryId = viewModel.libraryId
+        // The user may have closed the original detail while PiP was active.
+        // Restore above the currently visible owner, never an absent sheet.
+        reopened.detailPresentationID = presenter.presentedItemDetail?.id
+        presenter.presentedPlayer = reopened
         return true
     }
 
@@ -79,14 +90,18 @@ extension AppRouter.PlayerPresentation {
     /// result as a new presentation.
     func reopened() -> Self {
         AppRouter.PlayerPresentation(
+            libraryId: libraryId,
             contentId: contentId,
             fileId: fileId,
             audioTrackIndex: audioTrackIndex,
             subtitleTrackIndex: subtitleTrackIndex,
             startFromBeginning: startFromBeginning,
             resumePosition: resumePosition,
+            prefersLastUsedVersion: prefersLastUsedVersion,
             returnToContentId: returnToContentId,
             offlineDownloadId: offlineDownloadId,
+            detailPresentationID: detailPresentationID,
+            watchPartyContext: watchPartyContext,
             posterURL: posterURL,
             backdropURL: backdropURL
         )

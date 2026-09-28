@@ -19,6 +19,10 @@ enum TVPlayerTimeDisplayMode: Equatable {
 /// either hides the HUD, dismisses the overlay, or exits the player
 /// depending on what's on screen.
 struct TVPlayerControls: View {
+    private static let transportHorizontalInset: CGFloat = 80
+    private static let scrubPreviewCardWidth: CGFloat = 340
+    private static let scrubPreviewBottomInset: CGFloat = 300
+
     let viewModel: PlayerViewModel
     let showsTimelinePreview: Bool
     let timeDisplayMode: TVPlayerTimeDisplayMode
@@ -71,7 +75,8 @@ struct TVPlayerControls: View {
     @FocusState private var isScrubberFocused: Bool
     @FocusState private var focusedTransportButton: TVPlayerTransportCluster.FocusTarget?
     @FocusState private var focusedHUDTab: TVPlayerInfoHUD.Tab?
-    @FocusState private var focusedIntroAction: IntroAction?
+    @FocusState private var isIntroSkipFocused: Bool
+    @FocusState private var isCreditsSkipFocused: Bool
 
     private var isHUDPresented: Bool { viewModel.isHUDPresented }
 
@@ -89,8 +94,10 @@ struct TVPlayerControls: View {
                 idleOverlay
                     .transition(.opacity)
             }
-            if viewModel.showIntroSkip {
-                introSkipLayer
+            introSkipLayer
+                .transition(.opacity)
+            if viewModel.showCreditsSkip {
+                creditsSkipLayer
                     .transition(.opacity)
             }
             if isHUDPresented {
@@ -126,7 +133,8 @@ struct TVPlayerControls: View {
             )
             .frame(width: 1, height: 1)
         }
-        .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isHUDPresented)
+        .animation(.easeOut(duration: PrairieTheme.fastDuration), value: isHUDPresented)
+        .animation(.easeOut(duration: 0.2), value: viewModel.showIntroSkip)
         // Menu / exit handling intentionally lives at the `PlayerView` level
         // rather than here. That higher handler reads `viewModel.isHUDPresented`
         // directly so it catches Menu presses even when focus has drifted off
@@ -143,18 +151,38 @@ struct TVPlayerControls: View {
         }
         .onChange(of: viewModel.showIntroSkip) { _, visible in
             if visible {
-                // The skip layer renders beneath the HUD, so claiming focus
-                // here while the HUD is up would yank the user out of it
-                // mid-navigation. The HUD-dismiss handler above re-seeds
-                // transport focus, and Skip stays reachable by direction.
-                if !isHUDPresented {
-                    focusedIntroAction = .skip
+                // The pill takes focus as it appears, except from a viewer who
+                // is mid-interaction: the HUD's focus graph, or a timeline
+                // scrub, which commits its seek when it loses focus. The pill
+                // still shows and its timer still runs; it stays reachable by
+                // direction.
+                // With the controls hidden the press capture owns focus and
+                // already routes Select to the pill.
+                if viewModel.showControls && !isHUDPresented &&
+                    !isTimelineScrubbing && !viewModel.isScrubbing {
+                    isIntroSkipFocused = true
                 }
             } else {
-                focusedIntroAction = nil
-                // Hand focus back to the transport when the Skip button
-                // disappears while controls are still up, instead of leaving
-                // nothing focused.
+                isIntroSkipFocused = false
+                // Hand focus back to the transport when the pill disappears
+                // while controls are still up, instead of leaving nothing
+                // focused. A viewer who already moved onto the transport keeps
+                // their place.
+                if viewModel.showControls && !isHUDPresented &&
+                    focusedTransportButton == nil && !isScrubberFocused {
+                    isScrubberFocused = true
+                }
+            }
+        }
+        .onChange(of: viewModel.showCreditsSkip) { _, visible in
+            if visible {
+                // Like the intro pill, never take focus from an active scrub:
+                // losing focus cancels the scrub preview.
+                if !isHUDPresented && !isTimelineScrubbing && !viewModel.isScrubbing {
+                    isCreditsSkipFocused = true
+                }
+            } else {
+                isCreditsSkipFocused = false
                 if viewModel.showControls && !isHUDPresented {
                     isScrubberFocused = true
                 }
@@ -208,8 +236,12 @@ struct TVPlayerControls: View {
         if isHUDPresented {
             if focusedHUDTab == nil { focusedHUDTab = activeHUDTab }
         } else if viewModel.showControls {
-            if viewModel.showIntroSkip && focusedIntroAction == nil {
-                focusedIntroAction = .skip
+            // The skip pills are disabled during a timeline scrub, so a claim
+            // on them would land nowhere; the scrubber owns focus then.
+            if viewModel.showIntroSkip && !isTimelineScrubbing && !isIntroSkipFocused {
+                isIntroSkipFocused = true
+            } else if viewModel.showCreditsSkip && !isTimelineScrubbing && !isCreditsSkipFocused {
+                isCreditsSkipFocused = true
             } else if focusedTransportButton == nil && !isScrubberFocused {
                 isScrubberFocused = true
             }
@@ -230,7 +262,7 @@ struct TVPlayerControls: View {
                 passiveTimelineBar
                 timeRow
             }
-            .padding(.horizontal, 80)
+            .padding(.horizontal, Self.transportHorizontalInset)
             .padding(.bottom, 48)
         }
         .allowsHitTesting(false)
@@ -281,25 +313,40 @@ struct TVPlayerControls: View {
                 .padding(.horizontal, 80)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             if viewModel.isScrubbing, let image = viewModel.scrubPreviewImage {
-                scrubPreviewCard(image)
-                    .padding(.bottom, 214)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                    .transition(.opacity)
-                    .allowsHitTesting(false)
+                GeometryReader { proxy in
+                    scrubPreviewCard(image)
+                        .frame(width: Self.scrubPreviewCardWidth)
+                        .padding(.leading, scrubPreviewLeadingInset(in: proxy.size.width))
+                        .padding(.bottom, Self.scrubPreviewBottomInset)
+                        .frame(
+                            maxWidth: .infinity,
+                            maxHeight: .infinity,
+                            alignment: .bottomLeading
+                        )
+                }
+                .transition(.opacity)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
             }
             transportStack
-                .padding(.horizontal, 80)
+                .padding(.horizontal, Self.transportHorizontalInset)
                 .padding(.bottom, 48)
         }
         .onAppear {
             focusedTransportButton = nil
-            // When the intro-skip button is showing, let it own first focus
+            // When the intro-skip pill is showing, let it own first focus
             // instead of racing this scrubber seed — otherwise revealing the
-            // controls during the intro window lands focus nondeterministically
-            // on the scrubber or the Skip button.
-            if viewModel.showIntroSkip {
+            // controls while it is up lands focus nondeterministically on the
+            // scrubber or the pill. A timeline selection that revealed the
+            // controls keeps the scrubber: the pills are disabled mid-scrub.
+            if isTimelineScrubbing {
+                isScrubberFocused = true
+            } else if viewModel.showIntroSkip {
                 isScrubberFocused = false
-                focusedIntroAction = .skip
+                isIntroSkipFocused = true
+            } else if viewModel.showCreditsSkip {
+                isScrubberFocused = false
+                isCreditsSkipFocused = true
             } else {
                 isScrubberFocused = true
             }
@@ -334,11 +381,27 @@ struct TVPlayerControls: View {
                 .monospacedDigit()
         }
         .padding(10)
-        .siloPlayerGlass(
+        .prairiePlayerGlass(
             in: RoundedRectangle(cornerRadius: 20, style: .continuous),
             tint: Color.black.opacity(0.28)
         )
         .shadow(color: .black.opacity(0.5), radius: 18, y: 7)
+    }
+
+    /// Aligns the preview with the scrubber puck while keeping the complete
+    /// card inside the same horizontal bounds as the transport timeline.
+    private func scrubPreviewLeadingInset(in containerWidth: CGFloat) -> CGFloat {
+        let trackWidth = max(containerWidth - (Self.transportHorizontalInset * 2), 0)
+        let playheadCenter = Self.transportHorizontalInset
+            + (trackWidth * CGFloat(progressFraction))
+        let minimumLeading = Self.transportHorizontalInset
+        let maximumLeading = containerWidth
+            - Self.transportHorizontalInset
+            - Self.scrubPreviewCardWidth
+        return min(
+            max(playheadCenter - (Self.scrubPreviewCardWidth / 2), minimumLeading),
+            maximumLeading
+        )
     }
 
     /// The sleep-timer chip floats in the top-right when active. Buffering is
@@ -348,103 +411,72 @@ struct TVPlayerControls: View {
             if viewModel.sleepTimer.isActive {
                 Label(formatCountdown(viewModel.sleepTimer.remainingSeconds),
                       systemImage: "moon.zzz.fill")
-                    .font(.continuumSmall.weight(.medium))
+                    .font(.prairieSmall.weight(.medium))
                     .foregroundStyle(.white.opacity(0.85))
                     .monospacedDigit()
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
-                    .siloPlayerGlass(in: Capsule())
+                    .prairiePlayerGlass(in: Capsule())
             }
         }
     }
 
+    /// Lower right, above the transport while the controls are up and closer
+    /// to the corner when they hide. Fades in, and fades out when its timer
+    /// runs out; Select and Menu take it down instantly (see
+    /// `PlayerViewModel.selectIntroSkipPrompt`).
+    ///
+    /// One focus owner at a time (docs/tvos-focus.md). With the controls
+    /// hidden, the shell's press capture owns the remote and routes Select to
+    /// the pill, so the pill is not focusable and is drawn lit as the Select
+    /// target. With the controls up it is an ordinary button in the native
+    /// focus graph, and Down moves on to the transport while its timer runs.
+    @ViewBuilder
     private var introSkipLayer: some View {
-        introSkipButton
-            .padding(.horizontal, 80)
-            .padding(.bottom, viewModel.showControls && !isHUDPresented ? 156 : 96)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-            // Group Skip + Cancel as their own focus region so the engine can
-            // move between them and the transport row below by direction.
+        if let pill = viewModel.introSkipPrompt.pill {
+            TVIntroSkipPill(
+                pill: pill,
+                isSelectTarget: !viewModel.showControls && !isHUDPresented
+            ) {
+                viewModel.selectIntroSkipPrompt()
+            }
+            // Out of the focus graph during a timeline scrub, like the
+            // transport row: a drag that drifts upward would otherwise land
+            // here and cancel the scrub.
+            .disabled(!viewModel.showControls || isTimelineScrubbing)
+            .focused($isIntroSkipFocused)
+            // Its own focus region, sized to the pill: a section spanning the
+            // screen would hold Down inside it instead of handing focus to the
+            // transport below.
             .focusSection()
-    }
-
-    private var introSkipButton: some View {
-        VStack(alignment: .trailing, spacing: 16) {
-            if let countdown = viewModel.introAutoSkipCountdownSeconds {
-                markerCountdownBadge(countdown)
-            }
-
-            HStack(spacing: 18) {
-                if viewModel.introAutoSkipCountdownSeconds != nil {
-                    Button {
-                        viewModel.cancelIntroAutoSkip()
-                    } label: {
-                        Label("Cancel", systemImage: "xmark")
-                            .font(.system(size: 24, weight: .semibold))
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                            .frame(width: 136)
-                    }
-                    .buttonStyle(TVPillButtonStyle(kind: .secondary, focusTreatment: .compact))
-                    .focused($focusedIntroAction, equals: .cancel)
-                    .accessibilityLabel("Cancel Auto-Skip Intro")
-                }
-
-                skipIntroNowButton
-            }
+            .padding(.horizontal, 80)
+            // Clears the whole transport stack — title, scrubber, time row and
+            // buttons — while it shows, so the pill never covers the end of
+            // the timeline or the remaining-time label.
+            .padding(.bottom, viewModel.showControls && !isHUDPresented ? 400 : 96)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+            .animation(.easeOut(duration: 0.22), value: viewModel.showControls)
         }
     }
 
-    private var skipIntroNowButton: some View {
+    private var creditsSkipLayer: some View {
         Button {
-            viewModel.skipIntro()
+            viewModel.skipCredits()
         } label: {
-            Label(
-                viewModel.introAutoSkipCountdownSeconds == nil ? "Skip Intro" : "Skip Now",
-                systemImage: "forward.end.fill"
-            )
+            Label("Skip Credits", systemImage: "forward.end.fill")
                 .font(.system(size: 26, weight: .semibold))
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
-                .frame(width: 196)
+                .frame(width: 220)
         }
         .buttonStyle(TVPillButtonStyle(kind: .primary, focusTreatment: .compact))
-        .focused($focusedIntroAction, equals: .skip)
-        .accessibilityLabel(
-            viewModel.introAutoSkipCountdownSeconds == nil ? "Skip Intro" : "Skip Intro Now"
-        )
-    }
-
-    private func markerCountdownBadge(_ countdown: Int) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: "sparkles.tv")
-                .font(.system(size: 19, weight: .semibold))
-            Text("Intro")
-                .font(.system(size: 17, weight: .bold))
-                .textCase(.uppercase)
-                .tracking(1.0)
-                .foregroundStyle(.white.opacity(0.62))
-            Text("Skipping in \(countdown)")
-                .font(.system(size: 22, weight: .semibold))
-                .monospacedDigit()
-        }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 18)
-        .padding(.vertical, 11)
-        .background(
-            RoundedRectangle(cornerRadius: ContinuumTheme.smallCornerRadius, style: .continuous)
-                .fill(Color.black.opacity(0.46))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: ContinuumTheme.smallCornerRadius, style: .continuous)
-                .stroke(Color.white.opacity(0.24), lineWidth: 1.2)
-        )
-        .shadow(color: .black.opacity(0.32), radius: 10, y: 4)
-    }
-
-    private enum IntroAction: Hashable {
-        case cancel
-        case skip
+        .disabled(isTimelineScrubbing)
+        .focused($isCreditsSkipFocused)
+        .accessibilityLabel("Skip Credits")
+        .padding(.horizontal, 80)
+        .padding(.bottom, viewModel.showControls && !isHUDPresented ? 156 : 96)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+        .focusSection()
     }
 
     // MARK: - Transport stack
@@ -472,6 +504,9 @@ struct TVPlayerControls: View {
                     }
                 },
                 onExitWhenIdle: {
+                    // The intro pill is the most transient thing on screen, so
+                    // Menu takes it down first and the press ends there.
+                    if viewModel.dismissIntroSkipPrompt() { return }
                     // While paused, Menu exits the player instead of hiding
                     // the controls over a frozen frame.
                     if viewModel.isPlaying {
@@ -515,18 +550,18 @@ struct TVPlayerControls: View {
             VStack(alignment: .leading, spacing: 2) {
                 if let series = viewModel.metadata.seriesTitle, !series.isEmpty {
                     Text(series)
-                        .font(.continuumSmall.weight(.medium))
+                        .font(.prairieSmall.weight(.medium))
                         .foregroundStyle(.white.opacity(0.65))
                         .lineLimit(1)
                 }
                 HStack(spacing: 10) {
                     Text(title)
-                        .font(.continuumHeadline)
+                        .font(.prairieHeadline)
                         .foregroundStyle(.white)
                         .lineLimit(1)
                     if let episode = viewModel.metadata.episodeTag {
                         Text(episode)
-                            .font(.continuumSmall)
+                            .font(.prairieSmall)
                             .foregroundStyle(.white.opacity(0.6))
                     }
                 }
@@ -580,7 +615,7 @@ struct TVPlayerControls: View {
     }
 
     private func estimatedFinishDate(from now: Date) -> Date {
-        let speed = max(viewModel.settings.playbackSpeed, 0.1)
+        let speed = max(viewModel.effectivePlaybackSpeed, 0.1)
         return now.addingTimeInterval(remainingTime / speed)
     }
 
@@ -594,7 +629,7 @@ struct TVPlayerControls: View {
         cancelPendingScrub = false
         focusedHUDTab = nil
         focusedTransportButton = nil
-        focusedIntroAction = nil
+        isIntroSkipFocused = false
         viewModel.pinControlsVisible()
 
         guard viewModel.duration > 0 else {

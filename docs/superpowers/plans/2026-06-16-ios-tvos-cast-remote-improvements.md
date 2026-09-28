@@ -880,14 +880,14 @@ Replace `content` in `PrairieCastRemoteControlView` with:
         VStack(spacing: 18) {
             Image(systemName: "airplayvideo")
                 .font(.system(size: 44, weight: .medium))
-                .foregroundStyle(Color.continuumOnSurface)
+                .foregroundStyle(Color.prairieOnSurface)
             Text("Connected to \(controller.activeTarget?.name ?? "Prairie TV")")
                 .font(.title3.weight(.semibold))
-                .foregroundStyle(Color.continuumOnSurface)
+                .foregroundStyle(Color.prairieOnSurface)
             Text("Pick something from your library to start playing.")
                 .font(.subheadline)
                 .multilineTextAlignment(.center)
-                .foregroundStyle(Color.continuumSecondaryText)
+                .foregroundStyle(Color.prairieSecondaryText)
         }
         .padding(32)
     }
@@ -895,7 +895,7 @@ Replace `content` in `PrairieCastRemoteControlView` with:
     private func statusView(title: String, showSpinner: Bool) -> some View {
         VStack(spacing: 14) {
             if showSpinner { ProgressView() }
-            Text(title).font(.headline).foregroundStyle(Color.continuumSecondaryText)
+            Text(title).font(.headline).foregroundStyle(Color.prairieSecondaryText)
         }
         .padding(32)
     }
@@ -938,7 +938,7 @@ Wrap the scrubber + time labels in a `TimelineView(.periodic(from: .now, by: 0.2
                         self.scrubPreview = nil
                     }
                 )
-                .tint(Color.continuumOnSurface)
+                .tint(Color.prairieOnSurface)
                 .disabled(state.duration <= 0)
                 .accessibilityLabel("Playback position")
                 .accessibilityValue(PlayerTimeFormatter.formatHMS(live))
@@ -949,7 +949,7 @@ Wrap the scrubber + time labels in a `TimelineView(.periodic(from: .now, by: 0.2
                     Text(remainingLabel(live: live))
                 }
                 .font(.caption.monospacedDigit())
-                .foregroundStyle(Color.continuumSecondaryText)
+                .foregroundStyle(Color.prairieSecondaryText)
             }
         }
     }
@@ -994,11 +994,11 @@ Add:
                 ),
                 in: 0...1
             )
-            .tint(Color.continuumOnSurface)
+            .tint(Color.prairieOnSurface)
             .accessibilityLabel("Volume")
             .accessibilityValue("\(Int((state.isMuted ? 0 : state.volume) * 100)) percent")
         }
-        .foregroundStyle(Color.continuumOnSurface)
+        .foregroundStyle(Color.prairieOnSurface)
         .buttonStyle(.plain)
     }
 ```
@@ -1064,7 +1064,7 @@ struct PrairieCastMiniBar: View {
                             .lineLimit(1)
                         Text("Playing on \(controller.activeTarget?.name ?? "Prairie TV")")
                             .font(.caption)
-                            .foregroundStyle(Color.continuumSecondaryText)
+                            .foregroundStyle(Color.prairieSecondaryText)
                             .lineLimit(1)
                     }
                     Spacer(minLength: 8)
@@ -1082,8 +1082,8 @@ struct PrairieCastMiniBar: View {
                 .padding(.vertical, 8)
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(Color.continuumOutline, lineWidth: 1))
-                .foregroundStyle(Color.continuumOnSurface)
+                    .stroke(Color.prairieOutline, lineWidth: 1))
+                .foregroundStyle(Color.prairieOnSurface)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -1103,9 +1103,9 @@ struct PrairieCastMiniBar: View {
                 .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         } else {
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Color.continuumSurfaceElevated)
+                .fill(Color.prairieSurfaceElevated)
                 .frame(width: 34, height: 50)
-                .overlay { Image(systemName: "tv").foregroundStyle(Color.continuumSecondaryText) }
+                .overlay { Image(systemName: "tv").foregroundStyle(Color.prairieSecondaryText) }
         }
     }
 }

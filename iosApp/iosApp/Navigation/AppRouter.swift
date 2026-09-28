@@ -1,36 +1,81 @@
-import OSLog
 import SwiftUI
+
+/// The ordered cards surrounding a detail presentation. iOS uses this to
+/// turn the open detail sheet into a small, source-aware deck: horizontal
+/// swipes move through the exact row/grid that launched it, while the source
+/// view can keep its own scroll position synchronized underneath the sheet.
+struct ItemDetailBrowseSource: Equatable {
+    let originID: String
+    let contentIDs: [String]
+
+    init(originID: String, contentIDs: [String]) {
+        self.originID = originID
+
+        var seen = Set<String>()
+        self.contentIDs = contentIDs.filter { contentID in
+            !contentID.isEmpty && seen.insert(contentID).inserted
+        }
+    }
+}
+
+private struct BrowseLibraryIDKey: EnvironmentKey {
+    static let defaultValue: Int? = nil
+}
+
+extension EnvironmentValues {
+    /// Set only by library browse surfaces; detail destinations carry a copy in their route.
+    var browseLibraryId: Int? {
+        get { self[BrowseLibraryIDKey.self] }
+        set { self[BrowseLibraryIDKey.self] = newValue }
+    }
+}
+
+private struct AllowsDirectPlaybackKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+extension EnvironmentValues {
+    /// False where picking a title must not start solo playback (the Watch
+    /// Party picker). Cards keep Select but drop their Play/Pause action.
+    var allowsDirectPlayback: Bool {
+        get { self[AllowsDirectPlaybackKey.self] }
+        set { self[AllowsDirectPlaybackKey.self] = newValue }
+    }
+}
+
+private struct ItemDetailBrowseSourceKey: EnvironmentKey {
+    static let defaultValue: ItemDetailBrowseSource? = nil
+}
+
+extension EnvironmentValues {
+    var itemDetailBrowseSource: ItemDetailBrowseSource? {
+        get { self[ItemDetailBrowseSourceKey.self] }
+        set { self[ItemDetailBrowseSourceKey.self] = newValue }
+    }
+}
 
 extension Notification.Name {
     /// Posted by `HTTPClient` when a token refresh fails against the
     /// active server. `ContentView` observes it and drops to the login
     /// screen — the registry entry is preserved so the user only has to
     /// re-enter credentials.
-    static let continuumSessionExpired = Notification.Name("continuumSessionExpired")
+    static let prairieSessionExpired = Notification.Name("prairieSessionExpired")
     /// Posted when a playback-only remote handoff session expires. The TV
     /// restores its persistent identity instead of routing the app to login.
     static let temporaryRemoteAuthExpired = Notification.Name("temporaryRemoteAuthExpired")
     /// Posted when the account remains valid but the selected profile was
     /// removed or its saved PIN proof is no longer accepted.
-    static let continuumProfileSelectionRequired = Notification.Name(
-        "continuumProfileSelectionRequired"
+    static let prairieProfileSelectionRequired = Notification.Name(
+        "prairieProfileSelectionRequired"
     )
 }
 
-/// Central navigation controller for the Continuum iOS app.
+/// Central navigation controller for the Prairie iOS app.
 ///
 /// Manages the authentication state machine and the navigation stack.
 /// Observed by ContentView to decide which screen tree to present.
 @Observable
 class AppRouter {
-
-    /// Outcomes on the post-erasure sign-out paths can only go here: the
-    /// diagnostics binding is purged before control returns, so a breadcrumb
-    /// would be dropped. See `signOutAndReset`.
-    @ObservationIgnored private static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "com.continuum.app",
-        category: "AppRouter"
-    )
 
     // MARK: - Auth State Machine
 
@@ -41,6 +86,10 @@ class AppRouter {
         case needsServerSetup
         /// Server known but user is not signed in.
         case needsLogin
+        /// A remembered server responded authoritatively but cannot safely use
+        /// the restored session. Credentials remain until an explicit removal
+        /// or the existing terminal refresh-rejection path clears them.
+        case serverRecovery(ServerRecoveryReason)
         /// Signed in but no profile has been selected.
         case needsProfile
         /// Fully authenticated with an active profile.
@@ -56,6 +105,7 @@ class AppRouter {
             case .loading: return "loading"
             case .needsServerSetup: return "needsServerSetup"
             case .needsLogin: return "needsLogin"
+            case .serverRecovery(let reason): return "serverRecovery.\(reason.rawValue)"
             case .needsProfile: return "needsProfile"
             case .authenticated: return "authenticated"
             }
@@ -83,7 +133,10 @@ class AppRouter {
             // session) is ended here rather than waiting on a view callback
             // that treats engaged PiP as a presentation handoff.
             if authState != .authenticated {
+                watchPartySheetPresented = false
+                pendingWatchPartyPresentation = nil
                 PlayerIdentityBoundary.endEngagedVideoPictureInPicture()
+                dismissItemDetail()
             }
         }
     }
@@ -97,6 +150,9 @@ class AppRouter {
     // MARK: - Navigation Stack
 
     /// Navigation path for push/pop within the current flow.
+    private(set) var isSigningOut = false
+    var accountActionError: String?
+
     var path = NavigationPath()
 
     /// Zoom-transition source id of the most recently tapped card, handed to
@@ -106,12 +162,40 @@ class AppRouter {
     /// records it here on tap. Transient hand-off, not observable UI state.
     @ObservationIgnored var pendingZoomSourceID: String?
 
+    // MARK: - Item Detail Presentation
+
+    /// iPhone and iPad present catalog details as a native bottom sheet instead
+    /// of pushing them into the tab or split-view navigation stack. A fresh UUID
+    /// makes reopening the same title after dismissal a new presentation while
+    /// keeping the content id itself available to the sheet root.
+    struct ItemDetailPresentation: Identifiable, Equatable {
+        let id = UUID()
+        var contentId: String
+        let browseSource: ItemDetailBrowseSource?
+        let libraryId: Int?
+        let resumeContext: SeriesDetailContext?
+
+        init(contentId: String, libraryId: Int? = nil, browseSource: ItemDetailBrowseSource? = nil,
+             resumeContext: SeriesDetailContext? = nil) {
+            self.contentId = contentId
+            self.browseSource = browseSource
+            self.libraryId = libraryId
+            self.resumeContext = resumeContext
+        }
+    }
+
+    #if os(iOS)
+    var presentedItemDetail: ItemDetailPresentation?
+    var itemDetailPath = NavigationPath()
+    #endif
+
     // MARK: - Player Presentation
 
     /// Identifiable payload for presenting the player as a full-screen cover.
     /// Used on iOS/iPadOS where pushing into the detail pane would box video
     /// into split-view navigation chrome.
     struct PlayerPresentation: Identifiable, Equatable {
+        var libraryId: Int? = nil
         let id = UUID()
         let contentId: String
         let fileId: Int?
@@ -119,11 +203,19 @@ class AppRouter {
         let subtitleTrackIndex: Int?
         let startFromBeginning: Bool
         let resumePosition: Double?
+        /// Continue Watching asks playback to prefer the exact last-used
+        /// source version over the profile's general automatic quality rule.
+        let prefersLastUsedVersion: Bool
         /// Optional detail destination to install behind the full-screen
         /// player once playback has actually started.
         let returnToContentId: String?
         /// Set for offline playback of a completed download.
         var offlineDownloadId: String? = nil
+        /// The iOS detail sheet that owns this cover. Nil means the app root.
+        /// Keep ownership stable while the player is presented, rather than
+        /// attaching competing covers to the root and the sheet.
+        var detailPresentationID: UUID? = nil
+        var watchPartyContext: WatchPartyPlaybackContext? = nil
         /// Hints supplied by the originating screen (e.g. the detail page,
         /// which has just loaded the catalog item) so the player's now-
         /// playing widget can publish artwork without re-fetching the
@@ -133,6 +225,111 @@ class AppRouter {
     }
 
     var presentedPlayer: PlayerPresentation?
+    @ObservationIgnored private var watchPartySheetPresented = false
+    @ObservationIgnored private var pendingWatchPartyPresentation: WatchPartyPlaybackContext?
+
+    @MainActor
+    func watchPartySheetWillPresent() { watchPartySheetPresented = true }
+
+    @MainActor
+    func watchPartySheetDidDismiss() {
+        watchPartySheetPresented = false
+        if let context = pendingWatchPartyPresentation { presentWatchParty(context) }
+    }
+
+    @MainActor
+    func presentWatchParty(_ context: WatchPartyPlaybackContext?) {
+        pendingWatchPartyPresentation = context
+        guard let context else {
+            if presentedPlayer?.watchPartyContext != nil {
+                // A party sheet open over the player goes with it, and its
+                // dismissal is not reliably reported.
+                watchPartySheetPresented = false
+                presentedPlayer = nil
+            }
+            return
+        }
+        if watchPartySheetPresented, presentedPlayer?.watchPartyContext == nil { return }
+        pendingWatchPartyPresentation = nil
+        guard presentedPlayer?.watchPartyContext != context else { return }
+        var presentation = PlayerPresentation(libraryId: context.libraryId,
+            contentId: context.contentId, fileId: context.fileId,
+            audioTrackIndex: nil, subtitleTrackIndex: nil,
+            startFromBeginning: false, resumePosition: context.startPosition,
+            prefersLastUsedVersion: false, returnToContentId: nil,
+            watchPartyContext: context, posterURL: nil, backdropURL: nil)
+        #if os(iOS)
+        // Reuse the active presenter's cover, including a detail-owned player.
+        // Replacing its content avoids racing a dismissal with a new cover.
+        presentation.detailPresentationID = presentedPlayer?.detailPresentationID ?? presentedItemDetail?.id
+        #endif
+        presentedPlayer = presentation
+    }
+
+    #if os(iOS)
+    /// Where a streaming play request should go. Installed by the root view
+    /// with the PrairieControl client so every local-play entry point (detail
+    /// page, home rail badge, deep links, restored alerts) routes through one
+    /// decision instead of each call site re-checking the remote session.
+    /// Returns true when the request was taken by an engaged TV.
+    var remotePlaybackInterceptor: ((PrairieControlPlaybackRequest) async -> Bool)?
+    /// Whether a TV is engaged right now, for sites that must not open the
+    /// local player at all (a PiP restore) rather than route a request.
+    var isRemotePlaybackEngaged: (() -> Bool)?
+
+    /// True while the interceptor is deciding; a second Play in that window
+    /// must not slip past it and open the local player.
+    private var isRoutingRemotePlayback = false
+
+    /// An offline play requested while a TV is engaged. A download can only
+    /// play on the phone, so instead of silently starting a second player the
+    /// root view asks: play here, or send the streamed version to the TV.
+    struct OfflinePlayChoice: Identifiable, Equatable {
+        let id = UUID()
+        let presentation: PlayerPresentation
+        let request: PrairieControlPlaybackRequest
+    }
+    var pendingOfflinePlayChoice: OfflinePlayChoice?
+
+    /// A play requested while the engaged TV is already playing a different
+    /// title. Replacing what someone may be watching deserves a confirmation,
+    /// so the root view asks before the request goes to the TV.
+    struct ReplaceRemotePlaybackChoice: Identifiable, Equatable {
+        let id = UUID()
+        let request: PrairieControlPlaybackRequest
+        let currentTitle: String
+        let targetName: String
+    }
+    var pendingReplaceRemotePlayback: ReplaceRemotePlaybackChoice?
+
+    /// Installed by the root view: the title the engaged TV is playing right
+    /// now, or nil when it is idle, so the router knows whether a play
+    /// would replace something.
+    var remotePlaybackCurrentTitle: (() -> (title: String, contentId: String?, targetName: String)?)?
+
+    func confirmReplaceRemotePlayback() {
+        guard let choice = pendingReplaceRemotePlayback else { return }
+        pendingReplaceRemotePlayback = nil
+        guard let remotePlaybackInterceptor else { return }
+        Task { @MainActor in _ = await remotePlaybackInterceptor(choice.request) }
+    }
+
+    /// User chose the phone for a pending offline play.
+    func confirmOfflinePlayHere() {
+        guard let choice = pendingOfflinePlayChoice else { return }
+        pendingOfflinePlayChoice = nil
+        presentedPlayer = choice.presentation
+    }
+
+    /// User chose the TV for a pending offline play: the streamed version
+    /// goes through the same interceptor as any other play.
+    func sendPendingOfflinePlayToTV() {
+        guard let choice = pendingOfflinePlayChoice else { return }
+        pendingOfflinePlayChoice = nil
+        guard let remotePlaybackInterceptor else { return }
+        Task { @MainActor in _ = await remotePlaybackInterceptor(choice.request) }
+    }
+    #endif
 
     // MARK: - Tab Selection
 
@@ -150,16 +347,38 @@ class AppRouter {
         requestedTab = tab
     }
 
+    // MARK: - Search Requests
+
+    /// Search opened with `query` filled in. A fresh `id` makes a repeated
+    /// query a new request.
+    struct SearchRequest: Equatable {
+        let id = UUID()
+        let query: String
+    }
+
+    #if os(iOS) || os(tvOS)
+    /// One-shot Search request from Siri, consumed (and cleared) by the main
+    /// tab view (`TVMainTabView` on tvOS), which owns tab selection and the
+    /// navigation stack.
+    var requestedSearch: SearchRequest?
+
+    func requestSearch(query: String) {
+        requestedSearch = SearchRequest(query: query)
+    }
+    #endif
+
     /// Present the player using the platform-appropriate path. iOS/iPadOS use
     /// a full-window cover; macOS pushes into the main navigation content so
     /// playback replaces the detail pane instead of opening in a sheet.
     func presentPlayer(
         contentId: String,
+        libraryId: Int? = nil,
         fileId: Int? = nil,
         audioTrackIndex: Int? = nil,
         subtitleTrackIndex: Int? = nil,
         startFromBeginning: Bool = false,
         resumePosition: Double? = nil,
+        prefersLastUsedVersion: Bool = false,
         returnToContentId: String? = nil,
         posterURL: String? = nil,
         backdropURL: String? = nil
@@ -180,27 +399,68 @@ class AppRouter {
                 audioTrackIndex: audioTrackIndex,
                 subtitleTrackIndex: subtitleTrackIndex,
                 startFromBeginning: startFromBeginning,
-                resumePosition: resumePosition
+                resumePosition: resumePosition,
+                libraryId: libraryId
             ))
         } else {
             navigate(to: .player(
                 contentId: contentId,
                 startFromBeginning: startFromBeginning,
-                resumePosition: resumePosition
+                resumePosition: resumePosition,
+                prefersLastUsedVersion: prefersLastUsedVersion,
+                libraryId: libraryId
             ))
         }
         #else
-        presentedPlayer = PlayerPresentation(
+        var presentation = PlayerPresentation(
+            libraryId: libraryId,
             contentId: contentId,
             fileId: fileId,
             audioTrackIndex: audioTrackIndex,
             subtitleTrackIndex: subtitleTrackIndex,
             startFromBeginning: startFromBeginning,
             resumePosition: resumePosition,
+            prefersLastUsedVersion: prefersLastUsedVersion,
             returnToContentId: returnToContentId,
             posterURL: posterURL,
             backdropURL: backdropURL
         )
+        #if os(iOS)
+        presentation.detailPresentationID = presentedItemDetail?.id
+        if let remotePlaybackInterceptor {
+            // Decide the destination before touching `presentedPlayer`, so
+            // an engaged TV never sees the local cover flash. The request
+            // mirrors the values the local player would have used.
+            let request = PrairieControlPlaybackRequest(
+                contentId: contentId,
+                fileId: fileId,
+                audioTrackIndex: audioTrackIndex,
+                subtitleTrackIndex: subtitleTrackIndex,
+                startFromBeginning: startFromBeginning,
+                resumePosition: resumePosition
+            )
+            guard !isRoutingRemotePlayback else { return }
+            // The TV is mid-title and this is a different one: ask first.
+            // Same title (a Resume of what is already on) goes straight through.
+            if let now = remotePlaybackCurrentTitle?(),
+               now.contentId != contentId {
+                pendingReplaceRemotePlayback = ReplaceRemotePlaybackChoice(
+                    request: request,
+                    currentTitle: now.title,
+                    targetName: now.targetName
+                )
+                return
+            }
+            isRoutingRemotePlayback = true
+            Task { @MainActor in
+                defer { isRoutingRemotePlayback = false }
+                if await remotePlaybackInterceptor(request) { return }
+                presentedPlayer = presentation
+            }
+            return
+        }
+        #endif
+        presentedPlayer = presentation
         #endif
     }
 
@@ -228,27 +488,159 @@ class AppRouter {
             resumePosition: resumePosition
         ))
         #else
-        presentedPlayer = PlayerPresentation(
+        var presentation = PlayerPresentation(
             contentId: contentId,
             fileId: nil,
             audioTrackIndex: nil,
             subtitleTrackIndex: nil,
             startFromBeginning: startFromBeginning,
             resumePosition: resumePosition,
+            prefersLastUsedVersion: false,
             returnToContentId: nil,
             offlineDownloadId: downloadId,
             posterURL: nil,
             backdropURL: nil
         )
+        #if os(iOS)
+        presentation.detailPresentationID = presentedItemDetail?.id
+        #endif
+        #if os(iOS)
+        if isRemotePlaybackEngaged?() == true {
+            pendingOfflinePlayChoice = OfflinePlayChoice(
+                presentation: presentation,
+                request: PrairieControlPlaybackRequest(
+                    contentId: contentId,
+                    fileId: nil,
+                    audioTrackIndex: nil,
+                    subtitleTrackIndex: nil,
+                    startFromBeginning: startFromBeginning,
+                    resumePosition: resumePosition
+                )
+            )
+            return
+        }
+        #endif
+        presentedPlayer = presentation
         #endif
     }
 
     // MARK: - Actions
 
+    #if os(iOS)
+    /// Each presentation site sees only the player it owns.
+    func playerPresentation(forDetailID detailID: UUID?) -> PlayerPresentation? {
+        guard let presentedPlayer, presentedPlayer.detailPresentationID == detailID else { return nil }
+        return presentedPlayer
+    }
+
+    /// An outgoing cover must not close a newer player or the detail below it.
+    func dismissPlayerPresentation(id: UUID) {
+        guard presentedPlayer?.id == id else { return }
+        presentedPlayer = nil
+    }
+
+    /// A pull-down on a pushed actor/episode page means Back, not close sheet.
+    func goBackInItemDetail() {
+        guard presentedItemDetail != nil, !itemDetailPath.isEmpty else { return }
+        itemDetailPath.removeLast()
+    }
+
+    func itemDetailPresentationDidDismiss() {
+        // The sheet binding clears its item before this callback. A delayed
+        // callback from an old sheet must not erase a newly opened detail.
+        guard presentedItemDetail == nil else { return }
+        itemDetailPath = NavigationPath()
+    }
+    #endif
+
     /// Push a route onto the navigation stack.
     func navigate(to route: Route) {
+        #if os(iOS)
+        if case .itemDetail(let contentId, _, let libraryId, let context) = route {
+            presentItemDetail(contentId: contentId, libraryId: libraryId, resumeContext: context)
+            return
+        }
+        #endif
+
         recordScreenBreadcrumb(target: route.diagnosticsTarget, action: "navigate")
+
+        #if os(iOS)
+        // Person pages reached from Cast & Crew belong to the detail card's
+        // navigation stack. Keeping them inside the sheet means Back returns to
+        // the title the user opened instead of revealing an unrelated route that
+        // was pushed behind the still-presented card.
+        if presentedItemDetail != nil,
+           case .personDetail = route {
+            itemDetailPath.append(route)
+            return
+        }
+        #endif
+
         path.append(route)
+    }
+
+    /// Open an item from an ordered card source. Existing callers can keep
+    /// using `navigate(to: .itemDetail(...))`; rows and grids that provide a
+    /// browse source opt into sideways paging without changing deep links or
+    /// nested recommendations reached from inside an already-open detail.
+    func presentItemDetail(
+        contentId: String,
+        libraryId: Int? = nil,
+        browseSource: ItemDetailBrowseSource? = nil,
+        resumeContext: SeriesDetailContext? = nil
+    ) {
+        #if os(iOS)
+        recordScreenBreadcrumb(target: "itemDetail", action: "present")
+        if presentedItemDetail == nil {
+            let source = browseSource.flatMap { source in
+                source.contentIDs.contains(contentId) ? source : nil
+            }
+            itemDetailPath = NavigationPath()
+            presentedItemDetail = ItemDetailPresentation(
+                contentId: contentId,
+                libraryId: libraryId,
+                browseSource: source,
+                resumeContext: resumeContext
+            )
+        } else {
+            itemDetailPath.append(Route.itemDetail(contentId: contentId, libraryId: libraryId, seriesContext: resumeContext))
+        }
+        #else
+        navigate(to: .itemDetail(contentId: contentId, libraryId: libraryId, seriesContext: resumeContext))
+        #endif
+    }
+
+    func presentContinueWatchingDetail(for item: SectionItem, libraryId: Int? = nil, browseSource: ItemDetailBrowseSource? = nil) {
+        if let context = SeriesDetailContext(item: item) {
+            presentItemDetail(contentId: context.seriesContentId, libraryId: libraryId, resumeContext: context)
+            return
+        }
+        // Movies, audio and incomplete legacy episode payloads retain their
+        // existing destination; a missing parent must not make a card inert.
+        presentItemDetail(contentId: item.contentId, libraryId: libraryId, browseSource: browseSource)
+    }
+
+    /// Select a sibling while the iOS detail card stays presented. Keeping the
+    /// presentation UUID stable prevents SwiftUI from dismissing/reopening the
+    /// sheet; only the card contents animate to the new title.
+    func selectPresentedItemDetail(contentId: String) {
+        #if os(iOS)
+        guard var presentation = presentedItemDetail,
+              presentation.contentId != contentId,
+              presentation.browseSource?.contentIDs.contains(contentId) == true
+        else { return }
+        presentation.contentId = contentId
+        presentedItemDetail = presentation
+        #endif
+    }
+
+    /// Close the complete bottom-presented detail flow and discard any nested
+    /// episode/person navigation so the next title always opens at its root.
+    func dismissItemDetail() {
+        #if os(iOS)
+        presentedItemDetail = nil
+        itemDetailPath = NavigationPath()
+        #endif
     }
 
     /// Swap the top route instead of pushing, so sideways hops between
@@ -323,113 +715,73 @@ class AppRouter {
         setAuthState(.needsServerSetup, reason: "resetToServerSetup")
     }
 
-    /// Sign out of the active server and land at the next sensible step:
-    /// the login screen if a server entry still remembers its URL,
-    /// otherwise the server-setup screen. Fire-and-forget wrapper so
-    /// buttons and error-screen callbacks don't spell out a `Task`.
-    ///
-    /// Only the refusal is breadcrumbed, and that is not an oversight.
-    ///
-    /// A successful `completeRequestedSignOut()` has already run
-    /// `AuthService.signOut()`, which purges the current diagnostics binding
-    /// and then every binding for the signed-out server. That purge drops the
-    /// live breadcrumb consent context *and* the last-known status snapshot it
-    /// would otherwise fall back to, so no context resolves and capture is off
-    /// by the time control returns here. A `succeeded` line would be offered to
-    /// a disabled journal — whose directory the same purge just deleted — and
-    /// dropped. The auth-state transition that `resetToLogin()` /
-    /// `resetToServerSetup()` record below is in the same position and equally
-    /// silent; both wait on the next account's first status refresh to reopen
-    /// the gate, which is exactly the erasure working as intended.
-    ///
-    /// Re-emitting either one afterwards is not an option worth taking. This is
-    /// a post-erasure path: the user asked to be signed out, and reviving a
-    /// journal after the account's diagnostics were deleted — even with a
-    /// line carrying no identifiers — would put the signed-out session's tail
-    /// in front of whoever signs in next.
-    ///
-    /// The refusal keeps its line because a refusal purges nothing: the
-    /// authorization check fails before any diagnostics work, so the gate is
-    /// still open and "it won't let me sign out" stays answerable.
-    func signOutAndReset() {
-        Task {
-            guard await completeRequestedSignOut() else {
-                Self.recordAuthActionBreadcrumb(reason: "signOut", outcome: "refused")
-                return
-            }
-            await MainActor.run {
-                if ServerRegistry.shared.hasActiveServer {
-                    self.resetToLogin()
-                } else {
-                    self.resetToServerSetup()
-                }
-            }
-        }
+    /// Commit an auth state produced after validating a server selection.
+    /// Every previous screen belongs to the old server/session boundary.
+    func resetAfterServerResolution(to state: AuthState) {
+        recordScreenBreadcrumb(target: state.diagnosticsState, action: "reset")
+        PlayerIdentityBoundary.endEngagedVideoPictureInPicture()
+        presentedPlayer = nil
+        dismissItemDetail()
+        path = NavigationPath()
+        profileJourneyLabels = nil
+        setAuthState(state, reason: "serverResolution")
     }
 
-    /// Sign out and forget the active server entirely. If another saved
-    /// server becomes active, re-enter its existing auth state; otherwise
-    /// return to server setup.
-    ///
-    /// Breadcrumbed exactly like `signOutAndReset`, for the same reason and
-    /// with one addition. Past the sign-out guard the binding purge has already
-    /// run, so neither the `removeFailed` half-state nor the success can be
-    /// recorded. The removal that follows then crosses an identity boundary of
-    /// its own — `ServerRegistry.remove` closes the capture gate for an active
-    /// server and reopens it only asynchronously — so a line here would be
-    /// blocked twice over even if the purge had not already erased the context.
+    func signOutAndReset() {
+        requestSignOut(removingServer: false)
+    }
+
     func signOutRemoveServerAndReset() {
-        Task {
-            let serverId = ServerRegistry.shared.activeServerId
-            guard await completeRequestedSignOut() else {
-                Self.recordAuthActionBreadcrumb(reason: "signOutRemoveServer", outcome: "refused")
-                return
-            }
-            if let serverId {
-                let removed = await ServerRegistry.shared.remove(
-                    serverId: serverId,
-                    resolveFallbackProfile: true
-                )
-                guard removed else {
-                    // Signed out but the entry survived: the user lands back at
-                    // login for a server they asked to forget. The two halves
-                    // disagreeing is the actual bug, and it is visible only in
-                    // OSLog — see this function's doc comment.
-                    Self.logger.error("signOutRemoveServer signed out but the entry survived")
-                    await MainActor.run { self.resetToLogin() }
+        requestSignOut(removingServer: true)
+    }
+
+    /// One operation owns the button action through cleanup and navigation.
+    /// Repeated taps cannot queue another logout behind a subsequent login.
+    private func requestSignOut(removingServer: Bool) {
+        guard !isSigningOut else { return }
+        isSigningOut = true
+        accountActionError = nil
+        Task { @MainActor in
+            defer { isSigningOut = false }
+            #if os(tvOS)
+            if await TokenStore.shared.hasTemporaryScope() {
+                guard await RemotePlaybackIdentityManager.shared.end() else {
+                    accountActionError = "Couldn't end remote playback. Try signing out again."
                     return
                 }
             }
-            await MainActor.run {
-                let auth = AuthService.shared
-                if !auth.hasServer {
-                    self.resetToServerSetup()
-                } else if !auth.isLoggedIn {
-                    self.resetToLogin()
-                } else if !auth.hasProfile {
-                    self.showProfileSelection()
-                } else {
-                    self.resetToHome()
+            #endif
+            let serverID = ServerRegistry.shared.activeServerId
+            let outcome = await AuthService.shared.signOutWithOutcome()
+            guard outcome != .refused else {
+                accountActionError = "The active session changed. Try signing out again."
+                return
+            }
+            var durable = outcome != .localOnly
+            if outcome == .diagnosticsCleanupFailed {
+                accountActionError = "You're signed out, but Prairie couldn't erase local diagnostics. Remove this server from the server list to retry cleanup."
+            }
+            if removingServer, let serverID {
+                let removed = await ServerRegistry.shared.remove(serverId: serverID, resolveFallbackProfile: true)
+                durable = durable || removed
+                if removed { accountActionError = nil }
+                if !removed {
+                    accountActionError = "Prairie couldn't remove the saved server. Please try again."
                 }
             }
+            if !durable, accountActionError == nil {
+                accountActionError = "Prairie couldn't clear the saved sign-in on this device. Please try signing out again."
+            }
+            let state: AuthState
+            if !ServerRegistry.shared.hasActiveServer {
+                state = .needsServerSetup
+            } else if removingServer, ServerRegistry.shared.activeServerId != serverID {
+                state = await RestoredSessionAuthResolver.resolveValidated()
+            } else {
+                state = .needsLogin
+            }
+            resetAfterServerResolution(to: state)
         }
-    }
-
-    /// A user-initiated tvOS sign-out first retires a playback-only overlay if
-    /// it owns request authentication, then retries against the persistent
-    /// account. Other refusals leave navigation and credentials untouched.
-    private func completeRequestedSignOut() async -> Bool {
-        if await AuthService.shared.signOut() {
-            return true
-        }
-        #if os(tvOS)
-        guard await RemotePlaybackIdentityManager.shared.end() else {
-            return false
-        }
-        return await AuthService.shared.signOut()
-        #else
-        return false
-        #endif
     }
 
     private func completeRequestedProfileSwitch() async -> Bool {
@@ -585,6 +937,8 @@ private extension Route {
             return "serverList"
         case .downloads:
             return "downloads"
+        case .watchParty:
+            return "watchParty"
         case .requestsHub:
             return "requestsHub"
         case .requestDetail:

@@ -62,6 +62,10 @@ enum TVSettingsOptions {
         .init(id: "120", label: "2 minutes before end"),
     ]
 
+    static let introSkipMode: [TVSettingsOption] = IntroSkipMode.allCases.map {
+        TVSettingsOption(id: $0.wireValue, label: $0.label)
+    }
+
     static func subtitleLanguage(_ languages: [PlaybackLanguageOption]) -> [TVSettingsOption] {
         languageOptions(
             languages,
@@ -170,37 +174,37 @@ private struct TVSettingsRailRowBody: View {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .strokeBorder(
                         isSelected && !isFocused
-                            ? Color.continuumChromeSelectedBorder
+                            ? Color.prairieChromeSelectedBorder
                             : Color.clear,
                         lineWidth: 1
                     )
             )
             .overlay(alignment: .leading) {
                 Capsule()
-                    .fill(Color.continuumAccent)
+                    .fill(Color.prairieAccent)
                     .frame(width: 4)
                     .padding(.vertical, 12)
                     .opacity(isSelected && !isFocused ? 1 : 0)
             }
             .scaleEffect(configuration.isPressed ? 0.98 : (isFocused ? 1.012 : 1))
             .shadow(
-                color: isFocused ? Color.continuumAccent.opacity(0.14) : .clear,
+                color: isFocused ? Color.prairieAccent.opacity(0.14) : .clear,
                 radius: 18
             )
-            .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
+            .animation(.easeOut(duration: PrairieTheme.fastDuration), value: isFocused)
     }
 
     private var foreground: Color {
         if isDestructive {
-            return isFocused ? .white : .continuumError
+            return isFocused ? .white : .prairieError
         }
-        return isFocused ? .continuumBackground : .continuumOnSurface
+        return isFocused ? .prairieBackground : .prairieOnSurface
     }
 
     private var fill: Color {
-        if isDestructive && isFocused { return .continuumError }
-        if isFocused { return .continuumOnSurface }
-        if isSelected { return .continuumSurfaceElevated.opacity(0.92) }
+        if isDestructive && isFocused { return .prairieError }
+        if isFocused { return .prairieOnSurface }
+        if isSelected { return .prairieSurfaceElevated.opacity(0.92) }
         return .clear
     }
 }
@@ -247,30 +251,30 @@ private struct TVSettingsPaneRowBody: View {
             )
             .scaleEffect(configuration.isPressed ? 0.98 : (isFocused ? 1.012 : 1))
             .shadow(
-                color: isFocused ? Color.continuumAccent.opacity(0.16) : .clear,
+                color: isFocused ? Color.prairieAccent.opacity(0.16) : .clear,
                 radius: 18
             )
             .focusEffectDisabled()
-            .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
+            .animation(.easeOut(duration: PrairieTheme.fastDuration), value: isFocused)
     }
 
     private var foreground: Color {
         if isDestructive {
-            return isFocused ? Color(hex: "#D22F3F") : .continuumError
+            return isFocused ? Color(hex: "#D22F3F") : .prairieError
         }
-        return isFocused ? .continuumBackground : .continuumOnSurface
+        return isFocused ? .prairieBackground : .prairieOnSurface
     }
 
     private var backgroundFill: Color {
-        if isFocused { return .continuumOnSurface }
-        if isSelected { return .continuumChromeSelectedFill }
-        return .continuumSurfaceElevated.opacity(0.84)
+        if isFocused { return .prairieOnSurface }
+        if isSelected { return .prairieChromeSelectedFill }
+        return .prairieSurfaceElevated.opacity(0.84)
     }
 
     private var borderColor: Color {
         if isFocused { return .clear }
-        if isSelected { return .continuumChromeSelectedBorder }
-        return .continuumChromeRestingBorder
+        if isSelected { return .prairieChromeSelectedBorder }
+        return .prairieChromeRestingBorder
     }
 }
 
@@ -382,14 +386,14 @@ struct TVSettingsInfoRow: View {
         .padding(.horizontal, 24)
         .padding(.vertical, 17)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .foregroundColor(.continuumOnSurface)
+        .foregroundColor(.prairieOnSurface)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.continuumSurfaceElevated.opacity(0.84))
+                .fill(Color.prairieSurfaceElevated.opacity(0.84))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(Color.continuumChromeRestingBorder, lineWidth: 1)
+                .strokeBorder(Color.prairieChromeRestingBorder, lineWidth: 1)
         )
         .accessibilityElement(children: .combine)
     }
@@ -408,7 +412,7 @@ struct TVSettingsSectionHeader: View {
         Text(title)
             .font(.system(size: 15, weight: .semibold, design: .monospaced))
             .tracking(2)
-            .foregroundStyle(Color.continuumAccent.opacity(0.86))
+            .foregroundStyle(Color.prairieAccent.opacity(0.86))
             .padding(.horizontal, 24)
             .padding(.top, 26)
             .padding(.bottom, 6)
@@ -424,7 +428,7 @@ struct TVSettingsFooter: View {
     var body: some View {
         Text(text)
             .font(.system(size: 19))
-            .foregroundColor(.continuumSecondaryText)
+            .foregroundColor(.prairieSecondaryText)
             .padding(.horizontal, 24)
             .padding(.top, 4)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -444,7 +448,7 @@ struct TVSettingsWarningFooter: View {
             Text(text)
         }
         .font(.body)
-        .foregroundColor(.continuumError)
+        .foregroundColor(.prairieError)
         .padding(.horizontal, 24)
         .padding(.top, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -478,11 +482,11 @@ struct TVSettingsConfirmationOverlay: View {
                 VStack(spacing: 12) {
                     Text(title)
                         .font(.system(size: 38, weight: .semibold))
-                        .foregroundColor(.continuumOnSurface)
+                        .foregroundColor(.prairieOnSurface)
 
                     Text(message)
                         .font(.system(size: 22))
-                        .foregroundColor(.continuumSecondaryText)
+                        .foregroundColor(.prairieSecondaryText)
                         .multilineTextAlignment(.center)
                 }
 
@@ -526,11 +530,11 @@ struct TVSettingsConfirmationOverlay: View {
             .padding(.vertical, 42)
             .background(
                 RoundedRectangle(cornerRadius: 30, style: .continuous)
-                    .fill(Color.continuumSurfaceElevated)
+                    .fill(Color.prairieSurfaceElevated)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 30, style: .continuous)
-                    .strokeBorder(Color.continuumChromeRestingBorder, lineWidth: 1)
+                    .strokeBorder(Color.prairieChromeRestingBorder, lineWidth: 1)
             )
             .focusSection()
             .defaultFocus($focusedAction, .cancel, priority: .userInitiated)
@@ -576,21 +580,21 @@ struct TVPrivacyPolicyOverlay: View {
                 VStack(alignment: .leading, spacing: 22) {
                     Image(systemName: "hand.raised.fill")
                         .font(.system(size: 38, weight: .semibold))
-                        .foregroundStyle(Color.continuumAccent)
+                        .foregroundStyle(Color.prairieAccent)
                         .accessibilityHidden(true)
 
                     Text("Privacy Policy")
                         .font(.system(size: 42, weight: .bold))
-                        .foregroundStyle(Color.continuumOnSurface)
+                        .foregroundStyle(Color.prairieOnSurface)
 
                     Text("Scan this code with your phone or tablet to read Prairie's privacy policy.")
                         .font(.system(size: 23))
-                        .foregroundStyle(Color.continuumSecondaryText)
+                        .foregroundStyle(Color.prairieSecondaryText)
                         .fixedSize(horizontal: false, vertical: true)
 
                     Text(PrairieLegalLinks.privacyPolicy.absoluteString)
                         .font(.system(size: 20, weight: .medium, design: .monospaced))
-                        .foregroundStyle(Color.continuumAccent)
+                        .foregroundStyle(Color.prairieAccent)
                         .accessibilityLabel("Privacy policy URL")
                         .accessibilityValue(PrairieLegalLinks.privacyPolicy.absoluteString)
 
@@ -608,11 +612,11 @@ struct TVPrivacyPolicyOverlay: View {
             .padding(.vertical, 52)
             .background(
                 RoundedRectangle(cornerRadius: 32, style: .continuous)
-                    .fill(Color.continuumSurfaceElevated)
+                    .fill(Color.prairieSurfaceElevated)
             )
             .overlay {
                 RoundedRectangle(cornerRadius: 32, style: .continuous)
-                    .strokeBorder(Color.continuumChromeRestingBorder, lineWidth: 1)
+                    .strokeBorder(Color.prairieChromeRestingBorder, lineWidth: 1)
             }
             .focusSection()
             .defaultFocus($isDoneFocused, true, priority: .userInitiated)
@@ -647,12 +651,12 @@ struct TVSettingsPickerSheet: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                Color.continuumBackground.opacity(0.88)
+                Color.prairieBackground.opacity(0.88)
                     .ignoresSafeArea()
 
                 RadialGradient(
                     colors: [
-                        Color.continuumAccent.opacity(0.08),
+                        Color.prairieAccent.opacity(0.08),
                         Color.clear,
                     ],
                     center: .center,
@@ -691,25 +695,25 @@ struct TVSettingsPickerSheet: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(title)
                         .font(.system(size: 42, weight: .bold))
-                        .foregroundStyle(Color.continuumOnSurface)
+                        .foregroundStyle(Color.prairieOnSurface)
                         .accessibilityAddTraits(.isHeader)
 
                     Text("Choose an option")
                         .font(.system(size: 19))
-                        .foregroundStyle(Color.continuumSecondaryText)
+                        .foregroundStyle(Color.prairieSecondaryText)
                 }
 
                 Spacer(minLength: 12)
 
                 Label("Menu to close", systemImage: "arrow.uturn.backward")
                     .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(Color.continuumSecondaryText)
+                    .foregroundStyle(Color.prairieSecondaryText)
                     .padding(.horizontal, 15)
                     .padding(.vertical, 10)
                     .background(Color.white.opacity(0.055), in: Capsule())
                     .overlay {
                         Capsule()
-                            .strokeBorder(Color.continuumChromeRestingBorder, lineWidth: 1)
+                            .strokeBorder(Color.prairieChromeRestingBorder, lineWidth: 1)
                 }
             }
 
@@ -724,7 +728,7 @@ struct TVSettingsPickerSheet: View {
             }
 
             Rectangle()
-                .fill(Color.continuumChromeRestingBorder)
+                .fill(Color.prairieChromeRestingBorder)
                 .frame(height: 1)
 
             ScrollViewReader { proxy in
@@ -778,13 +782,13 @@ struct TVSettingsPickerSheet: View {
         }
         .padding(30)
         .frame(width: width, height: height, alignment: .top)
-        .background(cardShape.fill(Color.continuumSurfaceElevated.opacity(0.98)))
+        .background(cardShape.fill(Color.prairieSurfaceElevated.opacity(0.98)))
         // Clip child layers first, then add the border and outer card shadow.
         // This preserves the floating dialog while containing scroll content.
         .clipShape(cardShape)
         .overlay {
             cardShape.strokeBorder(
-                Color.continuumChromeSelectedBorder.opacity(0.9),
+                Color.prairieChromeSelectedBorder.opacity(0.9),
                 lineWidth: 1
             )
         }
@@ -852,7 +856,7 @@ struct TVSettingsPickerSheet: View {
         let targetID = focusedOptionID ?? options.first { $0.id == selection }?.id ?? options.first?.id
         guard let targetID else { return }
         if animated, !reduceMotion {
-            withAnimation(.easeOut(duration: ContinuumTheme.fastDuration)) {
+            withAnimation(.easeOut(duration: PrairieTheme.fastDuration)) {
                 proxy.scrollTo(targetID, anchor: .center)
             }
         } else {

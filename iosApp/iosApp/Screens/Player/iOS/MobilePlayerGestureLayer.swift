@@ -6,25 +6,28 @@ import SwiftUI
 /// stays a plain button surface:
 ///
 /// - single tap            → toggle the controls overlay
-/// - double tap left/right → skip ±10s (with a ripple flash at the tap side)
+/// - double tap left/right → skip by the profile's video intervals (with a
+///   ripple flash at the tap side)
 /// - double tap center     → play/pause
 /// - touch & hold          → 2× playback while held (chip at top center)
 /// - drag on left edge     → screen brightness (vertical gauge)
 /// - drag on right edge    → player volume (vertical gauge)
-/// - downward swipe center → dismiss the player
 /// - pinch                 → cycle video gravity (fit / fill / stretch)
+///
+/// Center drags never dismiss playback. Exit is an explicit close-button
+/// action; edge brightness/volume gestures remain available.
 ///
 /// The layer is mounted only while playback is loaded. When the controls
 /// overlay is visible its scrim sits above this layer and captures touches,
 /// so these gestures apply to the "clean" viewing state.
 struct MobilePlayerGestureLayer: View {
     let viewModel: PlayerViewModel
-    let onDismiss: () -> Void
 
     private enum EdgeAdjustment { case brightness, volume }
 
     private struct SkipFlash: Equatable {
         let forward: Bool
+        let seconds: Int
         let id: UUID
     }
 
@@ -32,7 +35,7 @@ struct MobilePlayerGestureLayer: View {
     @State private var skipFlashHideTask: Task<Void, Never>?
 
     /// Which edge gauge the in-flight drag is adjusting, decided once from
-    /// the drag's start location. Nil for center drags (dismiss candidates).
+    /// the drag's start location. Nil for center drags, which do nothing.
     @State private var activeAdjustment: EdgeAdjustment?
     /// Brightness/volume value captured when the drag began; the drag
     /// applies a delta on top so the level never jumps to the touch point.
@@ -79,7 +82,7 @@ struct MobilePlayerGestureLayer: View {
                             viewModel.endHoldFastForward()
                         }
                     }
-                    .simultaneousGesture(edgeAndDismissDrag(in: size))
+                    .simultaneousGesture(edgeAdjustmentDrag(in: size))
                     .simultaneousGesture(videoGravityPinchGesture)
 
                 feedbackOverlays(in: size)
@@ -87,7 +90,7 @@ struct MobilePlayerGestureLayer: View {
         }
         // The controls scrim should swallow touches while the overlay is up,
         // but SwiftUI tap recognizers on an occluded sibling can still track
-        // touches — rapid presses on the overlay's ±10s buttons registered
+        // touches — rapid presses on the overlay's skip buttons registered
         // here as a double-tap skip. Drop out of hit testing entirely while
         // the overlay owns the screen.
         .allowsHitTesting(!viewModel.showControls)
@@ -119,18 +122,20 @@ struct MobilePlayerGestureLayer: View {
             // summoning the overlay would drop its scrim on top of this
             // layer and swallow the next double-tap.
             if x < size.width * Self.skipZoneFraction {
-                viewModel.skipBackward(10, revealingControls: false)
-                showSkipFlash(forward: false)
+                let seconds = viewModel.skipIntervals.backward
+                viewModel.skipBackward(Double(seconds), revealingControls: false)
+                showSkipFlash(forward: false, seconds: seconds)
             } else if x > size.width * (1 - Self.skipZoneFraction) {
-                viewModel.skipForward(10, revealingControls: false)
-                showSkipFlash(forward: true)
+                let seconds = viewModel.skipIntervals.forward
+                viewModel.skipForward(Double(seconds), revealingControls: false)
+                showSkipFlash(forward: true, seconds: seconds)
             } else {
                 viewModel.togglePlayPause()
             }
         }
     }
 
-    private func edgeAndDismissDrag(in size: CGSize) -> some Gesture {
+    private func edgeAdjustmentDrag(in size: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 14)
             .onChanged { value in
                 if dragBaseline == nil {
@@ -160,15 +165,8 @@ struct MobilePlayerGestureLayer: View {
                     viewModel.applyUserVolume(Float(fraction))
                 }
             }
-            .onEnded { value in
-                if activeAdjustment == nil {
-                    // Center drag: a decisive, mostly-vertical downward swipe
-                    // dismisses the player.
-                    if value.translation.height > 140,
-                       abs(value.translation.width) < value.translation.height * 0.6 {
-                        onDismiss()
-                    }
-                } else {
+            .onEnded { _ in
+                if activeAdjustment != nil {
                     scheduleGaugeHide()
                 }
                 activeAdjustment = nil
@@ -209,8 +207,8 @@ struct MobilePlayerGestureLayer: View {
 
     // MARK: - Transient feedback
 
-    private func showSkipFlash(forward: Bool) {
-        skipFlash = SkipFlash(forward: forward, id: UUID())
+    private func showSkipFlash(forward: Bool, seconds: Int) {
+        skipFlash = SkipFlash(forward: forward, seconds: seconds, id: UUID())
         skipFlashHideTask?.cancel()
         skipFlashHideTask = Task {
             try? await Task.sleep(nanoseconds: 700_000_000)
@@ -278,14 +276,17 @@ struct MobilePlayerGestureLayer: View {
 
     private func skipFlashView(_ flash: SkipFlash) -> some View {
         VStack(spacing: 3) {
-            Image(systemName: flash.forward ? "goforward.10" : "gobackward.10")
+            Image(systemName: SeekIntervalLabel.symbolName(
+                flash.forward ? .forward : .backward,
+                seconds: flash.seconds
+            ))
                 .font(.system(size: 26, weight: .semibold))
-            Text(flash.forward ? "+10s" : "−10s")
+            Text(flash.forward ? "+\(flash.seconds)s" : "−\(flash.seconds)s")
                 .font(.system(size: 11, weight: .bold))
         }
         .foregroundStyle(.white)
         .frame(width: 74, height: 74)
-        .prairieGlass(in: Circle())
+        .prairiePlayerGlass(in: Circle())
     }
 
     private func gravityToastChip(for gravity: VideoGravity) -> some View {
@@ -298,7 +299,7 @@ struct MobilePlayerGestureLayer: View {
         .foregroundStyle(.white)
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
-        .prairieGlass(in: Capsule())
+        .prairiePlayerGlass(in: Capsule())
     }
 
     private func gravityToastIcon(for gravity: VideoGravity) -> String {
@@ -319,7 +320,7 @@ struct MobilePlayerGestureLayer: View {
         .foregroundStyle(.white)
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
-        .prairieGlass(in: Capsule())
+        .prairiePlayerGlass(in: Capsule())
     }
 
     private func edgeGauge(for adjustment: EdgeAdjustment) -> some View {
@@ -343,7 +344,7 @@ struct MobilePlayerGestureLayer: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 14)
-        .prairieGlass(in: Capsule())
+        .prairiePlayerGlass(in: Capsule())
     }
 }
 #endif

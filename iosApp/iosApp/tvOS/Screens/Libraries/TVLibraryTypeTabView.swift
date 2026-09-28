@@ -56,9 +56,15 @@ struct TVLibraryTypeTabView: View {
                     subtitle: "Libraries visible to this profile will appear here."
                 )
                 .padding(.top, TVTopMenuLayout.contentTopInset)
+                .tvPageFocusOwner(
+                    focusRequest: focusRequest,
+                    isTopMenuFocused: isTopMenuFocused,
+                    accessibilityLabel: "No \(type.title.lowercased()) libraries",
+                    onMoveUp: onTopMenuFocusRequest
+                )
             }
         }
-        .continuumBackground()
+        .prairieBackground()
     }
 
     @ViewBuilder
@@ -86,7 +92,7 @@ struct TVLibraryTypeTabView: View {
                 initialFilter: .none,
                 showsHeader: false,
                 showsAlphabetRail: true,
-                topContentInset: ContinuumTheme.Skyline.libraryContentTopInset,
+                topContentInset: PrairieTheme.Skyline.libraryContentTopInset,
                 focusRequest: focusRequest,
                 isTopMenuFocused: isTopMenuFocused,
                 onTopMenuFocusRequest: onTopMenuFocusRequest
@@ -103,7 +109,7 @@ struct TVLibraryTypeTabView: View {
     private var pillContentTransition: AnyTransition {
         guard !reduceMotion else { return .opacity }
         return .asymmetric(
-            insertion: .opacity.combined(with: .offset(y: ContinuumTheme.Skyline.pillDriftY)),
+            insertion: .opacity.combined(with: .offset(y: PrairieTheme.Skyline.pillDriftY)),
             removal: .opacity
         )
     }

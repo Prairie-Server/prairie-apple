@@ -1,13 +1,15 @@
 import SwiftUI
 
 /// The shared right-hand action cluster used at the top of tab-root screens:
-/// Search and a profile-avatar menu with Settings / Switch Profile / Sign Out.
+/// Search, the iOS TV remote control, and a profile-avatar menu with
+/// Settings / Switch Profile / Sign Out. Every root page renders the same
+/// three controls so the header reads identically across Home, Libraries,
+/// For You, and Calendar.
 ///
 /// Each tab renders its own leading content (e.g. library selector on the
-/// Libraries tab, a static title on Home) and places this view on the
+/// Libraries tab, the wordmark on Home) and places this view on the
 /// trailing side of a single `HStack` row.
 struct TabTopBarActions: View {
-    let profile: UserProfile?
     let onSearch: () -> Void
     let onOpenSettings: () -> Void
     /// Opens the media-requests hub. The menu row only renders when the
@@ -17,14 +19,30 @@ struct TabTopBarActions: View {
     let onSwitchServer: () -> Void
     let onSignOut: () -> Void
 
+    /// Shared session cache so switching pages never refetches or flashes
+    /// the avatar fallback.
+    private let profileStore = CurrentProfileStore.shared
+    #if os(iOS)
+    @Environment(PrairieControlClient.self) private var prairieControl
+    @State private var isShowingControlPicker = false
+    #endif
+
     var body: some View {
-        // Plain icon glyphs (no glass chip) spaced evenly, matching the
-        // clean top-right cluster used by Plex. The profile avatar is the
-        // only filled shape, so it reads as the account control.
-        HStack(spacing: ContinuumTheme.topBarIconSpacing) {
-            TopBarIconButton(systemImage: "magnifyingglass", accessibilityLabel: "Search", action: onSearch)
+        // Icons spaced evenly, matching the clean top-right cluster used by
+        // Plex. Order is fixed: Search, Remote (iOS), Profile.
+        HStack(spacing: PrairieTheme.topBarIconSpacing) {
+            TopBarIconButton(
+                systemImage: "magnifyingglass",
+                accessibilityLabel: "Search",
+                action: onSearch
+            )
+            #if os(iOS)
+            PrairieControlModeButton(controller: prairieControl) {
+                isShowingControlPicker = true
+            }
+            #endif
             ProfileAvatarMenu(
-                profile: profile,
+                profile: profileStore.profile,
                 onOpenSettings: onOpenSettings,
                 onOpenRequests: onOpenRequests,
                 onSwitchProfile: onSwitchProfile,
@@ -32,6 +50,14 @@ struct TabTopBarActions: View {
                 onSignOut: onSignOut
             )
         }
+        #if os(iOS)
+        .sheet(isPresented: $isShowingControlPicker) {
+            PrairieControlTargetPickerView(request: nil, controller: prairieControl)
+        }
+        #endif
+        // No-op once cached; covers a page shown before the session-level
+        // load finished.
+        .task { await profileStore.refresh() }
     }
 }
 
@@ -47,8 +73,8 @@ private struct TopBarIconButton: View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.system(size: 18, weight: .semibold))
-                .foregroundColor(.continuumOnSurface)
-                .frame(width: ContinuumTheme.topBarIconHitSize, height: ContinuumTheme.topBarIconHitSize)
+                .foregroundColor(.prairieOnSurface)
+                .frame(width: PrairieTheme.topBarIconHitSize, height: PrairieTheme.topBarIconHitSize)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -61,6 +87,7 @@ private struct TopBarIconButton: View {
 /// Settings / Switch Profile / Sign Out so the user can reach app settings
 /// and manage their account without leaving the current tab.
 private struct ProfileAvatarMenu: View {
+    @Environment(AppRouter.self) private var router
     let profile: UserProfile?
     let onOpenSettings: () -> Void
     let onOpenRequests: () -> Void
@@ -76,6 +103,11 @@ private struct ProfileAvatarMenu: View {
 
     var body: some View {
         Menu {
+            #if os(iOS) || os(tvOS)
+            if WatchPartyEntry.isAvailable {
+                Button(WatchPartySession.shared.isEngaged ? "Return to Watch Party" : "Watch Party", systemImage: "person.3") { router.navigate(to: .watchParty) }
+            }
+            #endif
             if requestsEnabled {
                 Button {
                     onOpenRequests()
@@ -114,9 +146,15 @@ private struct ProfileAvatarMenu: View {
                 avatar: profile?.avatarEmoji,
                 imageUrl: profile?.avatarImageUrl,
                 name: profile?.name ?? "",
-                size: 36
+                size: 30
             )
+            .frame(
+                width: PrairieTheme.topBarIconHitSize,
+                height: PrairieTheme.topBarIconHitSize
+            )
+            .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
+        .accessibilityLabel("Profile menu")
     }
 }

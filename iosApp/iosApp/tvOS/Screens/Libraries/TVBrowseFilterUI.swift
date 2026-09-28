@@ -31,7 +31,7 @@ struct TVBrowseControlRow: View {
                     Image(systemName: "arrow.up.arrow.down")
                     Text("Sort · \(sortLabel)")
                     Text(sortDirection)
-                        .foregroundColor(.continuumSecondaryText)
+                        .foregroundColor(.prairieSecondaryText)
                 }
             }
             .buttonStyle(TVBrowseControlPillStyle())
@@ -79,10 +79,6 @@ struct TVBrowseControlRow: View {
             onMoveUp?()
         case .down:
             onMoveDown?()
-        case .left where control == .filter:
-            focusedControl = .sort
-        case .right where control == .sort:
-            focusedControl = .filter
         default:
             break
         }
@@ -112,7 +108,7 @@ struct TVBrowseSortPanel: View {
             Text("SORT BY")
                 .font(.system(size: 18, weight: .semibold, design: .monospaced))
                 .tracking(2)
-                .foregroundColor(.continuumSecondaryText)
+                .foregroundColor(.prairieSecondaryText)
                 .padding(.horizontal, 18)
                 .padding(.bottom, 8)
 
@@ -125,7 +121,7 @@ struct TVBrowseSortPanel: View {
                         Spacer(minLength: 0)
                         if key == current {
                             Text(key.directionLabel(for: order))
-                                .foregroundColor(.continuumSecondaryText)
+                                .foregroundColor(.prairieSecondaryText)
                             Image(systemName: order == .asc ? "arrow.up" : "arrow.down")
                         }
                     }
@@ -225,7 +221,7 @@ struct TVBrowseFilterPanel: View {
             panelHeader
 
             Divider()
-                .overlay(Color.continuumDivider)
+                .overlay(Color.prairieDivider)
                 .padding(.vertical, 12)
 
             ScrollView(.vertical, showsIndicators: false) {
@@ -262,11 +258,11 @@ struct TVBrowseFilterPanel: View {
             Text(headerEyebrow)
                 .font(.system(size: 16, weight: .semibold, design: .monospaced))
                 .tracking(2)
-                .foregroundColor(.continuumSecondaryText)
+                .foregroundColor(.prairieSecondaryText)
 
             Text(headerTitle)
                 .font(.system(size: 34, weight: .semibold))
-                .foregroundColor(.continuumOnSurface)
+                .foregroundColor(.prairieOnSurface)
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
         }
@@ -294,7 +290,7 @@ struct TVBrowseFilterPanel: View {
         if availableFacets.isEmpty {
             Text("No filters available")
                 .font(.system(size: 24))
-                .foregroundColor(.continuumSecondaryText)
+                .foregroundColor(.prairieSecondaryText)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 18)
         } else {
@@ -475,7 +471,7 @@ struct TVBrowseFilterPanel: View {
         Text(title)
             .font(.system(size: 15, weight: .semibold, design: .monospaced))
             .tracking(2)
-            .foregroundColor(.continuumSecondaryText)
+            .foregroundColor(.prairieSecondaryText)
             .padding(.horizontal, 16)
             .padding(.top, 20)
             .padding(.bottom, 6)
@@ -571,16 +567,16 @@ private struct TVBrowseControlPillBody: View {
         configuration.label
             .padding(.horizontal, 22)
             .padding(.vertical, 12)
-            .foregroundColor(isFocused ? .continuumBackground : .continuumOnSurface)
+            .foregroundColor(isFocused ? .prairieBackground : .prairieOnSurface)
             .background(
                 Capsule().fill(
-                    isFocused ? Color.continuumOnSurface
-                        : (active ? Color.continuumChromeSelectedFill : Color.continuumChromeRestingFill)
+                    isFocused ? Color.prairieOnSurface
+                        : (active ? Color.prairieChromeSelectedFill : Color.prairieChromeRestingFill)
                 )
             )
             .overlay(
                 Capsule().strokeBorder(
-                    isFocused ? Color.clear : Color.continuumChromeRestingBorder,
+                    isFocused ? Color.clear : Color.prairieChromeRestingBorder,
                     lineWidth: 1
                 )
             )
@@ -604,10 +600,10 @@ private struct TVBrowsePanelRowBody: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 13)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .foregroundColor(isFocused ? .continuumBackground : .continuumOnSurface)
+            .foregroundColor(isFocused ? .prairieBackground : .prairieOnSurface)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(isFocused ? Color.continuumOnSurface : Color.clear)
+                    .fill(isFocused ? Color.prairieOnSurface : Color.clear)
             )
             .animation(.easeOut(duration: 0.12), value: isFocused)
     }

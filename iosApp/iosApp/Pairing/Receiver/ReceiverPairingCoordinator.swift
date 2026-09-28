@@ -37,10 +37,65 @@ final class ReceiverPairingCoordinator {
         case signedIn(serverCount: Int)
         /// Terminal success; every signed-in server, named for the summary.
         case completed(serverNames: [String])
+        /// Checking which of the server's addresses this TV can reach, and
+        /// starting device authorization there.
+        case reaching(serverName: String)
+        /// The pushed address did not answer from this TV. `help` names the
+        /// network provider behind it when the server listed one; `alternate`
+        /// is a verified address of the same server the user may choose
+        /// instead. Nothing switches without that choice.
+        case unreachable(serverName: String, help: String, alternate: ServerEndpoint?)
         /// Terminal failure for the last attempted server. Kept on screen
         /// (never clobbered back to idle by the phone's `done`/EOF) so the
-        /// user sees what happened; "Try again" returns to idle.
-        case failed(String)
+        /// user sees what happened; "Try again" returns to idle. `help` is
+        /// the recovery text for the failure, when there is a specific one.
+        case failed(serverName: String, code: PairingFailureCode, help: String?)
+    }
+
+    /// One server pushed by the phone, with the identity and alternate
+    /// addresses it offered (absent from older phones).
+    struct PushedServer: Equatable, Sendable {
+        let serverURL: String
+        let serverName: String?
+        let serverIdentity: String?
+        let endpoints: [ServerEndpoint]
+
+        var displayName: String { serverName ?? ServerRegistry.normalize(url: serverURL) }
+
+        /// The provider entry behind the pushed address, when the server
+        /// listed it: this is what makes the unreachable copy name the
+        /// provider to set up rather than guessing from the hostname.
+        var pushedProvider: ServerEndpoint? {
+            let pushed = ServerRegistry.normalize(url: serverURL)
+            return endpoints.first { $0.kind == .provider && $0.url == pushed }
+        }
+
+        func unreachableHelp() -> String {
+            if let provider = pushedProvider {
+                return provider.unreachableHelp(serverName: displayName)
+            }
+            return "This Apple TV can't reach \(displayName) at \(ServerRegistry.normalize(url: serverURL)). Check its network connection and try again."
+        }
+    }
+
+    /// What the receiver commits once a poll returns tokens.
+    struct PersistedPairing: Equatable, Sendable {
+        /// The address that worked from this TV. It may differ from the
+        /// pushed one; the phone's saved address is never changed.
+        let url: String
+        let fetchedName: String?
+        let verifiedServerId: String?
+        let accessToken: String
+        let refreshToken: String
+        /// The account the tokens authenticate (`TokenPair.user.id`), bound
+        /// as the session's verified account.
+        let accountID: String
+    }
+
+    private enum AlternateChoice: Sendable {
+        case useAlternate(ServerEndpoint)
+        case retry
+        case cancelled
     }
 
     /// How long a connected phone may sit completely silent (no message, no
@@ -52,10 +107,13 @@ final class ReceiverPairingCoordinator {
     private(set) var state: State = .idle
 
     private let api: any PairingDeviceAuthorizing
-    private let persist: @MainActor (_ url: String, _ fetchedName: String?, _ access: String, _ refresh: String) async -> Bool
+    private let identityProbe: @Sendable (_ serverURL: String) async -> ServerIdentityProbeResult
+    private let persist: @MainActor (PersistedPairing) async -> Bool
     private var signedInNames: [String] = []
     private var consented = false
-    private var pendingPush: (serverURL: String, serverName: String?)?
+    private var pendingPush: PushedServer?
+    /// The TV user's pending choice while `state` is `.unreachable`.
+    private var alternateDecision: CheckedContinuation<AlternateChoice, Never>?
     /// The session currently being driven, so `cancel()`/consent can reach it.
     private var activeSession: (any PairingChannel)?
     /// The in-flight start+poll for the current server. Run as a separate
@@ -66,13 +124,17 @@ final class ReceiverPairingCoordinator {
     /// explicit TV-side teardown is waiting for the current attempt to reach
     /// its cancellation-safe boundary.
     private var isCancelling = false
-    private static let logger = Logger(subsystem: "com.continuum.app", category: "pairing.receiver")
+    private static let logger = Logger(subsystem: "org.prairieserver.prairie", category: "pairing.receiver")
 
     init(
         api: any PairingDeviceAuthorizing = PairingDeviceAPI(),
-        persist: @escaping @MainActor (String, String?, String, String) async -> Bool = ReceiverPairingCoordinator.persistServer
+        identityProbe: @escaping @Sendable (String) async -> ServerIdentityProbeResult = { url in
+            await ServerIdentityResolver().probeIdentity(serverURL: url)
+        },
+        persist: @escaping @MainActor (PersistedPairing) async -> Bool = ReceiverPairingCoordinator.persistServer
     ) {
         self.api = api
+        self.identityProbe = identityProbe
         self.persist = persist
     }
 
@@ -101,18 +163,24 @@ final class ReceiverPairingCoordinator {
                 guard !isCancelling else { continue }
                 armIdleTimer(session)
                 switch message {
-                case let .pushServer(serverURL, serverName):
+                case let .pushServer(serverURL, serverName, serverIdentity, endpoints):
                     // The protocol is one-server-at-a-time: a new push while
                     // one is in flight means the phone gave up on the
                     // previous server — supersede it, don't ignore the push.
                     pollTask?.cancel()
                     await pollTask?.value
                     guard !isCancelling else { return }
+                    let push = PushedServer(
+                        serverURL: serverURL,
+                        serverName: serverName,
+                        serverIdentity: ServerIdentity.usable(serverIdentity),
+                        endpoints: endpoints ?? []
+                    )
                     if consented {
-                        beginAttempt(serverURL: serverURL, serverName: serverName, session: session)
+                        beginAttempt(push, session: session)
                     } else {
-                        pendingPush = (serverURL, serverName)
-                        state = .consentRequested(serverName: serverName ?? ServerRegistry.normalize(url: serverURL))
+                        pendingPush = push
+                        state = .consentRequested(serverName: push.displayName)
                     }
                 case .done:
                     // An in-flight server has no committed result; abandon it.
@@ -178,7 +246,40 @@ final class ReceiverPairingCoordinator {
         guard case .consentRequested = state, let push = pendingPush, let session = activeSession else { return }
         consented = true
         pendingPush = nil
-        beginAttempt(serverURL: push.serverURL, serverName: push.serverName, session: session)
+        beginAttempt(push, session: session)
+    }
+
+    // MARK: - Unreachable address
+
+    /// User chose the verified alternate address shown on the unreachable
+    /// screen. Device authorization runs there; the address that works is
+    /// what this TV saves.
+    func useAlternateAddress() {
+        guard case let .unreachable(_, _, alternate) = state, let alternate else { return }
+        resumeAlternateDecision(.useAlternate(alternate))
+    }
+
+    /// User set up the network provider (or fixed the connection) and wants
+    /// the pushed address tried again.
+    func retryPushedAddress() {
+        guard case .unreachable = state else { return }
+        resumeAlternateDecision(.retry)
+    }
+
+    private func resumeAlternateDecision(_ choice: AlternateChoice) {
+        guard let decision = alternateDecision else { return }
+        alternateDecision = nil
+        decision.resume(returning: choice)
+    }
+
+    private func awaitAlternateDecision() async -> AlternateChoice {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                alternateDecision = continuation
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.resumeAlternateDecision(.cancelled) }
+        }
     }
 
     /// User declined the pending server — end the session; the phone is told
@@ -245,7 +346,7 @@ final class ReceiverPairingCoordinator {
 
     // MARK: - Per-server attempt
 
-    private func beginAttempt(serverURL: String, serverName: String?, session: any PairingChannel) {
+    private func beginAttempt(_ push: PushedServer, session: any PairingChannel) {
         // "Automatic" only once a sign-in has been COMMITTED: the phone
         // auto-approves only after its user confirmed a match code, and the
         // first confirmed approval is what produces the first success. A
@@ -255,7 +356,7 @@ final class ReceiverPairingCoordinator {
         let automatic = !signedInNames.isEmpty
         idleTask?.cancel()
         pollTask = Task { [weak self] in
-            await self?.handlePushServer(serverURL: serverURL, serverName: serverName, session: session, automatic: automatic)
+            await self?.handlePushServer(push, session: session, automatic: automatic)
             self?.attemptEnded(session)
         }
     }
@@ -265,29 +366,48 @@ final class ReceiverPairingCoordinator {
         armIdleTimer(session)
     }
 
-    private func handlePushServer(serverURL: String, serverName: String?, session: any PairingChannel, automatic: Bool) async {
-        let normalized = ServerRegistry.normalize(url: serverURL)
-        let displayName = serverName ?? normalized
+    private func handlePushServer(_ push: PushedServer, session: any PairingChannel, automatic: Bool) async {
+        // Every frame back to the phone names the PUSHED address, whatever
+        // address this TV ends up using: phones key their per-server state
+        // on the URL they sent.
+        let pushedURL = ServerRegistry.normalize(url: push.serverURL)
+        let displayName = push.displayName
         let device = AppleDeviceIdentity.current
         do {
+            // 0. Decide which address to sign in at. Legacy pushes (no
+            //    identity) use the pushed address exactly, as before.
+            state = .reaching(serverName: displayName)
+            let loginURL = try await resolveLoginURL(push, pushedURL: pushedURL)
+
             // 1. Start device auth against the PENDING candidate (not persisted).
-            let started = try await api.start(serverURL: normalized, deviceName: device.name, devicePlatform: device.platform)
+            let started: DeviceLoginStartResponse
+            do {
+                started = try await api.start(serverURL: loginURL, deviceName: device.name, devicePlatform: device.platform)
+            } catch {
+                try Task.checkCancellation()
+                if let requirement = UpdateRequirement(error) { throw AttemptFailure.updateRequired(requirement) }
+                throw error is URLError ? AttemptFailure.unreachable : error
+            }
             state = .awaitingApproval(serverName: displayName, matchCode: started.matchCode, automatic: automatic)
-            try await session.send(.deviceStarted(serverURL: normalized, userCode: started.userCode, matchCode: started.matchCode))
+            try await session.send(.deviceStarted(serverURL: pushedURL, userCode: started.userCode, matchCode: started.matchCode))
 
             // 2. Poll until approved or the device code expires.
             let deadline = Date().addingTimeInterval(TimeInterval(started.expiresIn))
             var pollInterval = max(1, started.interval)
             while Date() < deadline {
                 try Task.checkCancellation() // abort promptly on peer cancel / drop
-                let poll: DeviceLoginPollResponse
+                let poll: APIv2DevicePoll
                 do {
-                    poll = try await api.poll(serverURL: normalized, deviceCode: started.deviceCode)
+                    poll = try await api.poll(serverURL: loginURL, deviceCode: started.deviceCode)
                 } catch {
                     try Task.checkCancellation()
-                    if case PairingDeviceAPI.APIError.http(404) = error {
-                        throw error // the server has expired and removed this request
+                    if let requirement = UpdateRequirement(error) { throw AttemptFailure.updateRequired(requirement) }
+                    if Self.isMissingRequest(error) {
+                        throw AttemptFailure.expired // the server has expired and removed this request
                     }
+                    // An approval without usable tokens cannot be collected
+                    // again: the server issues them once.
+                    if case APIv2Error.incompleteAuthResponse = error { throw error }
                     // Match the ordinary device-login flow and Android TV:
                     // a deploy, proxy hiccup, or brief network loss must not
                     // invalidate a still-live device code.
@@ -298,10 +418,16 @@ final class ReceiverPairingCoordinator {
                 try Task.checkCancellation() // a cancel that raced the network must win — persist nothing
                 switch poll.status {
                 case "approved":
-                    guard let access = poll.accessToken, let refresh = poll.refreshToken else {
-                        throw PairingDeviceAPI.APIError.decode
-                    }
-                    guard await persist(normalized, serverName, access, refresh) else {
+                    // `validated()` guarantees complete tokens on `approved`.
+                    guard let tokens = poll.tokens else { throw APIv2Error.incompleteAuthResponse }
+                    guard await persist(PersistedPairing(
+                        url: loginURL,
+                        fetchedName: push.serverName,
+                        verifiedServerId: push.serverIdentity,
+                        accessToken: tokens.accessToken,
+                        refreshToken: tokens.refreshToken,
+                        accountID: tokens.user.id
+                    )) else {
                         return
                     }
                     signedInNames.append(displayName)
@@ -310,16 +436,18 @@ final class ReceiverPairingCoordinator {
                     // confirmation frame must not repaint a real sign-in as a
                     // failure. If the send is lost the phone may undercount,
                     // but EOF-after-success still completes on both ends.
-                    await session.queue(.serverResult(serverURL: normalized, status: .signedIn, error: nil))
+                    await session.queue(.serverResult(serverURL: pushedURL, status: .signedIn, error: nil))
                     return
-                case "denied", "expired", "consumed":
-                    throw PairingDeviceAPI.APIError.http(409)
+                case "denied":
+                    throw AttemptFailure.denied
+                case "expired", "consumed":
+                    throw AttemptFailure.expired
                 default: // "pending"
-                    pollInterval = max(1, poll.pollAfter ?? pollInterval)
+                    pollInterval = max(1, poll.pollAfter)
                     try await Task.sleep(for: .seconds(pollInterval))
                 }
             }
-            throw PairingDeviceAPI.APIError.http(408) // local timeout
+            throw AttemptFailure.expired // local timeout
         } catch {
             // Persist-on-success: nothing was written, so nothing to roll back.
             if Task.isCancelled {
@@ -329,15 +457,119 @@ final class ReceiverPairingCoordinator {
                 return
             }
             Self.logger.error("server pairing failed: \(String(describing: error), privacy: .private)")
-            state = .failed(displayName)
-            try? await session.send(.serverResult(serverURL: normalized, status: .failed, error: "auth_failed"))
+            let failure = error as? AttemptFailure
+            let code = failure?.code ?? .authFailed
+            state = .failed(serverName: displayName, code: code, help: failure?.help(for: push))
+            try? await session.send(.serverResult(serverURL: pushedURL, status: .failed, error: code.rawValue))
         }
     }
 
+    private enum AttemptFailure: Error {
+        case unreachable
+        case identityMismatch
+        case denied
+        case expired
+        /// The server is v1-only, or no longer accepts this app version.
+        case updateRequired(UpdateRequirement)
+
+        var code: PairingFailureCode {
+            switch self {
+            case .unreachable: return .unreachable
+            case .identityMismatch: return .identityMismatch
+            case .denied: return .denied
+            case .expired: return .expired
+            case .updateRequired: return .updateRequired
+            }
+        }
+
+        func help(for push: PushedServer) -> String? {
+            switch self {
+            case .unreachable: return push.unreachableHelp()
+            case .updateRequired(let requirement): return requirement.message
+            case .identityMismatch, .denied, .expired: return nil
+            }
+        }
+    }
+
+    /// A poll the server answers with 404 names a request it no longer has
+    /// (expired and removed); a legacy 404 was already classified as an
+    /// update requirement.
+    private static func isMissingRequest(_ error: Error) -> Bool {
+        switch error {
+        case APIv2Error.problem(let problem): return problem.status == 404
+        case APIv2Error.httpStatus(404): return true
+        default: return false
+        }
+    }
+
+    /// The address to run device authorization at.
+    ///
+    /// With an identity, the pushed address must answer with that identity
+    /// from this TV. If it does not answer at all, the server's other
+    /// addresses are checked for the same identity and the first match is
+    /// OFFERED, never taken: the user sees why the pushed address failed
+    /// (usually a network provider to set up on the TV) and chooses between
+    /// the alternate and a retry. An address answering with a different
+    /// identity is never used, whether pushed or alternate.
+    private func resolveLoginURL(_ push: PushedServer, pushedURL: String) async throws -> String {
+        guard let expected = push.serverIdentity else { return pushedURL }
+        while true {
+            try Task.checkCancellation()
+            switch await identityProbe(pushedURL) {
+            case .identity(let id) where id == expected:
+                return pushedURL
+            case .identity, .unsupportedServer:
+                // The phone verified this identity at this very address; a
+                // different answer from here is not the server it meant.
+                throw AttemptFailure.identityMismatch
+            case .unreachable:
+                break
+            }
+
+            let alternate = await firstReachableAlternate(push, pushedURL: pushedURL, expected: expected)
+            try Task.checkCancellation()
+            state = .unreachable(serverName: push.displayName, help: push.unreachableHelp(), alternate: alternate)
+            switch await awaitAlternateDecision() {
+            case .useAlternate(let endpoint):
+                state = .reaching(serverName: push.displayName)
+                return endpoint.url
+            case .retry:
+                state = .reaching(serverName: push.displayName)
+                continue
+            case .cancelled:
+                throw CancellationError()
+            }
+        }
+    }
+
+    private func firstReachableAlternate(
+        _ push: PushedServer,
+        pushedURL: String,
+        expected: String
+    ) async -> ServerEndpoint? {
+        for endpoint in push.endpoints where endpoint.url != pushedURL {
+            if Task.isCancelled { return nil }
+            if case .identity(let id) = await identityProbe(endpoint.url), id == expected {
+                return endpoint
+            }
+        }
+        return nil
+    }
+
     /// Commit the now-trusted server + tokens. Runs only after a successful poll.
-    static func persistServer(url: String, fetchedName: String?, access: String, refresh: String) async -> Bool {
+    static func persistServer(_ pairing: PersistedPairing) async -> Bool {
+        let url = pairing.url
+        let access = pairing.accessToken
+        let refresh = pairing.refreshToken
         let id = ServerRegistry.serverId(for: url)
-        let entry = ServerEntry(id: id, url: url, fetchedName: fetchedName, profileId: nil, lastUsedAt: Date())
+        let entry = ServerEntry(
+            id: id,
+            url: url,
+            fetchedName: pairing.fetchedName,
+            profileId: nil,
+            lastUsedAt: Date(),
+            verifiedServerId: pairing.verifiedServerId
+        )
         // Device authorization can replace the account for an already-saved
         // server URL. Preserve its name, but never carry the previous account's
         // profile selection across that credential boundary.
@@ -354,6 +586,42 @@ final class ReceiverPairingCoordinator {
             return false
         }
         let previousTokenServerID = await TokenStore.shared.getActiveServerId()
+        let previousServerURL = await TokenStore.shared.getServerUrl()
+        let previousProfileID = await TokenStore.shared.getProfileId()
+        let previousProfileToken = await TokenStore.shared.getProfileToken()
+        // Re-pairing an already saved server replaces its credential slot in
+        // the session install below (and adopts the slot even when the write fails
+        // part way), before the registry commit can still fail. Keep what
+        // the slot and its server-scoped profile proof held, so either
+        // failure puts it back instead of leaving the new credentials, an
+        // adoption marker, or a tombstone behind a reported failure.
+        let previousSession = await TokenStore.shared.accountSessionSnapshot(for: id)
+        guard previousSession != .unreadable else {
+            // A slot that cannot be read cannot be restored either; refuse
+            // before anything is mutated rather than fail half way.
+            await HTTPClient.shared.endIdentityTransition(transitionLease)
+            return false
+        }
+        // `addOrUpdate(preservingProfile: false)` forgets the durable profile
+        // choice for this server id. When the pairing then fails, the previous
+        // session is kept, so its remembered profile must come back too or the
+        // next launch lands on profile selection for no reason.
+        let launchPreferences = ProfileLaunchPreferences.shared
+        let previousRememberedProfile = launchPreferences.rememberedProfile(for: id)
+        let previousSelectionRequired = launchPreferences.state.selectionRequiredServerIDs.contains(id)
+        func restoreRememberedProfile() {
+            if let remembered = previousRememberedProfile {
+                launchPreferences.remember(
+                    profileID: remembered.profileID,
+                    requiresPIN: remembered.requiredPINAtSelection,
+                    accountEpoch: remembered.accountEpoch,
+                    for: id
+                )
+            }
+            if previousSelectionRequired {
+                launchPreferences.markSelectionRequired(for: id)
+            }
+        }
         // From this first persistent mutation onward the transaction must
         // finish even if the pairing task is cancelled. Publishing failure
         // after committed credentials would make the phone and TV disagree.
@@ -365,13 +633,43 @@ final class ReceiverPairingCoordinator {
         await TokenStore.shared.switchActiveServer(serverId: id)
         await TokenStore.shared.setProfileId(nil)
         await TokenStore.shared.setProfileToken(nil)
-        await TokenStore.shared.saveTokens(accessToken: access, refreshToken: refresh)
+        // One rollback for both failure points below. The slot is restored
+        // first (a failed install has still blocked the runtime session
+        // and may have adopted the slot; a failed commit has the candidate's
+        // tokens persisted in it), then the URL and profile, so the previous
+        // server reads exactly as it did before pairing started. When the
+        // slot itself cannot be restored the token store keeps that server
+        // blocked (fail closed) and pairing still reports failure; the
+        // registry entry stays either way so the user can retry.
+        func rollBack() async {
+            let restored = await TokenStore.shared.restoreAccountSession(previousSession, for: id)
+            if !restored {
+                Self.logger.error("pairing rollback could not restore the previous session; the server stays blocked until relaunch")
+            }
+            await TokenStore.shared.setServerUrl(previousServerURL)
+            await TokenStore.shared.switchActiveServer(serverId: previousTokenServerID)
+            await TokenStore.shared.setProfileId(previousProfileID)
+            _ = await TokenStore.shared.setProfileToken(previousProfileToken)
+            restoreRememberedProfile()
+            await HTTPClient.shared.endIdentityTransition(transitionLease)
+        }
+        do {
+            try await TokenStore.shared.installAccountSession(
+                accessToken: access,
+                refreshToken: refresh,
+                accountID: pairing.accountID,
+                clearProfile: false
+            )
+        } catch {
+            Self.logger.error("pairing session install failed: \(String(describing: error), privacy: .private)")
+            await rollBack()
+            return false
+        }
         guard await ServerRegistry.shared.commitSwitchTo(
             serverId: id,
             holding: transitionLease
         ) else {
-            await TokenStore.shared.switchActiveServer(serverId: previousTokenServerID)
-            await HTTPClient.shared.endIdentityTransition(transitionLease)
+            await rollBack()
             return false
         }
         await HTTPClient.shared.endIdentityTransition(transitionLease)

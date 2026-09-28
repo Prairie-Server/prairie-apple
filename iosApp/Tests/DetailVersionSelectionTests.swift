@@ -77,6 +77,10 @@ final class DetailVersionSelectionTests: XCTestCase {
             "2160p · HEVC · DV · EAC3"
         )
         XCTAssertEqual(
+            DetailPlaybackFormatting.versionCompactLabel(version),
+            "2160p · DV"
+        )
+        XCTAssertEqual(
             DetailPlaybackFormatting.versionPrimaryText(version),
             "2160p · HEVC · DV · EAC3"
         )
@@ -119,7 +123,6 @@ final class DetailVersionSelectionTests: XCTestCase {
             "file_id": 10,
             "edition_raw": "Final Cut",
             "edition_key": "final_cut",
-            "edition": "Legacy Cut",
             "resolution": "4K"
           }
         ]
@@ -129,30 +132,14 @@ final class DetailVersionSelectionTests: XCTestCase {
 
         XCTAssertTrue(version.editionRaw == "Final Cut")
         XCTAssertTrue(version.editionKey == "final_cut")
-        XCTAssertTrue(version.edition == "Legacy Cut")
         XCTAssertTrue(version.editionDisplayLabel == "Final Cut")
-    }
-
-    func testLegacyEditionFallbackStillGroups() {
-        let versions = decodedVersions("""
-        [
-          { "file_id": 1, "edition": "Theatrical", "resolution": "1080p" },
-          { "file_id": 2, "edition": "Theatrical", "resolution": "720p" }
-        ]
-        """)
-
-        let editions = PlaybackEditions.editions(from: versions)
-
-        XCTAssertTrue(editions.count == 1, "Legacy edition field should still group versions")
-        XCTAssertTrue(editions[0].label == "Theatrical")
-        XCTAssertTrue(editions[0].versions.map(\.fileId) == [1, 2])
     }
 
     func testEditionForFileIdFindsOwningEdition() {
         let versions = decodedVersions("""
         [
-          { "file_id": 1, "edition": "Theatrical", "resolution": "1080p" },
-          { "file_id": 2, "edition": "Extended", "resolution": "1080p" }
+          { "file_id": 1, "edition_raw": "Theatrical", "edition_key": "theatrical", "resolution": "1080p" },
+          { "file_id": 2, "edition_raw": "Extended", "edition_key": "extended", "resolution": "1080p" }
         ]
         """)
 
@@ -414,6 +401,117 @@ final class DetailVersionSelectionTests: XCTestCase {
         )
     }
 
+    func testAutoSubtitlePreviewMatchesPlaybackCombinedOrder() {
+        // Catalog lists the embedded English track first; Protocol V3 resolves
+        // in combined order (externals first), so playback starts the external
+        // one. The detail "Auto:" preview must name that same track.
+        let versions = decodedVersions("""
+        [
+          {
+            "file_id": 1,
+            "subtitle_tracks": [
+              { "index": 2, "codec": "subrip", "language": "eng" },
+              { "index": 7, "codec": "ass", "language": "eng", "external": true, "external_path": "movie.en.ass" }
+            ]
+          }
+        ]
+        """)
+        let label = DetailPlaybackFormatting.subtitleValueLabel(
+            version: versions[0],
+            selectedSubtitleTrackIndex: nil,
+            autoContext: .init(preferredLanguage: "en", mode: "always", audioLanguage: "ja")
+        )
+        XCTAssertEqual(label, "Auto: English · ASS", "preview must follow the external-first order playback uses; got \(label)")
+    }
+
+    func testAutoSubtitlePreviewKeepsEmbeddedStreamZero() {
+        // The wire omits a zero stream index. An embedded row with no index is
+        // FFmpeg stream 0, which the plan can select, so the preview must
+        // still name it rather than falling through to a later track.
+        let versions = decodedVersions("""
+        [
+          {
+            "file_id": 1,
+            "subtitle_tracks": [
+              { "codec": "subrip", "language": "eng" },
+              { "index": 3, "codec": "ass", "language": "jpn" }
+            ]
+          }
+        ]
+        """)
+        let label = DetailPlaybackFormatting.subtitleValueLabel(
+            version: versions[0],
+            selectedSubtitleTrackIndex: nil,
+            autoContext: .init(preferredLanguage: "en", mode: "always", audioLanguage: "ja")
+        )
+        XCTAssertEqual(label, "Auto: English · SRT", "embedded stream 0 must remain a preview candidate; got \(label)")
+    }
+
+    func testSubtitleOptionsKeepEmbeddedStreamZeroSelectable() {
+        // The wire omits a zero stream index. The selector, sanitization and
+        // persistence paths must all read an embedded nil index as stream 0
+        // so the user can pick it manually, not just via auto-resolution.
+        let versions = decodedVersions("""
+        [
+          {
+            "file_id": 1,
+            "subtitle_tracks": [
+              { "codec": "subrip", "language": "eng" },
+              { "codec": "srt", "language": "fra", "file_name": "/subs/fr.srt", "external": true }
+            ]
+          }
+        ]
+        """)
+        XCTAssertEqual(versions[0].subtitleTracks?[0].selectionIndex, 0)
+        XCTAssertNil(versions[0].subtitleTracks?[1].selectionIndex)
+
+        let options = DetailPlaybackFormatting.subtitleOptions(
+            version: versions[0],
+            selectedSubtitleTrackIndex: 0,
+            preferredLanguage: nil
+        )
+        guard let embedded = options.first(where: { $0.title == "English" }) else {
+            return XCTFail("missing embedded option")
+        }
+        XCTAssertEqual(embedded.selectionIndex, 0)
+        XCTAssertTrue(embedded.isSelectable)
+        XCTAssertTrue(embedded.isSelected)
+        XCTAssertFalse(embedded.detail.contains("Available in player"))
+
+        XCTAssertEqual(
+            DetailPlaybackFormatting.subtitleValueLabel(version: versions[0], selectedSubtitleTrackIndex: 0),
+            "English · SRT"
+        )
+        XCTAssertEqual(
+            TrackSelectionPersistence.subtitleRequest(version: versions[0], ffIndex: 0, showForced: nil)?.subtitleTrackIndex,
+            0
+        )
+    }
+
+    func testSignatureSubtitlePreviewConsidersExternalTracks() {
+        // A persisted signature that ties between an embedded and an external
+        // track resolves to the external one in playback (combined order).
+        // The preview's signature pass must consider externals too.
+        let versions = decodedVersions("""
+        [
+          {
+            "file_id": 1,
+            "subtitle_tracks": [
+              { "index": 2, "codec": "subrip", "language": "eng" },
+              { "index": 9, "codec": "ass", "language": "eng", "external": true, "external_path": "movie.en.ass" }
+            ]
+          }
+        ]
+        """)
+        let signature = SubtitleTrackSignature(source: nil, language: "en", codec: nil, label: nil, forced: false, hearingImpaired: false)
+        let label = DetailPlaybackFormatting.subtitleValueLabel(
+            version: versions[0],
+            selectedSubtitleTrackIndex: nil,
+            autoContext: .init(preferredLanguage: "en", mode: "auto", signature: signature, audioLanguage: "ja")
+        )
+        XCTAssertEqual(label, "Auto: English · ASS", "signature preview must include external tracks; got \(label)")
+    }
+
     func testSubtitleLabelsIncludeTypeAndLanguage() {
         let versions = decodedVersions("""
         [
@@ -613,22 +711,6 @@ final class DetailVersionSelectionTests: XCTestCase {
             posterUrl: nil
         )
         XCTAssertTrue(library.isAudiobookLibrary)
-    }
-
-    func testLibrariesResponseDecodesBareArray() {
-        let json = """
-        [
-          { "id": 1, "name": "Movies", "type": "movies" },
-          { "id": 10, "name": "Audiobooks", "type": "audiobooks" }
-        ]
-        """
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-
-        let response = try! decoder.decode(LibrariesResponse.self, from: Data(json.utf8))
-
-        XCTAssertTrue(response.libraries.count == 2)
-        XCTAssertTrue(response.libraries[1].isAudiobookLibrary)
     }
 
     func testAudioPlaybackTimelineMapsGlobalAndLocalTime() {

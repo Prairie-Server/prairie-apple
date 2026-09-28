@@ -4,6 +4,7 @@
 <dict>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
+		<string>org.prairieserver.prairie.downloads-refresh</string>
 		<string>com.continuum.play.downloads-refresh</string>
 	</array>
 	<key>CFBundleDevelopmentRegion</key>
@@ -35,17 +36,20 @@
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
+			<key>CFBundleURLName</key>
+			<string>org.prairieserver.prairie</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>prairie</string>
+				<string>continuum</string>
 			</array>
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
-	<key>ContinuumKeychainAccessGroup</key>
+	<key>PrairieKeychainAccessGroup</key>
 	<string>$(AppIdentifierPrefix)$(PRAIRIE_KEYCHAIN_ACCESS_GROUP_ID)</string>
-	<key>ContinuumKeychainAccessGroupID</key>
+	<key>PrairieKeychainAccessGroupID</key>
 	<string>$(PRAIRIE_KEYCHAIN_ACCESS_GROUP_ID)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
@@ -76,7 +80,10 @@
 		<string>remote-notification</string>
 	</array>
 	<key>UILaunchScreen</key>
-	<dict/>
+	<dict>
+		<key>UIColorName</key>
+		<string>LaunchBackground</string>
+	</dict>
 	<key>UIRequiredDeviceCapabilities</key>
 	<array>
 		<string>arm64</string>

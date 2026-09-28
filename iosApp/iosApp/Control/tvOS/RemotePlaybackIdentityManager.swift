@@ -26,6 +26,30 @@ enum RemotePlaybackIdentityEndPolicy {
     }
 }
 
+/// Pure candidate-address policy for a handoff that carries a deployment
+/// identity. Kept outside the tvOS conditional so it can be regression-tested
+/// from the iOS test bundle.
+enum RemotePlaybackCandidatePolicy {
+    /// The addresses to try, in order, de-duplicated on the normalized URL:
+    /// the TV's own saved address for the same deployment (already known to
+    /// work from here), the phone's address, then the deployment's public
+    /// address and connected providers in the server's order.
+    static func candidateURLs(
+        savedURL: String?,
+        offeredURL: String,
+        endpoints: [ServerEndpoint]?
+    ) -> [String] {
+        var ordered: [String] = []
+        if let savedURL { ordered.append(savedURL) }
+        ordered.append(offeredURL)
+        ordered.append(contentsOf: (endpoints ?? []).map(\.url))
+        var seen = Set<String>()
+        return ordered
+            .map { ServerRegistry.normalize(url: $0) }
+            .filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+}
+
 #if os(tvOS)
 @MainActor
 final class RemotePlaybackIdentityManager {
@@ -34,8 +58,11 @@ final class RemotePlaybackIdentityManager {
     struct ActiveIdentity: Equatable {
         let generationID: UUID
         let serverId: String
+        /// The address this TV reached the server at. May differ from the
+        /// phone's when the handoff carried a deployment identity.
         let serverURL: String
         let serverName: String?
+        let serverIdentity: String?
         let profileId: String
         let profileName: String?
         let controllerDeviceId: String
@@ -50,6 +77,19 @@ final class RemotePlaybackIdentityManager {
         case denied
         case expired
         case invalidResponse
+        /// No candidate address answered from this TV.
+        case serverUnreachable(serverName: String?, help: String?)
+        /// A candidate answered with a different deployment identity.
+        case identityMismatch
+
+        /// Wire reason for `handoff_cancel`, mirrored by Android.
+        var cancelReason: String {
+            switch self {
+            case .serverUnreachable: return "server_unreachable"
+            case .identityMismatch: return "identity_mismatch"
+            default: return "handoff_failed"
+            }
+        }
 
         var errorDescription: String? {
             switch self {
@@ -63,12 +103,18 @@ final class RemotePlaybackIdentityManager {
                 return "Profile handoff expired."
             case .invalidResponse:
                 return "The server returned an invalid profile handoff."
+            case .serverUnreachable(let serverName, let help):
+                if let help { return help }
+                return "This Apple TV can't reach \(serverName ?? "the phone's server")."
+            case .identityMismatch:
+                return "The address the phone offered belongs to a different Prairie server."
             }
         }
     }
 
     private(set) var activeIdentity: ActiveIdentity?
     private let api = PairingDeviceAPI()
+    private let identityResolver = ServerIdentityResolver()
     /// Set synchronously before a replacement begins global request
     /// cancellation. An older re-entrant `end` must not cancel or remove work
     /// after this generation has claimed the transition.
@@ -84,9 +130,26 @@ final class RemotePlaybackIdentityManager {
         activeIdentity?.serverName ?? ServerRegistry.shared.activeServer?.displayName
     }
 
+    /// The deployment identity behind the effective server, when known.
+    var effectiveServerIdentity: String? {
+        activeIdentity?.serverIdentity ?? ServerRegistry.shared.activeServer?.verifiedServerId
+    }
+
+    /// Whether a controller that names `serverId` / `serverIdentity` is on the
+    /// same deployment as this TV's effective server.
+    func controllerMatchesEffectiveServer(serverId: String?, serverIdentity: String?) -> Bool {
+        ServerRegistry.serversMatch(
+            serverId: serverId, verifiedServerId: serverIdentity,
+            serverId: effectiveServerId, verifiedServerId: effectiveServerIdentity
+        )
+    }
+
     func matches(_ offer: PrairieControlHandoffOffer, controllerDeviceId: String) -> Bool {
         guard let activeIdentity else { return false }
-        return ServerRegistry.serverIdsMatch(activeIdentity.serverId, offer.serverId)
+        return ServerRegistry.serversMatch(
+            serverId: activeIdentity.serverId, verifiedServerId: activeIdentity.serverIdentity,
+            serverId: offer.serverId, verifiedServerId: offer.serverIdentity
+        )
             && activeIdentity.profileId == offer.profileId
             && activeIdentity.controllerDeviceId == controllerDeviceId
     }
@@ -97,10 +160,10 @@ final class RemotePlaybackIdentityManager {
         controllerDeviceName: String?,
         onChallenge: @escaping (PrairieControlHandoffChallenge) async throws -> Void
     ) async throws -> PrairieControlHandoffReady {
-        let normalizedURL = ServerRegistry.normalize(url: offer.serverURL)
-        guard !normalizedURL.isEmpty,
+        let offeredURL = ServerRegistry.normalize(url: offer.serverURL)
+        guard !offeredURL.isEmpty,
               !offer.profileId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              ServerRegistry.serverId(for: normalizedURL) == offer.serverId else {
+              ServerRegistry.serverId(for: offeredURL) == offer.serverId else {
             throw HandoffError.invalidOffer
         }
 
@@ -115,9 +178,14 @@ final class RemotePlaybackIdentityManager {
             )
         }
 
+        // With a deployment identity the phone's URL is one candidate among
+        // the deployment's addresses; the first that answers with the same
+        // identity from here is the one this TV can actually use. Without
+        // one (older phone) the offered URL is used exactly, as before.
+        let normalizedURL = try await resolveReachableURL(offer: offer, offeredURL: offeredURL)
+
         let capability = try await api.remotePlaybackCapability(serverURL: normalizedURL)
-        guard capability.remotePlaybackHandoff,
-              capability.protocolVersions.contains(PrairieControlProtocol.version) else {
+        guard capability.offersRemotePlaybackHandoff(protocolVersion: PrairieControlProtocol.version) else {
             throw HandoffError.unsupportedServer
         }
 
@@ -141,30 +209,37 @@ final class RemotePlaybackIdentityManager {
         let deadline = Date().addingTimeInterval(TimeInterval(started.expiresIn))
         while Date() < deadline {
             try Task.checkCancellation()
-            let poll = try await api.poll(serverURL: normalizedURL, deviceCode: started.deviceCode)
+            let poll: APIv2DevicePoll
+            do {
+                poll = try await api.poll(serverURL: normalizedURL, deviceCode: started.deviceCode)
+            } catch APIv2Error.problem(let problem) where problem.status == 404 {
+                throw HandoffError.expired // the server has expired and removed this request
+            } catch APIv2Error.incompleteAuthResponse {
+                throw HandoffError.invalidResponse
+            }
             try Task.checkCancellation()
             switch DeviceLoginStatus(raw: poll.status) {
             case .approved:
-                guard poll.temporary == true,
+                // `validated()` guarantees tokens, profile proof and expiry
+                // for an approved temporary session.
+                guard poll.temporary,
                       poll.profileId == offer.profileId,
-                      let accessToken = poll.accessToken, !accessToken.isEmpty,
-                      let refreshToken = poll.refreshToken, !refreshToken.isEmpty,
-                      let profileToken = poll.profileToken, !profileToken.isEmpty else {
+                      let tokens = poll.tokens,
+                      let expiresAt = poll.sessionExpiresAt else {
                     throw HandoffError.invalidResponse
                 }
-                let expiresAt = poll.sessionExpiresAt.flatMap(Self.parseISO8601)
-                    ?? Date().addingTimeInterval(24 * 60 * 60)
                 guard await activate(TemporaryAuthScope(
                     serverId: offer.serverId,
                     serverURL: normalizedURL,
-                    accessToken: accessToken,
-                    refreshToken: refreshToken,
+                    accessToken: tokens.accessToken,
+                    refreshToken: tokens.refreshToken,
                     profileId: offer.profileId,
-                    profileToken: profileToken,
+                    profileToken: poll.profileToken,
                     controllerDeviceId: controllerDeviceId,
                     expiresAt: expiresAt
                 ),
                     serverName: offer.serverName,
+                    serverIdentity: offer.serverIdentity,
                     profileName: offer.profileName,
                     controllerDeviceName: controllerDeviceName
                 ) else {
@@ -182,10 +257,50 @@ final class RemotePlaybackIdentityManager {
             case .expired, .consumed:
                 throw HandoffError.expired
             case .pending, .unknown:
-                try await Task.sleep(for: .seconds(max(1, poll.pollAfter ?? started.interval)))
+                try await Task.sleep(for: .seconds(max(1, poll.pollAfter)))
             }
         }
         throw HandoffError.expired
+    }
+
+    /// Picks the address this TV will use for the handoff. Only candidates
+    /// that report `offer.serverIdentity` qualify: an address that answers
+    /// with another identity is refused rather than skipped, because the
+    /// phone believes it belongs to this server. Reachability is decided
+    /// here, never by the server.
+    private func resolveReachableURL(
+        offer: PrairieControlHandoffOffer,
+        offeredURL: String
+    ) async throws -> String {
+        guard let expectedIdentity = ServerIdentity.usable(offer.serverIdentity) else {
+            return offeredURL
+        }
+        let candidates = RemotePlaybackCandidatePolicy.candidateURLs(
+            savedURL: ServerRegistry.shared.entry(verifiedServerId: expectedIdentity)?.url,
+            offeredURL: offeredURL,
+            endpoints: offer.serverEndpoints
+        )
+        for candidate in candidates {
+            try Task.checkCancellation()
+            switch await identityResolver.probeIdentity(serverURL: candidate) {
+            case .identity(let id) where id == expectedIdentity:
+                return candidate
+            case .identity:
+                throw HandoffError.identityMismatch
+            case .unsupportedServer:
+                // Reachable, but it cannot prove who it is; the phone's own
+                // address is still trusted the legacy way.
+                if candidate == offeredURL { return candidate }
+            case .unreachable:
+                continue
+            }
+        }
+        // The phone's address was unreachable: name the provider behind it
+        // when the deployment lists it, so the help says what to set up.
+        let help = offer.serverEndpoints?
+            .first { $0.kind == .provider && $0.url == offeredURL }?
+            .unreachableHelp(serverName: offer.serverName ?? "the phone's server")
+        throw HandoffError.serverUnreachable(serverName: offer.serverName, help: help)
     }
 
     @discardableResult
@@ -201,8 +316,9 @@ final class RemotePlaybackIdentityManager {
                   expectedGenerationID: expectedGenerationID
               ) else { return false }
         if let scope, notifyServer {
-            try? await HTTPClient.shared.postVoid(
-                "/api/v1/auth/logout",
+            // Best effort: the temporary session expires server-side when the
+            // revoke is refused, fails, or is skipped for a v1-only server.
+            try? await PrairieAPI.shared.apiV2Client.logout(
                 expectedAccount: RefreshAccountIdentity(
                     serverId: scope.serverId,
                     serverURL: scope.serverURL,
@@ -257,6 +373,7 @@ final class RemotePlaybackIdentityManager {
     private func activate(
         _ scope: TemporaryAuthScope,
         serverName: String?,
+        serverIdentity: String?,
         profileName: String?,
         controllerDeviceName: String?
     ) async -> Bool {
@@ -270,9 +387,10 @@ final class RemotePlaybackIdentityManager {
         }
         activationGenerationPending = generationID
         let previousIdentity = activeIdentity
-        let usesDifferentServer = !ServerRegistry.serverIdsMatch(
-            scope.serverId,
-            ServerRegistry.shared.activeServerId
+        let usesDifferentServer = !ServerRegistry.serversMatch(
+            serverId: scope.serverId, verifiedServerId: serverIdentity,
+            serverId: ServerRegistry.shared.activeServerId,
+            verifiedServerId: ServerRegistry.shared.activeServer?.verifiedServerId
         )
         await HTTPClient.shared.cancelInFlightRequests()
         guard activationGenerationPending == generationID,
@@ -316,6 +434,7 @@ final class RemotePlaybackIdentityManager {
             serverId: scope.serverId,
             serverURL: scope.serverURL,
             serverName: serverName,
+            serverIdentity: serverIdentity,
             profileId: scope.profileId,
             profileName: profileName,
             controllerDeviceId: scope.controllerDeviceId,
@@ -374,10 +493,6 @@ final class RemotePlaybackIdentityManager {
 
     private static func iso8601(_ date: Date) -> String {
         ISO8601DateFormatter().string(from: date)
-    }
-
-    private static func parseISO8601(_ value: String) -> Date? {
-        ISO8601DateFormatter().date(from: value)
     }
 }
 #endif

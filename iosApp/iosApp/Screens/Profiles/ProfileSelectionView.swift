@@ -73,14 +73,12 @@ struct ProfileSelectionView: View {
                 Task { await viewModel.loadProfiles() }
             }
             .presentationDetents([.large])
-            .presentationDragIndicator(.visible)
         }
         #endif
         #if !os(tvOS)
         .sheet(item: $pinEntryContext) { context in
             pinEntryContent(for: context)
                 .presentationDetents([.medium])
-                .presentationDragIndicator(.visible)
         }
         #endif
     }
@@ -426,5 +424,5 @@ struct ProfileSelectionView: View {
     #endif
 }
 
-// `GhostChipButtonStyle` now lives in `Theme/ContinuumButtonStyles.swift`
+// `GhostChipButtonStyle` now lives in `Theme/PrairieButtonStyles.swift`
 // (shared with `CreateProfileView`).

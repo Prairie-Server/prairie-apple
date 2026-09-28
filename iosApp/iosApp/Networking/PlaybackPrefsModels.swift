@@ -1,24 +1,13 @@
 //
 //  PlaybackPrefsModels.swift
-//  Continuum (iOS + tvOS)
+//  Prairie (iOS + tvOS)
 //
 //  Wire types for the user's playback preferences. The server stores
 //  these at three precedence levels: per-series (highest), per-library,
 //  and profile default (lowest). The cascade is resolved server-side
 //  and surfaced via the `effective_*` fields on `WatchDetail`, so the
-//  client only re-reads the raw prefs when the user is editing them in
-//  Settings or saving a per-series override from the player.
-//
-//  Endpoints in play:
-//    GET    /api/v1/library-playback-prefs           — list all
-//    PUT    /api/v1/library-playback-prefs/{id}      — set one
-//    DELETE /api/v1/library-playback-prefs/{id}      — clear one
-//    GET    /api/v1/subtitle-prefs/{series_id}       — per-series sub
-//    PUT    /api/v1/subtitle-prefs/{series_id}       — set per-series
-//    DELETE /api/v1/subtitle-prefs/{series_id}       — clear per-series
-//    GET    /api/v1/audio-prefs/{series_id}          — per-series audio
-//    PUT    /api/v1/audio-prefs/{series_id}          — set per-series
-//    DELETE /api/v1/audio-prefs/{series_id}          — clear per-series
+//  client writes per-series overrides from the player and profile defaults
+//  through the settings APIs.
 //
 
 import Foundation
@@ -28,7 +17,7 @@ import Foundation
 /// Identifier used to re-locate the same subtitle track across episodes
 /// in a series when the FFmpeg stream index shifts. Server tries an
 /// exact signature match first, falls back to language match.
-struct SubtitleTrackSignature: Codable, Hashable {
+struct SubtitleTrackSignature: Codable, Hashable, Sendable {
     let source: String?           // "embedded", "external", "downloaded"
     let language: String?         // ISO 639-1 / -2
     let codec: String?            // "subrip", "ass", "pgs", …
@@ -66,7 +55,7 @@ struct SubtitleTrackSignature: Codable, Hashable {
 /// Audio counterpart to `SubtitleTrackSignature`. Layout + channels let
 /// the server prefer "5.1 English Atmos" over "stereo English commentary"
 /// across episodes.
-struct AudioTrackSignature: Codable, Hashable {
+struct AudioTrackSignature: Codable, Hashable, Sendable {
     let language: String?
     let title: String?
     let embeddedTitle: String?
@@ -134,7 +123,9 @@ struct AudioTrackSignature: Codable, Hashable {
 enum PlaybackPrefSentinel {
     static let inherit = "__inherit__"
     static let none = "__none__"
-    static let originalLanguage = "original"
+    /// Private-use BCP-47 tag used by the settings contract. Keep accepting
+    /// the legacy spelling when reading older local settings.
+    static let originalLanguage = "x-silo-original"
 }
 
 /// One language row in a settings picker. Values come from the generated
@@ -168,7 +159,10 @@ struct PlaybackLanguageOption: Identifiable, Hashable {
         var indexByIdentity: [String: Int] = [:]
 
         func add(_ rawValue: String, replacingAlias: Bool) {
-            let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedValue = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            let value = trimmedValue.caseInsensitiveCompare("original") == .orderedSame
+                ? PlaybackPrefSentinel.originalLanguage
+                : trimmedValue
             guard !value.isEmpty,
                   value != PlaybackPrefSentinel.none,
                   value != PlaybackPrefSentinel.inherit else { return }
@@ -191,13 +185,19 @@ struct PlaybackLanguageOption: Identifiable, Hashable {
     }
 
     static func label(forCode code: String) -> String {
-        if code == PlaybackPrefSentinel.originalLanguage { return "Original Language" }
-        return Locale.current.localizedString(forIdentifier: code)?.capitalized
-            ?? Locale.current.localizedString(forLanguageCode: code)?.capitalized
+        if code.caseInsensitiveCompare(PlaybackPrefSentinel.originalLanguage) == .orderedSame
+            || code.caseInsensitiveCompare("original") == .orderedSame { return "Original Language" }
+        let identifier = code.replacingOccurrences(of: "_", with: "-")
+        return Locale.current.localizedString(forIdentifier: identifier)?.capitalized
+            ?? Locale.current.localizedString(forLanguageCode: identifier.split(separator: "-").first.map(String.init) ?? identifier)?.capitalized
             ?? code.uppercased()
     }
 
-    private static func languageIdentity(_ value: String) -> String {
+    static func languageIdentity(_ value: String) -> String {
+        // The legacy `original` spelling and the BCP-47 sentinel are one row.
+        if value.caseInsensitiveCompare("original") == .orderedSame {
+            return PlaybackPrefSentinel.originalLanguage
+        }
         let normalized = value.replacingOccurrences(of: "_", with: "-")
         var components = normalized.split(separator: "-").map(String.init)
         guard let language = components.first else { return normalized.lowercased() }
@@ -235,88 +235,18 @@ enum SubtitleMode: String, CaseIterable, Codable, Hashable {
     }
 }
 
-// MARK: - Library playback prefs
+// MARK: - Per-series track prefs
 
-struct LibraryPlaybackPref: Codable, Hashable, Identifiable {
-    let profileId: String
-    let libraryId: Int
-    let audioLanguage: String?
-    let subtitleLanguage: String?
-    let subtitleMode: String?
-    let showForcedSubtitles: Bool?
-    let updatedAt: String?
-
-    var id: Int { libraryId }
-
-    var subtitleModeEnum: SubtitleMode? {
-        guard let raw = subtitleMode, !raw.isEmpty else { return nil }
-        return SubtitleMode(rawValue: raw)
-    }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        profileId = try c.decodeIfPresent(String.self, forKey: .profileId) ?? ""
-        libraryId = try c.decode(Int.self, forKey: .libraryId)
-        audioLanguage = try c.decodeIfPresent(String.self, forKey: .audioLanguage)
-        subtitleLanguage = try c.decodeIfPresent(String.self, forKey: .subtitleLanguage)
-        subtitleMode = try c.decodeIfPresent(String.self, forKey: .subtitleMode)
-        showForcedSubtitles = try c.decodeIfPresent(Bool.self, forKey: .showForcedSubtitles)
-        updatedAt = try c.decodeIfPresent(String.self, forKey: .updatedAt)
-    }
-}
-
-struct LibraryPlaybackPrefsResponse: Codable {
-    let preferences: [LibraryPlaybackPref]
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        preferences = try c.decodeIfPresent([LibraryPlaybackPref].self, forKey: .preferences) ?? []
-    }
-}
-
-/// PUT body for `/library-playback-prefs/{id}`. All fields are
-/// optional; sending `null` removes the field without deleting the
-/// row. Sending all four fields as nil is equivalent to DELETE.
-struct LibraryPlaybackPrefRequest: Codable {
-    let audioLanguage: String?
-    let subtitleLanguage: String?
-    let subtitleMode: String?
-    let showForcedSubtitles: Bool?
+/// Which per-series track preference a v2 write targets. The raw value is
+/// the path prefix: `/api/v2/{kind}-prefs/{series_id}`.
+enum TrackPreferenceKind: String, Sendable {
+    case audio
+    case subtitle
 }
 
 // MARK: - Per-series subtitle pref
 
-struct SubtitlePref: Codable, Hashable {
-    let profileId: String
-    let seriesId: String
-    let subtitleLanguage: String
-    let subtitleTrackIndex: Int
-    let externalSubtitlePath: String
-    let subtitleMode: String
-    let trackSignature: SubtitleTrackSignature?
-    let showForcedSubtitles: Bool?
-    let updatedAt: String?
-
-    var subtitleModeEnum: SubtitleMode? {
-        guard !subtitleMode.isEmpty else { return nil }
-        return SubtitleMode(rawValue: subtitleMode)
-    }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        profileId = try c.decodeIfPresent(String.self, forKey: .profileId) ?? ""
-        seriesId = try c.decodeIfPresent(String.self, forKey: .seriesId) ?? ""
-        subtitleLanguage = try c.decodeIfPresent(String.self, forKey: .subtitleLanguage) ?? ""
-        subtitleTrackIndex = try c.decodeIfPresent(Int.self, forKey: .subtitleTrackIndex) ?? -1
-        externalSubtitlePath = try c.decodeIfPresent(String.self, forKey: .externalSubtitlePath) ?? ""
-        subtitleMode = try c.decodeIfPresent(String.self, forKey: .subtitleMode) ?? ""
-        trackSignature = try c.decodeIfPresent(SubtitleTrackSignature.self, forKey: .trackSignature)
-        showForcedSubtitles = try c.decodeIfPresent(Bool.self, forKey: .showForcedSubtitles)
-        updatedAt = try c.decodeIfPresent(String.self, forKey: .updatedAt)
-    }
-}
-
-struct SubtitlePrefRequest: Codable {
+struct SubtitlePrefRequest: Codable, Sendable {
     let subtitleLanguage: String
     let subtitleTrackIndex: Int
     let externalSubtitlePath: String
@@ -327,26 +257,7 @@ struct SubtitlePrefRequest: Codable {
 
 // MARK: - Per-series audio pref
 
-struct AudioPref: Codable, Hashable {
-    let profileId: String
-    let seriesId: String
-    let audioTrackIndex: Int
-    let audioLanguage: String
-    let trackSignature: AudioTrackSignature?
-    let updatedAt: String?
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        profileId = try c.decodeIfPresent(String.self, forKey: .profileId) ?? ""
-        seriesId = try c.decodeIfPresent(String.self, forKey: .seriesId) ?? ""
-        audioTrackIndex = try c.decodeIfPresent(Int.self, forKey: .audioTrackIndex) ?? -1
-        audioLanguage = try c.decodeIfPresent(String.self, forKey: .audioLanguage) ?? ""
-        trackSignature = try c.decodeIfPresent(AudioTrackSignature.self, forKey: .trackSignature)
-        updatedAt = try c.decodeIfPresent(String.self, forKey: .updatedAt)
-    }
-}
-
-struct AudioPrefRequest: Codable {
+struct AudioPrefRequest: Codable, Sendable {
     let audioTrackIndex: Int
     let audioLanguage: String
     let trackSignature: AudioTrackSignature?

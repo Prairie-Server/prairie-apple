@@ -46,13 +46,27 @@ enum AdaptiveColumns {
             return max(minimumCount, standardCount - 1)
         }
     }
+
+    /// Fits a fixed-density grid card inside its actual container while
+    /// preserving the standard poster width whenever enough room is available.
+    static func fittedPosterWidth(
+        containerWidth: CGFloat,
+        columnCount: Int,
+        spacing: CGFloat,
+        maximumWidth: CGFloat = PrairieTheme.posterCardWidth
+    ) -> CGFloat {
+        guard containerWidth > 0, columnCount > 0 else { return maximumWidth }
+        let totalSpacing = CGFloat(max(0, columnCount - 1)) * spacing
+        let availableWidth = max(1, containerWidth - totalSpacing)
+        return min(maximumWidth, availableWidth / CGFloat(columnCount))
+    }
 }
 
 extension View {
     /// Caps form/content width so text fields and buttons don't stretch
     /// edge-to-edge on iPad. iPhones are already narrower than the cap, so
     /// this is a no-op on phone. The second `frame` centers the capped view.
-    func continuumFormWidth(_ maxWidth: CGFloat = 600) -> some View {
+    func prairieFormWidth(_ maxWidth: CGFloat = 600) -> some View {
         self
             .frame(maxWidth: maxWidth)
             .frame(maxWidth: .infinity, alignment: .center)

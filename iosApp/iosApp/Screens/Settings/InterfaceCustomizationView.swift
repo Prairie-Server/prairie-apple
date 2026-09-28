@@ -142,7 +142,7 @@ struct InterfaceCustomizationView: View {
             if let message = preferences.capabilityMessage {
                 Section {
                     Label(message, systemImage: "server.rack")
-                        .foregroundStyle(Color.continuumSecondaryText)
+                        .foregroundStyle(Color.prairieSecondaryText)
                 }
             }
 
@@ -200,6 +200,18 @@ struct InterfaceCustomizationView: View {
             )
 
             Section {
+                NavigationLink {
+                    HomeSectionsCustomizationView()
+                } label: {
+                    Label("Home Sections", systemImage: "rectangle.3.group")
+                }
+            } header: {
+                Text("Home")
+            } footer: {
+                Text("Choose which Home rows are visible and the order they appear in.")
+            }
+
+            Section {
                 ForEach(visibleRows) { row in
                     let item = row.item
                     HStack(spacing: 12) {
@@ -207,7 +219,7 @@ struct InterfaceCustomizationView: View {
                             HStack(spacing: 8) {
                                 Image(systemName: "arrow.turn.down.right")
                                     .font(.caption.weight(.semibold))
-                                    .foregroundStyle(Color.continuumSecondaryText)
+                                    .foregroundStyle(Color.prairieSecondaryText)
                                     .frame(width: 18)
                                 shortcutLabel(for: item, isNestedLibrary: true)
                             }
@@ -296,15 +308,22 @@ struct InterfaceCustomizationView: View {
             }
 
             if let message = preferences.syncErrorMessage,
-               message != preferences.capabilityMessage {
+               message != preferences.capabilityMessage,
+               message != HeldSettingChange.message {
                 Section {
                     Label(message, systemImage: "icloud.slash")
                         .font(.footnote)
-                        .foregroundStyle(Color.continuumSecondaryText)
+                        .foregroundStyle(Color.prairieSecondaryText)
                 }
             }
+            if preferences.hasHeldChanges {
+                HeldSettingChangesSection(
+                    retry: { preferences.retryHeldChanges() },
+                    discard: { await preferences.discardHeldChanges() }
+                )
+            }
         }
-        .continuumGroupedListStyle()
+        .prairieGroupedListStyle()
         .navigationTitle("Interface")
         .task {
             await preferences.refresh()
@@ -438,7 +457,7 @@ struct InterfaceCustomizationView: View {
                     ).uppercased()
                 )
                     .font(.caption.weight(.medium))
-                    .foregroundStyle(Color.continuumSecondaryText.opacity(0.75))
+                    .foregroundStyle(Color.prairieSecondaryText.opacity(0.75))
                     .lineLimit(1)
             }
         }
@@ -551,6 +570,136 @@ struct InterfaceCustomizationView: View {
         case "tablet": return "Tablet"
         case "desktop": return "Desktop"
         default: return "Family"
+        }
+    }
+}
+
+/// Local profile-aware editor for the rows returned by `/home/sections`.
+/// Visibility is an explicit eye control; native List editing supplies familiar
+/// drag handles for ordering. Every change persists immediately, so returning
+/// to Home reflects it without a separate network save or page reload.
+private struct HomeSectionsCustomizationView: View {
+    @State private var preferences = HomeSectionPreferences.shared
+    @State private var sections: [ResolvedSection] = []
+    @State private var isLoading = false
+    @State private var loadFailed = false
+
+    var body: some View {
+        List {
+            Section {
+                if arrangedSections.isEmpty, isLoading {
+                    HStack {
+                        Spacer()
+                        ProgressView()
+                        Spacer()
+                    }
+                    .padding(.vertical, 16)
+                } else if arrangedSections.isEmpty {
+                    ContentUnavailableView(
+                        "No Home Sections",
+                        systemImage: loadFailed ? "wifi.exclamationmark" : "rectangle.3.group",
+                        description: Text(
+                            loadFailed
+                                ? "Prairie couldn’t refresh the Home rows. Try again when the server is reachable."
+                                : "Home has no populated rows to arrange yet."
+                        )
+                    )
+                } else {
+                    ForEach(arrangedSections) { section in
+                        sectionRow(section)
+                    }
+                    .onMove(perform: moveSections)
+                }
+            } footer: {
+                if !arrangedSections.isEmpty {
+                    Text("Open eye: shown on Home. Closed eye: hidden and dimmed here. Tap Edit to drag rows into a new order. Changes save automatically for this profile on this device.")
+                }
+            }
+        }
+        .prairieGroupedListStyle()
+        .navigationTitle("Home Sections")
+        #if os(iOS)
+        .toolbar {
+            EditButton()
+        }
+        #endif
+        .task {
+            await loadSections()
+        }
+        .refreshable {
+            await loadSections(forceRefresh: true)
+        }
+    }
+
+    private var arrangedSections: [ResolvedSection] {
+        preferences.arrangedSections(sections, includingHidden: true)
+    }
+
+    private func sectionRow(_ section: ResolvedSection) -> some View {
+        let isVisible = preferences.isVisible(section.id)
+        return HStack(spacing: 12) {
+            Button {
+                preferences.setVisible(!isVisible, sectionId: section.id)
+            } label: {
+                Image(systemName: isVisible ? "eye.fill" : "eye.slash.fill")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(isVisible ? Color.prairieOnSurface : Color.prairieSecondaryText)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(
+                isVisible ? "Hide \(section.title)" : "Show \(section.title)"
+            )
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(section.title)
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(Color.prairieOnSurface)
+                    .lineLimit(1)
+
+                Text("\(section.items.count) item\(section.items.count == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundStyle(Color.prairieSecondaryText)
+            }
+
+            Spacer(minLength: 8)
+        }
+        .opacity(isVisible ? 1 : 0.42)
+        .animation(.easeInOut(duration: PrairieTheme.fastDuration), value: isVisible)
+    }
+
+    private func moveSections(from source: IndexSet, to destination: Int) {
+        var ids = arrangedSections.map(\.id)
+        ids.move(fromOffsets: source, toOffset: destination)
+        preferences.setOrder(ids)
+    }
+
+    private func loadSections(forceRefresh: Bool = false) async {
+        preferences.refresh()
+
+        if let cached: SectionsResponse = ResponseCache.shared.get(CacheKey.homeSections) {
+            sections = cached.sections.filter { !$0.items.isEmpty }
+        }
+
+        _ = forceRefresh
+        // Cached rows paint immediately; this awaited refresh remains owned by
+        // the view task so it is cancelled cleanly when the editor disappears.
+        await refreshFromServer()
+    }
+
+    private func refreshFromServer() async {
+        isLoading = sections.isEmpty
+        loadFailed = false
+        defer { isLoading = false }
+
+        do {
+            let response = try await StartupContentPrefetcher.fetchHomeSections()
+            guard !Task.isCancelled else { return }
+            sections = response.sections.filter { !$0.items.isEmpty }
+        } catch {
+            guard !Task.isCancelled else { return }
+            loadFailed = sections.isEmpty
         }
     }
 }

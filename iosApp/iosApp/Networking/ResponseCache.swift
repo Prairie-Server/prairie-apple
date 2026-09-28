@@ -34,6 +34,13 @@ final class ResponseCache {
         entries.removeValue(forKey: key)
     }
 
+    /// Personal mutations affect every library presentation of the same item.
+    func removeItemMetadata(contentId: String) {
+        let key = CacheKey.itemDetail(contentId)
+        remove(key)
+        removeAll(withPrefix: key + ":")
+    }
+
     /// Mutate a cached value in place. Used by optimistic mutations
     /// (favorite, watched, etc.) so a returning screen sees the same
     /// toggle state without a network round-trip.
@@ -74,30 +81,39 @@ final class ResponseCache {
 /// Canonical key strings. Centralizing them keeps cache reads and
 /// writes from drifting apart and makes prefix-invalidation safe.
 enum CacheKey {
-    static let homeSections = "home:sections"
+    /// Versioned with the wire: rows from `/api/v2/home/sections` live under
+    /// a key that no v1-era writer uses.
+    static let homeSections = "home:sections:v2"
     static let recommendations = "recommendations:discover"
     static let collections = "collections:list"
     static let profiles = "profiles:list"
     static let favorites = "personal:favorites"
-    static let history = "personal:history"
+    /// Versioned with the wire: history pages from the v2 catalog.
+    static let history = "personal:history:v2"
     static let watchlist = "personal:watchlist"
     static let adminStats = "admin:stats"
     /// Libraries visible to the active profile — drives the Skyline
     /// type-derived tabs on tvOS.
     static let userLibraries = "user:libraries"
 
-    static func itemDetail(_ contentId: String) -> String { "item:\(contentId)" }
-    static func itemSeasons(_ seriesId: String) -> String { "item:\(seriesId):seasons" }
-    static func itemEpisodes(seriesId: String, seasonNumber: Int) -> String {
-        "item:\(seriesId):season:\(seasonNumber):episodes"
+    static func itemDetail(_ contentId: String, libraryId: Int? = nil) -> String {
+        // Opaque IDs may contain our delimiter or literal escape sequences.
+        let encodedId = contentId.replacingOccurrences(of: "%", with: "%25")
+            .replacingOccurrences(of: ":", with: "%3A")
+        return "item:\(encodedId)" + (libraryId.map { ":library:\($0)" } ?? "")
     }
-    static func itemUserState(_ contentId: String) -> String { "item:\(contentId):userState" }
-    static func itemWatchDetail(_ contentId: String) -> String { "item:\(contentId):watchDetail" }
+    static func itemSeasons(_ seriesId: String, libraryId: Int? = nil) -> String { "\(itemDetail(seriesId, libraryId: libraryId)):seasons" }
+    static func itemEpisodes(seriesId: String, seasonNumber: Int, libraryId: Int? = nil) -> String {
+        "\(itemDetail(seriesId, libraryId: libraryId)):season:\(seasonNumber):episodes"
+    }
+    static func itemUserState(_ contentId: String) -> String { "\(itemDetail(contentId)):userState" }
+    static func itemWatchDetail(_ contentId: String, libraryId: Int? = nil) -> String { "\(itemDetail(contentId, libraryId: libraryId)):watchDetail" }
     /// Browse grid page-1 cache, keyed by the full filter/sort state so
     /// distinct filter combinations never collide (the old genre+sort-only
     /// key did). `filterKey` is `CatalogFilterState.cacheKeyFragment`.
+    /// Versioned with the wire: pages from the v2 catalog.
     static func browse(libraryId: Int?, filterKey: String) -> String {
-        "browse:\(libraryId.map(String.init) ?? "all"):\(filterKey)"
+        "browse:v2:\(libraryId.map(String.init) ?? "all"):\(filterKey)"
     }
     /// Per-library facet vocabulary from `/catalog/filters`.
     static func catalogFilters(libraryId: Int?, includeTechnical: Bool = true) -> String {
@@ -107,10 +123,15 @@ enum CacheKey {
         "library:\(libraryId):sections"
     }
     static func tvLibrary(libraryId: Int, filterKey: String) -> String {
-        "tvlibrary:\(libraryId):\(filterKey)"
+        "tvlibrary:v2:\(libraryId):\(filterKey)"
     }
     static func collectionItems(_ collectionId: String) -> String { "collection:\(collectionId):items" }
-    static func similar(_ contentId: String) -> String { "item:\(contentId):similar" }
+    /// First page of a collection's items from the v2 catalog, kept apart
+    /// from the raw collection-items list.
+    static func catalogCollectionItems(_ collectionId: String) -> String {
+        "collection:\(collectionId):catalog:v2"
+    }
+    static func similar(_ contentId: String) -> String { "\(itemDetail(contentId)):similar" }
     static func calendarWeek(_ weekStart: String, filter: String) -> String {
         "calendar:\(weekStart):\(filter)"
     }

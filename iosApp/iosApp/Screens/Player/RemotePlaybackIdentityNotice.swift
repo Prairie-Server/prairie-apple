@@ -29,33 +29,33 @@ struct RemotePlaybackIdentityNotice: View {
 
     var body: some View {
         Label {
-            VStack(alignment: .leading, spacing: ContinuumTheme.smallPadding) {
+            VStack(alignment: .leading, spacing: PrairieTheme.smallPadding) {
                 Text("Playing as \(profileLabel)")
-                    .font(.continuumSubheadline)
-                    .foregroundStyle(Color.continuumOnSurface)
+                    .font(.prairieSubheadline)
+                    .foregroundStyle(Color.prairieOnSurface)
                     .lineLimit(1)
 
                 Text(sourceLabel)
-                    .font(.continuumBody)
-                    .foregroundStyle(Color.continuumSecondaryText)
+                    .font(.prairieBody)
+                    .foregroundStyle(Color.prairieSecondaryText)
                     .lineLimit(1)
             }
         } icon: {
             Image(systemName: "iphone")
                 .font(.title3)
-                .foregroundStyle(Color.continuumPrimary)
+                .foregroundStyle(Color.prairiePrimary)
                 .accessibilityHidden(true)
         }
-        .padding(.horizontal, ContinuumTheme.padding)
-        .padding(.vertical, ContinuumTheme.spacing)
+        .padding(.horizontal, PrairieTheme.padding)
+        .padding(.vertical, PrairieTheme.spacing)
         .frame(maxWidth: 720)
         .prairiePlayerGlass(
-            in: RoundedRectangle(cornerRadius: ContinuumTheme.cardCornerRadius),
-            tint: Color.continuumPrimary.opacity(0.24)
+            in: RoundedRectangle(cornerRadius: PrairieTheme.cardCornerRadius),
+            tint: Color.prairiePrimary.opacity(0.24)
         )
         .shadow(color: .black.opacity(0.28), radius: 24, y: 12)
-        .padding(.horizontal, ContinuumTheme.safePadding)
-        .padding(.top, ContinuumTheme.safePadding)
+        .padding(.horizontal, PrairieTheme.safePadding)
+        .padding(.top, PrairieTheme.safePadding)
         .allowsHitTesting(false)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Playing as \(profileLabel). \(sourceLabel).")

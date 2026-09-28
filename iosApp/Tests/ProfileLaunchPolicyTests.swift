@@ -296,6 +296,38 @@ final class ProfileLaunchPolicyTests: XCTestCase {
         XCTAssertEqual(preferences.behavior, .automatic)
     }
 
+    /// The profile picker reads remembered profiles on the main thread while
+    /// `AuthService` records a selection from a profile-switch task.
+    func testConcurrentRememberAndReadKeepEveryServer() throws {
+        let suiteName = "ProfileLaunchPolicyTests.\(UUID().uuidString)"
+        let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        let defaults = SharedDefaults(suite: suite, standard: suite)
+        defer { suite.removePersistentDomain(forName: suiteName) }
+        let preferences = ProfileLaunchPreferences(defaults: defaults)
+        let serverCount = 64
+        let accountEpoch = accountEpoch
+
+        DispatchQueue.concurrentPerform(iterations: serverCount * 16) { index in
+            let serverID = "server-\((index / 2) % serverCount)"
+            if index.isMultiple(of: 2) {
+                preferences.remember(
+                    profileID: "profile-\(index)",
+                    requiresPIN: false,
+                    accountEpoch: accountEpoch,
+                    for: serverID
+                )
+            } else {
+                _ = preferences.rememberedProfile(for: serverID)
+            }
+        }
+
+        XCTAssertEqual(preferences.state.rememberedByServerID.count, serverCount)
+        XCTAssertEqual(
+            ProfileLaunchPreferences(defaults: defaults).state,
+            preferences.state
+        )
+    }
+
     func testInvalidProfileNotificationCannotReplaceAnActiveProfile() {
         XCTAssertTrue(shouldPresentProfileSelectionAfterRecovery(
             isLoggedIn: true,
@@ -407,7 +439,7 @@ final class ProfileLaunchIdentityTests: XCTestCase {
         let harness = try makeTokenHarness()
         defer { harness.cleanup() }
         await harness.store.switchActiveServer(serverId: harness.serverID)
-        await harness.store.setServerUrl("https://silo.example")
+        await harness.store.setServerUrl("https://prairie.example")
         await harness.store.saveTokens(accessToken: "access-a", refreshToken: "refresh-a")
 
         let firstEpochValue = await harness.store.getOrCreateAccountEpoch()
@@ -431,7 +463,7 @@ final class ProfileLaunchIdentityTests: XCTestCase {
         let harness = try makeTokenHarness()
         defer { harness.cleanup() }
         await harness.store.switchActiveServer(serverId: harness.serverID)
-        await harness.store.setServerUrl("https://silo.example")
+        await harness.store.setServerUrl("https://prairie.example")
         await harness.store.saveTokens(accessToken: "access", refreshToken: "refresh")
         let accountValue = await harness.store.refreshAccountIdentity()
         let account = try XCTUnwrap(accountValue)
@@ -468,7 +500,7 @@ final class ProfileLaunchIdentityTests: XCTestCase {
         let harness = try makeTokenHarness()
         defer { harness.cleanup() }
         await harness.store.switchActiveServer(serverId: harness.serverID)
-        await harness.store.setServerUrl("https://silo.example")
+        await harness.store.setServerUrl("https://prairie.example")
         await harness.store.saveTokens(accessToken: "access", refreshToken: "refresh")
         let persistentAccountValue = await harness.store.refreshAccountIdentity()
         let persistentAccount = try XCTUnwrap(persistentAccountValue)
@@ -505,7 +537,8 @@ final class ProfileLaunchIdentityTests: XCTestCase {
         let store = TokenStore(
             keychain: SharedKeychain(
                 service: "ProfileLaunchIdentityTests.\(UUID().uuidString)",
-                accessGroup: "invalid.access.group"
+                accessGroup: "invalid.access.group",
+                allowsAppLocalFallback: false
             ),
             defaults: SharedDefaults(suite: suite, standard: suite)
         )
@@ -516,6 +549,90 @@ final class ProfileLaunchIdentityTests: XCTestCase {
         XCTAssertFalse(persisted)
         let profileToken = await store.getProfileToken()
         XCTAssertNil(profileToken)
+    }
+
+    func testUnavailableConfiguredAccessGroupUsesAppLocalKeychainWhenEnabled() {
+        let service = "ProfileLaunchIdentityTests.\(UUID().uuidString)"
+        let account = "profile-proof"
+        let sharedKeychain = SharedKeychain(
+            service: service,
+            accessGroup: "invalid.access.group",
+            allowsAppLocalFallback: true
+        )
+        let appLocalKeychain = SharedKeychain(
+            service: service,
+            accessGroup: nil
+        )
+        defer { appLocalKeychain.delete(account) }
+
+        XCTAssertTrue(sharedKeychain.set("proof", for: account))
+        XCTAssertEqual(appLocalKeychain.get(account), "proof")
+        XCTAssertEqual(sharedKeychain.get(account), "proof")
+        XCTAssertEqual(appLocalKeychain.get(account), "proof")
+        XCTAssertTrue(sharedKeychain.delete(account))
+        XCTAssertNil(sharedKeychain.get(account))
+        XCTAssertNil(appLocalKeychain.get(account))
+    }
+
+    func testAppLocalKeychainFallbackPolicyIsLimitedToLegacyIOSSideloads() {
+        XCTAssertTrue(
+            SideloadKeychainFallbackPolicy.isEnabled(
+                buildChannel: "sideload",
+                isPreIOS26: true
+            )
+        )
+        XCTAssertFalse(
+            SideloadKeychainFallbackPolicy.isEnabled(
+                buildChannel: "sideload",
+                isPreIOS26: false
+            )
+        )
+        XCTAssertFalse(
+            SideloadKeychainFallbackPolicy.isEnabled(
+                buildChannel: "release",
+                isPreIOS26: true
+            )
+        )
+        XCTAssertFalse(
+            SideloadKeychainFallbackPolicy.isEnabled(
+                buildChannel: "dev",
+                isPreIOS26: true
+            )
+        )
+    }
+
+    func testAppLocalKeychainFallbackPolicyRecognizesUnsignedArchiveGroup() {
+        let unprefixedGroup = "org.prairieserver.prairie.shared"
+
+        XCTAssertEqual(
+            SideloadKeychainFallbackPolicy.resolvedAccessGroup(
+                from: unprefixedGroup,
+                allowsUnprefixedSideloadGroup: true
+            ),
+            unprefixedGroup
+        )
+        XCTAssertNil(
+            SideloadKeychainFallbackPolicy.resolvedAccessGroup(
+                from: unprefixedGroup,
+                allowsUnprefixedSideloadGroup: false
+            )
+        )
+        XCTAssertEqual(
+            SideloadKeychainFallbackPolicy.resolvedAccessGroup(
+                from: "TEAMID.\(unprefixedGroup)",
+                allowsUnprefixedSideloadGroup: false
+            ),
+            "TEAMID.\(unprefixedGroup)"
+        )
+        XCTAssertEqual(
+            SideloadKeychainFallbackPolicy.teamPrefix(
+                from: "TEAMID.\(unprefixedGroup)"
+            ),
+            "TEAMID."
+        )
+        XCTAssertNil(
+            SideloadKeychainFallbackPolicy.teamPrefix(from: unprefixedGroup)
+        )
     }
 
     private struct TokenHarness {
@@ -563,15 +680,20 @@ final class ProfileLaunchIdentityTests: XCTestCase {
 
 @MainActor
 final class InvalidProfileRecoveryTests: XCTestCase {
-    func testOnlyExplicitProfileErrorsTriggerRecovery() {
+    func testOnlyExplicitProfileErrorsTriggerRecovery() throws {
+        func problem(_ identifier: String, status: Int) throws -> APIv2Error {
+            let json = #"{"type":"https://prairieserver.org/docs/api/v2/problems/\#(identifier)","title":"t","status":\#(status),"detail":"d"}"#
+            return .problem(try HTTPClient.makeJSONDecoder().decode(APIv2Problem.self, from: Data(json.utf8)))
+        }
         XCTAssertTrue(StartupContentPrefetcher.indicatesInvalidProfile(
-            HTTPError.http(statusCode: 403, body: #"{"error":"profile_unverified"}"#)
-        ))
-        XCTAssertTrue(StartupContentPrefetcher.indicatesInvalidProfile(
-            HTTPError.http(statusCode: 404, body: #"{"error":"profile_not_found"}"#)
+            try problem("profile_verification_required", status: 403)
         ))
         XCTAssertFalse(StartupContentPrefetcher.indicatesInvalidProfile(
-            HTTPError.http(statusCode: 404, body: #"{"error":"content_not_found"}"#)
+            try problem("not_found", status: 404)
+        ))
+        // A plain HTTP failure carries no profile verdict, whatever its body.
+        XCTAssertFalse(StartupContentPrefetcher.indicatesInvalidProfile(
+            HTTPError.http(statusCode: 403, body: #"{"error":"profile_unverified"}"#)
         ))
         XCTAssertFalse(StartupContentPrefetcher.indicatesInvalidProfile(
             HTTPError.http(statusCode: 404, body: nil)
@@ -611,7 +733,7 @@ final class ProfileLaunchMigrationTests: XCTestCase {
             activeServerId: serverID,
             entries: [ServerEntry(
                 id: serverID,
-                url: "https://silo.example",
+                url: "https://prairie.example",
                 fetchedName: "Prairie",
                 profileId: "profile-a",
                 lastUsedAt: Date(timeIntervalSinceReferenceDate: 1)
@@ -619,7 +741,7 @@ final class ProfileLaunchMigrationTests: XCTestCase {
         )
         defaults.set(
             try JSONEncoder().encode(legacy),
-            forKey: "continuumServerRegistry.v1"
+            forKey: ServerRegistry.defaultsKey
         )
         XCTAssertTrue(keychain.set(
             "access",
@@ -641,7 +763,13 @@ final class ProfileLaunchMigrationTests: XCTestCase {
         XCTAssertEqual(remembered.profileID, "profile-a")
         XCTAssertTrue(remembered.requiredPINAtSelection)
         XCTAssertNil(registry.entry(with: serverID)?.legacyProfileId)
-        let migrated = try XCTUnwrap(defaults.data(forKey: "continuumServerRegistry.v1"))
+        #if os(tvOS)
+        // tvOS persists the registry in the shared keychain and clears the
+        // defaults copy, so the legacy field is gone with the whole record.
+        XCTAssertNil(defaults.data(forKey: ServerRegistry.defaultsKey))
+        #else
+        let migrated = try XCTUnwrap(defaults.data(forKey: ServerRegistry.defaultsKey))
         XCTAssertFalse(String(decoding: migrated, as: UTF8.self).contains("profileId"))
+        #endif
     }
 }

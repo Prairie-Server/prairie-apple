@@ -22,9 +22,9 @@ final class LiveTVFeatureStore {
     /// or profile switch discards its result.
     private var generation = 0
 
-    private let api: ContinuumAPI
+    private let api: PrairieAPI
 
-    init(api: ContinuumAPI = .shared) {
+    init(api: PrairieAPI = .shared) {
         self.api = api
     }
 

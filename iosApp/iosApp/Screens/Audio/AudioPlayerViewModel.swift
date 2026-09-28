@@ -5,8 +5,10 @@ import OSLog
 @Observable
 @MainActor
 final class AudioPlayerViewModel {
+    @ObservationIgnored private let api: PrairieAPI
     private struct StartedAudioSession {
         let session: PlaybackSessionResponse
+        let authority: PlaybackV2SessionAuthority
         let track: AudioPlaybackTrack
         let streamHeaders: [String: String]
         let timeline: PlaybackTimelineMapper
@@ -20,6 +22,11 @@ final class AudioPlayerViewModel {
     /// engine. Audiobooks get one session per file; crossing a part
     /// boundary retires this session and starts a fresh one.
     private var activeSession: PlaybackSessionResponse?
+    /// The owner and installation `activeSession` was started under; its
+    /// progress and stop run under them and nothing else.
+    private var activeAuthority: PlaybackV2SessionAuthority?
+    /// Sequences the session-local progress samples of each server session.
+    private var progressSequence = PlaybackProgressSequence()
     /// Converts Aether's player axis to the active file's source axis and
     /// determines whether a seek can stay within the current V3 transport.
     private var activeTimeline: PlaybackTimelineMapper?
@@ -33,8 +40,20 @@ final class AudioPlayerViewModel {
     /// context of a newer book that superseded it. Kept separate from
     /// `loadGeneration`, which fences seeks and per-file session loads.
     private var startGeneration = 0
+    /// Where the latest requested seek will land while its load is still in
+    /// flight. Relative skips build on it so quick repeated presses add up.
+    private var pendingSeekTarget: Double?
+    /// Identifies the seek that owns `pendingSeekTarget`. A seek that ends
+    /// (loaded, failed, or superseded by a non-seek load such as an
+    /// automatic part advance) releases the target only if no newer seek
+    /// has claimed it.
+    private var seekSequence = 0
+    /// Profile-wide audiobook skip intervals, read at each press so a change
+    /// applies without restarting the book.
+    @ObservationIgnored let seekIntervalPreferences = SeekIntervalPreferences.shared
+    @ObservationIgnored private var isObservingSeekIntervals = false
     private let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "com.continuum.app",
+        subsystem: Bundle.main.bundleIdentifier ?? "org.prairieserver.prairie",
         category: "Playback"
     )
 
@@ -56,6 +75,9 @@ final class AudioPlayerViewModel {
     /// Stays on `.fallback` until sampling resolves so the UI never
     /// blocks on image work.
     private(set) var palette: AudioCoverPalette = .fallback
+    /// The caller's preview of the book being started, shown until the
+    /// session's own context arrives. Nil once `start` finishes.
+    private(set) var loadingPreview: AudioPlaybackPreview?
 
     static let availableRates: [Double] = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]
 
@@ -71,9 +93,9 @@ final class AudioPlayerViewModel {
             false
         }
     }
-    var title: String { context?.title ?? "" }
-    var subtitle: String? { context?.subtitle }
-    var posterUrl: String? { context?.posterUrl }
+    var title: String { context?.title ?? loadingPreview?.title ?? "" }
+    var subtitle: String? { context?.subtitle ?? loadingPreview?.subtitle }
+    var posterUrl: String? { context?.posterUrl ?? loadingPreview?.posterUrl }
     var chapters: [AudioPlaybackChapter] { context?.chapters ?? [] }
     var tracks: [AudioPlaybackTrack] { context?.tracks ?? [] }
 
@@ -84,7 +106,13 @@ final class AudioPlayerViewModel {
             .max { $0.startSeconds < $1.startSeconds }
     }
 
-    init() {
+    /// The intervals the audiobook controls use right now.
+    var skipIntervals: SeekIntervalPair {
+        seekIntervalPreferences.pair(for: .audiobook)
+    }
+
+    init(api: PrairieAPI = .shared) {
+        self.api = api
         engine.onEvent = { [weak self] event in
             self?.handleEngineEvent(event)
         }
@@ -93,11 +121,20 @@ final class AudioPlayerViewModel {
         }
     }
 
-    func start(contentId: String, restart: Bool = false, startPosition: Double? = nil) async {
+    func start(
+        contentId: String,
+        restart: Bool = false,
+        startPosition: Double? = nil,
+        libraryId: Int? = nil,
+        preview: AudioPlaybackPreview? = nil
+    ) async {
         startGeneration += 1
         let generation = startGeneration
         isLoading = true
+        loadingPreview = preview?.contentId == contentId ? preview : nil
         error = nil
+        pendingSeekTarget = nil
+        Task { await seekIntervalPreferences.refresh() }
         do {
             // No AVAudioSession setup here: AetherEngine declares the category
             // (.playback/.moviePlayback, multichannel, off-main) at init and activates it
@@ -106,7 +143,10 @@ final class AudioPlayerViewModel {
                 await closePlayback()
             }
             guard generation == startGeneration else { return }
-            let detail = try await ContinuumAPI.shared.itemDetail(contentId: contentId)
+            if let loadingPreview {
+                loadPreviewPalette(posterUrl: loadingPreview.posterUrl, generation: generation)
+            }
+            let detail = try await api.itemDetail(contentId: contentId, libraryId: libraryId)
             guard generation == startGeneration else {
                 // A newer start() superseded this request while the
                 // item-detail load was in flight; abandon it so the older,
@@ -136,7 +176,10 @@ final class AudioPlayerViewModel {
                 resetFailedStart()
             }
         }
-        if generation == startGeneration { isLoading = false }
+        if generation == startGeneration {
+            isLoading = false
+            loadingPreview = nil
+        }
     }
 
     func play() {
@@ -158,20 +201,51 @@ final class AudioPlayerViewModel {
 
     func seek(to globalTime: Double) {
         guard context != nil else { return }
+        let target = clampGlobal(globalTime)
+        seekSequence += 1
+        let sequence = seekSequence
+        pendingSeekTarget = target
         Task {
             do {
-                try await loadTrack(at: clampGlobal(globalTime), autoplay: isPlaying)
+                try await loadTrack(at: target, autoplay: isPlaying)
+                releasePendingSeek(sequence)
                 await syncNow()
             } catch is CancellationError {
+                // A newer seek keeps its own target. Anything else that
+                // superseded this load (close, an automatic part advance)
+                // abandoned the target, so later skips must start from the
+                // playhead again.
+                releasePendingSeek(sequence)
                 return
             } catch {
+                releasePendingSeek(sequence)
                 handlePlaybackError(error)
             }
         }
     }
 
+    private func releasePendingSeek(_ sequence: Int) {
+        if seekSequence == sequence { pendingSeekTarget = nil }
+    }
+
+    /// Relative skip by signed seconds, measured from the latest requested
+    /// target rather than a playhead that has not caught up yet.
     func skip(by seconds: Double) {
-        seek(to: currentTime + seconds)
+        guard context != nil else { return }
+        seek(to: RelativeSeek.target(
+            current: currentTime,
+            pending: pendingSeekTarget,
+            delta: seconds,
+            duration: duration
+        ))
+    }
+
+    func skipBackward() {
+        skip(by: -Double(skipIntervals.backward))
+    }
+
+    func skipForward() {
+        skip(by: Double(skipIntervals.forward))
     }
 
     func jumpToChapter(_ chapter: AudioPlaybackChapter) {
@@ -205,6 +279,7 @@ final class AudioPlayerViewModel {
     func close() async {
         startGeneration += 1
         isLoading = false
+        loadingPreview = nil
         await closePlayback()
     }
 
@@ -214,8 +289,10 @@ final class AudioPlayerViewModel {
         loadGeneration += 1
         let closedContext = context
         let closedSession = activeSession
+        let closedAuthority = activeAuthority
         let position = currentTime
         let total = duration
+        pendingSeekTarget = nil
         loadingEngineEpoch = nil
         activeEngineEpoch = nil
         engine.stop()
@@ -223,6 +300,7 @@ final class AudioPlayerViewModel {
         sleepTimer.cancel()
         context = nil
         activeSession = nil
+        activeAuthority = nil
         activeTrackIndex = nil
         activeTimeline = nil
         engineDuration = 0
@@ -233,21 +311,15 @@ final class AudioPlayerViewModel {
         duration = 0
         palette = .fallback
         if let closedContext {
-            do {
-                try await ContinuumAPI.shared.syncProgress(
-                    mediaItemId: closedContext.contentId,
-                    position: position,
-                    duration: total,
-                    forceOverwrite: true
-                )
-            } catch {
-                logger.warning(
-                    "final audiobook sync failed for \(closedContext.contentId, privacy: .public): \(MediaLogRedactor.sanitize(error), privacy: .public)"
-                )
-            }
+            await uploadBookPosition(
+                contentId: closedContext.contentId,
+                position: position,
+                duration: total,
+                label: "final audiobook sync"
+            )
         }
-        if let closedSession {
-            await stopPlaybackSession(closedSession, reason: "audio player closed")
+        if let closedSession, let closedAuthority {
+            await stopPlaybackSession(closedSession, authority: closedAuthority, reason: "audio player closed")
         }
     }
 
@@ -255,6 +327,7 @@ final class AudioPlayerViewModel {
         syncTask?.cancel()
         syncTask = nil
         loadGeneration += 1
+        pendingSeekTarget = nil
         loadingEngineEpoch = nil
         activeEngineEpoch = nil
         engine.stop()
@@ -262,6 +335,7 @@ final class AudioPlayerViewModel {
         sleepTimer.cancel()
         context = nil
         activeSession = nil
+        activeAuthority = nil
         activeTrackIndex = nil
         activeTimeline = nil
         engineDuration = 0
@@ -306,6 +380,7 @@ final class AudioPlayerViewModel {
             // so the current part can remain the active truth instead of being
             // retired speculatively.
             let priorSession = activeSession
+            let priorAuthority = activeAuthority
             let started: StartedAudioSession
             do {
                 started = try await startSession(for: track, localTime: localTime)
@@ -343,6 +418,7 @@ final class AudioPlayerViewModel {
                 loadingEngineEpoch = nil
                 activeEngineEpoch = engineEpoch
                 activeSession = started.session
+                activeAuthority = started.authority
                 activeTrackIndex = started.track.index
                 activeTimeline = started.timeline
                 resolvedGlobalTime =
@@ -351,11 +427,12 @@ final class AudioPlayerViewModel {
                             forPlayerTime: started.session.position
                         )
                 didLoadNewTrack = true
-                if let priorSession,
+                if let priorSession, let priorAuthority,
                    priorSession.sessionId != started.session.sessionId {
                     Task { [weak self] in
                         await self?.stopPlaybackSession(
                             priorSession,
+                            authority: priorAuthority,
                             reason: "successor audio track committed"
                         )
                     }
@@ -370,6 +447,7 @@ final class AudioPlayerViewModel {
                 }
                 await stopPlaybackSession(
                     started.session,
+                    authority: started.authority,
                     reason: "candidate audio load did not become active"
                 )
                 // `AetherEngine.load` replaces the prior media before it probes
@@ -383,11 +461,12 @@ final class AudioPlayerViewModel {
                 // session have to be released here.
                 let candidateReplacedEngineMedia = candidateEngineEpoch != nil
                 let failureTearsDownPlayer = generation == loadGeneration
-                if let priorSession,
+                if let priorSession, let priorAuthority,
                    priorSession.sessionId != started.session.sessionId,
                    candidateReplacedEngineMedia || failureTearsDownPlayer {
                     await stopPlaybackSession(
                         priorSession,
+                        authority: priorAuthority,
                         reason: candidateReplacedEngineMedia
                             ? "audio successor load failed after replacing prior media"
                             : "audio successor load failed before touching prior media"
@@ -415,6 +494,7 @@ final class AudioPlayerViewModel {
         activeEngineEpoch = nil
         engine.stop()
         activeSession = nil
+        activeAuthority = nil
         activeTrackIndex = nil
         activeTimeline = nil
         engineDuration = 0
@@ -425,8 +505,9 @@ final class AudioPlayerViewModel {
         for track: AudioPlaybackTrack,
         localTime: Double
     ) async throws -> StartedAudioSession {
-        try await PlaybackV3CapabilityGate.shared.requireNeutralProtocolV3()
-        guard let profileId = await TokenStore.shared.getProfileId(),
+        // Every request of this session runs for the owner captured here.
+        guard let owner = await TokenStore.shared.captureOrdinaryRequestAuth(),
+              let profileId = owner.profileId,
               !profileId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw PlaybackV3TerminalFailure(
                 reason: "profile_required",
@@ -436,38 +517,38 @@ final class AudioPlayerViewModel {
         }
 
         let snapshot = ApplePlaybackV3Capabilities.audiobookSnapshot()
-        let playbackAttemptId = "apple-audio:\(UUID().uuidString.lowercased())"
-        // Audiobook resume is a whole-item timeline stitched across files.
-        // The server keeps session-local progress for liveness, while the
-        // client owns durable resume/history through /sync/progress.
-        let request = PlaybackV3StartRequest(
-            protocolVersion: PlaybackProtocolV3.version,
-            clientFeatures: ApplePlaybackV3Capabilities.audiobookFeatures,
-            fileId: track.fileId,
-            profileId: profileId,
-            playbackAttemptId: playbackAttemptId,
-            qualityPreference: ApplePlaybackQuality.autoId,
-            subtitleFidelityPreference: "preserve",
-            progressPersistence: "client",
-            startPosition: localTime.isFinite ? max(0, localTime) : 0,
-            audioTrackId: nil,
-            audioTrackIndex: nil,
-            subtitleTrackId: nil,
-            subtitleTrackIndex: nil,
-            metered: false,
-            bandwidthEstimateKbps: nil,
-            bandwidthCapKbps: nil,
-            clientCapabilities: snapshot.capabilities,
-            clientPlaybackContext: snapshot.context
-        )
-        let response: PlaybackV3DecisionResponse
-        do {
-            response = try await ContinuumAPI.shared.startPlaybackV3(request: request)
-        } catch let error as HTTPError {
-            guard case .network = error else { throw error }
-            // Preserve the logical attempt identity across an ambiguous
-            // transport retry so the server replays instead of double-starting.
-            response = try await ContinuumAPI.shared.startPlaybackV3(request: request)
+        // A start refused because the server's playback installation changed
+        // runs once more with the refreshed capability and a new attempt id.
+        let (playbackAttemptId, authority, response) = try await PlaybackV3CapabilityGate.shared.withInstallationRefresh { capability in
+            let authority = PlaybackV2SessionAuthority(owner: owner, installationID: capability.installationID)
+            let playbackAttemptId = "apple-audio:\(UUID().uuidString.lowercased())"
+            // Audiobook resume is a whole-item timeline stitched across files.
+            // The server keeps session-local progress for liveness, while the
+            // client owns durable resume/history through /sync/progress, so the
+            // start sends progress_persistence "client".
+            let request = PlaybackV3StartRequest(
+                protocolVersion: PlaybackProtocolV3.version,
+                clientFeatures: ApplePlaybackV3Capabilities.audiobookFeatures,
+                fileId: track.fileId,
+                profileId: profileId,
+                playbackAttemptId: playbackAttemptId,
+                qualityPreference: ApplePlaybackQuality.autoId,
+                subtitleFidelityPreference: "preserve",
+                progressPersistence: "client",
+                startPosition: localTime.isFinite ? max(0, localTime) : 0,
+                audioTrackId: nil,
+                audioTrackIndex: nil,
+                subtitleTrackId: nil,
+                subtitleTrackIndex: nil,
+                metered: false,
+                bandwidthEstimateKbps: nil,
+                bandwidthCapKbps: nil,
+                clientCapabilities: snapshot.capabilities,
+                clientPlaybackContext: snapshot.context
+            )
+            // One identical resend after a transport failure: the server
+            // replays the attempt instead of starting it twice.
+            return (playbackAttemptId, authority, try await authority.start(request))
         }
 
         switch response.validatedForApple() {
@@ -476,7 +557,8 @@ final class AudioPlayerViewModel {
                 await PlaybackSessionBridge.reportTerminalStart(
                     playbackAttemptId: playbackAttemptId,
                     snapshot: snapshot,
-                    terminal: terminal
+                    terminal: terminal,
+                    authority: authority
                 )
             }
             throw PlaybackV3TerminalFailure(
@@ -486,7 +568,7 @@ final class AudioPlayerViewModel {
             )
         case .incompatible(let allocatedSessionId):
             if let allocatedSessionId {
-                try? await ContinuumAPI.shared.stopPlayback(sessionId: allocatedSessionId)
+                try? await authority.stop(allocatedSessionId, finalSample: nil)
             }
             throw PlaybackV3TerminalFailure(
                 reason: "invalid_playback_plan",
@@ -497,7 +579,7 @@ final class AudioPlayerViewModel {
             guard response.serverFeatures.contains(
                 PlaybackProtocolV3.headerAuthenticatedMediaFeature
             ) else {
-                try? await ContinuumAPI.shared.stopPlayback(sessionId: sessionId)
+                try? await authority.stop(sessionId, finalSample: nil)
                 throw PlaybackV3TerminalFailure(
                     reason: "server_upgrade_required",
                     message: "This server did not honor authenticated media transport for the playback plan.",
@@ -509,13 +591,13 @@ final class AudioPlayerViewModel {
                 try ApplePlaybackV3PlanAdapter.validate(plan)
                 timeline = try PlaybackTimelineMapper(validating: plan.timeline)
             } catch {
-                try? await ContinuumAPI.shared.stopPlayback(sessionId: sessionId)
+                try? await authority.stop(sessionId, finalSample: nil)
                 throw error
             }
             guard let effectiveTrack = context?.tracks.first(where: {
                 $0.fileId == plan.effectiveMediaFileId
             }) else {
-                try? await ContinuumAPI.shared.stopPlayback(sessionId: sessionId)
+                try? await authority.stop(sessionId, finalSample: nil)
                 throw PlaybackV3TerminalFailure(
                     reason: "effective_file_unavailable",
                     message: "The server selected an unavailable audiobook part.",
@@ -530,10 +612,21 @@ final class AudioPlayerViewModel {
             )
             return StartedAudioSession(
                 session: session,
+                authority: authority,
                 track: effectiveTrack,
                 streamHeaders: plan.stream.headers,
                 timeline: timeline
             )
+        }
+    }
+
+    /// Tints the player from the preview cover while the session loads, so
+    /// the background does not jump from the fallback once playback starts.
+    private func loadPreviewPalette(posterUrl: String?, generation: Int) {
+        Task { [weak self] in
+            guard let sampled = await AudioCoverPaletteSampler.palette(for: posterUrl) else { return }
+            guard let self, generation == self.startGeneration, self.context == nil else { return }
+            self.palette = sampled
         }
     }
 
@@ -546,18 +639,6 @@ final class AudioPlayerViewModel {
         }
     }
 
-    private func retireActiveSession() {
-        let session = activeSession
-        activeSession = nil
-        activeTrackIndex = nil
-        activeTimeline = nil
-        activeEngineEpoch = nil
-        guard let session else { return }
-        Task { [weak self] in
-            await self?.stopPlaybackSession(session, reason: "audio track retired")
-        }
-    }
-
     private func requireCurrentLoad(_ generation: Int) throws {
         guard !Task.isCancelled, generation == loadGeneration, context != nil else {
             throw CancellationError()
@@ -566,10 +647,12 @@ final class AudioPlayerViewModel {
 
     private func stopPlaybackSession(
         _ session: PlaybackSessionResponse,
+        authority: PlaybackV2SessionAuthority,
         reason: String
     ) async {
+        progressSequence.forget(session.sessionId)
         do {
-            try await ContinuumAPI.shared.stopPlayback(sessionId: session.sessionId)
+            try await authority.stop(session.sessionId, finalSample: nil)
         } catch {
             logger.warning(
                 "stopPlayback failed for \(session.sessionId, privacy: .public) (\(reason, privacy: .public)): \(MediaLogRedactor.sanitize(error), privacy: .public)"
@@ -645,6 +728,9 @@ final class AudioPlayerViewModel {
         let nextStart = current.startOffsetSeconds + current.durationSeconds + 0.01
         if AudioPlaybackTimeline.trackIndex(at: nextStart, tracks: context.tracks) != activeTrackIndex,
            nextStart < duration {
+            // The advance replaces any in-flight seek load, so that seek's
+            // target no longer describes where playback is heading.
+            pendingSeekTarget = nil
             do {
                 try await loadTrack(at: nextStart, autoplay: true)
             } catch is CancellationError {
@@ -678,32 +764,50 @@ final class AudioPlayerViewModel {
     private func syncNow() async {
         guard let context else { return }
         if let session = activeSession,
+           let authority = activeAuthority,
            let activeTrackIndex,
            let track = context.tracks.first(where: { $0.index == activeTrackIndex }) {
             do {
-                try await ContinuumAPI.shared.reportPlaybackProgress(
-                    sessionId: session.sessionId,
-                    report: ProgressReport(
-                        position: AudioPlaybackTimeline.localTime(for: currentTime, in: track),
-                        isPaused: !isPlaying
-                    )
+                let sample = try PlaybackSequencedSample(
+                    sequence: progressSequence.next(for: session.sessionId),
+                    position: AudioPlaybackTimeline.localTime(for: currentTime, in: track),
+                    isPaused: !isPlaying
+                )
+                _ = try await PrairieAPI.shared.apiV2Client.updatePlaybackProgress(
+                    sessionID: session.sessionId,
+                    sample: sample,
+                    installationID: authority.installationID,
+                    auth: authority.owner
                 )
             } catch {
                 logger.warning(
-                    "reportPlaybackProgress failed for session \(session.sessionId, privacy: .public): \(MediaLogRedactor.sanitize(error), privacy: .public)"
+                    "playback progress failed for session \(session.sessionId, privacy: .public): \(MediaLogRedactor.sanitize(error), privacy: .public)"
                 )
             }
         }
-        do {
-            try await ContinuumAPI.shared.syncProgress(
-                mediaItemId: context.contentId,
-                position: currentTime,
-                duration: duration,
-                forceOverwrite: true
-            )
-        } catch {
+        await uploadBookPosition(
+            contentId: context.contentId,
+            position: currentTime,
+            duration: duration,
+            label: "audiobook progress sync"
+        )
+    }
+
+    /// Uploads the whole-book position through `POST /api/v2/sync/progress`,
+    /// the only durable resume point for an audiobook. Each call is a new
+    /// write of the current position: a failed or unanswered upload is never
+    /// re-sent, and the next periodic sync or close carries a fresh value.
+    private func uploadBookPosition(contentId: String, position: Double, duration: Double, label: String) async {
+        guard let item = SyncProgressItem(
+            mediaItemId: contentId,
+            position: position,
+            duration: duration,
+            forceOverwrite: true
+        ) else { return }
+        let outcome = await PrairieAPI.shared.apiV2Client.syncProgress([item])
+        if let failure = outcome.failureSummary {
             logger.warning(
-                "syncProgress failed for \(context.contentId, privacy: .public) at \(self.currentTime, privacy: .public): \(MediaLogRedactor.sanitize(error), privacy: .public)"
+                "\(label, privacy: .public) failed for \(contentId, privacy: .public) at \(position, privacy: .public): \(failure, privacy: .public)"
             )
         }
     }
@@ -714,14 +818,30 @@ final class AudioPlayerViewModel {
             pause: { [weak self] in self?.pause() },
             isPaused: { [weak self] in !(self?.isPlaying ?? false) },
             currentTime: { [weak self] in self?.currentTime ?? 0 },
-            seek: { [weak self] target in self?.seek(to: target) }
+            seek: { [weak self] target in self?.seek(to: target) },
+            skip: { [weak self] delta in self?.skip(by: delta) }
         )
+        if !isObservingSeekIntervals {
+            isObservingSeekIntervals = true
+            seekIntervalPreferences.observe(self) { [weak self] in
+                self?.syncNowPlayingSkipIntervals()
+            }
+        }
+        syncNowPlayingSkipIntervals()
         #if os(iOS) || os(tvOS)
         nowPlaying.attach(session: engine.audioNowPlayingSession, handlers: handlers)
         #else
         nowPlaying.attach(handlers: handlers)
         #endif
         pushNowPlaying()
+    }
+
+    private func syncNowPlayingSkipIntervals() {
+        let pair = skipIntervals
+        nowPlaying.setPreferredSkipIntervals(
+            backward: Double(pair.backward),
+            forward: Double(pair.forward)
+        )
     }
 
     private func pushNowPlaying() {
@@ -741,8 +861,8 @@ final class AudioPlayerViewModel {
         session: PlaybackSessionResponse,
         additionalHeaders: [String: String]
     ) async -> StreamRequest? {
-        let serverURL = await ContinuumAPI.shared.currentServerUrl()
-        let accessToken = await ContinuumAPI.shared.currentAccessToken()
+        let serverURL = await PrairieAPI.shared.currentServerUrl()
+        let accessToken = await PrairieAPI.shared.currentAccessToken()
         return StreamRequest.resolve(
             rawURL: session.streamUrl,
             serverURL: serverURL,
@@ -757,7 +877,7 @@ final class AudioPlayerViewModel {
         if raw.hasPrefix("http://") || raw.hasPrefix("https://") {
             return URL(string: raw)
         }
-        let serverUrl = await ContinuumAPI.shared.currentServerUrl()
+        let serverUrl = await PrairieAPI.shared.currentServerUrl()
         guard !serverUrl.isEmpty else { return nil }
         let base = serverUrl.hasSuffix("/") ? String(serverUrl.dropLast()) : serverUrl
         let path = raw.hasPrefix("/") ? raw : "/\(raw)"

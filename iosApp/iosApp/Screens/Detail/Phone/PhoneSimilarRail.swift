@@ -2,11 +2,8 @@
 import SwiftUI
 
 /// Horizontal poster rail of "More Like This" items shown at the bottom
-/// of Movie / Series detail pages. Mirrors the web frontend's
-/// `RecommendationGrid` flow:
-///   1. Hit `/recommendations/similar/{contentId}` for scored IDs
-///   2. Resolve each ID to an `ItemDetail` in parallel
-///   3. Render a poster card per resolved item; tap opens detail
+/// of Movie / Series detail pages. One request returns the ranked cards;
+/// tapping a card opens its detail page.
 ///
 /// The rail self-loads its data when the parent provides a
 /// `contentId`. Hidden when the request fails or returns nothing —
@@ -39,7 +36,7 @@ struct PhoneSimilarRail: View {
         // `VStack(spacing: 14)` so the page rhythm is unchanged.
         VStack(alignment: .leading, spacing: 14) {
             PhoneSectionHeader(title: "More Like This")
-                .padding(.horizontal, ContinuumTheme.safePadding)
+                .padding(.horizontal, PrairieTheme.safePadding)
             content()
         }
     }
@@ -47,22 +44,7 @@ struct PhoneSimilarRail: View {
     // MARK: - Rail
 
     private var rail: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            LazyHStack(spacing: 12) {
-                ForEach(items) { item in
-                    Button {
-                        onSelect(item.contentId)
-                    } label: {
-                        PhoneSimilarCard(item: item)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(item.accessibilityDescription)
-                }
-            }
-            .padding(.horizontal, ContinuumTheme.safePadding)
-            .padding(.vertical, 4)
-        }
+        PhonePosterRailCards(items: items, onSelect: onSelect)
     }
 
     // MARK: - Loading placeholder
@@ -71,17 +53,17 @@ struct PhoneSimilarRail: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 12) {
                 ForEach(0..<4, id: \.self) { _ in
-                    RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius)
-                        .fill(Color.continuumSurfaceElevated)
+                    RoundedRectangle(cornerRadius: PrairieTheme.cornerRadius)
+                        .fill(Color.prairieSurfaceElevated)
                         .frame(
-                            width: ContinuumTheme.posterCardWidth
+                            width: PrairieTheme.posterCardWidth
                                 * uiCustomization.cardPresentation.posterSize.scale,
-                            height: ContinuumTheme.posterCardHeight
+                            height: PrairieTheme.posterCardHeight
                                 * uiCustomization.cardPresentation.posterSize.scale
                         )
                 }
             }
-            .padding(.horizontal, ContinuumTheme.safePadding)
+            .padding(.horizontal, PrairieTheme.safePadding)
             .padding(.vertical, 4)
         }
         .allowsHitTesting(false)
@@ -97,29 +79,11 @@ struct PhoneSimilarRail: View {
         items = []
 
         do {
-            let scored = try await ContinuumAPI.shared.recommendationsSimilar(
+            let cards = try await PrairieAPI.shared.recommendationsSimilar(
                 contentId: contentId,
                 limit: 12
             )
-            // Resolve detail pages in parallel — preserve the engine's
-            // ranking by zipping the resolved details back to their
-            // original index. Failed resolutions are dropped silently.
-            let resolved = await withTaskGroup(of: (Int, ItemDetail?).self) { group in
-                for (index, ref) in scored.enumerated() {
-                    group.addTask {
-                        let detail = try? await ContinuumAPI.shared.itemDetail(
-                            contentId: ref.mediaItemId
-                        )
-                        return (index, detail)
-                    }
-                }
-                var pairs: [(Int, ItemDetail)] = []
-                for await (index, detail) in group {
-                    if let detail { pairs.append((index, detail)) }
-                }
-                return pairs.sorted(by: { $0.0 < $1.0 }).map(\.1)
-            }
-            items = resolved.map(SimilarPosterItem.init(detail:))
+            items = cards.map(SimilarPosterItem.init(card:))
         } catch {
             items = []
         }
@@ -127,43 +91,120 @@ struct PhoneSimilarRail: View {
     }
 }
 
+// MARK: - Poster rail
+
+/// Titled horizontal rail of poster cards, shared by the detail pages'
+/// "More Like This" rail and the book rails (series, more by author).
+/// `aspectRatio` is width ÷ height: 2:3 video posters by default, square
+/// for audiobook covers.
+struct PhonePosterRail: View {
+    let title: String
+    var trailingText: String? = nil
+    let items: [SimilarPosterItem]
+    var aspectRatio: CGFloat = PrairieTheme.posterCardWidth / PrairieTheme.posterCardHeight
+    var placeholderSymbol: String = "film"
+    let onSelect: (String) -> Void
+
+    var body: some View {
+        if !items.isEmpty {
+            VStack(alignment: .leading, spacing: 14) {
+                PhoneSectionHeader(title: title, trailingText: trailingText)
+                    .padding(.horizontal, PrairieTheme.safePadding)
+                PhonePosterRailCards(
+                    items: items,
+                    aspectRatio: aspectRatio,
+                    placeholderSymbol: placeholderSymbol,
+                    onSelect: onSelect
+                )
+            }
+        }
+    }
+}
+
+/// The untitled card strip inside `PhonePosterRail`.
+struct PhonePosterRailCards: View {
+    let items: [SimilarPosterItem]
+    var aspectRatio: CGFloat = PrairieTheme.posterCardWidth / PrairieTheme.posterCardHeight
+    var placeholderSymbol: String = "film"
+    let onSelect: (String) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            LazyHStack(alignment: HorizontalMediaRailLayout.cardAlignment, spacing: 12) {
+                ForEach(items) { item in
+                    Button {
+                        onSelect(item.contentId)
+                    } label: {
+                        PhonePosterCard(
+                            item: item,
+                            aspectRatio: aspectRatio,
+                            placeholderSymbol: placeholderSymbol
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(item.accessibilityDescription)
+                }
+            }
+            .padding(.horizontal, PrairieTheme.safePadding)
+            .padding(.vertical, 4)
+            .phoneMediaRailBounds()
+        }
+    }
+}
+
 // MARK: - Card model
 
-/// View-side projection of an `ItemDetail` containing only what the
-/// poster card needs. Decoupled so the card never re-renders when
-/// unrelated detail fields change.
+/// View-side projection of a recommendation card containing only what
+/// the poster card needs. Decoupled so the card never re-renders when
+/// unrelated card fields change.
 struct SimilarPosterItem: Identifiable, Hashable {
     let contentId: String
     let title: String
     let posterUrl: String?
     let posterThumbhash: String?
     let year: Int?
+    /// Replaces the year caption when set, e.g. "Book 2" in a series rail.
+    let subtitle: String?
+    let accessibilityDescription: String
     var id: String { contentId }
 
-    var accessibilityDescription: String {
-        [title, year.map(String.init)].compactMap { $0 }.joined(separator: ", ")
+    init(card: BrowseItem) {
+        self.contentId = card.contentId
+        self.title = card.title
+        self.posterUrl = card.posterUrl
+        self.posterThumbhash = card.posterThumbhash
+        self.year = card.year
+        self.subtitle = nil
+        self.accessibilityDescription = [card.title, card.year.map(String.init)]
+            .compactMap { $0 }
+            .joined(separator: ", ")
     }
 
-    init(detail: ItemDetail) {
-        self.contentId = detail.contentId
-        self.title = detail.title
-        self.posterUrl = detail.posterUrl
-        self.posterThumbhash = detail.posterThumbhash
-        self.year = detail.year
+    init(audiobook item: AudiobookRelatedItem) {
+        self.contentId = item.contentId
+        self.title = item.title
+        self.posterUrl = item.posterUrl
+        self.posterThumbhash = nil
+        self.year = item.year
+        self.subtitle = item.seriesIndex.map { "Book \($0)" }
+        self.accessibilityDescription = audiobookRelatedItemAccessibilityLabel(item)
     }
 }
 
 // MARK: - Card
 
-private struct PhoneSimilarCard: View {
+private struct PhonePosterCard: View {
     let item: SimilarPosterItem
+    let aspectRatio: CGFloat
+    let placeholderSymbol: String
     @State private var uiCustomization = UICustomizationPreferences.shared
 
     private var cardWidth: CGFloat {
-        ContinuumTheme.posterCardWidth * uiCustomization.cardPresentation.posterSize.scale
+        PrairieTheme.posterCardWidth * uiCustomization.cardPresentation.posterSize.scale
     }
     private var cardHeight: CGFloat {
-        cardWidth * (ContinuumTheme.posterCardHeight / ContinuumTheme.posterCardWidth)
+        cardWidth / aspectRatio
     }
 
     var body: some View {
@@ -171,15 +212,16 @@ private struct PhoneSimilarCard: View {
             poster
             if uiCustomization.cardPresentation.caption.showsTitle {
                 Text(item.title)
-                    .font(.continuumSubheadline)
-                    .foregroundStyle(Color.continuumOnSurface)
+                    .font(.prairieSubheadline)
+                    .foregroundStyle(Color.prairieOnSurface)
                     .lineLimit(2, reservesSpace: true)
                     .multilineTextAlignment(.leading)
             }
-            if uiCustomization.cardPresentation.caption.showsMetadata, let year = item.year {
-                Text(String(year))
-                    .font(.continuumCaption)
-                    .foregroundColor(.continuumSecondaryText)
+            if uiCustomization.cardPresentation.caption.showsMetadata,
+               let caption = item.subtitle ?? item.year.map(String.init) {
+                Text(caption)
+                    .font(.prairieCaption)
+                    .foregroundColor(.prairieSecondaryText)
             }
         }
         .frame(width: cardWidth, alignment: .leading)
@@ -192,14 +234,14 @@ private struct PhoneSimilarCard: View {
             AsyncImageView(url: url, thumbhash: item.posterThumbhash, contentMode: .fill)
                 .frame(width: cardWidth, height: cardHeight)
                 .clipped()
-                .clipShape(RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius))
+                .clipShape(RoundedRectangle(cornerRadius: PrairieTheme.cornerRadius))
         } else {
-            RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius)
-                .fill(Color.continuumSurfaceElevated)
+            RoundedRectangle(cornerRadius: PrairieTheme.cornerRadius)
+                .fill(Color.prairieSurfaceElevated)
                 .frame(width: cardWidth, height: cardHeight)
                 .overlay(
-                    Image(systemName: "film")
-                        .foregroundColor(.continuumOnSurface.opacity(0.3))
+                    Image(systemName: placeholderSymbol)
+                        .foregroundColor(.prairieOnSurface.opacity(0.3))
                 )
         }
     }

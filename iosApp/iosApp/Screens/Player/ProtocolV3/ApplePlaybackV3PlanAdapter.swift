@@ -19,6 +19,7 @@ enum ApplePlaybackV3PlanError: LocalizedError, Equatable {
     case unsupportedClientTransformation(String)
     case invalidClientTransformation(String)
     case unsupportedRuntimeCorrection(String)
+    case invalidEmbeddedSubtitle(String)
 
     var errorDescription: String? {
         switch self {
@@ -30,6 +31,8 @@ enum ApplePlaybackV3PlanError: LocalizedError, Equatable {
             return "The V3 plan requires an unsupported client transformation: \(value)."
         case .invalidClientTransformation(let value):
             return "The V3 client transformation cannot be executed as planned: \(value)."
+        case .invalidEmbeddedSubtitle(let value):
+            return "The embedded subtitle selection is invalid: \(value)."
         case .unsupportedRuntimeCorrection(let value):
             return "The V3 plan requires an unsupported runtime correction: \(value)."
         }
@@ -81,6 +84,25 @@ enum ApplePlaybackV3PlanAdapter {
             throw ApplePlaybackV3PlanError.invalidClientTransformation(
                 "client transformations require the original_http delivery"
             )
+        }
+        if let embedded = plan.subtitle.embedded {
+            guard plan.delivery == PlaybackProtocolV3.PlanDelivery.originalHTTP,
+                  plan.subtitle.mode == PlaybackProtocolV3.SubtitleMode.render,
+                  plan.subtitle.artifact == nil,
+                  embedded.streamIndex >= 0,
+                  embedded.streamIndex <= Int(Int32.max),
+                  let selected = plan.selectedSubtitleInventoryItem,
+                  selected.trackId == plan.subtitle.trackId,
+                  selected.trackId == plan.selectedTracks.subtitle?.id,
+                  plan.selectedTracks.subtitle?.index == nil || plan.selectedTracks.subtitle?.index == selected.combinedIndex,
+                  selected.source == "embedded",
+                  let codec = selected.codec,
+                  let container = plan.stream.container,
+                  ApplePlaybackV3Capabilities.nativeEmbeddedSubtitleCapabilities(
+                    containers: [container]
+                  ).contains(where: { $0.codecs.contains(ApplePlaybackV3Capabilities.normalizedSubtitleCodec(codec)) }) else {
+                throw ApplePlaybackV3PlanError.invalidEmbeddedSubtitle("unsupported source, codec, or stream identity")
+            }
         }
         if let correction = plan.runtimeCorrections.first {
             // Runtime correction tokens belonged to the removed Prairie
@@ -188,16 +210,23 @@ enum ApplePlaybackV3PlanAdapter {
     /// index; the combined ordinal alone cannot stand in for it.
     static func subtitlePickerTracks(
         plan: PlaybackV3Plan,
-        version: FileVersion? = nil
+        version: FileVersion? = nil,
+        localSelection: ProtocolV3SubtitleSelection? = nil
     ) -> [PlayerTrack] {
         // A selected row and a rendered row are different questions: `off`
         // means nothing is selected no matter what the plan still names.
-        let selectedIndex = plan.subtitle.mode == PlaybackProtocolV3.SubtitleMode.off
-            ? nil
-            : plan.selectedSubtitleCombinedIndex
+        let selectedIndex: Int?
+        if let localSelection {
+            selectedIndex = localSelection.inventoryItem(in: plan)?.combinedIndex
+        } else {
+            selectedIndex = plan.subtitle.mode == PlaybackProtocolV3.SubtitleMode.off
+                ? nil : plan.selectedSubtitleCombinedIndex
+        }
         return plan.subtitle.inventory.compactMap { item in
             guard item.combinedIndex >= 0 else { return nil }
-            let ffIndex: Int? = item.source == "embedded"
+            let ffIndex: Int? = item.combinedIndex == plan.selectedSubtitleCombinedIndex && plan.subtitle.embedded != nil
+                ? plan.subtitle.embedded?.streamIndex
+                : item.source == "embedded"
                 ? version.flatMap {
                     ffmpegSubtitleStreamIndex(
                         serverCombinedIndex: item.combinedIndex,
@@ -223,6 +252,42 @@ enum ApplePlaybackV3PlanAdapter {
                 isSelected: item.combinedIndex == selectedIndex,
                 ffIndex: ffIndex,
                 srcId: item.combinedIndex
+            )
+        }
+    }
+
+    /// Keeps Aether authoritative when it publishes audio tracks, but fills
+    /// the picker from the selected catalog version when a remote V3 route
+    /// exposes only its packaged rendition. Audio changes on that route are
+    /// already server-owned replans, so each fallback row carries the catalog
+    /// ordinal in `srcId` and the plan's selected ordinal drives the checkmark.
+    static func audioPickerTracks(
+        aetherTracks: [PlayerTrack],
+        plan: PlaybackV3Plan?,
+        version: FileVersion?
+    ) -> [PlayerTrack] {
+        guard aetherTracks.isEmpty,
+              let plan,
+              let version else {
+            return aetherTracks
+        }
+        let selectedOrdinal = plan.selectedTracks.audio?.index
+        return (version.audioTracks ?? []).enumerated().map { ordinal, track in
+            PlayerTrack(
+                trackId: Int64(ordinal),
+                kind: .audio,
+                title: track.title,
+                lang: track.language,
+                codec: track.codec,
+                audioChannelCount: track.channels,
+                bitrate: track.bitrate.map(Int64.init),
+                isDefault: track.isDefault ?? false,
+                isForced: false,
+                isHearingImpaired: false,
+                isExternal: false,
+                isSelected: ordinal == selectedOrdinal,
+                ffIndex: track.index,
+                srcId: ordinal
             )
         }
     }
@@ -318,7 +383,7 @@ enum ApplePlaybackV3PlanAdapter {
         let embedded = tracks.filter { $0.external != true }
         let embeddedOrdinal = serverCombinedIndex - externalCount
         guard embedded.indices.contains(embeddedOrdinal) else { return nil }
-        return embedded[embeddedOrdinal].index
+        return embedded[embeddedOrdinal].selectionIndex
     }
 
     static func ffmpegSubtitleStreamIndex(
@@ -339,7 +404,7 @@ enum ApplePlaybackV3PlanAdapter {
         }
         let embedded = (version.subtitleTracks ?? []).filter { $0.external != true }
         guard embedded.indices.contains(embeddedOrdinal) else { return nil }
-        return embedded[embeddedOrdinal].index
+        return embedded[embeddedOrdinal].selectionIndex
     }
 
     /// Position of an FFmpeg stream index among the version's embedded subtitle
@@ -350,7 +415,7 @@ enum ApplePlaybackV3PlanAdapter {
     ) -> Int? {
         guard ffmpegStreamIndex >= 0 else { return nil }
         let embedded = (version.subtitleTracks ?? []).filter { $0.external != true }
-        return embedded.firstIndex { $0.index == ffmpegStreamIndex }
+        return embedded.firstIndex { $0.selectionIndex == ffmpegStreamIndex }
     }
 
     private static func subtitleTrack(

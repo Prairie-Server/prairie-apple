@@ -53,16 +53,16 @@ else
   PATH_FILTERS=("$@")
 fi
 
-# Built-in excludes: ContinuumAPI / HTTPClient / store refreshers / LAN session
+# Built-in excludes: PrairieAPI / HTTPClient / store refreshers / LAN session
 # I/O / capability probes. These are integration-heavy; PrairieTests covers the
 # pure-logic sibling modules (models, TokenStore, ServerRegistry migration,
 # PrairieFrame, …).
 DEFAULT_EXCLUDES=(
-  "/Networking/ContinuumAPI.swift"
-  "/Networking/ContinuumAPI+LiveTV.swift"
-  "/Networking/ContinuumAPI+Requests.swift"
-  "/Networking/ContinuumAPI+Settings.swift"
-  "/Networking/ContinuumAI.swift"
+  "/Networking/PrairieAPI.swift"
+  "/Networking/PrairieAPI+LiveTV.swift"
+  "/Networking/PrairieAPI+Requests.swift"
+  "/Networking/PrairieAPI+Settings.swift"
+  "/Networking/PrairieAI.swift"
   "/Networking/HTTPClient.swift"
   "/Networking/DiagnosticsAPI.swift"
   "/Networking/ConnectionMonitor.swift"

@@ -5,12 +5,16 @@ struct StreamRequest {
     let url: URL
     let headers: [String: String]
     let serverUrl: String
+    /// Owner of the credentials resolved for this load, excluding future
+    /// access-token rotations. Never recapture a new owner during playback.
+    let capturedAuth: CapturedOrdinaryRequestAuth?
 
     /// Resolve the server's engine-neutral transport without allowing the
     /// user's API credential to cross an origin boundary. Header-authenticated
-    /// V3 deliberately accepts only the two API-local media route families the
-    /// server contract promises; an absolute URL is a contract violation even
-    /// when it happens to name the same host.
+    /// V3 deliberately accepts only the two API-local v2 media route families
+    /// the server contract promises (`/api/v2/stream/...` and
+    /// `/api/v2/playback/transcode/...`); an absolute URL is a contract
+    /// violation even when it happens to name the same host.
     ///
     /// `authorized_media_origins_v1` is the one negotiated exception: an
     /// attempt that opted in may receive absolute media URLs on a
@@ -29,7 +33,8 @@ struct StreamRequest {
         additionalHeaders: [String: String],
         accessToken: String?,
         requiresHeaderAuthenticatedMedia: Bool,
-        authorizedMediaOriginSessionId: String? = nil
+        authorizedMediaOriginSessionId: String? = nil,
+        capturedAuth: CapturedOrdinaryRequestAuth? = nil
     ) -> StreamRequest? {
         let raw = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { return nil }
@@ -42,7 +47,7 @@ struct StreamRequest {
             guard !requiresHeaderAuthenticatedMedia, let fileURL = URL(string: raw) else {
                 return nil
             }
-            return StreamRequest(url: fileURL, headers: [:], serverUrl: normalizedServer)
+            return StreamRequest(url: fileURL, headers: [:], serverUrl: normalizedServer, capturedAuth: nil)
         }
 
         guard let baseURL = URL(string: normalizedServer),
@@ -87,8 +92,7 @@ struct StreamRequest {
                   components.fragment == nil else {
                 return nil
             }
-            let path = raw.hasPrefix("/") ? raw : "/\(raw)"
-            guard let resolved = URL(string: normalizedServer + "/api/v1" + path) else {
+            guard let resolved = URL(string: normalizedServer + raw) else {
                 return nil
             }
             resolvedURL = resolved
@@ -98,12 +102,10 @@ struct StreamRequest {
             }
             resolvedURL = resolved
         } else {
-            guard !raw.hasPrefix("//") else { return nil }
-            let path = raw.hasPrefix("/") ? raw : "/\(raw)"
-            let absolute = path.hasPrefix("/api/")
-                ? normalizedServer + path
-                : normalizedServer + "/api/v1" + path
-            guard let resolved = URL(string: absolute) else { return nil }
+            // v2 decisions mint API-rooted media URLs; a bare relative path
+            // names no API version and is refused rather than guessed.
+            guard raw.hasPrefix(Self.mediaRoot) else { return nil }
+            guard let resolved = URL(string: normalizedServer + raw) else { return nil }
             resolvedURL = resolved
         }
 
@@ -114,7 +116,7 @@ struct StreamRequest {
         if let accessToken, !accessToken.isEmpty {
             headers["Authorization"] = "Bearer \(accessToken)"
         }
-        return StreamRequest(url: resolvedURL, headers: headers, serverUrl: normalizedServer)
+        return StreamRequest(url: resolvedURL, headers: headers, serverUrl: normalizedServer, capturedAuth: capturedAuth)
     }
 
     /// The absolute form `authorized_media_origins_v1` permits. The server may
@@ -201,8 +203,11 @@ struct StreamRequest {
         return true
     }
 
+    /// Every server-minted media, subtitle and font URL lives under this root.
+    static let mediaRoot = "/api/v2/"
+
     static func isAllowedHeaderAuthenticatedMediaPath(_ path: String) -> Bool {
-        guard path.hasPrefix("/stream/") || path.hasPrefix("/playback/transcode/") else {
+        guard path.hasPrefix(mediaRoot + "stream/") || path.hasPrefix(mediaRoot + "playback/transcode/") else {
             return false
         }
         let lowered = path.lowercased()
@@ -219,21 +224,22 @@ struct StreamRequest {
 
     /// The V3 progressive-remux contract uses one non-secret `seek` value to
     /// anchor the media transport. The subtitle artifact family
-    /// (`/stream/<session>/subtitles/...`, including its `/fonts` variant)
-    /// additionally carries `file_id` and, for imported subtitles,
-    /// `downloaded_subtitle_id`: plain non-negative catalog row identifiers
-    /// that name a row the caller is already authorized to read, never a
-    /// credential or a signed grant. Every other query field is rejected in
+    /// (`/api/v2/stream/<session>/subtitles/...`, including its `/fonts` variant)
+    /// additionally carries `file_id` and one subtitle identity: an embedded
+    /// stream index, external file key, or downloaded subtitle ID. These pin
+    /// the selected track when inventory order changes; they are not credentials
+    /// or signed grants. Every other query field is rejected in
     /// header-authenticated mode — and duplicates are rejected too — so an old
     /// or compromised server cannot smuggle a signed media credential into
     /// Aether's source URL. Media (non-subtitle) routes keep the seek-only rule.
-    private static func hasAllowedHeaderAuthenticatedMediaQuery(
+    static func hasAllowedHeaderAuthenticatedMediaQuery(
         path: String,
         items: [URLQueryItem]
     ) -> Bool {
         guard !items.isEmpty else { return true }
         let allowsSubtitleArtifactIdentifiers = isSubtitleArtifactPath(path)
         var seenNames = Set<String>()
+        var hasSubtitleIdentity = false
         for item in items {
             guard seenNames.insert(item.name).inserted, let value = item.value else {
                 return false
@@ -243,10 +249,23 @@ struct StreamRequest {
                 guard let seconds = Double(value), seconds.isFinite, seconds >= 0 else {
                     return false
                 }
-            case "file_id", "downloaded_subtitle_id":
+            case "file_id":
                 guard allowsSubtitleArtifactIdentifiers, isNonNegativeInteger(value) else {
                     return false
                 }
+            case "downloaded_subtitle_id", "embedded_stream_index":
+                guard allowsSubtitleArtifactIdentifiers, !hasSubtitleIdentity,
+                      isNonNegativeInteger(value) else {
+                    return false
+                }
+                hasSubtitleIdentity = true
+            case "external_subtitle_key":
+                guard allowsSubtitleArtifactIdentifiers, !hasSubtitleIdentity,
+                      value.utf8.count == 64,
+                      value.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
+                    return false
+                }
+                hasSubtitleIdentity = true
             default:
                 return false
             }
@@ -255,16 +274,18 @@ struct StreamRequest {
     }
 
     /// Matches the server's subtitle artifact shapes
-    /// `/stream/<session>/subtitles/<index><ext>` and
-    /// `/stream/<session>/subtitles/<index>/fonts`.
+    /// `/api/v2/stream/<session>/subtitles/<index><ext>` and
+    /// `/api/v2/stream/<session>/subtitles/<index>/fonts`.
     private static func isSubtitleArtifactPath(_ path: String) -> Bool {
         let segments = path.split(separator: "/", omittingEmptySubsequences: false)
-        guard segments.count >= 5 else { return false }
+        guard segments.count >= 7 else { return false }
         return segments[0].isEmpty
-            && segments[1] == "stream"
-            && !segments[2].isEmpty
-            && segments[3] == "subtitles"
+            && segments[1] == "api"
+            && segments[2] == "v2"
+            && segments[3] == "stream"
             && !segments[4].isEmpty
+            && segments[5] == "subtitles"
+            && !segments[6].isEmpty
     }
 
     private static func isNonNegativeInteger(_ value: String) -> Bool {

@@ -99,7 +99,7 @@
     <p class="sub">Each renders all five screens end-to-end. All are fully dark (TV research strongly favors it) and reuse your Skyline color/spacing/motion tokens — they differ in mood, surface, and how loudly the phone-handoff idea is expressed.</p>
     <div class="dirgrid">
       <a class="dircard" href="flow-monolith.html">
-        <div class="swatch sw-mono"><span class="wm">SILO</span><span class="big">01</span></div>
+        <div class="swatch sw-mono"><span class="wm">PRAIRIE</span><span class="big">01</span></div>
         <div class="meta">
           <p class="nm">Monolith <span class="ms">/ austere</span></p>
           <p class="ds">Pure OLED black, monochrome, oversized Swiss type, maximal negative space. The most restrained and content-first — closest to today’s app DNA.</p>
@@ -107,7 +107,7 @@
         </div>
       </a>
       <a class="dircard" href="flow-aurora.html">
-        <div class="swatch sw-aur"><span class="wm">SILO</span><span class="serif">Aurora</span></div>
+        <div class="swatch sw-aur"><span class="wm">PRAIRIE</span><span class="serif">Aurora</span></div>
         <div class="meta">
           <p class="nm">Aurora <span class="ms">/ cinematic</span></p>
           <p class="ds">A film-still backdrop with frosted “liquid glass” panels and an editorial serif. The premium, marketing-forward first impression.</p>
@@ -118,7 +118,7 @@
         <div class="swatch sw-tan">
           <svg width="78%" viewBox="0 0 780 280" fill="none" style="opacity:0.95">
             <rect x="64" y="70" width="250" height="150" rx="18" stroke="rgba(255,255,255,0.5)" stroke-width="3" fill="rgba(255,255,255,0.03)"/>
-            <text x="189" y="158" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="40" font-weight="800" letter-spacing="8" fill="rgba(255,255,255,0.9)">SILO</text>
+            <text x="189" y="158" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="40" font-weight="800" letter-spacing="8" fill="rgba(255,255,255,0.9)">PRAIRIE</text>
             <rect x="556" y="46" width="160" height="200" rx="30" stroke="rgba(255,255,255,0.55)" stroke-width="3" fill="rgba(255,255,255,0.04)"/>
             <rect x="592" y="120" width="88" height="34" rx="17" fill="#5bb8ff"/>
             <path d="M322 146H548" stroke="#5bb8ff" stroke-width="4" stroke-linecap="round" stroke-dasharray="6 16"/>
@@ -144,7 +144,7 @@
         <svg viewBox="0 0 780 280" fill="none">
           <rect x="64" y="56" width="250" height="158" rx="18" stroke="rgba(255,255,255,0.5)" stroke-width="2.5" fill="rgba(255,255,255,0.03)"/>
           <rect x="64" y="56" width="250" height="158" rx="18" fill="url(#g1)"/>
-          <text x="189" y="150" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="34" font-weight="800" letter-spacing="7" fill="rgba(255,255,255,0.92)">SILO</text>
+          <text x="189" y="150" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="34" font-weight="800" letter-spacing="7" fill="rgba(255,255,255,0.92)">PRAIRIE</text>
           <rect x="150" y="232" width="78" height="13" rx="4" fill="rgba(255,255,255,0.14)"/>
           <rect x="556" y="32" width="160" height="214" rx="30" stroke="rgba(255,255,255,0.58)" stroke-width="2.5" fill="rgba(255,255,255,0.04)"/>
           <rect x="610" y="44" width="52" height="12" rx="6" fill="rgba(255,255,255,0.22)"/>
@@ -256,9 +256,9 @@
     <div class="deps">
       <h3>⚠ Cross-repo coordination (per workspace conventions)</h3>
       <ul>
-        <li><b>silo-server</b> — owns auth/session + pairing. The companion handoff needs a pairing/token-grant endpoint (extend the existing QuickConnect/QR flow). Bonjour discovery, if pursued, is also server-advertised.</li>
-        <li><b>silo-android</b> — TV client should stay aligned; the same handoff + phone-first sign-in pattern ought to land on Android TV ↔ Android phone. Compare before finalizing copy/flow.</li>
-        <li><b>silo-apple</b> — this repo: new SwiftUI first-run views + an iOS “Set up Apple TV” surface. Tokens already exist in <code>Theme/*.swift</code>; these mockups map 1:1 (1pt = 1px).</li>
+        <li><b>prairie-server</b> — owns auth/session + pairing. The companion handoff needs a pairing/token-grant endpoint (extend the existing QuickConnect/QR flow). Bonjour discovery, if pursued, is also server-advertised.</li>
+        <li><b>prairie-android</b> — TV client should stay aligned; the same handoff + phone-first sign-in pattern ought to land on Android TV ↔ Android phone. Compare before finalizing copy/flow.</li>
+        <li><b>prairie-apple</b> — this repo: new SwiftUI first-run views + an iOS “Set up Apple TV” surface. Tokens already exist in <code>Theme/*.swift</code>; these mockups map 1:1 (1pt = 1px).</li>
       </ul>
       <p style="font-size:15px;color:var(--secondary);margin:16px 0 0;">Manual entry (your chosen baseline) ships with <b>zero</b> server work. The handoff is the upgrade that needs coordination — these mockups show both so the manual path is never blocked on it.</p>
     </div>

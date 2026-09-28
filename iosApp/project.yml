@@ -2,7 +2,7 @@ name: Prairie
 options:
   bundleIdPrefix: org.prairieserver.prairie
   deploymentTarget:
-    iOS: "26.0"
+    iOS: "18.0"
     macOS: "26.0"
     tvOS: "26.0"
   createIntermediateGroups: true
@@ -12,8 +12,9 @@ settings:
   configs:
     Debug:
       # Required for `@testable import Prairie` in PrairieTests; Xcode's Debug
-      # template sets this but XcodeGen does not.
+      # template sets these defaults but XcodeGen does not.
       ENABLE_TESTABILITY: "YES"
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) DEBUG"
   base:
     SWIFT_VERSION: "5"
     ENABLE_USER_SCRIPT_SANDBOXING: false
@@ -56,14 +57,20 @@ packages:
   # The only media engine in the replacement player. Keep this at an exact
   # reviewed revision; Package.resolved also freezes its binary dependencies.
   AetherEngine:
-    url: https://github.com/superuser404notfound/AetherEngine
-    revision: 0ae80496ab6f3fda135f43ef195ff10961c0e625
+    url: https://github.com/Silo-Server/AetherEngine
+    revision: a02975eda62a13c7c24a2f1ac57840a12975c0b5
+  SwiftAssRenderer:
+    url: https://github.com/mihai8804858/swift-ass-renderer
+    exactVersion: 1.3.1
+  SwiftLibass:
+    url: https://github.com/mihai8804858/swift-libass
+    exactVersion: 1.4.0
   ViewInspector:
     url: https://github.com/nalexn/ViewInspector
     from: "0.10.3"
   Nuke:
     url: https://github.com/kean/Nuke
-    from: "12.8.0"
+    from: "13.2.0"
 
 targets:
   Prairie:
@@ -78,8 +85,6 @@ targets:
           - "macOS/**"
       - path: Resources
         buildPhase: resources
-        excludes:
-          - startup_splash.mp4
     # PRODUCT_BUNDLE_IDENTIFIER and CODE_SIGN_ENTITLEMENTS live in
     # Signing/Prairie.xcconfig so local contributors can override
     # them via Signing/Local.xcconfig without dirtying this file.
@@ -108,6 +113,10 @@ targets:
     dependencies:
       - package: AetherEngine
         product: AetherEngine
+      - package: SwiftAssRenderer
+        product: SwiftAssRenderer
+      - package: SwiftLibass
+        product: SwiftLibass
       - package: Nuke
         product: Nuke
       - package: Nuke
@@ -133,8 +142,6 @@ targets:
           - "macOS/**"
       - path: Resources
         buildPhase: resources
-        excludes:
-          - startup_splash.mp4
     # PRODUCT_BUNDLE_IDENTIFIER and CODE_SIGN_ENTITLEMENTS live in
     # Signing/PrairieTV.xcconfig so local contributors can override
     # them via Signing/Local.xcconfig without dirtying this file.
@@ -156,6 +163,10 @@ targets:
     dependencies:
       - package: AetherEngine
         product: AetherEngine
+      - package: SwiftAssRenderer
+        product: SwiftAssRenderer
+      - package: SwiftLibass
+        product: SwiftLibass
       - package: Nuke
         product: Nuke
       - package: Nuke
@@ -180,13 +191,12 @@ targets:
           - "Screens/Player/iOS/**"
           - "Screens/Player/tvOS/**"
           - "Screens/Player/PlayerView.swift"
+          - "Screens/WatchParty/**"
       - path: iosApp/Screens/Player/PlayerTimeFormatter.swift
       - path: iosApp/tvOS/Caching/CachedAsyncImage.swift
       - path: iosApp/tvOS/Caching/PosterImageCache.swift
       - path: Resources
         buildPhase: resources
-        excludes:
-          - startup_splash.mp4
     configFiles:
       Debug: Signing/PrairieMac.xcconfig
       Release: Signing/PrairieMac.xcconfig
@@ -202,6 +212,10 @@ targets:
     dependencies:
       - package: AetherEngine
         product: AetherEngine
+      - package: SwiftAssRenderer
+        product: SwiftAssRenderer
+      - package: SwiftLibass
+        product: SwiftLibass
       - package: Nuke
         product: Nuke
       - package: Nuke
@@ -297,50 +311,34 @@ targets:
     type: bundle.unit-test
     platform: iOS
     sources:
+      # The whole tree, fixtures included. XcodeGen's default inference puts
+      # every non-Swift file under Tests/Fixtures into the resources phase
+      # (Fixtures/DiagnosticsContract has always been bundled this way), so
+      # nothing is excluded and re-listed by hand. The provenance files named
+      # SOURCE stay in the project but out of the bundle: nothing reads them
+      # at runtime.
       - path: Tests
         excludes:
-          # Re-declared below with an explicit build phase. Both spellings:
-          # the directory itself, and everything under it.
-          - "Fixtures/SettingsContract"
-          - "Fixtures/SettingsContract/**"
-          - "Fixtures/PlaybackV3"
-          - "Fixtures/PlaybackV3/**"
-      # The vendored settings contract. SettingsConformanceTests reads both
-      # files out of the test bundle at runtime and fails hard when either is
-      # missing, so the build phase is stated rather than left to XcodeGen's
-      # extension-based inference: a cross-platform drift gate that quietly
-      # stopped being bundled is worse than no gate at all.
-      - path: Tests/Fixtures/SettingsContract/conformance.json
-        buildPhase: resources
-      - path: Tests/Fixtures/SettingsContract/manifest.json
-        buildPhase: resources
-      # Provenance for the two files above — which server commits they came
-      # from, and how to re-vendor. In the project so it is discoverable next
-      # to them, out of the bundle because nothing reads it at runtime.
+          # Provenance and tooling next to the fixtures, not fixtures. They
+          # are re-added below with no build phase so they stay visible in
+          # the project without landing in the bundle (ASS/README.md would
+          # also collide with DiagnosticsContract/README.md when flattened).
+          - "Fixtures/ASS/README.md"
+          - "Fixtures/ASS/generate-font.py"
+          - "Fixtures/ASS/alternate.ass"
       - path: Tests/Fixtures/SettingsContract/SOURCE
         buildPhase: none
-      # Playback V3's server-generated contract corpus. List every executable
-      # fixture explicitly so an XcodeGen inference change cannot silently
-      # remove this cross-repository gate from the test bundle.
-      - path: Tests/Fixtures/PlaybackV3/attempt_keys.json
-        buildPhase: resources
-      - path: Tests/Fixtures/PlaybackV3/capability_response.json
-        buildPhase: resources
-      - path: Tests/Fixtures/PlaybackV3/conformance_matrix.json
-        buildPhase: resources
-      - path: Tests/Fixtures/PlaybackV3/decision_response.json
-        buildPhase: resources
-      - path: Tests/Fixtures/PlaybackV3/error_response.json
-        buildPhase: resources
-      - path: Tests/Fixtures/PlaybackV3/replan_request.json
-        buildPhase: resources
-      - path: Tests/Fixtures/PlaybackV3/route_event.json
-        buildPhase: resources
-      - path: Tests/Fixtures/PlaybackV3/start_request.json
-        buildPhase: resources
-      - path: Tests/Fixtures/PlaybackV3/subtitle_inventory.json
-        buildPhase: resources
       - path: Tests/Fixtures/PlaybackV3/SOURCE
+        buildPhase: none
+      - path: Tests/Fixtures/APIv2/SOURCE
+        buildPhase: none
+      - path: Tests/Fixtures/DiagnosticsContract/SOURCE
+        buildPhase: none
+      - path: Tests/Fixtures/ASS/README.md
+        buildPhase: none
+      - path: Tests/Fixtures/ASS/generate-font.py
+        buildPhase: none
+      - path: Tests/Fixtures/ASS/alternate.ass
         buildPhase: none
     dependencies:
       - target: Prairie
@@ -362,14 +360,14 @@ targets:
     type: framework
     platform: macOS
     sources:
-      # Only the gated Networking surface + helpers. Live ContinuumAPI /
+      # Only the gated Networking surface + helpers. Live PrairieAPI /
       # prefs stores / feature stores pull half the app; CI stubs cover the
       # few symbols ServerRegistry still calls.
       - path: iosApp/Networking
         excludes:
-          - ContinuumAPI+LiveTV.swift
-          - ContinuumAPI+Requests.swift
-          - ContinuumAI.swift
+          - PrairieAPI+LiveTV.swift
+          - PrairieAPI+Requests.swift
+          - PrairieAI.swift
           - OverlayPrefsStore.swift
           - PlaybackPrefsStore.swift
           - ProfilePrefsStore.swift
@@ -459,7 +457,7 @@ targets:
           - SettingValuesAPITests.swift
           - SettingsConformanceTests.swift
           - SettingsContractResolve.swift
-          - NetworkingSiloGateFillTests.swift
+          - NetworkingPrairieGateFillTests.swift
           - ItemVideosDecodingTests.swift
       - path: Tests/Fixtures/SettingsContract/conformance.json
         buildPhase: resources
@@ -475,6 +473,71 @@ targets:
         SUPPORTED_PLATFORMS: macosx
         CODE_SIGNING_ALLOWED: "NO"
         MACOSX_DEPLOYMENT_TARGET: "15.0"
+
+  # Unit-test bundle for the tvOS PrairieTV app. Same Tests/ tree as PrairieTests
+  # minus the files that reference iOS-only declarations (each exclusion says
+  # which). Everything else compiles against the tvOS module, so the
+  # `#if os(tvOS)` branches in shared code and tests become real coverage.
+  PrairieTVTests:
+    type: bundle.unit-test
+    platform: tvOS
+    sources:
+      - path: Tests
+        excludes:
+          # UserNotifications and the ApplePush* types (Notifications/, #if os(iOS)).
+          - "ApplePushRegistrationTests.swift"
+          # PlayerOrientationCoordinator, AppRouter, DetailDismissalPolicy (iOS player/detail).
+          - "DetailDismissalNavigationTests.swift"
+          # Unguarded `import UIKit`, UIApplication.shared, phone home-feed rails.
+          - "HorizontalMediaRailTests.swift"
+          # UIApplication.shared, UIImage(systemName:), MobilePlayer* controls (iOS player).
+          - "PlayerSurfaceLayoutTests.swift"
+          # MetricKitCapture is declared under #if os(iOS).
+          - "MetricKitCaptureTests.swift"
+          # CompanionPairingCoordinator is declared under #if os(iOS).
+          - "PairingCoordinatorTests.swift"
+          # RemotePlaybackClock / RemoteVolumeReconciler / PrairieControlPlaybackState (Control/iOS).
+          - "PrairieControlTests.swift"
+          # PrairieControlPlaybackState (Control/iOS).
+          - "PrairieControlWireCompatibilityTests.swift"
+          # OnboardingTourViewModel / OnboardingTourAPI are declared under #if !os(tvOS).
+          - "OnboardingInvitationTests.swift"
+          # Same non-fixture files as PrairieTests, re-added below with no phase.
+          - "Fixtures/ASS/README.md"
+          - "Fixtures/ASS/generate-font.py"
+          - "Fixtures/ASS/alternate.ass"
+      - path: Tests/Fixtures/SettingsContract/SOURCE
+        buildPhase: none
+      - path: Tests/Fixtures/PlaybackV3/SOURCE
+        buildPhase: none
+      - path: Tests/Fixtures/APIv2/SOURCE
+        buildPhase: none
+      - path: Tests/Fixtures/DiagnosticsContract/SOURCE
+        buildPhase: none
+      - path: Tests/Fixtures/ASS/README.md
+        buildPhase: none
+      - path: Tests/Fixtures/ASS/generate-font.py
+        buildPhase: none
+      - path: Tests/Fixtures/ASS/alternate.ass
+        buildPhase: none
+    dependencies:
+      - target: PrairieTV
+    settings:
+      base:
+        PRODUCT_NAME: PrairieTVTests
+        GENERATE_INFOPLIST_FILE: "YES"
+        # Same reason as PrairieTests: an explicit SDKROOT is what gives
+        # BUILT_PRODUCTS_DIR its platform suffix so TEST_HOST resolves.
+        SDKROOT: appletvos
+        SUPPORTED_PLATFORMS: "appletvos appletvsimulator"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/PrairieTV.app/PrairieTV"
+        # Every shared test file says `@testable import Prairie`, but the tvOS
+        # app's Swift module is `PrairieTV` (its PRODUCT_NAME, which must stay
+        # for TestFlight continuity). Module aliasing resolves `Prairie` to
+        # `PrairieTV` for this test bundle only; the app target, its symbol
+        # mangling, and its Info.plist are untouched.
+        OTHER_SWIFT_FLAGS: "$(inherited) -module-alias Prairie=PrairieTV"
 
 schemes:
   # CI-only: Networking coverage gate without linking FFmpeg into Prairie.app.
@@ -527,10 +590,13 @@ schemes:
     build:
       targets:
         PrairieTV: all
+        PrairieTVTests: [test]
     run:
       config: Debug
     test:
       config: Debug
+      targets:
+        - PrairieTVTests
     archive:
       config: Release
     analyze:

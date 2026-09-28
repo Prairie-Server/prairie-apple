@@ -29,17 +29,17 @@ struct PhoneTrailerStatusPill: View {
             if isFetching {
                 ProgressView()
                     .controlSize(.small)
-                    .tint(.continuumOnSurface)
+                    .tint(.prairieOnSurface)
             } else {
                 Image(systemName: "info.circle")
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(.continuumOnSurface)
+                    .foregroundColor(.prairieOnSurface)
             }
 
             Text(message)
-                .font(.continuumCaption)
+                .font(.prairieCaption)
                 .fontWeight(.semibold)
-                .foregroundColor(.continuumOnSurface)
+                .foregroundColor(.prairieOnSurface)
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
         }

@@ -13,7 +13,12 @@ enum DownloadBackgroundRefresh {
     /// Must stay listed in `BGTaskSchedulerPermittedIdentifiers`
     /// (iosApp/Info.plist); the scheduler rejects submissions for
     /// identifiers outside that allowlist.
-    static let taskIdentifier = "com.continuum.play.downloads-refresh"
+    static let taskIdentifier = "org.prairieserver.prairie.downloads-refresh"
+
+    /// The identifier builds before the continuum → prairie rename submitted.
+    /// A request they left pending survives the update, so it stays
+    /// permitted and handled until the first launch cancels it.
+    static let legacyTaskIdentifier = "com.continuum.play.downloads-refresh"
 
     /// A floor, not a promise — iOS picks the real cadence from usage
     /// patterns. Hours-scale matches the monitoring feature: new episodes
@@ -21,23 +26,26 @@ enum DownloadBackgroundRefresh {
     private static let earliestInterval: TimeInterval = 4 * 60 * 60
 
     private static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "com.continuum.app",
+        subsystem: Bundle.main.bundleIdentifier ?? "org.prairieserver.prairie",
         category: "Downloads"
     )
 
     /// Must run before `didFinishLaunching` returns — the system traps if a
     /// task it launched the app for has no registered handler.
     static func register() {
-        BGTaskScheduler.shared.register(
-            forTaskWithIdentifier: taskIdentifier,
-            using: nil
-        ) { task in
-            guard let refresh = task as? BGAppRefreshTask else {
-                task.setTaskCompleted(success: false)
-                return
+        for identifier in [taskIdentifier, legacyTaskIdentifier] {
+            BGTaskScheduler.shared.register(
+                forTaskWithIdentifier: identifier,
+                using: nil
+            ) { task in
+                guard let refresh = task as? BGAppRefreshTask else {
+                    task.setTaskCompleted(success: false)
+                    return
+                }
+                handle(refresh)
             }
-            handle(refresh)
         }
+        BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: legacyTaskIdentifier)
     }
 
     /// Submit (or re-submit) the next refresh. Safe to call on every

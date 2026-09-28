@@ -4,8 +4,8 @@ import os
 /// Drives the manual "Find Trailers" action for a single item.
 ///
 /// The server has no job id for this flow: you `POST
-/// /items/{id}/trailers/refresh` and then observe completion by re-fetching
-/// item detail until trailers show up or a window lapses — the same
+/// /api/v2/catalog/items/{id}/trailers/refresh` and then observe completion
+/// by re-fetching item detail until trailers show up or a window lapses — the same
 /// request-then-poll shape `PersonDetailViewModel` uses for person metadata,
 /// with its policy (3s cadence, 120s window, settled-poll counter) carried
 /// over — plus a floor under the settle counter, because an item refresh can
@@ -14,7 +14,7 @@ import os
 /// item was checked within the last week) and `disabled` (every library
 /// holding it has remote videos switched off) resolve immediately.
 ///
-/// Both dependencies are injected closures rather than `ContinuumAPI.shared`
+/// Both dependencies are injected closures rather than `PrairieAPI.shared`
 /// so the whole state machine is testable headless with scripted responses
 /// (the `AIJobPoller` precedent). ``statusMessage`` carries the user-facing
 /// copy so iOS and tvOS render identical strings.
@@ -120,7 +120,7 @@ final class TrailerFetchCoordinator {
     static let defaultMinimumObservationSeconds: TimeInterval = 60
 
     private static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "com.continuum.app",
+        subsystem: Bundle.main.bundleIdentifier ?? "org.prairieserver.prairie",
         category: "TrailerFetch"
     )
 
@@ -297,6 +297,16 @@ final class TrailerFetchCoordinator {
         let onFound: (@MainActor (ItemDetail) async -> Void)?
     }
 
+    /// The v2 client reports a `429` as a problem document, or as a bare
+    /// status when the body is not one.
+    private static func isRateLimited(_ error: Error) -> Bool {
+        switch error {
+        case APIv2Error.problem(let problem): return problem.status == 429
+        case APIv2Error.httpStatus(let status): return status == 429
+        default: return false
+        }
+    }
+
     private func run(runID: UUID, context: PollContext) async {
         defer {
             if activeRunID == runID {
@@ -315,7 +325,7 @@ final class TrailerFetchCoordinator {
             // have consumed the weekly slot before the connection died, so
             // this must not be reported as "No trailers found" — the next
             // tap would contradict it with "checked recently".
-            let rateLimited = (error as? HTTPError)?.statusCode == 429
+            let rateLimited = Self.isRateLimited(error)
             Self.logger.debug("trailerFetchRequestFailed rateLimited=\(rateLimited, privacy: .public)")
             phase = .requestFailed(rateLimited: rateLimited)
             return

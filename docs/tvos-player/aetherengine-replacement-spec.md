@@ -1,9 +1,18 @@
 # AetherEngine-Only Playback Replacement
 
-Status: Aether-only source migration and Apple TV 4K engine-declared streaming capabilities implemented; physical hardware breadth and release gates pending
+> Historical implementation record from August 2026. The versions, requirements,
+> and validation results below describe that migration baseline. For the current
+> dependency selection, use [project.yml](../../iosApp/project.yml) and
+> [Package.resolved](../../iosApp/Prairie.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved).
+> [Third-party notices](../../THIRD_PARTY_NOTICES.md) record the current source
+> revisions. PR #298 selects AetherEngine 7.1.0 with FFmpegBuild 3.3.0;
+> [issue #299](https://github.com/Prairie-Server/prairie-apple/issues/299) tracks the
+> remaining ASF/WMV and related legacy Flash capability work.
+
+Historical status: Aether-only source migration and Apple TV 4K engine-declared streaming capabilities implemented; physical hardware breadth and release gates pending
 Date: 2026-08-23
 Prairie Apple baseline: `4910372c2ccb34d0f6bbde9419b6806e3971ff3f`
-AetherEngine pin: `6.34.0` / `0ae80496ab6f3fda135f43ef195ff10961c0e625`
+Historical AetherEngine pin: `6.34.0` / `0ae80496ab6f3fda135f43ef195ff10961c0e625`
 
 ## Decision
 
@@ -73,7 +82,7 @@ Prairie controls, settings, queue, progress, realtime, downloads
 - User quality intent, server-delivery/output policy, and Protocol V3
   capability assembly.
 - Resume, Next Up, intro/credits, markers, queueing, and exactly-once end work.
-- Realtime commands and SiloControl behavior.
+- Realtime commands and PrairieControl behavior.
 - Download lifecycle, persistent storage, and offline item metadata.
 - Controls, sheets, HUDs, subtitle appearance, selection memory, and AI
   subtitle job state.
@@ -530,13 +539,13 @@ Delete or replace all of the following before the first installable candidate:
   `AVPlayerEmbeddedSubtitleExtractor.swift`
 - `iosApp/Vendor/ffmpeg-build/**`
 - FFmpeg module-map/macOS preparation scripts and Fastlane invocations
-- `SiloPlayerBridging.h` and all target bridging-header settings
+- `PrairiePlayerBridging.h` and all target bridging-header settings
 - startup installation of Prairie's FFmpeg log filter
-- `iOSApp.swift`'s `ContinuumInstallFFmpegLogFilter` call
+- `iOSApp.swift`'s `PrairieInstallFFmpegLogFilter` call
 - custom-engine fixture runners and debug toggles
 - `AudioPlayerEngine`'s AVPlayer implementation
 - old engine/proxy/loopback/FFmpeg implementation tests
-- every SiloTests bridging-header and FFmpeg dependency plus Libav-importing
+- every PrairieTests bridging-header and FFmpeg dependency plus Libav-importing
   test fixture
 
 Behavioral fixture intent is retained by replacing implementation tests with

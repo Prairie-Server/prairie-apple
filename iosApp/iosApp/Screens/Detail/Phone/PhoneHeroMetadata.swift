@@ -23,23 +23,21 @@ enum PhoneHeroMetadata {
             var tokens: [String] = []
             if let label = episodeNumberLabel(from: detail) { tokens.append(label) }
             if let genres = detail.genres, !genres.isEmpty {
-                tokens.append(contentsOf: genres.prefix(1))
+                tokens.append(genres.prefix(1).joined(separator: ", "))
             }
             return tokens
         }
-        var tokens: [String] = [typeLabel(detail: detail)]
         if let genres = detail.genres, !genres.isEmpty {
-            tokens.append(contentsOf: genres.prefix(2))
+            return [genres.prefix(2).joined(separator: ", ")]
         }
-        return tokens
+        return []
     }
 
     static func seriesSourceTokens(from detail: ItemDetail) -> [String] {
-        var tokens: [String] = ["TV Show"]
         if let genres = detail.genres, !genres.isEmpty {
-            tokens.append(contentsOf: genres.prefix(2))
+            return [genres.prefix(2).joined(separator: ", ")]
         }
-        return tokens
+        return []
     }
 
     static func seasonSourceTokens(from detail: ItemDetail, episodeCount: Int) -> [String] {
@@ -69,7 +67,10 @@ enum PhoneHeroMetadata {
         } else if let year = detail.year, year > 0 {
             tokens.append(.text(String(year)))
         }
-        if let runtime = detail.runtime, runtime > 0 {
+        if let runtime = SelectedMediaRuntime.minutes(
+            detail: detail,
+            selectedVersion: selectedVersion
+        ), runtime > 0 {
             tokens.append(.text(formatRuntime(runtime)))
         }
         if let imdb = detail.ratingImdb {
@@ -117,6 +118,21 @@ enum PhoneHeroMetadata {
         return nil
     }
 
+    // MARK: - Credits
+
+    static func creditText(from detail: ItemDetail) -> String? {
+        if detail.type == "movie" {
+            let directors = detail.crew?
+                .filter { $0.job?.caseInsensitiveCompare("Director") == .orderedSame }
+                .map(\.name) ?? []
+            guard !directors.isEmpty else { return nil }
+            return "Directed by " + directors.prefix(2).joined(separator: ", ")
+        }
+        if detail.type == "episode" { return nil }
+        guard let cast = detail.cast, !cast.isEmpty else { return nil }
+        return "Starring " + cast.prefix(3).map(\.name).joined(separator: ", ")
+    }
+
     // MARK: - Title parts
 
     /// Splits "Monarch: Legacy of Monsters" into ("Monarch", "Legacy of
@@ -152,16 +168,6 @@ enum PhoneHeroMetadata {
         case let (.some(s), .none):    return s
         case let (.none, .some(e)):    return e
         case (.none, .none):           return nil
-        }
-    }
-
-    private static func typeLabel(detail: ItemDetail) -> String {
-        switch detail.type.lowercased() {
-        case "movie": return "Movie"
-        case "series": return "TV Show"
-        case "episode": return "Episode"
-        case "season": return "Season"
-        default: return detail.type.capitalized
         }
     }
 

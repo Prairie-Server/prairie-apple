@@ -50,7 +50,7 @@ struct TVLibraryGridView: View {
         subtitle: String? = nil,
         showsHeader: Bool = true,
         showsAlphabetRail: Bool = true,
-        topContentInset: CGFloat = ContinuumTheme.smallPadding,
+        topContentInset: CGFloat = PrairieTheme.smallPadding,
         focusRequest: Int = 0,
         isTopMenuFocused: Bool = false,
         onTopMenuFocusRequest: (() -> Void)? = nil
@@ -98,16 +98,16 @@ struct TVLibraryGridView: View {
                 panelOverlay(panel)
             }
         }
+        .environment(\.browseLibraryId, libraryId)
         .animation(.easeOut(duration: 0.18), value: openPanel)
-        .continuumBackground()
+        .prairieBackground()
         .task {
             if viewModel.items.isEmpty {
                 await viewModel.loadInitial()
             }
             await viewModel.loadFacetsIfNeeded()
         }
-        .onAppear { noteShellFocusRequest(focusRequest) }
-        .onChange(of: focusRequest) { _, request in noteShellFocusRequest(request) }
+        .onDisappear { viewModel.cancelPosterPrefetch() }
     }
 
     @ViewBuilder
@@ -144,7 +144,7 @@ struct TVLibraryGridView: View {
             VStack(alignment: .leading, spacing: 32) {
                 if showsHeader {
                     header
-                        .padding(.horizontal, ContinuumTheme.safePadding)
+                        .padding(.horizontal, PrairieTheme.safePadding)
                         .padding(.top, topContentInset)
                 } else {
                     Color.clear
@@ -161,7 +161,7 @@ struct TVLibraryGridView: View {
                     onSort: { openPanel = .sort },
                     onFilter: { openPanel = .filter }
                 )
-                .padding(.horizontal, ContinuumTheme.safePadding)
+                .padding(.horizontal, PrairieTheme.safePadding)
 
                 if viewModel.items.isEmpty && viewModel.isLoading {
                     Color.clear
@@ -180,21 +180,23 @@ struct TVLibraryGridView: View {
                         items: viewModel.items,
                         isLoading: viewModel.isLoading,
                         hasMore: viewModel.hasMore,
-                        onItemTap: { contentId in
-                            router.navigate(to: .itemDetail(contentId: contentId))
+                        onItemTap: { item in
+                            router.navigate(to: .itemDetail(browseItem: item, libraryId: libraryId))
                         },
-                        onNearEnd: { index in
+                        onNearEnd: { _ in
                             Task { await viewModel.loadMoreIfNeeded() }
-                            let end = min(index + 48, viewModel.items.count)
-                            viewModel.prefetchPosters(in: index..<end)
                         },
-                        focusRequest: gridFocusRequest
+                        focusRequest: gridFocusRequest,
+                        onRowVisibilityChange: { range, isVisible in
+                            viewModel.setPosterRowVisibility(range, isVisible: isVisible)
+                        }
                     )
-                    .padding(.horizontal, ContinuumTheme.safePadding)
+                    .padding(.horizontal, PrairieTheme.safePadding)
                 }
             }
             .padding(.bottom, 48)
         }
+        .modifier(TVMenuEntryScroll(request: focusRequest, isTopMenuFocused: isTopMenuFocused, onReady: noteShellFocusRequest))
     }
 
     // MARK: - Focus routing
@@ -223,20 +225,20 @@ struct TVLibraryGridView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(libraryName)
                 .font(.system(size: 64, weight: .bold))
-                .foregroundColor(.continuumOnSurface)
+                .foregroundColor(.prairieOnSurface)
 
             if let prefix = selectedPrefix {
                 Text(prefix == "#" ? "Titles starting with a number or symbol" : "Titles starting with \(prefix)")
-                    .font(.continuumHeadline)
-                    .foregroundColor(.continuumSecondaryText)
+                    .font(.prairieHeadline)
+                    .foregroundColor(.prairieSecondaryText)
             } else if let subtitle {
                 Text(subtitle)
-                    .font(.continuumHeadline)
-                    .foregroundColor(.continuumSecondaryText)
+                    .font(.prairieHeadline)
+                    .foregroundColor(.prairieSecondaryText)
             } else if let total = totalLabel {
                 Text(total)
-                    .font(.continuumHeadline)
-                    .foregroundColor(.continuumSecondaryText)
+                    .font(.prairieHeadline)
+                    .foregroundColor(.prairieSecondaryText)
             }
         }
     }

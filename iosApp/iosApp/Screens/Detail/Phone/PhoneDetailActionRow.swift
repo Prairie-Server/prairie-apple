@@ -1,42 +1,11 @@
 #if !os(tvOS)
 import SwiftUI
 
-// MARK: - Primary play
-
-/// Primary play control for the refined detail page.
-///
-/// Still full-width — on a phone detail page Play *is* the page's job, and
-/// both Apple TV and Netflix commit to a wide primary. What made the shipping
-/// version read as a web CTA was everything around it: 52pt of pure white with
-/// a row of naked, unlabelled circles floating underneath and a ragged grid of
-/// form fields below that. Trimmed to 50pt with a slightly quieter label, it
-/// anchors the stack instead of shouting over it.
-struct PhoneRefinedPlayButton: View {
-    let icon: String
-    let title: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 9) {
-                Image(systemName: icon)
-                    .font(.system(size: 15, weight: .bold))
-                Text(title)
-                    .font(.system(size: 16, weight: .semibold))
-                    .lineLimit(1)
-            }
-            .foregroundStyle(.black)
-            .frame(maxWidth: .infinity)
-            .frame(height: 50)
-            .background(Capsule().fill(.white))
-        }
-        .buttonStyle(.plain)
-    }
-}
-
 // MARK: - Labelled secondary action
 
-/// One named secondary action — glyph over a caption.
+/// One named secondary action — a filled circle with no outline, over a
+/// caption. This mirrors the approved detail treatment: the icon remains a
+/// generous touch target while the caption removes any guesswork.
 ///
 /// The shipping page gives favourite, watchlist, watched, download, and the
 /// overflow menu the same 44pt circular silhouette, centred under Play with
@@ -65,22 +34,19 @@ struct PhoneLabeledAction: View {
             VStack(spacing: 6) {
                 Image(systemName: resolvedIcon)
                     .font(.system(size: 19, weight: .regular))
-                    .foregroundStyle(isActive ? Color.continuumAccent : Color.continuumOnSurface)
-                    .frame(height: 22)
+                    .foregroundStyle(Color.prairieOnSurface)
+                    .frame(width: 42, height: 42)
+                    .background(
+                        Circle().fill(Color.white.opacity(isActive ? 0.18 : 0.10))
+                    )
                     .contentTransition(.symbolEffect(.replace.magic(fallback: .replace)))
 
                 Text(label)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(isActive
-                                     ? Color.continuumAccent
-                                     : Color.continuumOnSurface.opacity(0.6))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(Color.prairieOnSurface.opacity(isActive ? 0.92 : 0.6))
+                    .multilineTextAlignment(.center)
             }
-            // The glyph-plus-caption stack is only ~38pt tall; the frame
-            // keeps the tap target at the 44pt the old circles gave these
-            // actions. `contentShape` must follow so the padding is tappable.
-            .frame(maxWidth: .infinity, minHeight: 44)
+            .frame(maxWidth: .infinity, minHeight: 58)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -103,14 +69,15 @@ struct PhoneLabeledMenu<MenuContent: View>: View {
             VStack(spacing: 6) {
                 Image(systemName: icon)
                     .font(.system(size: 19, weight: .regular))
-                    .foregroundStyle(Color.continuumOnSurface)
-                    .frame(height: 22)
+                    .foregroundStyle(Color.prairieOnSurface)
+                    .frame(width: 42, height: 42)
+                    .background(Circle().fill(Color.white.opacity(0.10)))
                 Text(label)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(Color.continuumOnSurface.opacity(0.6))
-                    .lineLimit(1)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(Color.prairieOnSurface.opacity(0.6))
+                    .multilineTextAlignment(.center)
             }
-            .frame(maxWidth: .infinity, minHeight: 44)
+            .frame(maxWidth: .infinity, minHeight: 58)
             .contentShape(Rectangle())
         }
         .accessibilityLabel(label)

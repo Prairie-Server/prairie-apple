@@ -30,7 +30,7 @@ final class PrairieControlTests: XCTestCase {
         let offer = PrairieControlHandoffOffer(
             requestId: "request-1",
             serverId: "server-1",
-            serverURL: "https://silo.example",
+            serverURL: "https://prairie.example",
             serverName: "Home",
             profileId: "profile-1",
             profileName: "Alex"
@@ -60,9 +60,25 @@ final class PrairieControlTests: XCTestCase {
         XCTAssertEqual(try roundTrip(.handoffCancel(cancel)), .handoffCancel(cancel))
     }
 
+    /// The phone approves only the request the TV challenged with: same
+    /// match code, opened for remote playback, ending in a temporary session.
+    /// A full device sign-in with the same code is never approved here.
+    @MainActor func testHandoffApprovesOnlyATemporaryRemotePlaybackRequest() {
+        let challenge = PrairieControlHandoffChallenge(requestId: "request-1", userCode: "ABCD-1234",
+            matchCode: "42", expiresAt: "2026-01-02T03:14:05Z")
+        func lookup(match: String = "42", purpose: String = "remote_playback", temporary: Bool = true) -> DeviceLookupResponse {
+            DeviceLookupResponse(matchCode: match, deviceName: "TV", devicePlatform: "tvos", status: "pending",
+                clientPurpose: purpose, temporary: temporary)
+        }
+        XCTAssertTrue(PrairieControlClient.isRemotePlaybackHandoff(lookup(), answering: challenge))
+        XCTAssertFalse(PrairieControlClient.isRemotePlaybackHandoff(lookup(match: "43"), answering: challenge))
+        XCTAssertFalse(PrairieControlClient.isRemotePlaybackHandoff(lookup(purpose: "device_login"), answering: challenge))
+        XCTAssertFalse(PrairieControlClient.isRemotePlaybackHandoff(lookup(temporary: false), answering: challenge))
+    }
+
     func testHandoffOfferDecodesWithoutDisplayMetadata() throws {
         let data = Data(
-            #"{"type":"handoff_offer","v":2,"handoffOffer":{"requestId":"request-1","serverId":"server-1","serverURL":"https://silo.example","profileId":"profile-1"}}"#
+            #"{"type":"handoff_offer","v":2,"handoffOffer":{"requestId":"request-1","serverId":"server-1","serverURL":"https://prairie.example","profileId":"profile-1"}}"#
                 .utf8
         )
         guard case .handoffOffer(let offer) = try JSONDecoder().decode(PrairieControlMessage.self, from: data) else {
@@ -70,6 +86,41 @@ final class PrairieControlTests: XCTestCase {
         }
         XCTAssertNil(offer.serverName)
         XCTAssertNil(offer.profileName)
+    }
+
+    func testHandoffOfferCarriesIdentityAndEndpointsOptionally() throws {
+        let offer = PrairieControlHandoffOffer(
+            requestId: "request-1",
+            serverId: "server-1",
+            serverURL: "https://prairie.overlay.example",
+            serverName: "Home",
+            profileId: "profile-1",
+            profileName: "Alex",
+            serverIdentity: "96c1bd08-b839-4d47-980e-57d4e7a44cfa",
+            serverEndpoints: [
+                ServerEndpoint(url: "https://prairie.example", kind: .public),
+                ServerEndpoint(url: "https://prairie.overlay.example", kind: .provider, provider: "tailscale", displayName: "Tailscale"),
+            ]
+        )
+        XCTAssertEqual(try roundTrip(.handoffOffer(offer)), .handoffOffer(offer))
+
+        let hello = PrairieControlHello(
+            role: .tv, deviceName: "TV", deviceId: "tv-1", serverId: "server-1", serverName: "Home",
+            supportedVersions: [1, 2], serverIdentity: "96c1bd08-b839-4d47-980e-57d4e7a44cfa"
+        )
+        XCTAssertEqual(try roundTrip(.hello(hello)), .hello(hello))
+
+        // The keys stay off the wire when unset, so a v2 peer that predates
+        // them never sees an unexpected value.
+        let legacyOffer = PrairieControlHandoffOffer(
+            requestId: "r", serverId: "s", serverURL: "https://prairie.example",
+            serverName: nil, profileId: "p", profileName: nil
+        )
+        let data = try JSONEncoder().encode(PrairieControlMessage.handoffOffer(legacyOffer))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let body = try XCTUnwrap(json["handoffOffer"] as? [String: Any])
+        XCTAssertNil(body["serverIdentity"])
+        XCTAssertNil(body["serverEndpoints"])
     }
 
     func testServerIdentityMatchesURLCapitalizationAcrossDevices() {
@@ -94,12 +145,12 @@ final class PrairieControlTests: XCTestCase {
     }
 
     func testServerIdentityDecoderRequiresAValidRoundTrippingHTTPURL() {
-        let original = "https://Média.example.test:443/silo?mode=A#top"
+        let original = "https://Média.example.test:443/prairie?mode=A#top"
         let serverId = ServerRegistry.serverId(for: original)
 
         XCTAssertEqual(ServerRegistry.url(forServerId: serverId), original)
         XCTAssertNil(ServerRegistry.url(forServerId: "not-a-registry-id"))
-        XCTAssertNil(ServerRegistry.url(forServerId: ServerRegistry.serverId(for: "file:///tmp/silo")))
+        XCTAssertNil(ServerRegistry.url(forServerId: ServerRegistry.serverId(for: "file:///tmp/prairie")))
         XCTAssertFalse(ServerRegistry.serverIdsMatch(nil, serverId))
         XCTAssertTrue(ServerRegistry.serverIdsMatch("future-format", "future-format"))
         XCTAssertFalse(ServerRegistry.serverIdsMatch("future-format-a", "future-format-b"))

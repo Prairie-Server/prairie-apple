@@ -12,22 +12,22 @@ struct RequestsHubView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: ContinuumTheme.largePadding) {
+            VStack(alignment: .leading, spacing: PrairieTheme.largePadding) {
                 content
             }
-            .padding(.horizontal, ContinuumTheme.padding)
-            .padding(.top, ContinuumTheme.smallPadding)
+            .padding(.horizontal, PrairieTheme.padding)
+            .padding(.top, PrairieTheme.smallPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .continuumBackground()
+        .prairiePageBackground()
         #if os(tvOS)
         .safeAreaPadding(.horizontal, 40)
         #endif
         .navigationTitle("Requests")
-        .continuumNavigationTitleDisplayMode(.inline)
-        .continuumToolbarColorSchemeDark()
-        .continuumNavigationBarSurfaceBackground()
-        .continuumSearchable(text: $viewModel.query, prompt: "Search movies & series to request")
+        .prairieNavigationTitleDisplayMode(.inline)
+        .prairieToolbarColorSchemeDark()
+        .prairieNavigationBarSurfaceBackground()
+        .prairieSearchable(text: $viewModel.query, prompt: "Search movies & series to request")
         .task {
             await viewModel.load()
         }
@@ -55,7 +55,7 @@ struct RequestsHubView: View {
         } else if let error = viewModel.error {
             ErrorView(state: error, onRetry: { Task { await viewModel.load() } })
         } else if viewModel.isLoading {
-            LoadingView()
+            LoadingView(usesPageBackground: true)
                 .frame(maxWidth: .infinity)
                 .padding(.top, 80)
         } else if viewModel.myRequests.isEmpty && viewModel.carousels.isEmpty {
@@ -83,7 +83,7 @@ struct RequestsHubView: View {
     @ViewBuilder
     private var searchResults: some View {
         if viewModel.isSearching && viewModel.searchResults.isEmpty {
-            LoadingView()
+            LoadingView(usesPageBackground: true)
                 .frame(maxWidth: .infinity)
                 .padding(.top, 80)
         } else if viewModel.hasSearched && viewModel.searchResults.isEmpty {
@@ -125,8 +125,8 @@ struct RequestsHubView: View {
         VStack(alignment: .leading, spacing: RequestsUI.headerSpacing) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Your requests")
-                    .font(.continuumHeadline)
-                    .foregroundColor(.continuumOnSurface)
+                    .font(.prairieHeadline)
+                    .foregroundColor(.prairieOnSurface)
 
                 Spacer(minLength: 0)
 
@@ -157,8 +157,8 @@ struct RequestsHubView: View {
             Image(systemName: "chevron.right")
                 .font(.system(size: seeAllChevronSize, weight: .semibold))
         }
-        .font(.continuumCaption)
-        .foregroundColor(.continuumSecondaryText)
+        .font(.prairieCaption)
+        .foregroundColor(.prairieSecondaryText)
     }
 
     // MARK: - Discover carousels
@@ -166,8 +166,8 @@ struct RequestsHubView: View {
     private func carouselRow(_ carousel: RequestCarousel) -> some View {
         VStack(alignment: .leading, spacing: RequestsUI.headerSpacing) {
             Text(carousel.title)
-                .font(.continuumHeadline)
-                .foregroundColor(.continuumOnSurface)
+                .font(.prairieHeadline)
+                .foregroundColor(.prairieOnSurface)
 
             RequestCardRail(items: carousel.results) { result in
                 RequestMediaCard(result: result, onTap: { router.openRequestResult(result) })

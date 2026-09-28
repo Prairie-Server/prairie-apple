@@ -46,6 +46,10 @@ struct TVCascadeSelector: View {
     let onCommitLibrary: (Library) -> Void
     /// Commit a library scope + land on a specific section (pill).
     let onCommitSection: (Library, TVLibraryPill) -> Void
+    /// Warm the library landing after its row rests under focus. The host
+    /// joins this same request when the scope is committed, so a deliberate
+    /// menu selection can arrive with sections and artwork already cached.
+    var onPreviewLibrary: (Library) -> Void = { _ in }
     /// Close without changing scope (Menu/Back, or focus left the bar).
     let onClose: () -> Void
     /// Reports whether any panel row currently holds focus, so the host can
@@ -140,11 +144,11 @@ struct TVCascadeSelector: View {
         // focus frame at the top of the HStack. tvOS resolves directional moves
         // from layout frames, so padding keeps the visible and focus geometry
         // in the same place.
-        HStack(alignment: .top, spacing: ContinuumTheme.Skyline.flyoutGap) {
+        HStack(alignment: .top, spacing: PrairieTheme.Skyline.flyoutGap) {
             librariesPanel
 
             flyout
-                .frame(width: ContinuumTheme.Skyline.flyoutWidth, alignment: .top)
+                .frame(width: PrairieTheme.Skyline.flyoutWidth, alignment: .top)
                 .opacity(flyoutAnchorId != nil ? 1 : 0)
                 .padding(.top, flyoutTopPadding)
                 // Animate the follow on the *discrete* anchor change, never on
@@ -154,7 +158,7 @@ struct TVCascadeSelector: View {
                 // layout pass, so `AnimatorState.combine` accumulates without
                 // bound and the CA transaction never commits (hard UI freeze).
                 .animation(
-                    reduceMotion ? nil : .easeInOut(duration: ContinuumTheme.Skyline.flyoutOpenDuration),
+                    reduceMotion ? nil : .easeInOut(duration: PrairieTheme.Skyline.flyoutOpenDuration),
                     value: flyoutAnchorId
                 )
         }
@@ -189,13 +193,11 @@ struct TVCascadeSelector: View {
             panelHeader(type.librariesHeader)
 
             libraryRows
-
-            panelFooter
         }
-        .padding(ContinuumTheme.Skyline.dropdownPadding)
-        .frame(width: ContinuumTheme.Skyline.dropdownWidth, alignment: .leading)
+        .padding(PrairieTheme.Skyline.dropdownPadding)
+        .frame(width: PrairieTheme.Skyline.dropdownWidth, alignment: .leading)
         .modifier(TVSkylinePanelChrome(
-            cornerRadius: ContinuumTheme.Skyline.dropdownCornerRadius
+            cornerRadius: PrairieTheme.Skyline.dropdownCornerRadius
         ))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(type.title) libraries")
@@ -207,7 +209,7 @@ struct TVCascadeSelector: View {
             libraryRow(library)
         }
 
-        if libraries.count > ContinuumTheme.Skyline.cascadeMaxVisibleRows {
+        if libraries.count > PrairieTheme.Skyline.cascadeMaxVisibleRows {
             // Cap the visible height at the spec's 6 rows, then scroll
             // internally as the composite cascade focus rolls the list.
             ScrollViewReader { proxy in
@@ -217,7 +219,7 @@ struct TVCascadeSelector: View {
                 .onAppear { scrollFocusedLibrary(with: proxy) }
                 .onChange(of: focus) { _, _ in scrollFocusedLibrary(with: proxy) }
             }
-            .frame(maxHeight: estimatedRowHeight * CGFloat(ContinuumTheme.Skyline.cascadeMaxVisibleRows))
+            .frame(maxHeight: estimatedRowHeight * CGFloat(PrairieTheme.Skyline.cascadeMaxVisibleRows))
         } else {
             VStack(alignment: .leading, spacing: 0) { rows }
         }
@@ -268,13 +270,11 @@ struct TVCascadeSelector: View {
                     sectionRow(pill, in: library)
                 }
             }
-
-            panelFooter
         }
-        .padding(ContinuumTheme.Skyline.dropdownPadding)
-        .frame(width: ContinuumTheme.Skyline.dropdownWidth, alignment: .leading)
+        .padding(PrairieTheme.Skyline.dropdownPadding)
+        .frame(width: PrairieTheme.Skyline.dropdownWidth, alignment: .leading)
         .modifier(TVSkylinePanelChrome(
-            cornerRadius: ContinuumTheme.Skyline.dropdownCornerRadius
+            cornerRadius: PrairieTheme.Skyline.dropdownCornerRadius
         ))
         .fixedSize()
         .accessibilityElement(children: .contain)
@@ -301,10 +301,10 @@ struct TVCascadeSelector: View {
                     }
                 }
             }
-            .padding(ContinuumTheme.Skyline.flyoutPadding)
-            .frame(width: ContinuumTheme.Skyline.flyoutWidth, alignment: .leading)
+            .padding(PrairieTheme.Skyline.flyoutPadding)
+            .frame(width: PrairieTheme.Skyline.flyoutWidth, alignment: .leading)
             .modifier(TVSkylinePanelChrome(
-                cornerRadius: ContinuumTheme.Skyline.flyoutCornerRadius
+                cornerRadius: PrairieTheme.Skyline.flyoutCornerRadius
             ))
             .fixedSize()
             .coordinateSpace(name: Self.flyoutSpace)
@@ -344,8 +344,8 @@ struct TVCascadeSelector: View {
 
     private func panelHeader(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: ContinuumTheme.Skyline.dropdownHeaderSize, design: .monospaced))
-            .tracking(ContinuumTheme.Skyline.dropdownHeaderSize * 0.26)
+            .font(.system(size: PrairieTheme.Skyline.dropdownHeaderSize, design: .monospaced))
+            .tracking(PrairieTheme.Skyline.dropdownHeaderSize * 0.26)
             .foregroundStyle(Color.white.opacity(0.38))
             .lineLimit(1)
             .padding(.horizontal, 16)
@@ -356,41 +356,14 @@ struct TVCascadeSelector: View {
 
     private func flyoutHeader(_ text: String) -> some View {
         Text(text.uppercased())
-            .font(.system(size: ContinuumTheme.Skyline.flyoutHeaderSize, design: .monospaced))
-            .tracking(ContinuumTheme.Skyline.flyoutHeaderSize * 0.26)
+            .font(.system(size: PrairieTheme.Skyline.flyoutHeaderSize, design: .monospaced))
+            .tracking(PrairieTheme.Skyline.flyoutHeaderSize * 0.26)
             .foregroundStyle(Color.white.opacity(0.38))
             .lineLimit(1)
             .padding(.horizontal, 14)
             .padding(.top, 6)
             .padding(.bottom, 8)
             .accessibilityHidden(true)
-    }
-
-    private var panelFooter: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Rectangle()
-                .fill(Color.continuumDivider)
-                .frame(height: 1)
-                .padding(.horizontal, 12)
-                .padding(.top, 6)
-
-            Text(footerCaption)
-                .font(.system(size: ContinuumTheme.Skyline.dropdownHeaderSize, design: .monospaced))
-                .tracking(1.2)
-                .foregroundStyle(Color.white.opacity(0.34))
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 16)
-                .padding(.top, 10)
-                .padding(.bottom, 4)
-        }
-        .accessibilityHidden(true)
-    }
-
-    private var footerCaption: String {
-        isSingleLibrary
-            ? "Press opens the section · Menu closes"
-            : "Press opens the library · → jumps to a section · Menu closes"
     }
 
     // MARK: - Focus plumbing
@@ -402,6 +375,7 @@ struct TVCascadeSelector: View {
         lastAppliedEntryGeneration = generation
         if isSingleLibrary, let library = libraries.first {
             // Single-level: land on the first section (§5.3).
+            onPreviewLibrary(library)
             focus = .section(library.id, pills.first ?? .recommended)
             claimPanelFocus()
         } else {
@@ -416,9 +390,6 @@ struct TVCascadeSelector: View {
     }
 
     private func handleFocusChange(_ newValue: Focus?) {
-        if newValue != nil, entersPanel {
-            onPanelFocusChanged(true)
-        }
         guard let newValue else { return }
         switch newValue {
         case .library(let id):
@@ -438,30 +409,34 @@ struct TVCascadeSelector: View {
     /// Move the flyout to a newly focused library row after a rest
     /// debounce (§5.3) so rolling the list never thrashes the flyout.
     private func scheduleFlyoutFollow(to id: Int) {
-        guard flyoutAnchorId != id else { return }
         flyoutFollowTask?.cancel()
         flyoutFollowTask = Task { @MainActor in
             try? await Task.sleep(
-                nanoseconds: ContinuumTheme.Skyline.flyoutFollowDebounceMilliseconds * 1_000_000
+                nanoseconds: PrairieTheme.Skyline.flyoutFollowDebounceMilliseconds * 1_000_000
             )
             guard !Task.isCancelled else { return }
             // Only follow if focus is still on this library row.
             guard focus == .library(id) else { return }
-            withAnimation(reduceMotion ? nil : .easeInOut(duration: ContinuumTheme.Skyline.flyoutOpenDuration)) {
-                flyoutAnchorId = id
+            if let library = libraries.first(where: { $0.id == id }) {
+                onPreviewLibrary(library)
+            }
+            if flyoutAnchorId != id {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: PrairieTheme.Skyline.flyoutOpenDuration)) {
+                    flyoutAnchorId = id
+                }
             }
         }
     }
 
     private var estimatedRowHeight: CGFloat {
-        ContinuumTheme.Skyline.cascadeRowTextSize
-            + ContinuumTheme.Skyline.cascadeRowPaddingVertical * 2
+        PrairieTheme.Skyline.cascadeRowTextSize
+            + PrairieTheme.Skyline.cascadeRowPaddingVertical * 2
             + 6 // row spacing slack so the 6th row isn't clipped mid-glyph
     }
 
     private func scrollFocusedLibrary(with proxy: ScrollViewProxy) {
         guard case .library(let libraryId) = focus else { return }
-        withAnimation(reduceMotion ? nil : .easeInOut(duration: ContinuumTheme.Skyline.flyoutOpenDuration)) {
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: PrairieTheme.Skyline.flyoutOpenDuration)) {
             proxy.scrollTo(Focus.library(libraryId), anchor: .center)
         }
     }
@@ -523,18 +498,15 @@ struct TVCascadeSelector: View {
 
     private func moveToLibrary(_ libraryId: Int) {
         flyoutFollowTask?.cancel()
-        flyoutAnchorId = libraryId
-        onPanelFocusChanged(true)
+        // Highlight immediately; handleFocusChange moves the flyout only
+        // after the user rests on this row.
         focus = .library(libraryId)
-        claimPanelFocus()
     }
 
     private func moveToSection(libraryId: Int, pill: TVLibraryPill) {
         flyoutFollowTask?.cancel()
         flyoutAnchorId = libraryId
-        onPanelFocusChanged(true)
         focus = .section(libraryId, pill)
-        claimPanelFocus()
     }
 
     private func commitFocusedSelection() {
@@ -572,16 +544,14 @@ private struct TVCascadeLibraryRowLabel: View {
     let trailingGlyph: String
     let isFocused: Bool
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
     var body: some View {
         HStack(spacing: 14) {
             Image(systemName: systemImage)
                 .font(.system(size: 22, weight: .semibold))
-                .frame(width: ContinuumTheme.Skyline.cascadeRowIconSize)
+                .frame(width: PrairieTheme.Skyline.cascadeRowIconSize)
 
             Text(title)
-                .font(.system(size: ContinuumTheme.Skyline.cascadeRowTextSize, weight: .semibold))
+                .font(.system(size: PrairieTheme.Skyline.cascadeRowTextSize, weight: .semibold))
                 .lineLimit(1)
 
             Spacer(minLength: 12)
@@ -591,19 +561,19 @@ private struct TVCascadeLibraryRowLabel: View {
                 .foregroundStyle(foreground.opacity(isFocused ? 1 : 0.5))
         }
         .foregroundStyle(foreground)
-        .padding(.horizontal, ContinuumTheme.Skyline.cascadeRowPaddingHorizontal)
-        .padding(.vertical, ContinuumTheme.Skyline.cascadeRowPaddingVertical)
+        .padding(.horizontal, PrairieTheme.Skyline.cascadeRowPaddingHorizontal)
+        .padding(.vertical, PrairieTheme.Skyline.cascadeRowPaddingVertical)
         .background(
-            RoundedRectangle(cornerRadius: ContinuumTheme.Skyline.cascadeRowCornerRadius, style: .continuous)
+            RoundedRectangle(cornerRadius: PrairieTheme.Skyline.cascadeRowCornerRadius, style: .continuous)
                 .fill(isFocused ? Color.white : Color.clear)
         )
         .focusEffectDisabled()
-        // Reduce Motion snaps the cascade row inversion (§4.2 acceptance).
-        .animation(reduceMotion ? nil : ContinuumTheme.springAnimation, value: isFocused)
+        // Row selection should read immediately as the remote moves.
+        .animation(nil, value: isFocused)
     }
 
     private var foreground: Color {
-        isFocused ? .continuumBackground : .white.opacity(0.9)
+        isFocused ? .prairieBackground : .white.opacity(0.9)
     }
 }
 
@@ -614,8 +584,6 @@ private struct TVCascadeSectionRowLabel: View {
     let systemImage: String
     let isFocused: Bool
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: systemImage)
@@ -623,21 +591,21 @@ private struct TVCascadeSectionRowLabel: View {
                 .frame(width: 26)
 
             Text(title)
-                .font(.system(size: ContinuumTheme.Skyline.flyoutRowTextSize, weight: .semibold))
+                .font(.system(size: PrairieTheme.Skyline.flyoutRowTextSize, weight: .semibold))
                 .lineLimit(1)
 
             Spacer(minLength: 0)
         }
-        .foregroundStyle(isFocused ? Color.continuumBackground : .white.opacity(0.86))
-        .padding(.horizontal, ContinuumTheme.Skyline.flyoutRowPaddingHorizontal)
-        .padding(.vertical, ContinuumTheme.Skyline.flyoutRowPaddingVertical)
+        .foregroundStyle(isFocused ? Color.prairieBackground : .white.opacity(0.86))
+        .padding(.horizontal, PrairieTheme.Skyline.flyoutRowPaddingHorizontal)
+        .padding(.vertical, PrairieTheme.Skyline.flyoutRowPaddingVertical)
         .background(
-            RoundedRectangle(cornerRadius: ContinuumTheme.Skyline.flyoutRowCornerRadius, style: .continuous)
+            RoundedRectangle(cornerRadius: PrairieTheme.Skyline.flyoutRowCornerRadius, style: .continuous)
                 .fill(isFocused ? Color.white : Color.clear)
         )
         .focusEffectDisabled()
-        // Reduce Motion snaps the flyout row inversion (§4.2 acceptance).
-        .animation(reduceMotion ? nil : ContinuumTheme.springAnimation, value: isFocused)
+        // Row selection should read immediately as the remote moves.
+        .animation(nil, value: isFocused)
     }
 }
 

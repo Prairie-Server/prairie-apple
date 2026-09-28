@@ -1,12 +1,12 @@
 import Foundation
 
 extension Notification.Name {
-    static let continuumSessionExpired = Notification.Name("continuumSessionExpired")
+    static let prairieSessionExpired = Notification.Name("prairieSessionExpired")
     static let temporaryRemoteAuthExpired = Notification.Name("temporaryRemoteAuthExpired")
 }
 
 /// Minimal stand-ins for app types that gated Networking code references but
-/// that would otherwise pull ContinuumAPI / Diagnostics / player UI into the
+/// that would otherwise pull PrairieAPI / Diagnostics / player UI into the
 /// FFmpeg-free CI host. Full Prairie.app keeps the real implementations.
 
 final class AuthService: @unchecked Sendable {
@@ -68,8 +68,8 @@ final class AICapabilities {
     func reset() {}
 }
 
-/// ContinuumAPI-backed probe; real type is excluded from the FFmpeg-free host
-/// the same way ``AICapabilities`` is. ServerRegistry / ContinuumAPI only need
+/// PrairieAPI-backed probe; real type is excluded from the FFmpeg-free host
+/// the same way ``AICapabilities`` is. ServerRegistry / PrairieAPI only need
 /// reset/refresh/requestQuery.
 final class ImageSizeCapability: @unchecked Sendable {
     static let shared = ImageSizeCapability()
@@ -78,8 +78,8 @@ final class ImageSizeCapability: @unchecked Sendable {
     func refresh() async {}
 }
 
-actor ContinuumAI {
-    static let shared = ContinuumAI()
+actor PrairieAI {
+    static let shared = PrairieAI()
 
     func subtitleProvidersStatus() async throws -> SubtitleProvidersStatus {
         let data = Data("{\"enabled\":true}".utf8)

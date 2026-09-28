@@ -45,15 +45,9 @@ struct AudioFullPlayerView: View {
 
     @ViewBuilder
     private func content(player: AudioPlayerViewModel) -> some View {
+        #if os(tvOS)
         if player.isLoading {
-            VStack(spacing: 16) {
-                ProgressView()
-                    .controlSize(.large)
-                Text("Starting audiobook")
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            startingIndicator
         } else if let error = player.error {
             ErrorView(
                 state: error,
@@ -61,27 +55,56 @@ struct AudioFullPlayerView: View {
                 onGoBack: { audioStore.dismissFullPlayer() }
             )
         } else if player.hasActiveSession {
-            #if os(tvOS)
             TVPlayerLayout(
                 player: player,
                 onShowChapters: { showChapters = true },
                 onStop: { stop(player: player) }
             )
-            #else
+        } else {
+            noSessionState
+        }
+        #else
+        // With a caller preview the player opens on its final layout (cover,
+        // title, author) and only the controls wait for the session.
+        if let error = player.error, !player.isLoading {
+            ErrorView(
+                state: error,
+                onRetry: { audioStore.retryLastRequest() },
+                onGoBack: { audioStore.dismissFullPlayer() }
+            )
+        } else if player.hasActiveSession || (player.isLoading && player.loadingPreview != nil) {
             PortraitPlayerLayout(
                 player: player,
+                isPreparing: player.isLoading,
                 onShowChapters: { showChapters = true },
                 onMinimize: minimize,
                 onStop: { stop(player: player) }
             )
-            #endif
+        } else if player.isLoading {
+            startingIndicator
         } else {
-            EmptyStateView(
-                icon: "headphones",
-                title: "No audiobook playing",
-                subtitle: nil
-            )
+            noSessionState
         }
+        #endif
+    }
+
+    private var startingIndicator: some View {
+        VStack(spacing: 16) {
+            ProgressView()
+                .controlSize(.large)
+            Text("Starting audiobook")
+                .font(.headline)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var noSessionState: some View {
+        EmptyStateView(
+            icon: "headphones",
+            title: "No audiobook playing",
+            subtitle: nil
+        )
     }
 }
 
@@ -90,6 +113,9 @@ struct AudioFullPlayerView: View {
 #if !os(tvOS)
 private struct PortraitPlayerLayout: View {
     let player: AudioPlayerViewModel
+    /// True while the session loads. The controls keep their layout but stay
+    /// hidden under a spinner, so nothing shifts when playback starts.
+    var isPreparing = false
     let onShowChapters: () -> Void
     let onMinimize: () -> Void
     let onStop: () -> Void
@@ -112,6 +138,18 @@ private struct PortraitPlayerLayout: View {
 
             Spacer(minLength: 24)
 
+            controls
+
+
+            Spacer(minLength: 20)
+        }
+        .padding(.horizontal, 24)
+        .frame(maxWidth: 560)
+        .frame(maxWidth: .infinity)
+    }
+
+    private var controls: some View {
+        VStack(spacing: 0) {
             AudioScrubberSection(player: player)
                 .padding(.horizontal, 8)
 
@@ -120,12 +158,18 @@ private struct PortraitPlayerLayout: View {
 
             optionsRow
                 .padding(.top, 26)
-
-            Spacer(minLength: 20)
         }
-        .padding(.horizontal, 24)
-        .frame(maxWidth: 560)
-        .frame(maxWidth: .infinity)
+        .opacity(isPreparing ? 0 : 1)
+        .allowsHitTesting(!isPreparing)
+        .accessibilityHidden(isPreparing)
+        .overlay {
+            if isPreparing {
+                ProgressView()
+                    .controlSize(.large)
+                    .accessibilityLabel("Starting audiobook")
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: isPreparing)
     }
 
     private var topBar: some View {
@@ -158,7 +202,7 @@ private struct PortraitPlayerLayout: View {
             .shadow(color: .black.opacity(0.55), radius: 28, y: 14)
             .scaleEffect(coverScale)
             .animation(
-                reduceMotion ? nil : ContinuumTheme.springAnimation,
+                reduceMotion ? nil : PrairieTheme.springAnimation,
                 value: player.isPlaying
             )
     }
@@ -268,13 +312,13 @@ private struct AudioOptionChip: View {
             .font(.footnote.weight(.semibold))
             .monospacedDigit()
             .lineLimit(1)
-            .foregroundStyle(isActive ? accent : Color.continuumOnSurface)
+            .foregroundStyle(isActive ? accent : Color.prairieOnSurface)
             .padding(.horizontal, 14)
             .padding(.vertical, 9)
             .background(.white.opacity(0.08), in: Capsule())
             .overlay {
                 Capsule().strokeBorder(
-                    isActive ? accent.opacity(0.5) : Color.continuumOutline,
+                    isActive ? accent.opacity(0.5) : Color.prairieOutline,
                     lineWidth: 1
                 )
             }
@@ -300,25 +344,25 @@ private struct TVPlayerLayout: View {
             VStack(alignment: .leading, spacing: 28) {
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Audiobook")
-                        .font(.continuumSmall.weight(.semibold))
+                        .font(.prairieSmall.weight(.semibold))
                         .textCase(.uppercase)
                         .kerning(2)
                         .foregroundStyle(.secondary)
 
                     Text(player.title)
-                        .font(.continuumTitle)
+                        .font(.prairieTitle)
                         .lineLimit(2)
 
                     if let subtitle = player.subtitle, !subtitle.isEmpty {
                         Text(subtitle)
-                            .font(.continuumBody)
+                            .font(.prairieBody)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
 
                     if let chapter = player.currentChapter {
                         Text(chapter.title ?? "Chapter \(chapter.index + 1)")
-                            .font(.continuumCaption)
+                            .font(.prairieCaption)
                             .foregroundStyle(player.palette.accent.opacity(0.9))
                             .lineLimit(1)
                             .padding(.top, 6)
@@ -336,11 +380,11 @@ private struct TVPlayerLayout: View {
                     .accessibilityLabel("Previous Chapter")
 
                     Button {
-                        player.skip(by: -30)
+                        player.skipBackward()
                     } label: {
-                        Image(systemName: "gobackward.30")
+                        Image(systemName: SeekIntervalLabel.symbolName(.backward, seconds: player.skipIntervals.backward))
                     }
-                    .accessibilityLabel("Back 30 Seconds")
+                    .accessibilityLabel(SeekIntervalLabel.accessibilityLabel(.backward, seconds: player.skipIntervals.backward))
 
                     Button {
                         player.togglePlayPause()
@@ -351,11 +395,11 @@ private struct TVPlayerLayout: View {
                     .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
 
                     Button {
-                        player.skip(by: 30)
+                        player.skipForward()
                     } label: {
-                        Image(systemName: "goforward.30")
+                        Image(systemName: SeekIntervalLabel.symbolName(.forward, seconds: player.skipIntervals.forward))
                     }
-                    .accessibilityLabel("Forward 30 Seconds")
+                    .accessibilityLabel(SeekIntervalLabel.accessibilityLabel(.forward, seconds: player.skipIntervals.forward))
 
                     Button {
                         player.nextChapter()
@@ -406,11 +450,11 @@ private struct TVPlayerLayout: View {
                     .accessibilityLabel("Stop Listening")
                 }
                 .buttonStyle(.bordered)
-                .font(.continuumCaption)
+                .font(.prairieCaption)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.horizontal, ContinuumTheme.safePadding)
+        .padding(.horizontal, PrairieTheme.safePadding)
         .padding(.vertical, 60)
     }
 }
@@ -464,8 +508,8 @@ private struct AudioScrubberSection: View {
         )
         .accessibilityAdjustableAction { direction in
             switch direction {
-            case .increment: player.skip(by: 30)
-            case .decrement: player.skip(by: -30)
+            case .increment: player.skipForward()
+            case .decrement: player.skipBackward()
             @unknown default: break
             }
         }
@@ -556,14 +600,14 @@ private struct AudioTransportControls: View {
             .accessibilityLabel("Previous Chapter")
 
             Button {
-                player.skip(by: -30)
+                player.skipBackward()
             } label: {
-                Image(systemName: "gobackward.30")
+                Image(systemName: SeekIntervalLabel.symbolName(.backward, seconds: player.skipIntervals.backward))
                     .font(.title)
                     .frame(width: 50, height: 50)
                     .contentShape(Rectangle())
             }
-            .accessibilityLabel("Back 30 Seconds")
+            .accessibilityLabel(SeekIntervalLabel.accessibilityLabel(.backward, seconds: player.skipIntervals.backward))
 
             Button {
                 player.togglePlayPause()
@@ -582,14 +626,14 @@ private struct AudioTransportControls: View {
             .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
 
             Button {
-                player.skip(by: 30)
+                player.skipForward()
             } label: {
-                Image(systemName: "goforward.30")
+                Image(systemName: SeekIntervalLabel.symbolName(.forward, seconds: player.skipIntervals.forward))
                     .font(.title)
                     .frame(width: 50, height: 50)
                     .contentShape(Rectangle())
             }
-            .accessibilityLabel("Forward 30 Seconds")
+            .accessibilityLabel(SeekIntervalLabel.accessibilityLabel(.forward, seconds: player.skipIntervals.forward))
 
             Button {
                 player.nextChapter()
@@ -602,7 +646,7 @@ private struct AudioTransportControls: View {
             .accessibilityLabel("Next Chapter")
         }
         .buttonStyle(.plain)
-        .foregroundStyle(Color.continuumOnSurface)
+        .foregroundStyle(Color.prairieOnSurface)
     }
 }
 #endif

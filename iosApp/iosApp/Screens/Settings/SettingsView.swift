@@ -59,10 +59,10 @@ struct SettingsView: View {
             aboutSection
             signOutSection
         }
-        .continuumGroupedListStyle()
+        .prairieGroupedListStyle()
         .navigationTitle("Settings")
-        .continuumNavigationTitleDisplayMode(.large)
-        .continuumToolbarColorSchemeDark()
+        .prairieNavigationTitleDisplayMode(.large)
+        .prairieToolbarColorSchemeDark()
         .task {
             await viewModel.loadSettings()
         }
@@ -94,12 +94,12 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(displayName)
                             .font(.title3.weight(.semibold))
-                            .foregroundStyle(Color.continuumOnSurface)
+                            .foregroundStyle(Color.prairieOnSurface)
                             .lineLimit(1)
 
                         Text(subtitleLine)
                             .font(.footnote)
-                            .foregroundStyle(Color.continuumSecondaryText)
+                            .foregroundStyle(Color.prairieSecondaryText)
                             .lineLimit(1)
                     }
 
@@ -115,7 +115,7 @@ struct SettingsView: View {
         } footer: {
             if viewModel.userInfo?.isAdmin == true {
                 Text("Signed in as an administrator.")
-                    .foregroundStyle(Color.continuumSecondaryText)
+                    .foregroundStyle(Color.prairieSecondaryText)
             }
         }
     }
@@ -200,7 +200,7 @@ struct SettingsView: View {
                     title: "Subtitles",
                     systemImage: "captions.bubble.fill",
                     color: .pink,
-                    value: subtitleLanguageName(viewModel.editorSubtitleLanguage)
+                    value: subtitleLanguageName(viewModel.prefs.subtitleLanguage)
                 )
             }
 
@@ -251,10 +251,10 @@ struct SettingsView: View {
         Section("About") {
             LabeledContent {
                 Text(versionString)
-                    .foregroundStyle(Color.continuumSecondaryText)
+                    .foregroundStyle(Color.prairieSecondaryText)
             } label: {
                 Text("Version")
-                    .foregroundStyle(Color.continuumOnSurface)
+                    .foregroundStyle(Color.prairieOnSurface)
             }
 
             Link("Privacy Policy", destination: PrairieLegalLinks.privacyPolicy)
@@ -318,13 +318,13 @@ struct SettingsRowLabel: View {
                 }
 
             Text(title)
-                .foregroundStyle(Color.continuumOnSurface)
+                .foregroundStyle(Color.prairieOnSurface)
 
             Spacer(minLength: 8)
 
             if let value {
                 Text(value)
-                    .foregroundStyle(Color.continuumSecondaryText)
+                    .foregroundStyle(Color.prairieSecondaryText)
                     .lineLimit(1)
             }
         }
@@ -338,7 +338,7 @@ struct SettingsRowChevron: View {
     var body: some View {
         Image(systemName: "chevron.right")
             .font(.footnote.weight(.semibold))
-            .foregroundStyle(Color.continuumSecondaryText.opacity(0.6))
+            .foregroundStyle(Color.prairieSecondaryText.opacity(0.6))
             .accessibilityHidden(true)
     }
 }

@@ -10,13 +10,13 @@ enum MediaCardAspect {
 
 func mediaCardAccessibilityLabel(
     title: String,
-    episodeBadge: String?,
+    episodeLabel: String?,
     year: Int?,
     isWatched: Bool
 ) -> String {
     var components = [title]
-    if let episodeBadge, !episodeBadge.isEmpty {
-        components.append(episodeBadge)
+    if let episodeLabel, !episodeLabel.isEmpty {
+        components.append(episodeLabel)
     }
     if let year {
         components.append(String(year))
@@ -60,6 +60,10 @@ struct MediaCard: View {
     let posterUrl: String
     var thumbhash: String? = nil
     var year: Int? = nil
+    /// Secondary caption line drawn in place of the year — episode cards pass
+    /// "S01E02 · Pilot" so the code and episode title sit under the series
+    /// name. Always one line; see `EpisodeCardCaption`.
+    var subtitle: String? = nil
     var progress: Double? = nil
     var userState: MediaItemUserState? = nil
     /// Data for the optional overlay badges (resolution, ratings, …).
@@ -78,6 +82,9 @@ struct MediaCard: View {
     var focusedItemId: FocusState<String?>.Binding? = nil
 
     var contentId: String? = nil
+    var contextPlayTitle: String? = nil
+    var contextDetailTitle: String? = nil
+    var onOpenContextDetail: (() -> Void)? = nil
     var onRemoveFromContinueWatching: (() -> Void)? = nil
     var onSetWatched: ((Bool) async -> Bool)? = nil
     var aspect: MediaCardAspect = .poster
@@ -85,15 +92,15 @@ struct MediaCard: View {
     /// rows (§5.6) pass 208 so two rows + the marquee fit above the fold;
     /// the poster keeps its 2:3 ratio.
     var cardWidthOverride: CGFloat? = nil
-    /// "S2 · E10" badge drawn over the bottom-leading corner of the poster
-    /// for episodes rendered in a poster row (e.g. "Recently Released
-    /// Episodes"). `nil` for movies / series / audiobooks.
-    var episodeBadge: String? = nil
+    /// Episode context retained for the card's accessibility label. Episode
+    /// numbers are intentionally not drawn over poster artwork.
+    var episodeAccessibilityLabel: String? = nil
     /// Fires after a favorite/watchlist toggle from the card's context
     /// menu commits server-side, with the item's new state. Favorites /
     /// Watchlist grids use it to drop the card from the list in place.
     var onUserStateChanged: ((MediaItemUserState) -> Void)? = nil
 
+    @State private var actionFeedback = MediaActionFeedback()
     @State private var playedOverride: Bool?
     @State private var favoriteOverride: Bool?
     @State private var watchlistOverride: Bool?
@@ -107,6 +114,8 @@ struct MediaCard: View {
     @Environment(\.zoomNamespace) private var zoomNamespace
     #if !os(tvOS)
     @Environment(AppRouter.self) private var router
+    @Environment(\.browseLibraryId) private var browseLibraryId
+    @Environment(\.itemDetailBrowseSource) private var detailBrowseSource
     /// Stable per-placement id for the zoom source. A bare `contentId` collides
     /// when the same item is visible in two rows (e.g. Continue Watching +
     /// Recently Added), making SwiftUI pick an ambiguous source; a per-instance
@@ -116,26 +125,31 @@ struct MediaCard: View {
     #endif
 
     private var cardWidth: CGFloat {
-        (cardWidthOverride ?? ContinuumTheme.posterCardWidth)
+        (cardWidthOverride ?? PrairieTheme.posterCardWidth)
             * uiCustomization.cardPresentation.posterSize.scale
     }
     private var cardHeight: CGFloat {
         switch aspect {
         case .poster:
-            cardWidth * (ContinuumTheme.posterCardHeight / ContinuumTheme.posterCardWidth)
+            cardWidth * (PrairieTheme.posterCardHeight / PrairieTheme.posterCardWidth)
         case .square:
             cardWidth
         }
     }
 
     var body: some View {
+        cardBody.mediaActionFeedback(actionFeedback)
+    }
+
+    private var cardBody: some View {
         #if os(tvOS)
         // tvOS: button label is just the poster (so .card style lifts the image),
         // then a title caption lives outside the button and reacts to focus via FocusState.
         FocusableMediaCard(
             title: title,
             year: year,
-            episodeBadge: episodeBadge,
+            subtitle: subtitle,
+            episodeAccessibilityLabel: episodeAccessibilityLabel,
             captionStyle: uiCustomization.cardPresentation.caption,
             cardWidth: cardWidth,
             action: action,
@@ -143,18 +157,11 @@ struct MediaCard: View {
             focusedItemId: focusedItemId,
             itemId: contentId,
             isWatched: isPlayed,
+            contextPlayTitle: contextPlayTitle,
+            contextDetailTitle: contextDetailTitle,
+            onOpenContextDetail: onOpenContextDetail,
             onRemoveFromContinueWatching: onRemoveFromContinueWatching,
-            onSetWatched: onSetWatched.map { handler in
-                { played in
-                    playedOverride = played
-                    let succeeded = await handler(played)
-                    if !succeeded {
-                        playedOverride = nil
-                    }
-                    return succeeded
-                }
-            },
-            personalItems: hasPersonalActions ? personalMenuItems : nil
+            stateMenu: hasStateActions ? stateMenu : nil
         ) {
             posterImage
         }
@@ -188,7 +195,11 @@ struct MediaCard: View {
             if let contentId {
                 Button {
                     router.pendingZoomSourceID = zoomInstanceID.uuidString
-                    router.navigate(to: .itemDetail(contentId: contentId))
+                    router.presentItemDetail(
+                        contentId: contentId,
+                        libraryId: browseLibraryId,
+                        browseSource: detailBrowseSource
+                    )
                 } label: {
                     cardContent
                         .zoomTransitionSource(id: zoomInstanceID.uuidString, in: zoomNamespace)
@@ -206,34 +217,14 @@ struct MediaCard: View {
     }
 
     private var hasIOSContextActions: Bool {
-        hasPersonalActions || onSetWatched != nil || onRemoveFromContinueWatching != nil
+        hasStateActions || onRemoveFromContinueWatching != nil
     }
 
     /// Same action set (and ordering) as the tvOS `FocusableMediaCard` menu:
     /// watched toggle, favorite/watchlist, then the destructive remove.
     @ViewBuilder
     private var iosContextActions: some View {
-        if let onSetWatched {
-            Button {
-                let played = !isPlayed
-                Task { @MainActor in
-                    playedOverride = played
-                    let succeeded = await onSetWatched(played)
-                    if !succeeded {
-                        playedOverride = nil
-                    }
-                }
-            } label: {
-                Label(
-                    isPlayed ? "Mark as Unwatched" : "Mark as Watched",
-                    systemImage: isPlayed ? "circle" : "checkmark.circle"
-                )
-            }
-        }
-
-        if hasPersonalActions {
-            personalMenuItems
-        }
+        stateMenu
 
         if let onRemoveFromContinueWatching {
             Button(role: .destructive) {
@@ -262,30 +253,67 @@ struct MediaCard: View {
         watchlistOverride ?? (userState?.inWatchlist == true)
     }
 
-    private var personalMenuItems: PersonalListMenuItems {
-        PersonalListMenuItems(
+    private var canSetWatched: Bool {
+        onSetWatched != nil || (hasPersonalActions && aspect != .square)
+    }
+
+    private var hasStateActions: Bool { hasPersonalActions || canSetWatched }
+
+    private var stateMenu: MediaStateMenuItems {
+        MediaStateMenuItems(
+            isWatched: isPlayed,
             isFavorite: isFavorite,
             inWatchlist: isInWatchlist,
-            onToggleFavorite: togglePersonalFavorite,
-            onToggleWatchlist: togglePersonalWatchlist
+            isUpdating: actionFeedback.isUpdating,
+            onToggleWatched: canSetWatched ? toggleWatched : nil,
+            onToggleFavorite: hasPersonalActions ? togglePersonalFavorite : nil,
+            onToggleWatchlist: hasPersonalActions ? togglePersonalWatchlist : nil
         )
+    }
+
+    private func toggleWatched() {
+        let played = !isPlayed
+        let previous = playedOverride
+        // Home's injected handler owns its page-level failure alert.
+        actionFeedback.perform(reportsFailure: onSetWatched == nil) {
+            playedOverride = played
+            let outcome: PersonalStateOutcome
+            if let onSetWatched {
+                outcome = await onSetWatched(played) ? .applied : .failed(nil)
+            } else if let contentId {
+                outcome = await MediaCardWatchedSync.setWatched(contentId: contentId, played: played)
+            } else {
+                outcome = .failed(nil)
+            }
+            if outcome == .applied {
+                onUserStateChanged?(MediaItemUserState(
+                    played: played, isFavorite: isFavorite, inWatchlist: isInWatchlist
+                ))
+            } else {
+                playedOverride = previous
+            }
+            return outcome
+        }
     }
 
     private func togglePersonalFavorite() {
         guard let contentId else { return }
         let newValue = !isFavorite
         let watchlist = isInWatchlist
-        favoriteOverride = newValue
-        Task {
-            if await PersonalListSync.setFavorite(
+        let previous = favoriteOverride
+        actionFeedback.perform {
+            favoriteOverride = newValue
+            let outcome = await PersonalListSync.setFavorite(
                 contentId: contentId, isFavorite: newValue, inWatchlist: watchlist
-            ) {
+            )
+            if outcome == .applied {
                 onUserStateChanged?(
                     MediaItemUserState(played: isPlayed, isFavorite: newValue, inWatchlist: watchlist)
                 )
             } else {
-                favoriteOverride = !newValue // Revert on failure
+                favoriteOverride = previous
             }
+            return outcome
         }
     }
 
@@ -293,17 +321,20 @@ struct MediaCard: View {
         guard let contentId else { return }
         let newValue = !isInWatchlist
         let favorite = isFavorite
-        watchlistOverride = newValue
-        Task {
-            if await PersonalListSync.setWatchlist(
+        let previous = watchlistOverride
+        actionFeedback.perform {
+            watchlistOverride = newValue
+            let outcome = await PersonalListSync.setWatchlist(
                 contentId: contentId, isFavorite: favorite, inWatchlist: newValue
-            ) {
+            )
+            if outcome == .applied {
                 onUserStateChanged?(
                     MediaItemUserState(played: isPlayed, isFavorite: favorite, inWatchlist: newValue)
                 )
             } else {
-                watchlistOverride = !newValue // Revert on failure
+                watchlistOverride = previous
             }
+            return outcome
         }
     }
 
@@ -331,7 +362,7 @@ struct MediaCard: View {
             )
                 .frame(width: cardWidth, height: cardHeight)
                 .clipped()
-                .clipShape(RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius))
+                .clipShape(RoundedRectangle(cornerRadius: PrairieTheme.cornerRadius))
 
             // Server / user-customized overlays (resolution, HDR, ratings, …)
             // sit under the watched check + progress bar so those built-in
@@ -339,21 +370,7 @@ struct MediaCard: View {
             if let overlayData, overlayStore.enabled {
                 CardOverlays(data: overlayData, prefs: overlayStore.prefs, variant: .poster)
                     .frame(width: cardWidth, height: cardHeight)
-                    .clipShape(RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius))
-            }
-
-            // Episode badge (e.g. "S2 · E10") for episodes shown as posters,
-            // so new episodes of the same series stay distinguishable.
-            if let episodeBadge {
-                Text(episodeBadge)
-                    .font(.continuumCaption)
-                    .fontWeight(.semibold)
-                    .foregroundColor(.white)
-                    .padding(.horizontal, episodeBadgeHPadding)
-                    .padding(.vertical, episodeBadgeVPadding)
-                    .background(Capsule().fill(Color.black.opacity(0.65)))
-                    .padding(episodeBadgeInset)
-                    .frame(width: cardWidth, height: cardHeight, alignment: .bottomLeading)
+                    .clipShape(RoundedRectangle(cornerRadius: PrairieTheme.cornerRadius))
             }
 
             // Progress bar at bottom of poster (inside rounded corners)
@@ -363,7 +380,7 @@ struct MediaCard: View {
                     ProgressBar(value: progress)
                 }
                 .frame(width: cardWidth, height: cardHeight)
-                .clipShape(RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius))
+                .clipShape(RoundedRectangle(cornerRadius: PrairieTheme.cornerRadius))
             }
 
             // Watched indicator — white circle with check (Plezy style)
@@ -372,12 +389,12 @@ struct MediaCard: View {
                     Spacer()
                     ZStack {
                         Circle()
-                            .fill(Color.continuumOnSurface)
+                            .fill(Color.prairieOnSurface)
                             .frame(width: checkBadgeSize, height: checkBadgeSize)
                             .shadow(color: .black.opacity(0.3), radius: 4)
                         Image(systemName: "checkmark")
                             .font(.system(size: checkIconSize, weight: .bold))
-                            .foregroundColor(Color.continuumBackground)
+                            .foregroundColor(Color.prairieBackground)
                     }
                 }
                 .padding(checkBadgePadding)
@@ -398,7 +415,7 @@ struct MediaCard: View {
     private var accessibilityDescription: String {
         mediaCardAccessibilityLabel(
             title: title,
-            episodeBadge: episodeBadge,
+            episodeLabel: episodeAccessibilityLabel,
             year: year,
             isWatched: isPlayed
         )
@@ -406,8 +423,8 @@ struct MediaCard: View {
 
     private var titleText: some View {
         Text(title)
-            .font(.continuumSubheadline)
-            .foregroundColor(.continuumOnSurface)
+            .font(.prairieSubheadline)
+            .foregroundColor(.prairieOnSurface)
             // Reserve 2 lines of space so single- and multi-line titles
             // produce the same overall card height — keeps posters in a
             // row top-aligned when titles wrap.
@@ -416,10 +433,15 @@ struct MediaCard: View {
 
     @ViewBuilder
     private var yearText: some View {
-        if let year {
-            Text(String(year))
-                .font(.continuumCaption)
-                .foregroundColor(.continuumSecondaryText)
+        if let secondLine = subtitle ?? year.map(String.init) {
+            Text(secondLine)
+                .font(.prairieCaption)
+                .foregroundColor(.prairieSecondaryText)
+                // One line, tail-truncated: an episode title must never wrap
+                // and push the row below it.
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(width: cardWidth, alignment: .leading)
         }
     }
 
@@ -449,29 +471,6 @@ struct MediaCard: View {
         #endif
     }
 
-    private var episodeBadgeHPadding: CGFloat {
-        #if os(tvOS)
-        return 14
-        #else
-        return 8
-        #endif
-    }
-
-    private var episodeBadgeVPadding: CGFloat {
-        #if os(tvOS)
-        return 7
-        #else
-        return 4
-        #endif
-    }
-
-    private var episodeBadgeInset: CGFloat {
-        #if os(tvOS)
-        return 14
-        #else
-        return 6
-        #endif
-    }
 }
 
 // MARK: - Zoom transition source helper
@@ -500,7 +499,9 @@ extension View {
 private struct FocusableMediaCard<Content: View>: View {
     let title: String
     let year: Int?
-    let episodeBadge: String?
+    /// Replaces the year on the metadata line when present.
+    let subtitle: String?
+    let episodeAccessibilityLabel: String?
     let captionStyle: CardCaptionStyle
     let cardWidth: CGFloat
     let action: () -> Void
@@ -512,53 +513,57 @@ private struct FocusableMediaCard<Content: View>: View {
     let focusedItemId: FocusState<String?>.Binding?
     let itemId: String?
     let isWatched: Bool
+    let contextPlayTitle: String?
+    let contextDetailTitle: String?
+    let onOpenContextDetail: (() -> Void)?
     let onRemoveFromContinueWatching: (() -> Void)?
-    let onSetWatched: ((Bool) async -> Bool)?
-    /// Favorite / watchlist toggles, built by the owning card. `nil`
-    /// when the card has no catalog identity or user state.
-    let personalItems: PersonalListMenuItems?
+    let stateMenu: MediaStateMenuItems?
     @ViewBuilder var content: () -> Content
 
-    @FocusState private var standaloneFocused: Bool
-
-    private var isFocused: Bool {
-        guard let focusedItemId, let itemId else { return standaloneFocused }
-        return focusedItemId.wrappedValue == itemId
+    @ViewBuilder
+    var body: some View {
+        if let focusedItemId, let itemId {
+            card(focusedItemId: focusedItemId, itemId: itemId, standaloneFocused: nil)
+        } else {
+            TVStandaloneCardFocus { binding in
+                card(focusedItemId: nil, itemId: nil, standaloneFocused: binding)
+            }
+        }
     }
 
-    var body: some View {
+    private func card(
+        focusedItemId: FocusState<String?>.Binding?,
+        itemId: String?,
+        standaloneFocused: FocusState<Bool>.Binding?
+    ) -> some View {
         VStack(alignment: .leading, spacing: 22) {
-            mediaButton
+            mediaButton(
+                focusedItemId: focusedItemId,
+                itemId: itemId,
+                standaloneFocused: standaloneFocused
+            )
 
             if captionStyle.showsTitle {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(title)
-                        .font(.continuumSubheadline)
-                        .foregroundStyle(
-                            isFocused
-                                ? Color.continuumOnSurface
-                                : Color.continuumOnSurface.opacity(0.85)
-                        )
-                        // Single line, truncated — keeps poster cards a uniform
-                        // height and the row short under the bottom-anchored marquee.
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .animation(.easeOut(duration: 0.15), value: isFocused)
-
-                    if captionStyle.showsMetadata, let year {
-                        Text(String(year))
-                            .font(.continuumCaption)
-                            .foregroundStyle(Color.continuumSecondaryText)
-                    }
-                }
-                .frame(width: cardWidth, alignment: .leading)
+                TVMediaCardCaption(
+                    title: title,
+                    secondLine: subtitle ?? year.map(String.init),
+                    showsMetadata: captionStyle.showsMetadata,
+                    cardWidth: cardWidth,
+                    focusedItemId: focusedItemId,
+                    itemId: itemId,
+                    standaloneFocused: standaloneFocused
+                )
             }
         }
         .frame(width: cardWidth)
     }
 
     @ViewBuilder
-    private var mediaButton: some View {
+    private func mediaButton(
+        focusedItemId: FocusState<String?>.Binding?,
+        itemId: String?,
+        standaloneFocused: FocusState<Bool>.Binding?
+    ) -> some View {
         let button = Button(action: action) {
             content()
         }
@@ -566,7 +571,7 @@ private struct FocusableMediaCard<Content: View>: View {
         .applyCardFocus(
             focusedItemId,
             itemId: itemId,
-            standaloneBinding: $standaloneFocused
+            standaloneBinding: standaloneFocused
         )
         .applyPlayPauseAction(playAction)
         .accessibilityElement(children: .ignore)
@@ -587,13 +592,16 @@ private struct FocusableMediaCard<Content: View>: View {
     }
 
     private var hasContextActions: Bool {
-        onSetWatched != nil || onRemoveFromContinueWatching != nil || personalItems != nil
+        (contextPlayTitle != nil && playAction != nil)
+            || onOpenContextDetail != nil
+            || onRemoveFromContinueWatching != nil
+            || stateMenu != nil
     }
 
     private var accessibilityDescription: String {
         mediaCardAccessibilityLabel(
             title: title,
-            episodeBadge: episodeBadge,
+            episodeLabel: episodeAccessibilityLabel,
             year: year,
             isWatched: isWatched
         )
@@ -601,22 +609,19 @@ private struct FocusableMediaCard<Content: View>: View {
 
     @ViewBuilder
     private var contextActions: some View {
-        if let onSetWatched {
-            Button {
-                Task { @MainActor in
-                    _ = await onSetWatched(!isWatched)
-                }
-            } label: {
-                Label(
-                    isWatched ? "Mark as Unwatched" : "Mark as Watched",
-                    systemImage: isWatched ? "circle" : "checkmark.circle"
-                )
+        if let contextPlayTitle, let playAction {
+            Button(action: playAction) {
+                Label(contextPlayTitle, systemImage: "play.fill")
             }
         }
 
-        if let personalItems {
-            personalItems
+        if let contextDetailTitle, let onOpenContextDetail {
+            Button(action: onOpenContextDetail) {
+                Label(contextDetailTitle, systemImage: "info.circle")
+            }
         }
+
+        if let stateMenu { stateMenu }
 
         if let onRemoveFromContinueWatching {
             Button(role: .destructive) {
@@ -625,6 +630,63 @@ private struct FocusableMediaCard<Content: View>: View {
                 Label("Remove from Continue Watching", systemImage: "xmark.circle")
             }
         }
+    }
+}
+
+/// Only cards outside a managed row need their own focus state. Keeping this
+/// dynamic property out of row cards avoids invalidating their full button
+/// and context-menu bodies when the shared focus environment changes.
+private struct TVStandaloneCardFocus<Content: View>: View {
+    @FocusState private var isFocused: Bool
+    @ViewBuilder var content: (FocusState<Bool>.Binding) -> Content
+
+    var body: some View {
+        content($isFocused)
+    }
+}
+
+/// Only the caption reads focus. The native card button owns its lift and
+/// parallax without rebuilding its artwork and menu when a caption brightens.
+private struct TVMediaCardCaption: View {
+    let title: String
+    let secondLine: String?
+    let showsMetadata: Bool
+    let cardWidth: CGFloat
+    let focusedItemId: FocusState<String?>.Binding?
+    let itemId: String?
+    let standaloneFocused: FocusState<Bool>.Binding?
+
+    private var isFocused: Bool {
+        guard let focusedItemId, let itemId else { return standaloneFocused?.wrappedValue ?? false }
+        return focusedItemId.wrappedValue == itemId
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.prairiePosterTitle)
+                .foregroundStyle(
+                    isFocused
+                        ? Color.prairieOnSurface
+                        : Color.prairieOnSurface.opacity(0.85)
+                )
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(width: cardWidth, alignment: .leading)
+                .clipped()
+                .animation(.easeOut(duration: 0.15), value: isFocused)
+
+            if showsMetadata, let secondLine {
+                Text(secondLine)
+                    .font(.prairiePosterMetadata)
+                    .foregroundStyle(Color.prairieSecondaryText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(width: cardWidth, alignment: .leading)
+                    .clipped()
+            }
+        }
+        .frame(width: cardWidth, alignment: .leading)
     }
 }
 
@@ -644,12 +706,14 @@ private extension View {
     func applyCardFocus(
         _ binding: FocusState<String?>.Binding?,
         itemId: String?,
-        standaloneBinding: FocusState<Bool>.Binding
+        standaloneBinding: FocusState<Bool>.Binding?
     ) -> some View {
         if let binding, let itemId {
             self.focused(binding, equals: itemId)
-        } else {
+        } else if let standaloneBinding {
             self.focused(standaloneBinding)
+        } else {
+            self
         }
     }
 }

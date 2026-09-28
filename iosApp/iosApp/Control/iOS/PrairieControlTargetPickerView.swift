@@ -20,7 +20,7 @@ struct PrairieControlTargetPickerView: View {
                     searchingState
                 }
             }
-            .background(Color.continuumBackground.ignoresSafeArea())
+            .prairieSheetBackground()
             .navigationTitle("Remote Control")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -37,8 +37,6 @@ struct PrairieControlTargetPickerView: View {
         }
         .preferredColorScheme(.dark)
         .presentationDetents(displayedTargets.count > 3 ? [.medium, .large] : [.medium])
-        .presentationDragIndicator(.visible)
-        .presentationCornerRadius(24)
     }
 
     private var searchingState: some View {
@@ -46,7 +44,7 @@ struct PrairieControlTargetPickerView: View {
             ProgressView()
             Text("Searching for Prairie TVs…")
                 .font(.headline)
-                .foregroundStyle(Color.continuumSecondaryText)
+                .foregroundStyle(Color.prairieSecondaryText)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -74,29 +72,26 @@ struct PrairieControlTargetPickerView: View {
                 HStack(spacing: 12) {
                     Image(systemName: "tv")
                         .font(.title3)
-                        .foregroundStyle(Color.continuumOnSurface)
+                        .foregroundStyle(Color.prairieOnSurface)
                         .frame(width: 38, height: 38)
-                        .background(Circle().fill(Color.continuumChromeRestingFill))
+                        .background(Circle().fill(Color.prairieChromeRestingFill))
 
                     VStack(alignment: .leading, spacing: 3) {
                         Text(target.name).font(.headline)
                         if request != nil, target.protocolVersion < 2 {
                             Text("Update Prairie on this TV to use your profile")
                                 .font(.subheadline)
-                                .foregroundStyle(Color.continuumSecondaryText)
+                                .foregroundStyle(Color.prairieSecondaryText)
                         } else if target.isPlaying {
                             Text("Playing now")
                                 .font(.subheadline)
-                                .foregroundStyle(Color.continuumPrimary)
+                                .foregroundStyle(Color.prairiePrimary)
                         } else if let serverName = target.serverName {
-                            Text(ServerRegistry.serverIdsMatch(
-                                target.serverId,
-                                ServerRegistry.shared.activeServerId
-                            )
+                            Text(target.targetsActiveServer
                                  ? serverName
                                  : "Will temporarily use your server")
                                 .font(.subheadline)
-                                .foregroundStyle(Color.continuumSecondaryText)
+                                .foregroundStyle(Color.prairieSecondaryText)
                         }
                     }
 
@@ -110,17 +105,15 @@ struct PrairieControlTargetPickerView: View {
             }
             .buttonStyle(.plain)
             .disabled(request != nil && target.protocolVersion < 2)
-            .listRowBackground(Color.continuumSurface)
+            .listRowBackground(Color.prairieSurface)
         }
         .scrollContentBackground(.hidden)
     }
 
     private var displayedTargets: [PrairieControlTarget] {
         guard request == nil else { return browser.found }
-        guard let activeServerId = ServerRegistry.shared.activeServerId else { return [] }
-        return browser.found.filter {
-            ServerRegistry.serverIdsMatch($0.serverId, activeServerId)
-        }
+        guard ServerRegistry.shared.activeServer != nil else { return [] }
+        return browser.found.filter(\.targetsActiveServer)
     }
 }
 

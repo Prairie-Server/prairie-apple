@@ -13,6 +13,7 @@ struct ServerListView: View {
     @Environment(AppRouter.self) private var router
     @State private var registry = ServerRegistry.shared
     @State private var removeTarget: ServerEntry?
+    @State private var isResolvingServer = false
     #if os(tvOS)
     @FocusState private var focusedRow: TVRow?
     #endif
@@ -21,7 +22,7 @@ struct ServerListView: View {
         #if os(tvOS)
         ZStack {
             tvOSContent
-                .disabled(removeTarget != nil)
+                .disabled(removeTarget != nil || isResolvingServer)
 
             if let entry = removeTarget {
                 TVSettingsConfirmationOverlay(
@@ -36,11 +37,12 @@ struct ServerListView: View {
             }
         }
         .background(SettingsBackdrop())
-        .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: removeTarget)
+        .animation(.easeOut(duration: PrairieTheme.fastDuration), value: removeTarget)
         #else
         contentList
+            .disabled(isResolvingServer)
             .navigationTitle("")
-            .continuumNavigationTitleDisplayMode(.inline)
+            .prairieNavigationTitleDisplayMode(.inline)
             .alert(
                 "Remove this server?",
                 isPresented: Binding(
@@ -67,13 +69,13 @@ struct ServerListView: View {
                     Text("CONNECTION")
                         .font(.system(size: 15, weight: .semibold, design: .monospaced))
                         .tracking(2)
-                        .foregroundColor(.continuumSecondaryText)
+                        .foregroundColor(.prairieSecondaryText)
                     Text("Manage Servers")
                         .font(.system(size: 38, weight: .semibold))
-                        .foregroundColor(.continuumOnSurface)
+                        .foregroundColor(.prairieOnSurface)
                     Text("Manage saved Prairie servers or add another connection.")
                         .font(.system(size: 20))
-                        .foregroundColor(.continuumSecondaryText)
+                        .foregroundColor(.prairieSecondaryText)
                 }
                 .padding(.horizontal, 24)
                 .padding(.bottom, 18)
@@ -114,7 +116,7 @@ struct ServerListView: View {
             .padding(.bottom, 64)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .safeAreaPadding(.horizontal, ContinuumTheme.Skyline.safeAreaX)
+        .safeAreaPadding(.horizontal, PrairieTheme.Skyline.safeAreaX)
         .safeAreaPadding(.top, 64)
         .defaultFocus($focusedRow, defaultTVRow)
     }
@@ -188,19 +190,19 @@ struct ServerListView: View {
                 }
             } header: {
                 Text("Saved servers")
-                    .foregroundColor(.continuumSecondaryText)
+                    .foregroundColor(.prairieSecondaryText)
             }
-            .listRowBackground(Color.continuumSurfaceElevated)
+            .listRowBackground(Color.prairieSurfaceElevated)
 
             Section {
                 Button {
                     router.navigate(to: .serverSetup)
                 } label: {
                     Label("Add Server", systemImage: "plus")
-                        .foregroundColor(.continuumOnSurface)
+                        .foregroundColor(.prairieOnSurface)
                 }
             }
-            .listRowBackground(Color.continuumSurfaceElevated)
+            .listRowBackground(Color.prairieSurfaceElevated)
         }
         .settingsListChrome()
     }
@@ -215,19 +217,22 @@ struct ServerListView: View {
                       ? "checkmark.circle.fill"
                       : "server.rack")
                     .font(.system(size: 20, weight: .medium))
-                    .foregroundColor(.continuumOnSurface)
+                    .foregroundColor(.prairieOnSurface)
                     .frame(width: 28)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(entry.displayName)
-                        .font(.continuumSubheadline)
-                        .foregroundColor(.continuumOnSurface)
+                        .font(.prairieSubheadline)
+                        .foregroundColor(.prairieOnSurface)
                         .lineLimit(1)
                     Text(entry.url)
-                        .font(.continuumCaption)
-                        .foregroundColor(.continuumSecondaryText)
-                        .lineLimit(1)
+                        .font(.prairieCaption)
+                        .foregroundColor(.prairieSecondaryText)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
+                .multilineTextAlignment(.leading)
                 Spacer()
             }
             .contentShape(Rectangle())
@@ -248,26 +253,37 @@ struct ServerListView: View {
             refreshAuthState()
             return
         }
+        isResolvingServer = true
         Task {
             guard await registry.switchTo(
                 serverId: entry.id,
                 resolveDestinationProfile: true
-            ) else { return }
-            await MainActor.run { refreshAuthState() }
+            ) else {
+                await MainActor.run { isResolvingServer = false }
+                return
+            }
+            let state = await RestoredSessionAuthResolver.resolveValidated()
+            await MainActor.run {
+                isResolvingServer = false
+                router.resetAfterServerResolution(to: state)
+            }
         }
     }
 
     private func remove(_ entry: ServerEntry) {
+        guard !isResolvingServer else { return }
+        isResolvingServer = true
         let wasActive = entry.id == registry.activeServerId
-        Task {
-            guard await registry.remove(
-                serverId: entry.id,
-                resolveFallbackProfile: wasActive
-            ) else { return }
-            await MainActor.run {
-                removeTarget = nil
+        Task { @MainActor in
+            let removed = await registry.remove(serverId: entry.id, resolveFallbackProfile: wasActive)
+            isResolvingServer = false
+            removeTarget = nil
+            guard removed else {
+                router.accountActionError = "Prairie couldn't remove the saved server. Please try again."
                 if wasActive { refreshAuthState() }
+                return
             }
+            if wasActive { refreshAuthState() }
         }
     }
 
@@ -275,19 +291,13 @@ struct ServerListView: View {
     /// drop any in-tab navigation that belonged to the previous server.
     private func refreshAuthState() {
         router.popToRoot()
-        // A server switch can land back on `.authenticated`, which the
-        // router's same-value guard drops — so the identity boundary for an
-        // engaged PiP video is enforced here, before the reassignment.
-        PlayerIdentityBoundary.endEngagedVideoPictureInPicture()
-        let auth = AuthService.shared
-        if !auth.hasServer {
-            router.authState = .needsServerSetup
-        } else if !auth.isLoggedIn {
-            router.authState = .needsLogin
-        } else if !auth.hasProfile {
-            router.authState = .needsProfile
-        } else {
-            router.authState = .authenticated
+        isResolvingServer = true
+        Task {
+            let state = await RestoredSessionAuthResolver.resolveValidated()
+            await MainActor.run {
+                isResolvingServer = false
+                router.resetAfterServerResolution(to: state)
+            }
         }
     }
 }

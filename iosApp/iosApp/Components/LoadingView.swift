@@ -3,22 +3,27 @@ import SwiftUI
 /// Full-screen loading indicator.
 struct LoadingView: View {
     var message: String? = nil
+    var usesPageBackground = false
 
     var body: some View {
         ZStack {
-            Color.continuumBackground.ignoresSafeArea()
+            if usesPageBackground {
+                PrairiePageBackdrop()
+            } else {
+                Color.prairieBackground.ignoresSafeArea()
+            }
 
             VStack(spacing: 20) {
                 PrairieWordmarkView(width: 132)
 
                 ProgressView()
-                    .tint(.continuumOnSurface)
+                    .tint(.prairieOnSurface)
                     .scaleEffect(1.2)
 
                 if let message {
                     Text(message)
-                        .font(.continuumCaption)
-                        .foregroundColor(.continuumSecondaryText)
+                        .font(.prairieCaption)
+                        .foregroundColor(.prairieSecondaryText)
                 }
             }
         }

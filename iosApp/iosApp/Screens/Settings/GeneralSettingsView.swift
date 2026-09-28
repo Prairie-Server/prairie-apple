@@ -20,8 +20,8 @@ struct GeneralSettingsView: View {
         }
         .settingsListChrome()
         .navigationTitle("")
-        .continuumNavigationTitleDisplayMode(.inline)
-        .continuumToolbarColorSchemeDark()
+        .prairieNavigationTitleDisplayMode(.inline)
+        .prairieToolbarColorSchemeDark()
     }
 
     private var profileSection: some View {
@@ -33,7 +33,7 @@ struct GeneralSettingsView: View {
                         .tag(behavior)
                 }
             }
-            .foregroundStyle(Color.continuumOnSurface)
+            .foregroundStyle(Color.prairieOnSurface)
             #if os(macOS)
             .pickerStyle(.menu)
             #else
@@ -43,12 +43,12 @@ struct GeneralSettingsView: View {
             .accessibilityHint(launchPreferences.behavior.standardDescription)
         } header: {
             Text("Profiles")
-                .foregroundStyle(Color.continuumSecondaryText)
+                .foregroundStyle(Color.prairieSecondaryText)
         } footer: {
             Text(launchPreferences.behavior.standardDescription)
-                .foregroundStyle(Color.continuumSecondaryText)
+                .foregroundStyle(Color.prairieSecondaryText)
         }
-        .listRowBackground(Color.continuumSurfaceElevated)
+        .listRowBackground(Color.prairieSurfaceElevated)
     }
 }
 #endif

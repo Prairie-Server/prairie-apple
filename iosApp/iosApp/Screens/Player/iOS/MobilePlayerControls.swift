@@ -3,12 +3,14 @@ import SwiftUI
 
 /// Touch-driven overlay used on iOS/iPadOS. Layout (see
 /// docs/ios-player-redesign/mockups.html):
-/// - Top strip: close, title block (series eyebrow + episode title)
-/// - Center: skip back 10s, play/pause, skip forward 10s
+/// - Top strip: close, title block (series eyebrow + episode title), PiP,
+///   AirPlay, rotate, rotation lock
+/// - Center: skip back, play/pause, skip forward (profile video intervals),
+///   pinned to the middle of the player rather than between the bars
 /// - Bottom stack: time row (elapsed / status chips / remaining), capsule
 ///   scrubber with buffered range + intro tint + chapter ticks + scrub
 ///   preview bubble, then a labeled action row (Quality menu, Audio &
-///   Subtitles sheet, Chapters menu, orientation Lock, More → settings sheet)
+///   Subtitles sheet, Chapters menu, More → settings sheet)
 ///
 /// The whole thing is wrapped in a tap-to-toggle gesture; auto-hide after 3 s
 /// of inactivity. The view is stateful only for sheet presentation and the
@@ -17,7 +19,6 @@ import SwiftUI
 /// swipes) live in `MobilePlayerGestureLayer` underneath this overlay.
 struct MobilePlayerControls: View {
     let viewModel: PlayerViewModel
-    let orientationCoordinator: PlayerOrientationCoordinator
     let onDismiss: () -> Void
 
     @State private var activeSheet: PlayerSheet?
@@ -25,6 +26,7 @@ struct MobilePlayerControls: View {
     /// duration otherwise. Tap the label to flip — the native player idiom.
     @State private var showsRemainingTime = true
     @State private var pictureInPicture = PictureInPictureCoordinator.shared
+    @State private var orientationCoordinator = PlayerOrientationCoordinator.shared
     /// Floating stats card. Kept here rather than on the view model because
     /// it is purely presentation, and kept outside the `showControls` gate
     /// below so the auto-hide takes the transport away without it.
@@ -52,11 +54,17 @@ struct MobilePlayerControls: View {
                             .ignoresSafeArea()
                             .onTapGesture { viewModel.toggleControls() }
 
+                        // Centred on the whole screen, where the video is,
+                        // rather than between the top strip and the taller
+                        // bottom stack, which would pull it off-centre. Kept
+                        // beneath the bars so the scrub preview draws over it.
+                        centerCluster
+                            .opacity(recedingOpacity)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .ignoresSafeArea()
+
                         VStack(spacing: 0) {
-                            topStrip
-                                .opacity(recedingOpacity)
-                            Spacer()
-                            centerCluster
+                            topStrip(compact: proxy.size.width < proxy.size.height)
                                 .opacity(recedingOpacity)
                             Spacer()
                             bottomStack
@@ -68,20 +76,27 @@ struct MobilePlayerControls: View {
                         // a hairline of extra breathing room is needed.
                         .padding(.bottom, 2)
                         .frame(width: proxy.size.width, height: proxy.size.height)
-                        .animation(.easeOut(duration: 0.18), value: viewModel.isScrubbing)
                     }
+                    .animation(.easeOut(duration: 0.18), value: viewModel.isScrubbing)
                 }
                 .transition(.opacity)
             }
-            if viewModel.showIntroSkip {
-                introSkipPill
+            introSkipPill
+            if viewModel.showCreditsSkip {
+                creditsSkipPill
             }
             if showsStats {
                 MobilePlaybackStatsOverlay(stats: viewModel.playbackStats)
                     .transition(.opacity)
             }
         }
+        // Tap-to-toggle and auto-hide flip `showControls` without an
+        // animation of their own; fade every control in and out together.
+        .animation(.easeOut(duration: 0.18), value: viewModel.showControls)
         .animation(.easeOut(duration: 0.18), value: showsStats)
+        // Fades in, and out when its timer runs out. Tap takes it down at once
+        // (see `PlayerViewModel.selectIntroSkipPrompt`).
+        .animation(.easeOut(duration: 0.2), value: viewModel.showIntroSkip)
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
             case .tracks:
@@ -142,44 +157,93 @@ struct MobilePlayerControls: View {
 
     // MARK: - Top strip
 
-    private var topStrip: some View {
-        HStack(alignment: .center, spacing: 12) {
-            controlButton(systemName: "xmark", action: onDismiss)
-                .accessibilityLabel("Close Player")
-
-            titleBlock
-
-            Spacer(minLength: 12)
-
-            if pictureInPicture.isSupported, pictureInPicture.hasSource {
-                controlButton(
-                    systemName: pictureInPicture.isActive ? "pip.exit" : "pip.enter"
-                ) {
-                    pictureInPicture.toggle()
-                }
-                // AVKit can report `possible == false` during the final active
-                // transition; the user must still be able to stop PiP.
-                .disabled(!pictureInPicture.isPossible && !pictureInPicture.isActive)
-                .accessibilityLabel(
-                    pictureInPicture.isActive
-                        ? "Stop Picture in Picture"
-                        : "Start Picture in Picture"
-                )
+    private func topStrip(compact: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 12) {
+                closeButton
+                if !compact { titleBlock }
+                Spacer(minLength: 0)
+                if !compact { externalPlaybackControls }
+                rotationControls
             }
-
-            if viewModel.supportsExternalPlayback {
-                AirPlayRoutePicker { isPresentingRoutes in
-                    // The route sheet is a UIKit presentation the auto-hide
-                    // timer knows nothing about; pin the controls so it can't
-                    // dismantle the picker mid-selection.
-                    if isPresentingRoutes {
-                        viewModel.pinControlsVisible()
-                    } else {
-                        viewModel.resumeAutoHide()
-                    }
+            if compact {
+                HStack(spacing: 12) {
+                    titleBlock
+                    Spacer(minLength: 12)
+                    externalPlaybackControls
                 }
-                .frame(width: 44, height: 44)
             }
+        }
+    }
+
+    private var closeButton: some View {
+        Button(action: onDismiss) {
+            Image(systemName: "xmark")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: PrairieTheme.topBarIconHitSize, height: PrairieTheme.topBarIconHitSize)
+        }
+        .buttonStyle(MobilePlayerGlassButtonStyle())
+        .accessibilityLabel("Close Player")
+        .accessibilityIdentifier("player.close")
+    }
+
+    @ViewBuilder
+    private var externalPlaybackControls: some View {
+        if !viewModel.isWatchPartyPlayback, pictureInPicture.isSupported, pictureInPicture.hasSource {
+            controlButton(
+                systemName: pictureInPicture.isActive ? "pip.exit" : "pip.enter"
+            ) {
+                pictureInPicture.toggle()
+            }
+            // AVKit can report `possible == false` during the final active
+            // transition; the user must still be able to stop PiP.
+            .disabled(!pictureInPicture.isPossible && !pictureInPicture.isActive)
+            .accessibilityLabel(
+                pictureInPicture.isActive
+                    ? "Stop Picture in Picture"
+                    : "Start Picture in Picture"
+            )
+        }
+
+        if !viewModel.isWatchPartyPlayback, viewModel.supportsExternalPlayback {
+            AirPlayRoutePicker { isPresentingRoutes in
+                // The route sheet is a UIKit presentation the auto-hide
+                // timer knows nothing about; pin the controls so it can't
+                // dismantle the picker mid-selection.
+                if isPresentingRoutes {
+                    viewModel.pinControlsVisible()
+                } else {
+                    viewModel.resumeAutoHide()
+                }
+            }
+            .frame(width: PrairieTheme.topBarIconHitSize, height: PrairieTheme.topBarIconHitSize)
+            .prairiePlayerGlass(in: Circle(), interactive: true)
+        }
+    }
+
+    private var rotationControls: some View {
+        HStack(spacing: 12) {
+            controlButton(systemName: "rectangle.landscape.rotate") {
+                orientationCoordinator.togglePlayerOrientation()
+                viewModel.resumeAutoHide()
+            }
+            .accessibilityLabel("Rotate to \(orientationCoordinator.nextPlayerOrientation.title)")
+            .accessibilityHint("Rotates the screen without interrupting playback")
+            .accessibilityIdentifier("player.rotate")
+
+            controlButton(
+                systemName: orientationCoordinator.isRotationLocked ? "lock.rotation" : "lock.rotation.open"
+            ) {
+                orientationCoordinator.toggleRotationLock()
+                viewModel.resumeAutoHide()
+            }
+            .accessibilityLabel(orientationCoordinator.isRotationLocked ? "Unlock screen rotation" : "Lock screen rotation")
+            .accessibilityValue(orientationCoordinator.isRotationLocked ? "Locked" : "Unlocked")
+            .accessibilityHint(orientationCoordinator.isRotationLocked
+                ? "Allows video to follow phone orientation"
+                : "Stops phone movement rotating video. The rotate button still works")
+            .accessibilityIdentifier("player.rotation-lock")
         }
     }
 
@@ -228,53 +292,53 @@ struct MobilePlayerControls: View {
 
     // MARK: - Center
 
-    /// Fixed circle sizes keep the three buttons proportioned as a family
-    /// (content-driven glass sizing made the play disc balloon relative to
-    /// the skips). The play/pause disc is white prominent glass with a dark
-    /// glyph rather than accent-tinted.
+    /// Play/pause is the largest control, flanked by smaller skips — the
+    /// same 64/52pt hierarchy and 48pt spacing as the Android phone player.
     private var centerCluster: some View {
-        HStack(spacing: 36) {
+        HStack(spacing: 48) {
             Button {
-                viewModel.skipBackward(10)
+                viewModel.skipBackward()
             } label: {
-                Image(systemName: "gobackward.10")
-                    .font(.system(size: 20, weight: .medium))
+                Image(systemName: SeekIntervalLabel.symbolName(.backward, seconds: viewModel.skipIntervals.backward))
+                    .font(.system(size: 24, weight: .medium))
                     .foregroundStyle(.white)
-                    .frame(width: 50, height: 50)
+                    .frame(width: Self.skipButtonSize, height: Self.skipButtonSize)
             }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.circle)
-            .accessibilityLabel("Skip Back 10 Seconds")
+            .buttonStyle(MobilePlayerGlassButtonStyle(size: Self.skipButtonSize))
+            .accessibilityLabel(SeekIntervalLabel.accessibilityLabel(.backward, seconds: viewModel.skipIntervals.backward))
+            .disabled(!viewModel.canRequestSeek)
 
             Button {
                 viewModel.togglePlayPause()
             } label: {
                 Image(systemName: viewModel.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 26, weight: .semibold))
+                    .font(.system(size: 28, weight: .semibold))
                     .foregroundStyle(.black.opacity(0.85))
                     // play.fill reads left-heavy inside a circle;
                     // nudge it toward the optical center.
-                    .offset(x: viewModel.isPlaying ? 0 : 1.5)
-                    .frame(width: 64, height: 64)
+                    .offset(x: viewModel.isPlaying ? 0 : 2)
+                    .frame(width: Self.playButtonSize, height: Self.playButtonSize)
             }
-            .buttonStyle(.glassProminent)
-            .buttonBorderShape(.circle)
-            .tint(.white.opacity(0.9))
+            .buttonStyle(MobilePlayerGlassButtonStyle(tint: .white.opacity(0.9), size: Self.playButtonSize))
             .accessibilityLabel(viewModel.isPlaying ? "Pause" : "Play")
+            .disabled(!viewModel.canRequestPlayPause)
 
             Button {
-                viewModel.skipForward(10)
+                viewModel.skipForward()
             } label: {
-                Image(systemName: "goforward.10")
-                    .font(.system(size: 20, weight: .medium))
+                Image(systemName: SeekIntervalLabel.symbolName(.forward, seconds: viewModel.skipIntervals.forward))
+                    .font(.system(size: 24, weight: .medium))
                     .foregroundStyle(.white)
-                    .frame(width: 50, height: 50)
+                    .frame(width: Self.skipButtonSize, height: Self.skipButtonSize)
             }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.circle)
-            .accessibilityLabel("Skip Forward 10 Seconds")
+            .buttonStyle(MobilePlayerGlassButtonStyle(size: Self.skipButtonSize))
+            .accessibilityLabel(SeekIntervalLabel.accessibilityLabel(.forward, seconds: viewModel.skipIntervals.forward))
+            .disabled(!viewModel.canRequestSeek)
         }
     }
+
+    static let playButtonSize: CGFloat = 64
+    static let skipButtonSize: CGFloat = 52
 
     // MARK: - Bottom stack
 
@@ -431,8 +495,8 @@ struct MobilePlayerControls: View {
             )
             .accessibilityAdjustableAction { direction in
                 switch direction {
-                case .increment: viewModel.skipForward(10)
-                case .decrement: viewModel.skipBackward(10)
+                case .increment: viewModel.skipForward()
+                case .decrement: viewModel.skipBackward()
                 @unknown default: break
                 }
             }
@@ -470,7 +534,7 @@ struct MobilePlayerControls: View {
             }
         }
         .padding(7)
-        .siloGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .prairiePlayerGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .fixedSize()
     }
 
@@ -497,12 +561,12 @@ struct MobilePlayerControls: View {
 
     private enum ActionRowStyle {
         case full      // labeled pills, value on the Quality pill
-        case compact   // shorter labels, lock folds to a circle
-        case icons     // circles everywhere except the Quality value pill
+        case compact   // shorter labels
+        case icons     // icon controls; Quality remains a pill
     }
 
     /// Labeled pill row. `ViewThatFits` tries the full labels first, then
-    /// compact ones, then icon circles, so the row never truncates or wraps
+    /// compact ones, then icon controls, so the row never truncates or wraps
     /// — an iPhone in portrait with chapters present lands on `.icons`.
     private var actionRow: some View {
         ViewThatFits(in: .horizontal) {
@@ -537,8 +601,6 @@ struct MobilePlayerControls: View {
                 chaptersMenu(style: style)
                     .accessibilityLabel("Chapters")
             }
-
-            lockControl(compact: style != .full)
 
             controlButton(systemName: "ellipsis") {
                 activeSheet = .settings
@@ -583,21 +645,16 @@ struct MobilePlayerControls: View {
             }
             .foregroundStyle(.white)
             .padding(.horizontal, 12)
-            .frame(height: 34)
+            .frame(height: PrairieTheme.topBarIconHitSize)
         }
         .menuStyle(.button)
         // Keep Auto at the top, reading down.
         .menuOrder(.fixed)
 
-        return Group {
-            // The prominent style flags a non-Auto quality cap at a glance.
-            if viewModel.activeQualityId == ApplePlaybackQuality.autoId {
-                menu.buttonStyle(.glass)
-            } else {
-                menu.buttonStyle(.glassProminent)
-            }
-        }
-        .buttonBorderShape(.capsule)
+        return menu
+        .buttonStyle(MobilePlayerGlassButtonStyle(
+            tint: viewModel.activeQualityId == ApplePlaybackQuality.autoId ? nil : .accentColor
+        ))
         .accessibilityLabel("Playback Quality")
         .accessibilityValue(qualityValueText)
     }
@@ -676,8 +733,7 @@ struct MobilePlayerControls: View {
         .menuStyle(.button)
         // Keep Chapter 1 at the top, reading down.
         .menuOrder(.fixed)
-        .buttonStyle(.glass)
-        .buttonBorderShape(style == .icons ? .circle : .capsule)
+        .buttonStyle(MobilePlayerGlassButtonStyle())
     }
 
     private func chapterMenuTitle(_ chapter: PlayerChapterInfo) -> String {
@@ -697,34 +753,13 @@ struct MobilePlayerControls: View {
             }
             .foregroundStyle(.white)
             .padding(.horizontal, 12)
-            .frame(height: 34)
+            .frame(height: PrairieTheme.topBarIconHitSize)
         } else {
             Image(systemName: systemImage)
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(.white)
-                .frame(width: 40, height: 40)
+                .frame(width: PrairieTheme.topBarIconHitSize, height: PrairieTheme.topBarIconHitSize)
         }
-    }
-
-    private func lockControl(compact: Bool) -> some View {
-        let isLocked = orientationCoordinator.isLandscapeLocked
-        return Group {
-            if compact {
-                controlButton(systemName: isLocked ? "lock.fill" : "lock.open") {
-                    orientationCoordinator.togglePlayerMode()
-                }
-            } else {
-                actionPill(systemImage: isLocked ? "lock.fill" : "lock.open", title: "Lock") {
-                    orientationCoordinator.togglePlayerMode()
-                }
-            }
-        }
-        .accessibilityLabel(isLocked ? "Landscape Locked" : "Rotate Freely")
-        .accessibilityHint(
-            isLocked
-                ? "Allows portrait rotation during playback"
-                : "Locks playback to landscape"
-        )
     }
 
     private func actionPill(
@@ -741,67 +776,73 @@ struct MobilePlayerControls: View {
             }
             .foregroundStyle(.white)
             .padding(.horizontal, 12)
-            .frame(height: 34)
+            .frame(height: PrairieTheme.topBarIconHitSize)
         }
-        .buttonStyle(.glass)
-        .buttonBorderShape(.capsule)
+        .buttonStyle(MobilePlayerGlassButtonStyle())
     }
 
     // MARK: - Intro skip
 
-    /// One prominent pill that covers both intro states: "Skip Intro" while
-    /// the range is active, "Skip Intro · N" with a cancel circle beside it
-    /// once the auto-skip countdown is armed.
+    /// The intro-skip pill: "Skip Intro" for `ask`, and a small "Intro
+    /// skipped" caption over "Watch Intro" for `always`'s undo. The same state
+    /// machine and copy as the TV, web and Android pills, with pointer rules: a
+    /// tap is Select, and a tap elsewhere is not a dismissal.
+    @ViewBuilder
     private var introSkipPill: some View {
+        if let pill = viewModel.introSkipPrompt.pill {
+            VStack(alignment: .trailing, spacing: 4) {
+                Spacer()
+                if let caption = pill.kind.caption {
+                    Text(caption)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.75))
+                        .shadow(color: .black.opacity(0.6), radius: 3, y: 1)
+                        .padding(.trailing, 12)
+                        .accessibilityHidden(true)
+                }
+                Button {
+                    viewModel.selectIntroSkipPrompt()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: pill.kind == .skip ? "forward.end.fill" : "arrow.counterclockwise")
+                        Text(pill.kind.actionTitle)
+                    }
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16)
+                    .frame(height: PrairieTheme.topBarIconHitSize)
+                }
+                .buttonStyle(MobileIntroSkipPillButtonStyle(pill: pill))
+                .accessibilityLabel(pill.kind.accessibilityLabel)
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .padding(.horizontal, 24)
+            // Clear the bottom stack while the controls are up; hug the
+            // bottom edge when the pill is floating alone.
+            .padding(.bottom, viewModel.showControls ? 88 : 24)
+            .animation(.easeOut(duration: 0.2), value: viewModel.showControls)
+            .transition(.opacity)
+        }
+    }
+
+    private var creditsSkipPill: some View {
         VStack {
             Spacer()
             HStack {
                 Spacer()
-                HStack(spacing: 10) {
-                    if viewModel.introAutoSkipCountdownSeconds != nil {
-                        Button {
-                            viewModel.cancelIntroAutoSkip()
-                        } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: 38, height: 38)
-                        }
-                        .buttonStyle(.glass)
-                        .buttonBorderShape(.circle)
-                        .accessibilityLabel("Cancel Auto-Skip Intro")
-                    }
-
-                    Button {
-                        viewModel.skipIntro()
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "forward.end.fill")
-                            Text("Skip Intro")
-                            if let countdown = viewModel.introAutoSkipCountdownSeconds {
-                                Text("· \(countdown)")
-                                    .opacity(0.55)
-                                    .monospacedDigit()
-                            }
-                        }
+                Button {
+                    viewModel.skipCredits()
+                } label: {
+                    Label("Skip Credits", systemImage: "forward.end.fill")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(.black.opacity(0.85))
                         .padding(.horizontal, 16)
-                        .padding(.vertical, 9)
-                    }
-                    // White prominent glass with a dark glyph, matching the
-                    // play/pause disc — accent-tinted prominent reads as an
-                    // app-colored web button over video.
-                    .buttonStyle(.glassProminent)
-                    .tint(.white.opacity(0.9))
-                    .accessibilityLabel(
-                        viewModel.introAutoSkipCountdownSeconds == nil ? "Skip Intro" : "Skip Intro Now"
-                    )
+                        .frame(height: PrairieTheme.topBarIconHitSize)
                 }
+                .buttonStyle(MobilePlayerGlassButtonStyle(tint: .white.opacity(0.9)))
+                .accessibilityLabel("Skip Credits")
             }
             .padding(.horizontal, 24)
-            // Clear the bottom stack while the controls are up; hug the
-            // bottom edge when the pill is floating alone.
             .padding(.bottom, viewModel.showControls ? 88 : 24)
         }
         .animation(.easeOut(duration: 0.2), value: viewModel.showControls)
@@ -815,12 +856,9 @@ struct MobilePlayerControls: View {
             Image(systemName: systemName)
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(.white)
-                .frame(width: 40, height: 40)
+                .frame(width: PrairieTheme.topBarIconHitSize, height: PrairieTheme.topBarIconHitSize)
         }
-        // `.circle` keeps each glass control a compact circle instead of the
-        // default wider capsule so rows of controls stay dense.
-        .buttonStyle(.glass)
-        .buttonBorderShape(.circle)
+        .buttonStyle(MobilePlayerGlassButtonStyle())
     }
 
     // MARK: - Sheet identifier
@@ -828,6 +866,67 @@ struct MobilePlayerControls: View {
     private enum PlayerSheet: Identifiable {
         case tracks, aiSubtitles, subtitleSearch, settings
         var id: Self { self }
+    }
+}
+
+/// The intro pill's capsule: a dark scrim with the timer's fill creeping
+/// behind the label, brighter while pressed.
+private struct MobileIntroSkipPillButtonStyle: ButtonStyle {
+    let pill: IntroSkipPrompt.Pill
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .frame(minWidth: PrairieTheme.topBarIconHitSize)
+            .background {
+                ZStack {
+                    Capsule().fill(Color.black.opacity(0.65))
+                    IntroSkipPillProgress(
+                        pill: pill,
+                        color: .white.opacity(configuration.isPressed ? 0.4 : 0.22)
+                    )
+                }
+                .clipShape(Capsule())
+            }
+            .overlay {
+                Capsule().strokeBorder(Color.white.opacity(0.2), lineWidth: 1)
+            }
+            .contentShape(Capsule())
+            .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
+    }
+}
+
+/// Match detail chrome without the extra padding added by native glass
+/// button styles. A square label is circular; longer labels form a pill.
+/// Chrome uses the 44pt default; the transport cluster passes larger sizes.
+struct MobilePlayerGlassButtonStyle: ButtonStyle {
+    var tint: Color? = nil
+    var size: CGFloat = PrairieTheme.topBarIconHitSize
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .frame(minWidth: size)
+            .frame(height: size)
+            .opacity(configuration.isPressed ? 0.75 : 1)
+            .contentShape(Capsule())
+            .prairiePlayerGlass(in: Capsule(), tint: tint, interactive: true)
+    }
+}
+
+/// The standalone close button shown while loading, on Next Up and on
+/// errors — when the full controls aren't mounted — follows the same
+/// tap/auto-hide state as the controls.
+struct MobilePlayerChromeVisibility: ViewModifier {
+    /// Room the Next Up layout leaves above itself for the close button.
+    static let topClearance: CGFloat = PrairieTheme.topBarIconHitSize + 32
+
+    let isVisible: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(isVisible ? 1 : 0)
+            .allowsHitTesting(isVisible)
+            .accessibilityHidden(!isVisible)
+            .animation(.easeOut(duration: 0.18), value: isVisible)
     }
 }
 #endif

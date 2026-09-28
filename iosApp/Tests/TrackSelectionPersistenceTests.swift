@@ -185,7 +185,7 @@ final class TrackSelectionPersistenceTests: XCTestCase {
         XCTAssertEqual(request.showForcedSubtitles, true)
     }
 
-    /// Fire-and-forget writers hit ContinuumAPI without a server; the
+    /// Fire-and-forget writers hit PrairieAPI without a server; the
     /// catch / logger paths must still execute so the scoped gate sees
     /// those lines (they are best-effort wrappers, not success paths).
     func testSaveAndClearWritersExecuteFailurePaths() async {
@@ -201,7 +201,7 @@ final class TrackSelectionPersistenceTests: XCTestCase {
         TrackSelectionPersistence.clearAudio(prefKey: "cov-series")
         TrackSelectionPersistence.clearSubtitle(prefKey: "cov-series")
 
-        // ContinuumAPI → HTTPClient throws serverUrlNotConfigured immediately
+        // PrairieAPI → HTTPClient throws serverUrlNotConfigured immediately
         // when no server is configured; yield so the Tasks hit the catch paths.
         for _ in 0..<40 { await Task.yield() }
         try? await Task.sleep(nanoseconds: 250_000_000)

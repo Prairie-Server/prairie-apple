@@ -50,58 +50,6 @@ where Value.Stride: SignedInteger {
     }
 }
 
-/// Same as `RangeSpinner` but for `Double` values — Stepper's Strideable
-/// bound insists on SignedInteger so we special-case doubles.
-private struct DoubleRangeSpinner: View {
-    let title: String
-    @Binding var value: Double
-    let range: ClosedRange<Double>
-    let step: Double
-    let display: (Double) -> String
-    let onCommit: () -> Void
-
-    var body: some View {
-        #if os(tvOS)
-        let options = Array(stride(from: range.lowerBound, through: range.upperBound, by: step))
-        Picker(title, selection: Binding(
-            get: { nearest(to: value, in: options) },
-            set: { newValue in
-                value = newValue
-                onCommit()
-            }
-        )) {
-            ForEach(options, id: \.self) { option in
-                Text(display(option)).tag(option)
-            }
-        }
-        #else
-        Stepper(
-            value: Binding(
-                get: { value },
-                set: { newValue in
-                    value = newValue
-                    onCommit()
-                }
-            ),
-            in: range,
-            step: step
-        ) {
-            HStack {
-                Text(title)
-                Spacer()
-                Text(display(value))
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-        }
-        #endif
-    }
-
-    private func nearest(to target: Double, in options: [Double]) -> Double {
-        options.min(by: { abs($0 - target) < abs($1 - target) }) ?? target
-    }
-}
-
 /// Player configuration sheet. Apply-on-change — the VM's
 /// `applySettingsToPlayer()` is already called on file-loaded; live mutation
 /// re-applies one property at a time through the binding helpers below.
@@ -167,16 +115,14 @@ struct PlayerSettingsSheet: View {
                 LabeledContent("Quality", value: activeQualityLabel)
             }
 
-            if viewModel.backendCapabilities.supportsVideoGravity {
-                Picker("Aspect", selection: Binding(
-                    get: { viewModel.settings.videoGravity },
-                    set: { newValue in
-                        viewModel.setVideoGravity(newValue)
-                    }
-                )) {
-                    ForEach(VideoGravity.allCases, id: \.self) { gravity in
-                        Text(gravity.label).tag(gravity)
-                    }
+            Picker("Aspect", selection: Binding(
+                get: { viewModel.settings.videoGravity },
+                set: { newValue in
+                    viewModel.setVideoGravity(newValue)
+                }
+            )) {
+                ForEach(VideoGravity.allCases, id: \.self) { gravity in
+                    Text(gravity.label).tag(gravity)
                 }
             }
         } header: {
@@ -296,7 +242,7 @@ struct PlayerSettingsSheet: View {
                         viewModel.setSubtitleMatchesSystemAppearance(enabled)
                     }
                 ))
-                .tint(.continuumAccent)
+                .tint(.prairieAccent)
 
                 Toggle("Save for this device and profile", isOn: Binding(
                     get: { viewModel.settings.subtitleUsesDeviceAppearanceOverride },
@@ -304,7 +250,7 @@ struct PlayerSettingsSheet: View {
                         Task { await viewModel.setSubtitleDeviceOverrideEnabled(enabled) }
                     }
                 ))
-                .tint(.continuumAccent)
+                .tint(.prairieAccent)
                 .disabled(matchesSystem)
             } footer: {
                 Text(matchesSystem
@@ -332,7 +278,7 @@ struct PlayerSettingsSheet: View {
                 }
 
                 Toggle("Text outline", isOn: appearanceBoolBinding(\.textOutline))
-                    .tint(.continuumAccent)
+                    .tint(.prairieAccent)
 
                 Picker("Outline color", selection: appearanceStringBinding(\.textOutlineColor)) {
                     ForEach(SubtitleAppearance.outlineColors, id: \.hex) { color in
@@ -395,7 +341,7 @@ struct PlayerSettingsSheet: View {
                 next.backgroundOpacity = percent
                 Task { await viewModel.setSubtitleAppearance(next) }
             }
-            .tint(.continuumAccent)
+            .tint(.prairieAccent)
             Text("\(Int(draftOpacity ?? committed))%")
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
@@ -412,17 +358,18 @@ struct PlayerSettingsSheet: View {
 
     private var sessionSection: some View {
         Section("Session") {
-            Picker("Speed", selection: Binding(
-                get: { Self.speedOptions.min(by: {
-                    abs($0 - viewModel.settings.playbackSpeed) < abs($1 - viewModel.settings.playbackSpeed)
-                }) ?? 1.0 },
-                set: { viewModel.setPlaybackSpeed($0) }
-            )) {
-                ForEach(Self.speedOptions, id: \.self) { speed in
-                    Text(speed == 1.0 ? "1×" : String(format: "%g×", speed)).tag(speed)
+            if !viewModel.isWatchPartyPlayback {
+                Picker("Speed", selection: Binding(
+                    get: { Self.speedOptions.min(by: {
+                        abs($0 - viewModel.settings.playbackSpeed) < abs($1 - viewModel.settings.playbackSpeed)
+                    }) ?? 1.0 },
+                    set: { viewModel.setPlaybackSpeed($0) }
+                )) {
+                    ForEach(Self.speedOptions, id: \.self) { speed in
+                        Text(speed == 1.0 ? "1×" : String(format: "%g×", speed)).tag(speed)
+                    }
                 }
             }
-
             sleepTimerPicker
 
             if sleepTimer.isActive {
@@ -432,11 +379,13 @@ struct PlayerSettingsSheet: View {
                 }
             }
 
-            Toggle("Auto-Play Next Episode", isOn: Binding(
-                get: { viewModel.settings.autoPlayNextEpisode },
-                set: { viewModel.settings.setAutoPlayNextEpisode($0) }
-            ))
-            .tint(.continuumAccent)
+            if !viewModel.isWatchPartyPlayback {
+                Toggle("Auto-Play Next Episode", isOn: Binding(
+                    get: { viewModel.settings.autoPlayNextEpisode },
+                    set: { viewModel.settings.setAutoPlayNextEpisode($0) }
+                ))
+                .tint(.prairieAccent)
+            }
         }
     }
 
@@ -451,7 +400,7 @@ struct PlayerSettingsSheet: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                .tint(.continuumAccent)
+                .tint(.prairieAccent)
             }
 
             NavigationLink {
@@ -589,36 +538,37 @@ struct PlayerSettingsSheet: View {
             // Speed — 0.5x through 3.0x, step 0.25x. Constrained to a Picker
             // so the tvOS remote gets a spinner instead of a free slider
             // (which doesn't focus well).
-            Picker("Speed", selection: Binding(
-                get: { viewModel.settings.playbackSpeed },
-                set: { newValue in
-                    viewModel.setPlaybackSpeed(newValue)
-                }
-            )) {
-                ForEach([0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0], id: \.self) { speed in
-                    Text(speed == 1.0 ? "Normal (1.0×)" : String(format: "%.2f×", speed))
-                        .tag(speed)
-                }
-            }
-
-            if viewModel.backendCapabilities.supportsVideoGravity {
-                Picker("Aspect", selection: Binding(
-                    get: { viewModel.settings.videoGravity },
+            if !viewModel.isWatchPartyPlayback {
+                Picker("Speed", selection: Binding(
+                    get: { viewModel.settings.playbackSpeed },
                     set: { newValue in
-                        viewModel.setVideoGravity(newValue)
+                        viewModel.setPlaybackSpeed(newValue)
                     }
                 )) {
-                    ForEach(VideoGravity.allCases, id: \.self) { gravity in
-                        Text(gravity.label).tag(gravity)
+                    ForEach([0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0], id: \.self) { speed in
+                        Text(speed == 1.0 ? "Normal (1.0×)" : String(format: "%.2f×", speed))
+                            .tag(speed)
                     }
                 }
             }
+            Picker("Aspect", selection: Binding(
+                get: { viewModel.settings.videoGravity },
+                set: { newValue in
+                    viewModel.setVideoGravity(newValue)
+                }
+            )) {
+                ForEach(VideoGravity.allCases, id: \.self) { gravity in
+                    Text(gravity.label).tag(gravity)
+                }
+            }
 
-            Toggle("Auto-play next episode", isOn: Binding(
-                get: { viewModel.settings.autoPlayNextEpisode },
-                set: { viewModel.settings.setAutoPlayNextEpisode($0) }
-            ))
-            .tint(.continuumAccent)
+            if !viewModel.isWatchPartyPlayback {
+                Toggle("Auto-play next episode", isOn: Binding(
+                    get: { viewModel.settings.autoPlayNextEpisode },
+                    set: { viewModel.settings.setAutoPlayNextEpisode($0) }
+                ))
+                .tint(.prairieAccent)
+            }
         }
     }
 
@@ -674,7 +624,7 @@ struct PlayerSettingsSheet: View {
                             viewModel.setSubtitleMatchesSystemAppearance(enabled)
                         }
                     ))
-                    .tint(.continuumAccent)
+                    .tint(.prairieAccent)
 
                     Toggle("Save for this device and profile", isOn: Binding(
                         get: { viewModel.settings.subtitleUsesDeviceAppearanceOverride },
@@ -682,7 +632,7 @@ struct PlayerSettingsSheet: View {
                             Task { await viewModel.setSubtitleDeviceOverrideEnabled(enabled) }
                         }
                     ))
-                    .tint(.continuumAccent)
+                    .tint(.prairieAccent)
                     .disabled(matchesSystem)
 
                     Group {
@@ -705,7 +655,7 @@ struct PlayerSettingsSheet: View {
                         }
 
                         Toggle("Text outline", isOn: appearanceBoolBinding(\.textOutline))
-                            .tint(.continuumAccent)
+                            .tint(.prairieAccent)
 
                         Picker("Outline color", selection: appearanceStringBinding(\.textOutlineColor)) {
                             ForEach(SubtitleAppearance.outlineColors, id: \.hex) { color in

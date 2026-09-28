@@ -16,14 +16,25 @@ struct PlaybackSettingsView: View {
             )
             .settingsPageHeaderRow()
 
+            if viewModel.hasHeldPlaybackChanges {
+                HeldSettingChangesSection(
+                    retry: { await viewModel.retryHeldPlaybackChanges() },
+                    discard: { await viewModel.discardHeldPlaybackChanges() },
+                    message: viewModel.heldPlaybackChangesMessage
+                )
+            }
+            if viewModel.playbackChangeWasRejected {
+                rejectedChangeSection
+            }
             streamingSection
             behaviorSection
+            SeekIntervalSettingsSections()
             resetSection
         }
         .settingsListChrome()
         .navigationTitle("")
-        .continuumNavigationTitleDisplayMode(.inline)
-        .continuumToolbarColorSchemeDark()
+        .prairieNavigationTitleDisplayMode(.inline)
+        .prairieToolbarColorSchemeDark()
     }
 
     // MARK: - Streaming
@@ -49,7 +60,7 @@ struct PlaybackSettingsView: View {
                     Text(preset.label).tag(preset.id)
                 }
             }
-            .foregroundStyle(Color.continuumOnSurface)
+            .foregroundStyle(Color.prairieOnSurface)
             #if os(macOS)
             .pickerStyle(.menu)
             #else
@@ -71,7 +82,7 @@ struct PlaybackSettingsView: View {
                     Text(option.label).tag(option.code)
                 }
             }
-            .foregroundStyle(Color.continuumOnSurface)
+            .foregroundStyle(Color.prairieOnSurface)
             #if os(macOS)
             .pickerStyle(.menu)
             #else
@@ -85,8 +96,8 @@ struct PlaybackSettingsView: View {
                     Task { await viewModel.setDolbyVisionEnabled(enabled) }
                 }
             ))
-            .foregroundStyle(Color.continuumOnSurface)
-            .tint(.continuumAccent)
+            .foregroundStyle(Color.prairieOnSurface)
+            .tint(.prairieAccent)
 
             Toggle("Seek Cache", isOn: Binding(
                 get: { viewModel.seekCacheEnabled },
@@ -95,8 +106,8 @@ struct PlaybackSettingsView: View {
                     Task { await viewModel.setSeekCacheEnabled(enabled) }
                 }
             ))
-            .foregroundStyle(Color.continuumOnSurface)
-            .tint(.continuumAccent)
+            .foregroundStyle(Color.prairieOnSurface)
+            .tint(.prairieAccent)
 
             Picker("Buffer Ahead", selection: Binding(
                 get: { viewModel.bufferAhead },
@@ -109,7 +120,7 @@ struct PlaybackSettingsView: View {
                     Text(mode.label).tag(mode)
                 }
             }
-            .foregroundStyle(Color.continuumOnSurface)
+            .foregroundStyle(Color.prairieOnSurface)
             #if os(macOS)
             .pickerStyle(.menu)
             #else
@@ -123,8 +134,18 @@ struct PlaybackSettingsView: View {
                     Task { await viewModel.setLosslessAudioEnabled(enabled) }
                 }
             ))
-            .foregroundStyle(Color.continuumOnSurface)
-            .tint(.continuumAccent)
+            .foregroundStyle(Color.prairieOnSurface)
+            .tint(.prairieAccent)
+
+            Toggle("TrueHD Atmos", isOn: Binding(
+                get: { viewModel.trueHDAtmosEnabled },
+                set: { enabled in
+                    viewModel.trueHDAtmosEnabled = enabled
+                    Task { await viewModel.setTrueHDAtmosEnabled(enabled) }
+                }
+            ))
+            .foregroundStyle(Color.prairieOnSurface)
+            .tint(.prairieAccent)
 
             Picker("Deinterlacing", selection: Binding(
                 get: { viewModel.deinterlaceMode },
@@ -137,7 +158,7 @@ struct PlaybackSettingsView: View {
                     Text(mode.label).tag(mode)
                 }
             }
-            .foregroundStyle(Color.continuumOnSurface)
+            .foregroundStyle(Color.prairieOnSurface)
             #if os(macOS)
             .pickerStyle(.menu)
             #else
@@ -155,7 +176,7 @@ struct PlaybackSettingsView: View {
                     Text(rate.label).tag(rate)
                 }
             }
-            .foregroundStyle(Color.continuumOnSurface)
+            .foregroundStyle(Color.prairieOnSurface)
             #if os(macOS)
             .pickerStyle(.menu)
             #else
@@ -173,17 +194,17 @@ struct PlaybackSettingsView: View {
                     Task { await viewModel.setBackgroundPlaybackEnabled(enabled) }
                 }
             ))
-            .foregroundStyle(Color.continuumOnSurface)
-            .tint(.continuumAccent)
+            .foregroundStyle(Color.prairieOnSurface)
+            .tint(.prairieAccent)
             #endif
         } header: {
             Text("Streaming")
-                .foregroundStyle(Color.continuumSecondaryText)
+                .foregroundStyle(Color.prairieSecondaryText)
         } footer: {
             Text(streamingFooterText)
-                .foregroundStyle(Color.continuumSecondaryText)
+                .foregroundStyle(Color.prairieSecondaryText)
         }
-        .listRowBackground(Color.continuumSurfaceElevated)
+        .listRowBackground(Color.prairieSurfaceElevated)
     }
 
     private var streamingFooterText: String {
@@ -196,7 +217,8 @@ struct PlaybackSettingsView: View {
         text += "Turn off Dolby Vision to play Dolby Vision titles as HDR10 instead. Profile 5 titles have no HDR10-compatible layer and always play in Dolby Vision."
         text += " Seek Cache keeps recently streamed video in temporary storage during playback so skipping forward and back is instant; it is cleared when playback ends."
         text += " Buffer Ahead controls how much video is downloaded ahead of the playhead; longer windows ride out network dropouts, and Unlimited buffers as much as fits in temporary storage, which is cleared when playback ends."
-        text += " Lossless Multichannel Audio delivers TrueHD and DTS-HD audio as lossless multichannel PCM, and needs a receiver or soundbar that accepts multichannel PCM over eARC. If surround plays as stereo, turn it off to use a surround-compatible Dolby Digital Plus bridge instead."
+        text += " Lossless Multichannel Audio delivers TrueHD and DTS-HD audio as lossless multichannel PCM, and needs a receiver or soundbar that accepts multichannel PCM over eARC. If surround plays as stereo, turn it off to use a surround-compatible Dolby Digital Plus bridge instead. For TrueHD tracks that carry Atmos, the TrueHD Atmos setting takes precedence."
+        text += " TrueHD Atmos converts TrueHD Atmos tracks so their height channels play: Prairie decodes the track's Atmos objects, mixes them into a 7.1.4 speaker layout and plays that as Spatial Audio on AirPods and the built-in speakers. This is Prairie's own conversion, not the original Atmos stream and not Dolby's decoder, and the result is compressed audio, so these tracks are no longer lossless. Turn it off to play them without heights, as lossless 7.1 when Lossless Multichannel Audio is on."
         text += " Deinterlacing applies to interlaced sources such as DVDs and broadcast recordings; Automatic uses this device's hardware deinterlacer and falls back to software, while Software always deinterlaces on the CPU. Field Rate applies to the hardware deinterlacer only: Full Motion doubles the frame rate (50/60 fps), and Film keeps one frame per field pair."
         #if os(iOS)
         text += " Background Playback continues audio when the app moves to the background, including Picture in Picture; turning it off stops playback when you leave the app. Audiobooks always keep playing in the background."
@@ -215,8 +237,8 @@ struct PlaybackSettingsView: View {
                     Task { await viewModel.setAutoPlayNext(enabled) }
                 }
             ))
-            .foregroundStyle(Color.continuumOnSurface)
-            .tint(.continuumAccent)
+            .foregroundStyle(Color.prairieOnSurface)
+            .tint(.prairieAccent)
 
             Picker("Show Next Up", selection: Binding(
                 get: { viewModel.nextUpPromptSeconds },
@@ -229,22 +251,32 @@ struct PlaybackSettingsView: View {
                     Text(label).tag(seconds)
                 }
             }
-            .foregroundStyle(Color.continuumOnSurface)
+            .foregroundStyle(Color.prairieOnSurface)
             #if os(macOS)
             .pickerStyle(.menu)
             #else
             .pickerStyle(.navigationLink)
             #endif
 
-            Toggle("Skip Intros", isOn: Binding(
-                get: { viewModel.skipIntros },
-                set: { enabled in
-                    viewModel.skipIntros = enabled
-                    Task { await viewModel.setSkipIntros(enabled) }
+            // Three-way, not a switch: the boolean this replaced could not
+            // say "never". Labels and semantics are fixed by the contract.
+            Picker("Skip Intros", selection: Binding(
+                get: { viewModel.introSkipMode },
+                set: { mode in
+                    viewModel.introSkipMode = mode
+                    Task { await viewModel.setIntroSkipMode(mode) }
                 }
-            ))
-            .foregroundStyle(Color.continuumOnSurface)
-            .tint(.continuumAccent)
+            )) {
+                ForEach(IntroSkipMode.allCases) { mode in
+                    Text(mode.label).tag(mode)
+                }
+            }
+            .foregroundStyle(Color.prairieOnSurface)
+            #if os(macOS)
+            .pickerStyle(.menu)
+            #else
+            .pickerStyle(.navigationLink)
+            #endif
 
             Toggle("Skip Credits", isOn: Binding(
                 get: { viewModel.skipCredits },
@@ -253,13 +285,30 @@ struct PlaybackSettingsView: View {
                     Task { await viewModel.setSkipCredits(enabled) }
                 }
             ))
-            .foregroundStyle(Color.continuumOnSurface)
-            .tint(.continuumAccent)
+            .foregroundStyle(Color.prairieOnSurface)
+            .tint(.prairieAccent)
         } header: {
             Text("Episodes")
-                .foregroundStyle(Color.continuumSecondaryText)
+                .foregroundStyle(Color.prairieSecondaryText)
         }
-        .listRowBackground(Color.continuumSurfaceElevated)
+        .listRowBackground(Color.prairieSurfaceElevated)
+    }
+
+    // MARK: - Refused change
+
+    private var rejectedChangeSection: some View {
+        Section {
+            Button("OK") {
+                Task { await viewModel.acknowledgeRejectedPlaybackChange() }
+            }
+        } header: {
+            Text("Not Saved")
+                .foregroundStyle(Color.prairieSecondaryText)
+        } footer: {
+            Text(SettingsViewModel.rejectedPlaybackChangeMessage)
+                .foregroundStyle(Color.prairieSecondaryText)
+        }
+        .listRowBackground(Color.prairieSurfaceElevated)
     }
 
     // MARK: - Reset
@@ -271,9 +320,9 @@ struct PlaybackSettingsView: View {
             }
         } footer: {
             Text("Resets playback choices for this device and profile back to the server fallback.")
-                .foregroundStyle(Color.continuumSecondaryText)
+                .foregroundStyle(Color.prairieSecondaryText)
         }
-        .listRowBackground(Color.continuumSurfaceElevated)
+        .listRowBackground(Color.prairieSurfaceElevated)
     }
 
     // MARK: - Options

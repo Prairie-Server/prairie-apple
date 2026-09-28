@@ -5,7 +5,7 @@ import SwiftUI
 
 /// Layout constants shared by the Design Lab variants.
 ///
-/// These deliberately diverge from `ContinuumTheme` in a few places — the
+/// These deliberately diverge from `PrairieTheme` in a few places — the
 /// divergences *are* the proposal, and each one is called out below so the
 /// reasoning survives the experiment.
 enum HomeFeedMetrics {
@@ -17,20 +17,19 @@ enum HomeFeedMetrics {
     /// Wider than today's 120pt. At 120 the cards read as thumbnails against
     /// 24pt row gaps; the screen ends up feeling sparse rather than spacious.
     static let posterWidth: CGFloat = 132
-    /// Poster Wall trades size for count.
-    static let densePosterWidth: CGFloat = 104
-    /// 16:9 still used by resume rows. Tuned so a still row shows the same
-    /// "two cards plus a peek" as a poster row — at 210 the stills were
-    /// noticeably less dense than the 132pt posters directly below them, which
-    /// made the page rhythm feel inconsistent as you scrolled.
-    static let stillWidth: CGFloat = 184
+    /// 16:9 still used by resume rows. Continue Watching is the row people
+    /// act on most, so it reads as "one card plus a peek" rather than matching
+    /// the poster rows' density — at 184 the stills felt like thumbnails and
+    /// the progress rail was hard to read. Android's backdrop card is 280dp.
+    /// Scaled by the Poster Size setting at the call site.
+    static let stillWidth: CGFloat = 240
     /// Runway under the last row so captions clear the floating tab bar.
     static let bottomRunway: CGFloat = 96
 
     static let posterRadius: CGFloat = 10
     static let stillRadius: CGFloat = 12
 
-    /// Screen gutter. Matches `ContinuumTheme.safePadding` so variants stay
+    /// Screen gutter. Matches `PrairieTheme.safePadding` so variants stay
     /// aligned with the rest of the app's chrome.
     static let gutter: CGFloat = 16
     static let cardSpacing: CGFloat = 10
@@ -79,23 +78,14 @@ enum HomeFeedMeta {
         return min(max(position / duration, 0), 1)
     }
 
-    /// "1968  ·  Horror  ·  1h 36m" — the meta line under a hero title.
-    static func heroLine(for item: SectionItem, maxGenres: Int = 2) -> String {
-        var parts: [String] = []
-        if let year = item.year { parts.append(String(year)) }
-        if let genres = item.genres, !genres.isEmpty {
-            parts.append(contentsOf: genres.prefix(maxGenres))
-        }
-        if let runtime = runtime(minutes: item.runtime) { parts.append(runtime) }
-        return parts.joined(separator: "  ·  ")
+    /// Secondary caption line under a card title: "S01E02 · Pilot" for
+    /// episodes, otherwise the year. One line, so every card in a row keeps
+    /// the same height.
+    static func cardSecondLine(for item: SectionItem) -> String? {
+        EpisodeCardCaption.line(for: item) ?? item.year.map(String.init)
     }
 
-    static func episodeCode(for item: SectionItem) -> String? {
-        guard let season = item.seasonNumber, let episode = item.episodeNumber else { return nil }
-        return "S\(season) E\(episode)"
-    }
-
-    /// Caption under a resume still — "S2 E4  ·  23m left".
+    /// Caption under a resume still — "23m left".
     ///
     /// Some items carry a resume position but no duration, which left their
     /// card showing a progress bar and no caption while the card beside it had
@@ -112,8 +102,7 @@ enum HomeFeedMeta {
             progressText = nil
         }
 
-        let pieces = [episodeCode(for: item), progressText].compactMap { $0 }
-        return pieces.isEmpty ? nil : pieces.joined(separator: "  ·  ")
+        return progressText
     }
 
     /// The title a card should be captioned with. Episodes caption with the
@@ -131,16 +120,31 @@ enum HomeFeedMeta {
 private struct HomeCardTap<Label: View>: View {
     let contentId: String
     let accessibilityLabel: String
+    var continueWatchingItem: SectionItem? = nil
+    /// Secondary action surfaced to VoiceOver. The card collapses its
+    /// children into one element, so a nested play button would otherwise
+    /// vanish from the accessibility tree.
+    var accessibilityPlayAction: (name: String, perform: () -> Void)? = nil
+    /// Replaces opening detail, for hosts that pick rather than browse.
+    var onTap: (() -> Void)? = nil
     @ViewBuilder var label: () -> Label
 
     @Environment(AppRouter.self) private var router
+    @Environment(\.browseLibraryId) private var browseLibraryId
+    @Environment(\.itemDetailBrowseSource) private var detailBrowseSource
     @Environment(\.zoomNamespace) private var zoomNamespace
     @State private var zoomInstanceID = UUID()
 
     var body: some View {
         Button {
+            if let onTap { onTap(); return }
             router.pendingZoomSourceID = zoomInstanceID.uuidString
-            router.navigate(to: .itemDetail(contentId: contentId))
+            if let continueWatchingItem {
+                router.presentContinueWatchingDetail(for: continueWatchingItem, libraryId: browseLibraryId, browseSource: detailBrowseSource)
+            } else {
+                router.presentItemDetail(contentId: contentId, libraryId: browseLibraryId, browseSource: detailBrowseSource
+                )
+            }
         } label: {
             label()
                 .zoomTransitionSource(id: zoomInstanceID.uuidString, in: zoomNamespace)
@@ -148,6 +152,19 @@ private struct HomeCardTap<Label: View>: View {
         .buttonStyle(.plain)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel)
+        .modifier(OptionalAccessibilityAction(action: accessibilityPlayAction))
+    }
+}
+
+private struct OptionalAccessibilityAction: ViewModifier {
+    let action: (name: String, perform: () -> Void)?
+
+    func body(content: Content) -> some View {
+        if let action {
+            content.accessibilityAction(named: Text(action.name), action.perform)
+        } else {
+            content
+        }
     }
 }
 
@@ -169,6 +186,7 @@ private struct HomeCardMenu: ViewModifier {
     /// with the menu label instead of waiting on the Home refresh —
     /// `MediaCard` drives its badge from the same effective state.
     @Binding var playedOverride: Bool?
+    @State private var actionFeedback = MediaActionFeedback()
     @State private var favoriteOverride: Bool?
     @State private var watchlistOverride: Bool?
 
@@ -188,6 +206,7 @@ private struct HomeCardMenu: ViewModifier {
         if hasAnyAction {
             content
                 .contextMenu { menuItems }
+                .mediaActionFeedback(actionFeedback)
                 .onChange(of: item.userState) { _, _ in
                     playedOverride = nil
                     favoriteOverride = nil
@@ -200,31 +219,15 @@ private struct HomeCardMenu: ViewModifier {
 
     @ViewBuilder
     private var menuItems: some View {
-        if let onSetWatched {
-            Button {
-                let played = !isPlayed
-                Task { @MainActor in
-                    playedOverride = played
-                    if await onSetWatched(played) == false {
-                        playedOverride = nil
-                    }
-                }
-            } label: {
-                Label(
-                    isPlayed ? "Mark as Unwatched" : "Mark as Watched",
-                    systemImage: isPlayed ? "circle" : "checkmark.circle"
-                )
-            }
-        }
-
-        if hasPersonalActions {
-            PersonalListMenuItems(
-                isFavorite: isFavorite,
-                inWatchlist: inWatchlist,
-                onToggleFavorite: toggleFavorite,
-                onToggleWatchlist: toggleWatchlist
-            )
-        }
+        MediaStateMenuItems(
+            isWatched: isPlayed,
+            isFavorite: isFavorite,
+            inWatchlist: inWatchlist,
+            isUpdating: actionFeedback.isUpdating,
+            onToggleWatched: canSetWatched ? toggleWatched : nil,
+            onToggleFavorite: hasPersonalActions ? toggleFavorite : nil,
+            onToggleWatchlist: hasPersonalActions ? toggleWatchlist : nil
+        )
 
         if let onRemoveFromContinueWatching {
             Button(role: .destructive, action: onRemoveFromContinueWatching) {
@@ -233,29 +236,53 @@ private struct HomeCardMenu: ViewModifier {
         }
     }
 
+    private var canSetWatched: Bool {
+        onSetWatched != nil || (hasPersonalActions && !item.isAudiobook)
+    }
+
+    private func toggleWatched() {
+        let played = !isPlayed
+        let previous = playedOverride
+        actionFeedback.perform(reportsFailure: onSetWatched == nil) {
+            playedOverride = played
+            let outcome: PersonalStateOutcome
+            if let onSetWatched {
+                outcome = await onSetWatched(played) ? .applied : .failed(nil)
+            } else {
+                outcome = await MediaCardWatchedSync.setWatched(
+                    contentId: item.contentId, played: played, seriesId: item.seriesId
+                )
+            }
+            if outcome != .applied { playedOverride = previous }
+            return outcome
+        }
+    }
+
     private func toggleFavorite() {
         let newValue = !isFavorite
         let watchlist = inWatchlist
-        favoriteOverride = newValue
-        Task {
-            if await PersonalListSync.setFavorite(
+        let previous = favoriteOverride
+        actionFeedback.perform {
+            favoriteOverride = newValue
+            let outcome = await PersonalListSync.setFavorite(
                 contentId: item.contentId, isFavorite: newValue, inWatchlist: watchlist
-            ) == false {
-                favoriteOverride = !newValue
-            }
+            )
+            if outcome != .applied { favoriteOverride = previous }
+            return outcome
         }
     }
 
     private func toggleWatchlist() {
         let newValue = !inWatchlist
         let favorite = isFavorite
-        watchlistOverride = newValue
-        Task {
-            if await PersonalListSync.setWatchlist(
+        let previous = watchlistOverride
+        actionFeedback.perform {
+            watchlistOverride = newValue
+            let outcome = await PersonalListSync.setWatchlist(
                 contentId: item.contentId, isFavorite: favorite, inWatchlist: newValue
-            ) == false {
-                watchlistOverride = !newValue
-            }
+            )
+            if outcome != .applied { watchlistOverride = previous }
+            return outcome
         }
     }
 }
@@ -267,9 +294,9 @@ private struct HomeWatchedCheck: View {
     var body: some View {
         Image(systemName: "checkmark")
             .font(.system(size: 9, weight: .bold))
-            .foregroundStyle(Color.continuumBackground)
+            .foregroundStyle(Color.prairieBackground)
             .frame(width: 18, height: 18)
-            .background(Circle().fill(Color.continuumOnSurface))
+            .background(Circle().fill(Color.prairieOnSurface))
     }
 }
 
@@ -285,16 +312,20 @@ struct HomePosterCard: View {
     var showsMetadata: Bool = true
     /// Draws the resume rail across the bottom of the artwork.
     var showsProgress: Bool = false
+    var opensResumeContext = false
     /// Audiobook covers are square; stretching one into a 2:3 poster crops
     /// its edges off.
     var aspect: MediaCardAspect = .poster
-    /// "S2 · E10" for an episode rendered as a poster. Without it, several
-    /// episodes of one series are captioned identically (they caption with
-    /// the series name) and become indistinguishable cards.
-    var episodeBadge: String? = nil
+    /// Episode context retained for accessibility. Episode numbers are
+    /// intentionally not drawn over poster artwork.
+    var episodeAccessibilityLabel: String? = nil
     /// Long-press actions, matching what `MediaCard` offers elsewhere.
     var onRemoveFromContinueWatching: (() -> Void)? = nil
     var onSetWatched: ((Bool) async -> Bool)? = nil
+    /// Replaces opening detail; see `HomeCardTap.onTap`.
+    var onTap: (() -> Void)? = nil
+    /// Replaces the year/metadata caption line.
+    var secondLineOverride: String? = nil
 
     @EnvironmentObject private var overlayStore: OverlayPrefsStore
     /// Optimistic watched state, shared with the menu so the badge flips the
@@ -313,7 +344,9 @@ struct HomePosterCard: View {
     var body: some View {
         HomeCardTap(
             contentId: item.contentId,
-            accessibilityLabel: accessibilityDescription
+            accessibilityLabel: accessibilityDescription,
+            continueWatchingItem: opensResumeContext ? item : nil,
+            onTap: onTap
         ) {
             VStack(alignment: .leading, spacing: 7) {
                 artwork
@@ -348,8 +381,8 @@ struct HomePosterCard: View {
         .overlay {
             // Home uses the same renderer and resolved profile preferences as
             // Browse, For You, Watchlist, and Favorites. Keep this below the
-            // episode/progress/watched affordances so those controls retain
-            // their established corner priority.
+            // progress and watched affordances so those controls retain their
+            // established corner priority.
             if overlayStore.enabled {
                 CardOverlays(
                     data: OverlayData.from(item),
@@ -363,17 +396,6 @@ struct HomePosterCard: View {
                         style: .continuous
                     )
                 )
-            }
-        }
-        .overlay(alignment: .bottomLeading) {
-            if let episodeBadge {
-                Text(episodeBadge)
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(Capsule().fill(.black.opacity(0.65)))
-                    .padding(6)
             }
         }
         .overlay(alignment: .topTrailing) {
@@ -397,8 +419,8 @@ struct HomePosterCard: View {
     private var caption: some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(HomeFeedMeta.cardTitle(for: item))
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Color.continuumOnSurface)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(Color.prairieOnSurface)
                 // One line, always. Reserving two lines (as the shipping card
                 // does) makes every row 17pt taller than it needs to be; letting
                 // it wrap makes row baselines ragged. Truncation is the honest
@@ -406,11 +428,13 @@ struct HomePosterCard: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
 
-            if showsMetadata, let year = item.year {
-                Text(String(year))
-                    .font(.system(size: 11, weight: .regular))
-                    .foregroundStyle(Color.continuumOnSurface.opacity(0.5))
+            if showsMetadata, let secondLine = secondLineOverride ?? HomeFeedMeta.cardSecondLine(for: item) {
+                Text(secondLine)
+                    .font(.caption2)
+                    .foregroundStyle(Color.prairieOnSurface.opacity(0.5))
                     .monospacedDigit()
+                    .lineLimit(1)
+                    .truncationMode(.tail)
             }
         }
         .frame(width: width, alignment: .leading)
@@ -418,7 +442,11 @@ struct HomePosterCard: View {
 
     private var accessibilityDescription: String {
         var components = [HomeFeedMeta.cardTitle(for: item)]
-        components.append(contentsOf: [episodeBadge, item.year.map(String.init)].compactMap { $0 })
+        if let episodeAccessibilityLabel {
+            components.append(episodeAccessibilityLabel)
+        } else if let year = item.year {
+            components.append(String(year))
+        }
         if isPlayed {
             components.append("Watched")
         }
@@ -436,12 +464,17 @@ struct HomeStillCard: View {
     var width: CGFloat = HomeFeedMetrics.stillWidth
     var showsCaption: Bool = true
     var showsMetadata: Bool = true
+    var opensResumeContext = false
     var onRemoveFromContinueWatching: (() -> Void)? = nil
     var onSetWatched: ((Bool) async -> Bool)? = nil
+    /// Replaces opening detail and drops the direct-play action; see `HomeCardTap.onTap`.
+    var onTap: (() -> Void)? = nil
 
     /// Optimistic watched state, shared with the menu — see `HomePosterCard`.
     @State private var playedOverride: Bool?
     @EnvironmentObject private var overlayStore: OverlayPrefsStore
+    @Environment(\.browseLibraryId) private var playbackLibraryId
+    @Environment(AppRouter.self) private var router
 
     private var isPlayed: Bool { playedOverride ?? (item.userState?.played == true) }
 
@@ -461,7 +494,12 @@ struct HomeStillCard: View {
     var body: some View {
         HomeCardTap(
             contentId: item.contentId,
-            accessibilityLabel: accessibilityDescription
+            accessibilityLabel: accessibilityDescription,
+            continueWatchingItem: opensResumeContext ? item : nil,
+            accessibilityPlayAction: isDirectlyPlayable && onTap == nil
+                ? (name: playActionName, perform: playItem)
+                : nil,
+            onTap: onTap
         ) {
             VStack(alignment: .leading, spacing: 8) {
                 artwork
@@ -527,13 +565,8 @@ struct HomeStillCard: View {
                 .stroke(.white.opacity(0.08), lineWidth: 0.5)
         )
         .overlay(alignment: .center) {
-            Image(systemName: "play.fill")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.9))
-                .frame(width: 28, height: 28)
-                .background(Circle().fill(.black.opacity(0.32)))
-                .overlay(Circle().stroke(.white.opacity(0.38), lineWidth: 0.75))
-                .allowsHitTesting(false)
+            // A host that picks on tap must not also offer direct playback.
+            if onTap == nil { playBadge }
         }
         // A watched item can sit in Continue Watching again on a rewatch —
         // the check says "you've finished this before" alongside the rail's
@@ -552,18 +585,74 @@ struct HomeStillCard: View {
         }
     }
 
+    /// Quick-start affordance. Tapping the badge plays (or resumes) the item
+    /// directly instead of opening its detail page; the rest of the still
+    /// keeps the detail tap. Sized as a real touch target rather than a
+    /// decorative glyph so a thumb lands on it reliably.
+    @ViewBuilder
+    private var playBadge: some View {
+        let badge = Image(systemName: "play.fill")
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.white.opacity(0.9))
+            .frame(width: 36, height: 36)
+            .background(Circle().fill(.black.opacity(0.32)))
+            .overlay(Circle().stroke(.white.opacity(0.38), lineWidth: 0.75))
+            .contentShape(Circle())
+
+        if isDirectlyPlayable {
+            Button(action: playItem) { badge }
+                .buttonStyle(.plain)
+                .accessibilityLabel(playActionName)
+        } else {
+            badge.allowsHitTesting(false)
+        }
+    }
+
+    private var isDirectlyPlayable: Bool { PrairieMediaType.isDirectlyPlayable(item.type) }
+
+    private var playActionName: String { (item.positionSeconds ?? 0) > 0 ? "Resume" : "Play" }
+
+    private func playItem() {
+        router.presentPlayer(
+            contentId: item.contentId,
+            libraryId: playbackLibraryId,
+            resumePosition: item.positionSeconds,
+            prefersLastUsedVersion: opensResumeContext,
+            posterURL: item.posterUrl,
+            backdropURL: item.backdropUrl
+        )
+    }
+
     private var caption: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(HomeFeedMeta.cardTitle(for: item))
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Color.continuumOnSurface)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(Color.prairieOnSurface)
                 .lineLimit(1)
 
-            if showsMetadata, let subtitle = HomeFeedMeta.resumeCaption(for: item) {
-                Text(subtitle)
-                    .font(.system(size: 11, weight: .regular))
-                    .foregroundStyle(Color.continuumOnSurface.opacity(0.55))
+            if showsMetadata {
+                // Episode code + title (or the year for movies). Space is
+                // reserved even when empty so a row mixing episodes and
+                // movies keeps one caption height.
+                Text(HomeFeedMeta.cardSecondLine(for: item) ?? "")
+                    .font(.caption2)
+                    .foregroundStyle(Color.prairieOnSurface.opacity(0.7))
+                    .monospacedDigit()
+                    .lineLimit(1, reservesSpace: true)
+                    .truncationMode(.tail)
+            }
+
+            if showsMetadata,
+               (opensResumeContext && HorizontalMediaRailLayout.isPhone)
+                   || HomeFeedMeta.resumeCaption(for: item) != nil {
+                // Keep phone resume cards the same height when only some items have
+                // a remaining-time caption, including as lazy cards enter/leave.
+                Text(HomeFeedMeta.resumeCaption(for: item) ?? "0m left")
+                    .font(.caption2)
+                    .foregroundStyle(Color.prairieOnSurface.opacity(0.55))
                     .lineLimit(1)
+                    .opacity(HomeFeedMeta.resumeCaption(for: item) == nil ? 0 : 1)
+                    .accessibilityHidden(HomeFeedMeta.resumeCaption(for: item) == nil)
             }
         }
         .frame(width: width, alignment: .leading)
@@ -571,6 +660,11 @@ struct HomeStillCard: View {
 
     private var accessibilityDescription: String {
         var components = [HomeFeedMeta.cardTitle(for: item)]
+        if let episodeLabel = EpisodeCardCaption.accessibilityLabel(for: item) {
+            components.append(episodeLabel)
+        } else if let year = item.year {
+            components.append(String(year))
+        }
         if let resumeCaption = HomeFeedMeta.resumeCaption(for: item) {
             components.append(resumeCaption)
         }
@@ -609,14 +703,14 @@ struct HomeSectionHeader: View {
         HStack(spacing: 7) {
             if let icon {
                 Image(systemName: icon)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.continuumOnSurface.opacity(0.85))
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(Color.prairieOnSurface.opacity(0.85))
             }
 
             Text(title)
-                .font(.system(size: 17, weight: .semibold))
+                .font(.headline)
                 .tracking(-0.3)
-                .foregroundStyle(Color.continuumOnSurface)
+                .foregroundStyle(Color.prairieOnSurface)
                 .lineLimit(1)
 
             Spacer(minLength: 8)
@@ -624,8 +718,8 @@ struct HomeSectionHeader: View {
             if let onSeeAll {
                 Button(action: onSeeAll) {
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Color.continuumOnSurface.opacity(0.35))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.prairieOnSurface.opacity(0.35))
                 }
                 .buttonStyle(.plain)
             }
@@ -637,9 +731,9 @@ struct HomeSectionHeader: View {
         VStack(spacing: 8) {
             HStack(spacing: 8) {
                 Text(title.uppercased())
-                    .font(.system(size: 11, weight: .heavy))
+                    .font(.caption2.weight(.heavy))
                     .tracking(1.4)
-                    .foregroundStyle(Color.continuumOnSurface.opacity(0.72))
+                    .foregroundStyle(Color.prairieOnSurface.opacity(0.72))
                     .lineLimit(1)
 
                 Spacer(minLength: 8)
@@ -647,8 +741,8 @@ struct HomeSectionHeader: View {
                 if let onSeeAll {
                     Button(action: onSeeAll) {
                         Image(systemName: "arrow.right")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(Color.continuumOnSurface.opacity(0.35))
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(Color.prairieOnSurface.opacity(0.35))
                     }
                     .buttonStyle(.plain)
                 }

@@ -98,10 +98,10 @@ struct CompanionPairingCard: View {
         VStack(spacing: 0) {
             heroGlyph.padding(.bottom, 16)
             Text("Set Up \(tv.name)")
-                .font(.continuumTitle)
+                .font(.prairieTitle)
                 .multilineTextAlignment(.center)
             Text("Sign \(tv.name) in to your servers from this \(UIDevice.current.model).")
-                .font(.continuumCaption)
+                .font(.prairieCaption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.top, 6)
@@ -138,10 +138,20 @@ struct CompanionPairingCard: View {
                     .frame(width: 34, height: 34)
                     .background(accent, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                     .foregroundStyle(.white)
-                Text(server.displayName)
-                    .font(.continuumBody)
-                    .foregroundStyle(.primary)
-                Spacer()
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(server.displayName)
+                        .font(.prairieBody)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text(server.url)
+                        .font(.prairieCaption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 Image(systemName: isOn ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 22))
                     .foregroundStyle(isOn ? accent : Color.secondary)
@@ -149,7 +159,7 @@ struct CompanionPairingCard: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
             .background(
-                isOn ? Color.continuumChromeSelectedFill : Color.continuumChromeRestingFill,
+                isOn ? Color.prairieChromeSelectedFill : Color.prairieChromeRestingFill,
                 in: RoundedRectangle(cornerRadius: 13, style: .continuous)
             )
         }
@@ -160,16 +170,16 @@ struct CompanionPairingCard: View {
     private func confirm(serverName: String, matchCode: String) -> some View {
         VStack(spacing: 0) {
             Text("Make sure your TV shows")
-                .font(.continuumCaption)
+                .font(.prairieCaption)
                 .foregroundStyle(.secondary)
             Text(matchCode)
-                .font(.continuumPIN)
+                .font(.prairiePIN)
                 .textCase(.uppercase)
                 .tracking(8)
                 .padding(.top, 8)
                 .accessibilityLabel(Self.spelledOut(matchCode))
             Text("for \(serverName)")
-                .font(.continuumCaption)
+                .font(.prairieCaption)
                 .foregroundStyle(.secondary)
                 .padding(.top, 4)
             primaryButton("Yes, this matches", systemImage: "checkmark") { Task { await coordinator?.confirmMatch() } }
@@ -179,18 +189,18 @@ struct CompanionPairingCard: View {
         }
     }
 
-    private func finished(signedIn: [String], failed: [String]) -> some View {
+    private func finished(signedIn: [String], failed: [CompanionPairingCoordinator.FailedServer]) -> some View {
         VStack(spacing: 0) {
             Image(systemName: signedIn.isEmpty ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
                 .font(.system(size: 44))
                 .foregroundStyle(signedIn.isEmpty ? Color.yellow : Color.green)
                 .padding(.bottom, 12)
             Text(signedIn.isEmpty ? "Setup didn’t finish" : "Set up \(signedIn.joined(separator: ", "))")
-                .font(.continuumHeadline)
+                .font(.prairieHeadline)
                 .multilineTextAlignment(.center)
-            if !failed.isEmpty {
-                Text("Couldn’t sign in to \(failed.joined(separator: ", ")).")
-                    .font(.continuumCaption)
+            ForEach(failed, id: \.name) { failure in
+                Text(failure.summary)
+                    .font(.prairieCaption)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.top, 4)
@@ -211,7 +221,7 @@ struct CompanionPairingCard: View {
                 .foregroundStyle(.yellow)
                 .padding(.bottom, 12)
             Text(message)
-                .font(.continuumBody)
+                .font(.prairieBody)
                 .multilineTextAlignment(.center)
             primaryButton("Try Again", systemImage: "arrow.clockwise") { retry() }.padding(.top, 22)
             tertiaryButton("Close", systemImage: "xmark") { dismiss() }.padding(.top, 4)
@@ -231,8 +241,8 @@ struct CompanionPairingCard: View {
         HStack(spacing: 12) {
             Image(systemName: "appletv.fill").font(.system(size: 22)).frame(width: 40, height: 40)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.continuumHeadline)
-                Text(subtitle).font(.continuumCaption).foregroundStyle(.secondary)
+                Text(title).font(.prairieHeadline)
+                Text(subtitle).font(.prairieCaption).foregroundStyle(.secondary)
             }
             Spacer()
         }
@@ -241,9 +251,9 @@ struct CompanionPairingCard: View {
 
     private func progressStep(title: String, subtitle: String) -> some View {
         VStack(spacing: 10) {
-            Text(title).font(.continuumHeadline)
+            Text(title).font(.prairieHeadline)
             Text(subtitle)
-                .font(.continuumCaption)
+                .font(.prairieCaption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             ProgressView().padding(.top, 4)
@@ -268,7 +278,7 @@ struct CompanionPairingCard: View {
                     Text(title)
                 }
             }
-            .font(.continuumHeadline)
+            .font(.prairieHeadline)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 6)
         }
@@ -290,7 +300,7 @@ struct CompanionPairingCard: View {
                     Text(title)
                 }
             }
-            .font(.continuumBody)
+            .font(.prairieBody)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 8)
         }

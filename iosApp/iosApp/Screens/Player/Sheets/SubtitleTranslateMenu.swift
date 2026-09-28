@@ -1,6 +1,6 @@
 //
 //  SubtitleTranslateMenu.swift
-//  Continuum (iOS + tvOS)
+//  Prairie (iOS + tvOS)
 //
 //  In-player "AI subtitles" menu. One-tap, Ray-style: the user picks a single
 //  target language and the menu picks the method automatically — translate an
@@ -96,12 +96,6 @@ struct SubtitleTranslateMenu: View {
 
     private var translatableSubtitleTracks: [PlayerTrack] {
         Self.translatableSubtitleTracks(viewModel)
-    }
-
-    /// True when translating an existing text track is possible at all — when
-    /// so, most language picks take the cheap translation path (no ASR quota).
-    private var translationAvailable: Bool {
-        capabilities.subtitleEnabled && !translatableSubtitleTracks.isEmpty
     }
 
     /// The audio track whose language is treated as the "spoken" language:
@@ -220,7 +214,7 @@ struct SubtitleTranslateMenu: View {
         func add(_ code: String, hint: String?) {
             let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
-            let key = trimmed.lowercased()
+            let key = PlaybackLanguageOption.languageIdentity(trimmed)
             guard !seen.contains(key) else { return }
             seen.insert(key)
             result.append(.init(code: trimmed, label: displayName(trimmed), hint: hint))
@@ -262,9 +256,9 @@ struct SubtitleTranslateMenu: View {
     /// Rows in display order: suggested (priority) then the alphabetized rest.
     private var displayLanguages: [LanguageChoice] { suggestedLanguages + otherLanguages }
 
-    /// Move focus to the first serviceable row. Used on appear and to recover
-    /// when focus falls to `nil`.
+    /// Recover focus when it falls to `nil`.
     private func focusFirstServiceableLanguage() {
+        guard !isBusy, controller.phase != .failed else { return }
         focusedLanguageID = displayLanguages.first(where: { canServe($0.code) })?.code
     }
 
@@ -273,7 +267,7 @@ struct SubtitleTranslateMenu: View {
         guard let target = focusedLanguageID
             ?? displayLanguages.first(where: { canServe($0.code) })?.code else { return }
         if animated {
-            withAnimation(.easeOut(duration: ContinuumTheme.fastDuration)) {
+            withAnimation(.easeOut(duration: PrairieTheme.fastDuration)) {
                 proxy.scrollTo(target, anchor: .center)
             }
         } else {
@@ -286,66 +280,39 @@ struct SubtitleTranslateMenu: View {
 
     #if os(tvOS)
     private var tvOSPanel: some View {
-        ZStack {
-            Color.black.opacity(0.55)
-                .ignoresSafeArea()
-                .contentShape(Rectangle())
-                .onTapGesture { onDismiss() }
-
-            VStack(alignment: .leading, spacing: 14) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(title.uppercased())
-                        .font(.system(size: 18, weight: .semibold))
-                        .tracking(1.5)
-                        .foregroundStyle(.white.opacity(0.7))
-                    if !isBusy, controller.phase != .failed {
-                        Text(explainer)
-                            .font(.system(size: 16))
-                            .foregroundStyle(.white.opacity(0.45))
-                            .lineLimit(2)
+        TVSubtitleDialog(
+            title: title,
+            subtitle: isBusy ? "Preparing your subtitles"
+                : controller.phase == .failed ? "AI subtitles could not finish"
+                : "Choose a language. Prairie translates existing subtitles or transcribes the audio.",
+            backHint: "Back to Subtitles",
+            onDismiss: onDismiss
+        ) {
+            if isBusy || controller.phase == .failed {
+                progressPanel
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView(showsIndicators: false) {
+                        LazyVStack(alignment: .leading, spacing: 8) {
+                            languageRows
+                        }
+                        .padding(8)
                     }
-                }
-                .padding(.horizontal, 12)
-
-                if isBusy || controller.phase == .failed {
-                    progressPanel
-                } else {
-                    ScrollViewReader { proxy in
-                        ScrollView(showsIndicators: false) {
-                            LazyVStack(alignment: .leading, spacing: 2) {
-                                languageRows
-                            }
-                            .padding(.vertical, 2)
-                        }
-                        .focusSection()
-                        .onAppear {
-                            focusFirstServiceableLanguage()
-                            scrollToFocusedLanguage(proxy, animated: false)
-                        }
-                        .onChange(of: focusedLanguageID) { _, value in
-                            // Focus fell off the list (scrolled past an edge) —
-                            // pull it back to a serviceable row instead of letting
-                            // it vanish. Otherwise just keep the focused row visible.
-                            if value == nil { focusFirstServiceableLanguage() }
-                            else { scrollToFocusedLanguage(proxy) }
-                        }
+                    .focusSection()
+                    .defaultFocus(
+                        $focusedLanguageID,
+                        displayLanguages.first(where: { canServe($0.code) })?.code ?? ""
+                    )
+                    .onChange(of: focusedLanguageID) { _, value in
+                        // Focus fell off the list (scrolled past an edge) —
+                        // pull it back to a serviceable row instead of letting
+                        // it vanish. Otherwise just keep the focused row visible.
+                        if value == nil { focusFirstServiceableLanguage() }
+                        else { scrollToFocusedLanguage(proxy) }
                     }
                 }
             }
-            .padding(28)
-            .frame(maxWidth: 1100, maxHeight: 720)
-            .background(
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .fill(.ultraThinMaterial)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 24, style: .continuous)
-                            .fill(Color.black.opacity(0.35))
-                    )
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
-            )
         }
         .onExitCommand { onDismiss() }
         .task { await controller.refreshQuota() }
@@ -371,7 +338,7 @@ struct SubtitleTranslateMenu: View {
             }
         }
         if !suggestedLanguages.isEmpty {
-            sectionHeader("Suggested")
+            sectionHeader("Suggested languages")
             ForEach(suggestedLanguages) { tvLanguageRow($0) }
         }
         sectionHeader(suggestedLanguages.isEmpty ? "Language" : "All Languages")
@@ -424,11 +391,11 @@ struct SubtitleTranslateMenu: View {
                             Text(explainer)
                         }
                     }
-                    .continuumGroupedListStyle()
+                    .prairieGroupedListStyle()
                 }
             }
             .navigationTitle(title)
-            .continuumNavigationTitleDisplayMode(.inline)
+            .prairieNavigationTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { onDismiss() }
@@ -472,6 +439,14 @@ struct SubtitleTranslateMenu: View {
                       systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.secondary)
                 progressButton(title: "Dismiss") { onDismiss() }
+                if controller.hasHeldRequest {
+                    // The request may have started a job, so it is not sent
+                    // again until the user lets it go.
+                    progressButton(title: "Discard held request", focusID: "progress-discard",
+                                   seedsFocus: false) {
+                        controller.discardHeldRequest()
+                    }
+                }
             } else {
                 Text(progressTitle(for: job))
                     .font(.headline)
@@ -560,7 +535,7 @@ private extension SubtitleTranslateMenu {
                     .foregroundStyle(.white.opacity(0.5))
                 Text(quotaText)
                     .font(.system(size: 16))
-                    .foregroundStyle(isQuotaExhausted ? Color.continuumWarning : .white.opacity(0.6))
+                    .foregroundStyle(isQuotaExhausted ? Color.prairieWarning : .white.opacity(0.6))
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 6)
@@ -570,7 +545,7 @@ private extension SubtitleTranslateMenu {
                     .foregroundStyle(.secondary)
                 Spacer()
                 Text(quotaText)
-                    .foregroundStyle(isQuotaExhausted ? Color.continuumWarning : .secondary)
+                    .foregroundStyle(isQuotaExhausted ? Color.prairieWarning : .secondary)
             }
             .font(.footnote)
             #endif
@@ -578,10 +553,13 @@ private extension SubtitleTranslateMenu {
     }
 
     @ViewBuilder
-    func progressButton(title: String, action: @escaping () -> Void) -> some View {
+    func progressButton(title: String, focusID: String = "progress-action", seedsFocus: Bool = true,
+                        action: @escaping () -> Void) -> some View {
         #if os(tvOS)
         Button(title, action: action)
             .buttonStyle(.bordered)
+            .focused($focusedLanguageID, equals: focusID)
+            .onAppear { if seedsFocus { focusedLanguageID = focusID } }
         #else
         Button(title, action: action)
             .buttonStyle(.bordered)
@@ -592,12 +570,7 @@ private extension SubtitleTranslateMenu {
 // MARK: - Menu row (platform-split, mirroring TrackSelectionSheet.TrackRow)
 
 #if os(tvOS)
-/// tvOS language row: icon + two lines, row-fill focus highlight, bare
-/// `.focusable` + tap (no system halo), matching `TrackSelectionSheet`.
-///
-/// Focus is driven by a panel-level `@FocusState.Binding` keyed on the language
-/// `code` (rather than a self-owned `@FocusState`) so the list can scroll-follow
-/// focus and recover it when it falls to `nil`. Mirrors `TVSettingsPickerSheet`.
+/// AI routing hints within the shared subtitle menu row.
 private struct TVLanguageRow: View {
     let name: String
     let detail: String?
@@ -607,44 +580,36 @@ private struct TVLanguageRow: View {
     @FocusState.Binding var focusedID: String?
     let action: () -> Void
 
-    private var isFocused: Bool { focusedID == code }
-
     var body: some View {
-        HStack(alignment: .center, spacing: 16) {
+        TVSubtitleMenuRow(
+            rowID: code,
+            isDisabled: isDisabled,
+            focusedID: $focusedID,
+            action: action
+        ) {
             Image(systemName: systemImage)
                 .font(.system(size: 22, weight: .regular))
-                .foregroundStyle(.white.opacity(0.8))
+                .opacity(0.8)
                 .frame(width: 34)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(name)
                     .font(.system(size: 24, weight: .medium))
-                    .foregroundStyle(.white)
                     .lineLimit(1)
                 if let detail {
                     Text(detail)
                         .font(.system(size: 18, weight: .regular))
-                        .foregroundStyle(.white.opacity(0.55))
+                        .opacity(0.65)
                         .lineLimit(2)
                 }
             }
             Spacer(minLength: 8)
+            Image(systemName: "chevron.right")
+                .font(.system(size: 18, weight: .semibold))
+                .opacity(0.55)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(isFocused ? Color.white.opacity(0.16) : Color.clear)
-        )
-        .contentShape(Rectangle())
-        .focusable(!isDisabled)
-        .focused($focusedID, equals: code)
-        .onTapGesture(perform: action)
-        .disabled(isDisabled)
-        .opacity(isDisabled ? 0.35 : 1.0)
-        .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
-        .accessibilityAddTraits(.isButton)
         .accessibilityLabel(name)
+        .accessibilityValue(detail ?? "")
     }
 }
 #else

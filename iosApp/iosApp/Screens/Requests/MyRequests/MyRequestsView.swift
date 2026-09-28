@@ -13,7 +13,7 @@ struct MyRequestsView: View {
             if let error = viewModel.error, viewModel.buckets.isEmpty {
                 ErrorView(state: error, onRetry: { Task { await viewModel.load() } })
             } else if viewModel.isLoading && viewModel.buckets.isEmpty {
-                LoadingView()
+                LoadingView(usesPageBackground: true)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if viewModel.isEmpty {
                 EmptyStateView(
@@ -25,11 +25,11 @@ struct MyRequestsView: View {
                 bucketList
             }
         }
-        .continuumBackground()
+        .prairiePageBackground()
         .navigationTitle("My Requests")
-        .continuumNavigationTitleDisplayMode(.inline)
-        .continuumToolbarColorSchemeDark()
-        .continuumNavigationBarSurfaceBackground()
+        .prairieNavigationTitleDisplayMode(.inline)
+        .prairieToolbarColorSchemeDark()
+        .prairieNavigationBarSurfaceBackground()
         .task {
             await viewModel.load()
         }
@@ -52,8 +52,8 @@ struct MyRequestsView: View {
             VStack(alignment: .leading, spacing: sectionSpacing) {
                 if let message = viewModel.actionErrorMessage {
                     Text(message)
-                        .font(.continuumCaption)
-                        .foregroundColor(.continuumSecondaryText)
+                        .font(.prairieCaption)
+                        .foregroundColor(.prairieSecondaryText)
                         .frame(maxWidth: .infinity, alignment: .center)
                 }
 
@@ -61,9 +61,9 @@ struct MyRequestsView: View {
                     bucketSection(entry.bucket, requests: entry.requests)
                 }
             }
-            .padding(.horizontal, ContinuumTheme.padding)
-            .padding(.top, ContinuumTheme.smallPadding)
-            .padding(.bottom, ContinuumTheme.largePadding)
+            .padding(.horizontal, PrairieTheme.padding)
+            .padding(.top, PrairieTheme.smallPadding)
+            .padding(.bottom, PrairieTheme.largePadding)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         #if os(tvOS)
@@ -76,11 +76,11 @@ struct MyRequestsView: View {
         VStack(alignment: .leading, spacing: rowSpacing) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(bucket.title)
-                    .font(.continuumHeadline)
-                    .foregroundColor(.continuumOnSurface)
+                    .font(.prairieHeadline)
+                    .foregroundColor(.prairieOnSurface)
                 Text(String(requests.count))
-                    .font(.continuumCaption)
-                    .foregroundColor(.continuumSecondaryText)
+                    .font(.prairieCaption)
+                    .foregroundColor(.prairieSecondaryText)
             }
 
             #if os(tvOS)
@@ -119,13 +119,13 @@ struct MyRequestsView: View {
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(record.title)
-                        .font(.continuumSubheadline)
-                        .foregroundColor(.continuumOnSurface)
+                        .font(.prairieSubheadline)
+                        .foregroundColor(.prairieOnSurface)
                         .lineLimit(1)
 
                     Text(rowMeta(record))
-                        .font(.continuumCaption)
-                        .foregroundColor(.continuumSecondaryText)
+                        .font(.prairieCaption)
+                        .foregroundColor(.prairieSecondaryText)
                         .lineLimit(2)
                 }
 
@@ -135,12 +135,12 @@ struct MyRequestsView: View {
             }
             .padding(10)
             .background(
-                RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius)
-                    .fill(Color.continuumSurface)
+                RoundedRectangle(cornerRadius: PrairieTheme.cornerRadius)
+                    .fill(Color.prairieSurface)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius)
-                    .stroke(Color.continuumOutline.opacity(0.6), lineWidth: 1)
+                RoundedRectangle(cornerRadius: PrairieTheme.cornerRadius)
+                    .stroke(Color.prairieOutline.opacity(0.6), lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
@@ -167,10 +167,10 @@ struct MyRequestsView: View {
             )
             .frame(width: 46, height: 69)
             .clipped()
-            .clipShape(RoundedRectangle(cornerRadius: ContinuumTheme.smallCornerRadius))
+            .clipShape(RoundedRectangle(cornerRadius: PrairieTheme.smallCornerRadius))
         } else {
-            RoundedRectangle(cornerRadius: ContinuumTheme.smallCornerRadius)
-                .fill(Color.continuumSurfaceElevated)
+            RoundedRectangle(cornerRadius: PrairieTheme.smallCornerRadius)
+                .fill(Color.prairieSurfaceElevated)
                 .frame(width: 46, height: 69)
         }
     }
@@ -183,7 +183,7 @@ struct MyRequestsView: View {
     }
 
     private func isCancelable(_ record: MediaRequest) -> Bool {
-        rowState(record).isCancelable
+        rowState(record).isCancelable && !viewModel.isCancelUnconfirmed(record)
     }
 
     private func rowMeta(_ record: MediaRequest) -> String {

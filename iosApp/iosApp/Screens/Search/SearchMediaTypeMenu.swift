@@ -21,7 +21,7 @@ struct SearchMediaTypeMenu: View {
         } label: {
             HStack(spacing: 6) {
                 Text(selectedMediaType.title)
-                    .font(.continuumBody)
+                    .font(.prairieBody)
                     .lineLimit(1)
 
                 Image(systemName: "chevron.down")
@@ -29,14 +29,14 @@ struct SearchMediaTypeMenu: View {
                     .bold()
                     .imageScale(.small)
             }
-            .foregroundStyle(Color.continuumOnSurface)
+            .foregroundStyle(Color.prairieOnSurface)
             .padding(.horizontal, 14)
             .frame(minHeight: 44)
             .background(
-                Capsule().fill(Color.continuumChromeRestingFill)
+                Capsule().fill(Color.prairieChromeRestingFill)
             )
             .overlay(
-                Capsule().strokeBorder(Color.continuumChromeRestingBorder, lineWidth: 1)
+                Capsule().strokeBorder(Color.prairieChromeRestingBorder, lineWidth: 1)
             )
             .contentShape(Capsule())
         }

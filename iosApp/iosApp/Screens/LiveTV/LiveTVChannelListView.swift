@@ -48,11 +48,11 @@ struct LiveTVChannelListView: View {
 
     var body: some View {
         content
-            .continuumBackground()
+            .prairieBackground()
             .navigationTitle("Live TV")
-            .continuumNavigationTitleDisplayMode(.inline)
-            .continuumToolbarColorSchemeDark()
-            .continuumNavigationBarSurfaceBackground()
+            .prairieNavigationTitleDisplayMode(.inline)
+            .prairieToolbarColorSchemeDark()
+            .prairieNavigationBarSurfaceBackground()
             .task {
                 if viewModel.loadState == .idle {
                     await viewModel.load()
@@ -66,11 +66,11 @@ struct LiveTVChannelListView: View {
             .overlay(alignment: .bottom) {
                 if let message = viewModel.recordingMessage {
                     Text(message)
-                        .font(.continuumCaption)
-                        .foregroundStyle(Color.continuumOnSurface)
+                        .font(.prairieCaption)
+                        .foregroundStyle(Color.prairieOnSurface)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 10)
-                        .background(Color.continuumSurfaceElevated)
+                        .background(Color.prairieSurfaceElevated)
                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                         .padding(.bottom, 24)
                         .accessibilityIdentifier("livetv-recording-message")
@@ -161,7 +161,7 @@ struct LiveTVChannelListView: View {
             HStack(spacing: 8) {
                 ForEach(LiveTVTab.allCases) { tab in
                     Button {
-                        withAnimation(.easeInOut(duration: ContinuumTheme.normalDuration)) {
+                        withAnimation(.easeInOut(duration: PrairieTheme.normalDuration)) {
                             selectedTab = tab
                         }
                     } label: {
@@ -169,29 +169,29 @@ struct LiveTVChannelListView: View {
                             Text(tab.title)
                             if tab == .recordings, !viewModel.scheduledRecordings.isEmpty {
                                 Text("\(viewModel.scheduledRecordings.count)")
-                                    .font(.continuumCaption)
+                                    .font(.prairieCaption)
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 2)
-                                    .background(Color.continuumSurfaceElevated)
+                                    .background(Color.prairieSurfaceElevated)
                                     .clipShape(Capsule())
                             }
                         }
-                        .font(.continuumCaption)
+                        .font(.prairieCaption)
                         .fontWeight(selectedTab == tab ? .semibold : .regular)
-                        .foregroundColor(selectedTab == tab ? Color.continuumBackground : .continuumSecondaryText)
+                        .foregroundColor(selectedTab == tab ? Color.prairieBackground : .prairieSecondaryText)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 8)
                         .background(
                             Capsule()
-                                .fill(selectedTab == tab ? Color.continuumOnSurface : Color.continuumSurfaceElevated)
+                                .fill(selectedTab == tab ? Color.prairieOnSurface : Color.prairieSurfaceElevated)
                         )
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("livetv-tab-\(tab.rawValue)")
                 }
             }
-            .padding(.horizontal, ContinuumTheme.padding)
-            .padding(.vertical, ContinuumTheme.smallPadding)
+            .padding(.horizontal, PrairieTheme.padding)
+            .padding(.vertical, PrairieTheme.smallPadding)
         }
     }
 
@@ -214,7 +214,7 @@ struct LiveTVChannelListView: View {
                     #if os(tvOS)
                     .listRowBackground(Color.clear)
                     #else
-                    .listRowBackground(Color.continuumSurface)
+                    .listRowBackground(Color.prairieSurface)
                     #endif
             }
         }
@@ -233,8 +233,8 @@ struct LiveTVChannelListView: View {
             let programs = viewModel.programs(for: channel.id)
             if programs.isEmpty {
                 Text("No guide data")
-                    .font(.continuumCaption)
-                    .foregroundStyle(Color.continuumSecondaryText)
+                    .font(.prairieCaption)
+                    .foregroundStyle(Color.prairieSecondaryText)
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 10) {
@@ -248,9 +248,9 @@ struct LiveTVChannelListView: View {
         } header: {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Text(channel.displayNumber)
-                    .font(.continuumHeadline)
+                    .font(.prairieHeadline)
                 Text(channel.displayName)
-                    .font(.continuumBody)
+                    .font(.prairieBody)
                 Spacer(minLength: 8)
                 Button {
                     Task { await play(channel) }
@@ -272,7 +272,7 @@ struct LiveTVChannelListView: View {
                 }
                 #else
                 .buttonStyle(.borderedProminent)
-                .tint(Color.continuumAccent)
+                .tint(Color.prairieAccent)
                 #endif
             }
         }
@@ -283,18 +283,18 @@ struct LiveTVChannelListView: View {
             && !program.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         VStack(alignment: .leading, spacing: 6) {
             Text(program.displayTitle)
-                .font(.continuumCaption)
-                .foregroundStyle(Color.continuumOnSurface)
+                .font(.prairieCaption)
+                .foregroundStyle(Color.prairieOnSurface)
                 .lineLimit(2)
             Text(timeRange(program))
-                .font(.continuumCaption)
-                .foregroundStyle(Color.continuumSecondaryText)
+                .font(.prairieCaption)
+                .foregroundStyle(Color.prairieSecondaryText)
             if canRecord {
                 Button {
                     Task { await viewModel.scheduleRecording(program: program) }
                 } label: {
                     Label("Record", systemImage: "record.circle")
-                        .font(.continuumCaption)
+                        .font(.prairieCaption)
                 }
                 .disabled(viewModel.isRecordingBusy)
                 #if !os(tvOS)
@@ -304,7 +304,7 @@ struct LiveTVChannelListView: View {
         }
         .frame(width: 160, alignment: .leading)
         .padding(10)
-        .background(Color.continuumSurfaceElevated)
+        .background(Color.prairieSurfaceElevated)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
@@ -323,7 +323,7 @@ struct LiveTVChannelListView: View {
                         #if os(tvOS)
                         .listRowBackground(Color.clear)
                         #else
-                        .listRowBackground(Color.continuumSurface)
+                        .listRowBackground(Color.prairieSurface)
                         #endif
                 }
             }
@@ -377,15 +377,15 @@ struct LiveTVChannelListView: View {
         Section(title) {
             if recordings.isEmpty {
                 Text(emptyMessage)
-                    .font(.continuumCaption)
-                    .foregroundStyle(Color.continuumSecondaryText)
+                    .font(.prairieCaption)
+                    .foregroundStyle(Color.prairieSecondaryText)
             } else {
                 ForEach(recordings) { recording in
                     recordingRow(recording)
                         #if os(tvOS)
                         .listRowBackground(Color.clear)
                         #else
-                        .listRowBackground(Color.continuumSurface)
+                        .listRowBackground(Color.prairieSurface)
                         #endif
                 }
             }
@@ -397,13 +397,13 @@ struct LiveTVChannelListView: View {
         HStack(alignment: .center, spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(recording.title)
-                    .font(.continuumBody)
-                    .foregroundStyle(Color.continuumOnSurface)
+                    .font(.prairieBody)
+                    .foregroundStyle(Color.prairieOnSurface)
                 let channelLabel = viewModel.channel(for: recording.channelId)?.displayName
                     ?? recording.channelId
                 Text("\(recording.status.capitalized) · \(channelLabel) · \(recordingTimeRange(recording))")
-                    .font(.continuumCaption)
-                    .foregroundStyle(Color.continuumSecondaryText)
+                    .font(.prairieCaption)
+                    .foregroundStyle(Color.prairieSecondaryText)
             }
             Spacer(minLength: 8)
             if let contentId = playableLibraryItemId(from: recording) {
@@ -414,7 +414,7 @@ struct LiveTVChannelListView: View {
                 }
                 #if !os(tvOS)
                 .buttonStyle(.borderedProminent)
-                .tint(Color.continuumAccent)
+                .tint(Color.prairieAccent)
                 #endif
             } else if recording.status.lowercased() == "scheduled"
                 || recording.status.lowercased() == "pending" {
@@ -457,17 +457,17 @@ struct LiveTVChannelListView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Text(channel.displayNumber)
-                    .font(.continuumHeadline)
-                    .foregroundStyle(Color.continuumOnSurface)
+                    .font(.prairieHeadline)
+                    .foregroundStyle(Color.prairieOnSurface)
                     .frame(minWidth: 44, alignment: .leading)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(channel.displayName)
-                        .font(.continuumBody)
-                        .foregroundStyle(Color.continuumOnSurface)
+                        .font(.prairieBody)
+                        .foregroundStyle(Color.prairieOnSurface)
                     if channel.hd {
                         Text("HD")
-                            .font(.continuumCaption)
-                            .foregroundStyle(Color.continuumSecondaryText)
+                            .font(.prairieCaption)
+                            .foregroundStyle(Color.prairieSecondaryText)
                     }
                 }
                 Spacer(minLength: 8)
@@ -491,7 +491,7 @@ struct LiveTVChannelListView: View {
                 }
                 #else
                 .buttonStyle(.borderedProminent)
-                .tint(Color.continuumAccent)
+                .tint(Color.prairieAccent)
                 #endif
             }
 
@@ -499,8 +499,8 @@ struct LiveTVChannelListView: View {
                 epgLine(label: "Now", program: now, allowRecord: true)
             } else {
                 Text("Now — No guide data")
-                    .font(.continuumCaption)
-                    .foregroundStyle(Color.continuumSecondaryText)
+                    .font(.prairieCaption)
+                    .foregroundStyle(Color.prairieSecondaryText)
             }
             if let next = slot.next {
                 epgLine(label: "Next", program: next, allowRecord: true)
@@ -514,11 +514,11 @@ struct LiveTVChannelListView: View {
         HStack(alignment: .center, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("\(label) — \(program.displayTitle)")
-                    .font(.continuumCaption)
-                    .foregroundStyle(Color.continuumOnSurface)
+                    .font(.prairieCaption)
+                    .foregroundStyle(Color.prairieOnSurface)
                 Text(timeRange(program))
-                    .font(.continuumCaption)
-                    .foregroundStyle(Color.continuumSecondaryText)
+                    .font(.prairieCaption)
+                    .foregroundStyle(Color.prairieSecondaryText)
             }
             Spacer(minLength: 8)
             if allowRecord, !program.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -554,7 +554,7 @@ struct LiveTVChannelListView: View {
                 return
             }
 
-            let serverUrl = await ContinuumAPI.shared.currentServerUrl()
+            let serverUrl = await PrairieAPI.shared.currentServerUrl()
             let accessToken = await TokenStore.shared.getAccessToken()
             let profileId = await TokenStore.shared.getProfileId()
             let resolved = LiveTVURLResolver.resolve(

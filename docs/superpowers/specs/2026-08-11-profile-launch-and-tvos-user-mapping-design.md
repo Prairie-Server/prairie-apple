@@ -3,7 +3,7 @@ title: Prairie Profile Launch Choice and Apple TV User Mapping
 description: Implementation-ready design for automatic or required profile selection and per-user tvOS profile memory.
 date: 2026-08-11
 tags:
-  - silo
+  - prairie
   - apple
   - profiles
   - design-spec
@@ -13,11 +13,11 @@ tags:
 
 - **Date:** 2026-08-11
 - **Status:** Implemented; simulator-validated
-- **Repo:** `silo-apple` (iOS, iPadOS, macOS, tvOS, and the tvOS Top Shelf extension)
+- **Repo:** `prairie-apple` (iOS, iPadOS, macOS, tvOS, and the tvOS Top Shelf extension)
 - **Server:** No change required
 - **Android:** Parity follow-up recommended; not part of this implementation
-- **Exploration baseline:** `silo-apple` `fdb5225`; `silo-server` `origin/main`
-  `2dc7d5e36`; `silo-android` `origin/main` `3efdbd90`
+- **Exploration baseline:** `prairie-apple` `fdb5225`; `prairie-server` `origin/main`
+  `2dc7d5e36`; `prairie-android` `origin/main` `3efdbd90`
 
 ## Implementation validation
 
@@ -374,7 +374,7 @@ picker. Do not automatically select a sibling profile.
 
 ### 8.1 Use the modern entitlement model
 
-Add this entitlement to both the `SiloTV` app and `SiloTVTopShelf` extension targets:
+Add this entitlement to both the `PrairieTV` app and `PrairieTVTopShelf` extension targets:
 
 ```xml
 <key>com.apple.developer.user-management</key>
@@ -491,7 +491,7 @@ sign-out regression.
 
 ### 9.3 Personal-team signing
 
-Add the User Management key to `SiloTV.personal.entitlements` and
+Add the User Management key to `PrairieTV.personal.entitlements` and
 `TopShelf.personal.entitlements` only if personal provisioning supports it. If it does not, keep a
 documented local-signing fallback that compiles/runs without system-user separation; production
 entitlements remain authoritative. Never replace the paid-team production entitlements to make a
@@ -683,6 +683,6 @@ Use a signed-in physical device; the Simulator does not prove Apple TV user stor
 - `iosApp/iosApp/tvOS/Navigation/TVMainTabView.swift` — centralized explicit switch action.
 - `iosApp/TopShelf/ContentProvider.swift` / `TopShelfHTTPClient.swift` — policy gating and split
   credential reads.
-- `iosApp/SiloTV.entitlements`, `iosApp/TopShelf/TopShelf.entitlements`, and supported personal
+- `iosApp/PrairieTV.entitlements`, `iosApp/TopShelf/TopShelf.entitlements`, and supported personal
   variants — User Management capability.
 - `iosApp/Tests/` — resolver, migration, identity, Top Shelf, and account-boundary coverage.

@@ -14,6 +14,12 @@ struct DownloadsSettingsView: View {
         return available.isEmpty ? [.original] : available
     }
 
+    private var heldProgressFooter: String {
+        let count = manager.heldProgressCount
+        let subject = count == 1 ? "1 offline watch position" : "\(count) offline watch positions"
+        return "\(subject) may not have reached the server. Prairie won't send them again. Playing the download again replaces them."
+    }
+
     var body: some View {
         Form {
             SettingsPageHeader(
@@ -25,7 +31,7 @@ struct DownloadsSettingsView: View {
 
             Section {
                 Toggle("Download over Wi-Fi only", isOn: $settings.wifiOnly)
-                    .tint(.continuumAccent)
+                    .tint(.prairieAccent)
                 if formats.count > 1 {
                     Picker("Quality", selection: $settings.preferredFormat) {
                         ForEach(formats, id: \.self) { format in
@@ -43,11 +49,11 @@ struct DownloadsSettingsView: View {
                     Text("Original prefers source quality and may prepare a compatibility file if this device needs one. Bitrate presets are prepared on the server before download starts.")
                 }
             }
-            .listRowBackground(Color.continuumSurfaceElevated.opacity(0.92))
+            .listRowBackground(Color.prairieSurfaceElevated.opacity(0.92))
 
             Section("Series Monitoring Defaults") {
                 Toggle("Delete watched episodes", isOn: $settings.defaultDeleteWatched)
-                    .tint(.continuumAccent)
+                    .tint(.prairieAccent)
                 Stepper(
                     settings.defaultMaxStorageGB == 0
                         ? "Storage limit: Unlimited"
@@ -57,24 +63,24 @@ struct DownloadsSettingsView: View {
                     step: 5
                 )
             }
-            .listRowBackground(Color.continuumSurfaceElevated.opacity(0.92))
+            .listRowBackground(Color.prairieSurfaceElevated.opacity(0.92))
 
             Section {
                 Toggle("Keep watched downloads", isOn: $settings.keepWatchedDownloads)
-                    .tint(.continuumAccent)
+                    .tint(.prairieAccent)
             } header: {
                 Text("Cleanup")
             } footer: {
                 Text("When off, the Downloads tab suggests freeing up space by removing items you've finished watching.")
             }
-            .listRowBackground(Color.continuumSurfaceElevated.opacity(0.92))
+            .listRowBackground(Color.prairieSurfaceElevated.opacity(0.92))
 
             Section("Storage") {
                 HStack {
                     Text("Used")
                     Spacer()
                     Text(DownloadFormatting.bytes(manager.totalBytesUsed))
-                        .foregroundColor(.continuumSecondaryText)
+                        .foregroundColor(.prairieSecondaryText)
                 }
                 if !manager.records.isEmpty {
                     Button(role: .destructive) {
@@ -84,7 +90,20 @@ struct DownloadsSettingsView: View {
                     }
                 }
             }
-            .listRowBackground(Color.continuumSurfaceElevated.opacity(0.92))
+            .listRowBackground(Color.prairieSurfaceElevated.opacity(0.92))
+
+            if manager.heldProgressCount > 0 {
+                Section {
+                    Button("Discard held change", role: .destructive) {
+                        manager.discardHeldProgress()
+                    }
+                } header: {
+                    Text("Offline Progress")
+                } footer: {
+                    Text(heldProgressFooter)
+                }
+                .listRowBackground(Color.prairieSurfaceElevated.opacity(0.92))
+            }
         }
         .navigationTitle("")
         .task {
@@ -97,7 +116,7 @@ struct DownloadsSettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .settingsListChrome()
-        .continuumToolbarColorSchemeDark()
+        .prairieToolbarColorSchemeDark()
         .confirmationDialog(
             "Remove all downloaded files?",
             isPresented: $showDeleteAllConfirm,

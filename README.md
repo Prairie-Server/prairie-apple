@@ -17,7 +17,9 @@ Try the latest beta builds of the iOS and tvOS apps:
 <p>
   <img src="project-images/prairie-apple-native/04-home.png" width="260" alt="iOS home screen" />
   <img src="project-images/prairie-apple-native/09-movie-detail.png" width="260" alt="iOS movie detail" />
+  <img src="project-images/prairie-apple-native/12-series-detail.png" width="260" alt="iOS series detail" />
   <img src="project-images/prairie-apple-native/05-libraries.png" width="260" alt="iOS movies library" />
+  <img src="project-images/prairie-apple-native/13-tv-library.png" width="260" alt="iOS TV shows library" />
 </p>
 
 ### tvOS
@@ -39,7 +41,7 @@ Try the latest beta builds of the iOS and tvOS apps:
 
 ## Prerequisites
 
-- Xcode 16+
+- Xcode 26+
 - `xcodegen`
 - Ruby 3.2 with Bundler for release automation
 - A running Prairie server for local auth, browsing, and playback validation
@@ -80,7 +82,7 @@ xcodebuild build \
 ## VS Code
 
 The checked-in `.vscode` configuration provides recommended extensions,
-unsigned build and test tasks, and SweetPad integration for building, running,
+unsigned build tasks, ad-hoc-signed simulator test tasks, and SweetPad integration for building, running,
 debugging, simulator management, and Swift code intelligence without using the
 Xcode UI.
 
@@ -128,9 +130,19 @@ Personal Apple Developer teams cannot join the production App Group, so Top Shel
 
 Fastlane lanes are defined in `fastlane/Fastfile`. All Apple IDs, team IDs, signing repo URLs, and App Store Connect credentials must come from CI environment variables.
 
+## Contributing
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Features,
+navigation or behavior changes, large refactors, and shared contract changes
+should start as an issue.
+
 ## License & Trademarks
 
-Prairie Apple is licensed under `AGPL-3.0-or-later`. See [LICENSE](LICENSE).
+Prairie Apple is licensed under `AGPL-3.0-or-later` with an additional
+permission under AGPL section 7, inherited from upstream Silo Apple, allowing
+distribution through the Apple App Store and TestFlight despite those platforms' signing, DRM, and
+redistribution terms. See [LICENSE](LICENSE) and
+[APPSTORE-EXCEPTION.md](APPSTORE-EXCEPTION.md).
 
 The **Prairie name, logo, wordmark, app icons, and other brand assets** are **not**
 covered by the AGPL. You're free to fork and redistribute the code, including with
@@ -138,4 +150,6 @@ truthful notices such as "fork of Prairie," but forks and redistributions must n
 use the Prairie brand as their identity and must remove or replace the Prairie
 brand assets. See [TRADEMARK.md](TRADEMARK.md).
 
-FFmpeg, Nuke, fastlane, and other third-party dependencies retain their own licenses. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Media playback is built on [AetherEngine](https://github.com/superuser404notfound/AetherEngine)
+by Vincent Herbst, used under LGPL-3.0 with its Apple Store / DRM exception.
+AetherEngine, FFmpeg, Nuke, fastlane, and other third-party dependencies retain their own licenses. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

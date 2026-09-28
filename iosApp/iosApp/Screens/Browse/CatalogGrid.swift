@@ -7,10 +7,20 @@ struct CatalogGrid: View {
     let items: [BrowseItem]
     let isLoading: Bool
     let hasMore: Bool
-    let onItemTap: (String) -> Void
+    /// Library grids stay three-up on iPhone even when the shared card
+    /// preference is Large. Other CatalogGrid call sites remain adaptive.
+    var forcesThreeColumnsOnPhone = false
+    let onItemTap: (BrowseItem) -> Void
     let onLoadMore: () -> Void
+    @Environment(\.browseLibraryId) private var browseLibraryId
     @Environment(AppRouter.self) private var router
     @State private var uiCustomization = UICustomizationPreferences.shared
+    @State private var gridWidth: CGFloat = 0
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    #if !os(tvOS)
+    @State private var detailBrowseOriginID = UUID().uuidString
+    @State private var detailBrowseSource: ItemDetailBrowseSource?
+    #endif
 
     #if os(tvOS)
     private var columns: [GridItem] {
@@ -26,7 +36,19 @@ struct CatalogGrid: View {
     #else
     @Environment(\.horizontalSizeClass) private var hSize
     private var columns: [GridItem] {
-        AdaptiveColumns.posters(
+        if dynamicTypeSize.isAccessibilitySize {
+            return Array(
+                repeating: GridItem(.flexible(), spacing: 8, alignment: .top),
+                count: hSize == .regular ? 3 : 2
+            )
+        }
+        if usesThreeColumnPhoneLayout {
+            return Array(
+                repeating: GridItem(.flexible(), spacing: 8),
+                count: 3
+            )
+        }
+        return AdaptiveColumns.posters(
             for: hSize,
             posterSize: uiCustomization.cardPresentation.posterSize,
             spacing: 8
@@ -45,10 +67,11 @@ struct CatalogGrid: View {
                     year: item.year,
                     userState: item.userState,
                     overlayData: OverlayData.from(item),
-                    action: { onItemTap(item.contentId) },
+                    action: { onItemTap(item) },
                     playAction: playAction(for: item),
                     contentId: item.contentId,
-                    aspect: item.isAudiobook ? .square : .poster
+                    aspect: item.isAudiobook ? .square : .poster,
+                    cardWidthOverride: phoneCardWidthOverride
                 )
                 .frame(maxWidth: .infinity)
                 .onAppear {
@@ -58,12 +81,30 @@ struct CatalogGrid: View {
                 }
             }
         }
+        #if os(iOS)
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.size.width
+        } action: { width in
+            guard abs(width - gridWidth) >= 0.5 else { return }
+            gridWidth = width
+        }
+        #endif
+        #if !os(tvOS)
+        .scrollTargetLayout()
+        .environment(\.itemDetailBrowseSource, detailBrowseSource)
+        .onChange(of: items.map(\.contentId), initial: true) { _, contentIDs in
+            detailBrowseSource = ItemDetailBrowseSource(
+                originID: detailBrowseOriginID,
+                contentIDs: contentIDs
+            )
+        }
+        #endif
 
         if isLoading {
             HStack {
                 Spacer()
                 ProgressView()
-                    .tint(.continuumOnSurface)
+                    .tint(.prairieOnSurface)
                     .padding()
                 Spacer()
             }
@@ -76,6 +117,7 @@ struct CatalogGrid: View {
         return {
             router.presentPlayer(
                 contentId: item.contentId,
+                libraryId: browseLibraryId,
                 posterURL: item.posterUrl,
                 backdropURL: item.backdropUrl
             )
@@ -83,5 +125,36 @@ struct CatalogGrid: View {
         #else
         return nil
         #endif
+    }
+
+    private var usesThreeColumnPhoneLayout: Bool {
+        #if os(iOS)
+        forcesThreeColumnsOnPhone && UIDevice.current.userInterfaceIdiom == .phone
+        #else
+        false
+        #endif
+    }
+
+    /// MediaCard applies the global poster-size scale after its override. Undo
+    /// that scale here, then cap the standard width to the measured grid cell.
+    private var phoneCardWidthOverride: CGFloat? {
+        #if os(iOS)
+        if dynamicTypeSize.isAccessibilitySize {
+            let fittedWidth = AdaptiveColumns.fittedPosterWidth(
+                containerWidth: gridWidth,
+                columnCount: columns.count,
+                spacing: 8,
+                maximumWidth: 240
+            )
+            return fittedWidth / uiCustomization.cardPresentation.posterSize.scale
+        }
+        #endif
+        guard usesThreeColumnPhoneLayout else { return nil }
+        let fittedWidth = AdaptiveColumns.fittedPosterWidth(
+            containerWidth: gridWidth,
+            columnCount: 3,
+            spacing: 8
+        )
+        return fittedWidth / uiCustomization.cardPresentation.posterSize.scale
     }
 }

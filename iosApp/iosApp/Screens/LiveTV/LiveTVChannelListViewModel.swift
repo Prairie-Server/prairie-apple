@@ -20,10 +20,10 @@ final class LiveTVChannelListViewModel {
     private(set) var isRecordingBusy = false
     private(set) var cancellingRecordingIds: Set<String> = []
 
-    private let api: ContinuumAPI
+    private let api: PrairieAPI
     private var schedulingProgramIds: Set<String> = []
 
-    init(api: ContinuumAPI = .shared) {
+    init(api: PrairieAPI = .shared) {
         self.api = api
     }
 

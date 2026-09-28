@@ -10,6 +10,7 @@ import SwiftUI
 struct TVMediaCard: View {
     let title: String
     let posterUrl: String
+    var posterThumbhash: String? = nil
     var year: Int? = nil
     /// Optional second caption line rendered in place of the year (same
     /// type treatment) — e.g. "Book 3" on audiobook series rails.
@@ -25,7 +26,7 @@ struct TVMediaCard: View {
     /// Width of the poster. Defaults to the theme's standard poster size.
     /// Override with a smaller value in space-constrained grids (e.g. the
     /// Library tab where the alphabet rail forces cards to shrink).
-    var cardWidth: CGFloat = ContinuumTheme.posterCardWidth
+    var cardWidth: CGFloat = PrairieTheme.posterCardWidth
     var aspect: MediaCardAspect = .poster
     var prefersDefaultFocus: Bool = false
     var defaultFocusNamespace: Namespace.ID? = nil
@@ -51,6 +52,8 @@ struct TVMediaCard: View {
     }
 
     @FocusState private var isFocused: Bool
+    @State private var actionFeedback = MediaActionFeedback()
+    @State private var playedOverride: Bool?
     @State private var favoriteOverride: Bool?
     @State private var watchlistOverride: Bool?
     @State private var uiCustomization = UICustomizationPreferences.shared
@@ -72,13 +75,15 @@ struct TVMediaCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             posterButton
-                .personalListContextMenu(hasPersonalActions ? personalMenuItems : nil)
+                .mediaStateContextMenu(hasPersonalActions ? stateMenu : nil)
             if uiCustomization.cardPresentation.caption.showsTitle {
                 caption
             }
         }
         .frame(width: resolvedCardWidth)
+        .mediaActionFeedback(actionFeedback)
         .onChange(of: userState) { _, _ in
+            playedOverride = nil
             favoriteOverride = nil
             watchlistOverride = nil
         }
@@ -98,26 +103,44 @@ struct TVMediaCard: View {
         watchlistOverride ?? (userState?.inWatchlist == true)
     }
 
-    private var personalMenuItems: PersonalListMenuItems {
-        PersonalListMenuItems(
+    private var isPlayed: Bool { playedOverride ?? (userState?.played == true) }
+
+    private var stateMenu: MediaStateMenuItems {
+        MediaStateMenuItems(
+            isWatched: isPlayed,
             isFavorite: isFavorite,
             inWatchlist: isInWatchlist,
+            isUpdating: actionFeedback.isUpdating,
+            onToggleWatched: aspect != .square ? toggleWatched : nil,
             onToggleFavorite: togglePersonalFavorite,
             onToggleWatchlist: togglePersonalWatchlist
         )
+    }
+
+    private func toggleWatched() {
+        guard let contentId else { return }
+        let played = !isPlayed
+        let previous = playedOverride
+        actionFeedback.perform {
+            playedOverride = played
+            let outcome = await MediaCardWatchedSync.setWatched(contentId: contentId, played: played)
+            if outcome != .applied { playedOverride = previous }
+            return outcome
+        }
     }
 
     private func togglePersonalFavorite() {
         guard let contentId else { return }
         let newValue = !isFavorite
         let watchlist = isInWatchlist
-        favoriteOverride = newValue
-        Task {
-            if await PersonalListSync.setFavorite(
+        let previous = favoriteOverride
+        actionFeedback.perform {
+            favoriteOverride = newValue
+            let outcome = await PersonalListSync.setFavorite(
                 contentId: contentId, isFavorite: newValue, inWatchlist: watchlist
-            ) == false {
-                favoriteOverride = !newValue // Revert on failure
-            }
+            )
+            if outcome != .applied { favoriteOverride = previous }
+            return outcome
         }
     }
 
@@ -125,13 +148,14 @@ struct TVMediaCard: View {
         guard let contentId else { return }
         let newValue = !isInWatchlist
         let favorite = isFavorite
-        watchlistOverride = newValue
-        Task {
-            if await PersonalListSync.setWatchlist(
+        let previous = watchlistOverride
+        actionFeedback.perform {
+            watchlistOverride = newValue
+            let outcome = await PersonalListSync.setWatchlist(
                 contentId: contentId, isFavorite: favorite, inWatchlist: newValue
-            ) == false {
-                watchlistOverride = !newValue // Revert on failure
-            }
+            )
+            if outcome != .applied { watchlistOverride = previous }
+            return outcome
         }
     }
 
@@ -166,18 +190,19 @@ struct TVMediaCard: View {
             CachedAsyncImage(
                 url: posterUrl,
                 targetSize: CGSize(width: resolvedCardWidth, height: cardHeight),
+                thumbhash: posterThumbhash,
                 contentMode: .fill
             )
             .frame(width: resolvedCardWidth, height: cardHeight)
-            .clipShape(RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius))
+            .clipShape(RoundedRectangle(cornerRadius: PrairieTheme.cornerRadius))
 
             if let overlayData, overlayStore.enabled {
                 CardOverlays(data: overlayData, prefs: overlayStore.prefs, variant: .poster)
                     .frame(width: resolvedCardWidth, height: cardHeight)
-                    .clipShape(RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius))
+                    .clipShape(RoundedRectangle(cornerRadius: PrairieTheme.cornerRadius))
             }
 
-            if userState?.played == true {
+            if isPlayed {
                 watchedBadge
                     .padding(12)
             }
@@ -188,9 +213,9 @@ struct TVMediaCard: View {
             // halo is suppressed in TVPosterRingButtonStyle), matching the
             // episode/cast cards.
             if focusTreatment == .ring {
-                RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius)
+                RoundedRectangle(cornerRadius: PrairieTheme.cornerRadius)
                     .stroke(Color.white.opacity(isFocused ? 0.9 : 0), lineWidth: isFocused ? 4 : 0)
-                    .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
+                    .animation(.easeOut(duration: PrairieTheme.fastDuration), value: isFocused)
             }
         }
     }
@@ -201,17 +226,23 @@ struct TVMediaCard: View {
     private var caption: some View {
         VStack(spacing: 4) {
             Text(title)
-                .font(.system(size: 22, weight: .semibold))
-                .foregroundColor(isFocused ? .continuumOnSurface : .continuumOnSurface.opacity(0.92))
+                .font(.prairiePosterTitle)
+                .foregroundColor(isFocused ? .prairieOnSurface : .prairieOnSurface.opacity(0.92))
                 .lineLimit(1)
                 .truncationMode(.tail)
-                .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
+                .frame(width: resolvedCardWidth, alignment: .center)
+                .clipped()
+                .animation(.easeOut(duration: PrairieTheme.fastDuration), value: isFocused)
 
             if uiCustomization.cardPresentation.caption.showsMetadata,
                let secondLine = subtitle ?? year.map(String.init) {
                 Text(secondLine)
-                    .font(.system(size: 18, weight: .regular))
-                    .foregroundColor(.continuumSecondaryText)
+                    .font(.prairiePosterMetadata)
+                    .foregroundColor(.prairieSecondaryText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(width: resolvedCardWidth, alignment: .center)
+                    .clipped()
             }
         }
         .multilineTextAlignment(.center)
@@ -221,12 +252,12 @@ struct TVMediaCard: View {
     private var watchedBadge: some View {
         ZStack {
             Circle()
-                .fill(Color.continuumOnSurface)
+                .fill(Color.prairieOnSurface)
                 .frame(width: 40, height: 40)
                 .shadow(color: .black.opacity(0.3), radius: 4)
             Image(systemName: "checkmark")
                 .font(.system(size: 20, weight: .bold))
-                .foregroundColor(Color.continuumBackground)
+                .foregroundColor(Color.prairieBackground)
         }
     }
 
@@ -236,7 +267,7 @@ struct TVMediaCard: View {
         if let secondLine {
             components.append(secondLine)
         }
-        if userState?.played == true {
+        if isPlayed {
             components.append("Watched")
         }
         return components.joined(separator: ", ")
@@ -290,8 +321,8 @@ private struct TVPosterRingButtonBody: View {
                 y: isFocused ? 8 : 0
             )
             .focusEffectDisabled()
-            .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
-            .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: configuration.isPressed)
+            .animation(.easeOut(duration: PrairieTheme.fastDuration), value: isFocused)
+            .animation(.easeOut(duration: PrairieTheme.fastDuration), value: configuration.isPressed)
     }
 
     private var scale: CGFloat {

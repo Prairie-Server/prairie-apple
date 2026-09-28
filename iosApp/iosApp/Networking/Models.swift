@@ -20,9 +20,9 @@ struct BrowseItem: Codable, Identifiable, Hashable {
     let networks: [String]?
     let showStatus: String?
     let overview: String?
-    let posterUrl: String?
+    @ArtworkURL var posterUrl: String? = nil
     let posterThumbhash: String?
-    let backdropUrl: String?
+    @ArtworkURL var backdropUrl: String? = nil
     let backdropThumbhash: String?
     let addedAt: String?
     let releaseDate: String?
@@ -50,9 +50,9 @@ struct BrowseItem: Codable, Identifiable, Hashable {
         networks = try c.decodeIfPresent([String].self, forKey: .networks)
         showStatus = try c.decodeIfPresent(String.self, forKey: .showStatus)
         overview = try c.decodeIfPresent(String.self, forKey: .overview)
-        posterUrl = try c.decodeIfPresent(String.self, forKey: .posterUrl)
+        posterUrl = try c.decode(ArtworkURL.self, forKey: .posterUrl).wrappedValue
         posterThumbhash = try c.decodeIfPresent(String.self, forKey: .posterThumbhash)
-        backdropUrl = try c.decodeIfPresent(String.self, forKey: .backdropUrl)
+        backdropUrl = try c.decode(ArtworkURL.self, forKey: .backdropUrl).wrappedValue
         backdropThumbhash = try c.decodeIfPresent(String.self, forKey: .backdropThumbhash)
         addedAt = try c.decodeIfPresent(String.self, forKey: .addedAt)
         releaseDate = try c.decodeIfPresent(String.self, forKey: .releaseDate)
@@ -108,33 +108,23 @@ struct MediaItemUserState: Codable, Hashable {
     }
 }
 
-/// Distinct filter values for a library. Returned by `/api/v1/catalog/filters`.
-/// The server does NOT return counts — consumers render plain labels.
-struct CatalogFilters: Codable, Hashable {
-    let genres: [String]
-    let studios: [String]
-    let networks: [String]
-    let countries: [String]
-    let contentRatings: [String]
-    let resolutions: [String]?
-    let audioLanguages: [String]?
-    let subtitleLanguages: [String]?
-    let originalLanguages: [String]?
-    /// Audiobook-native facets. Always returned by the server; optional here
-    /// so older servers still decode.
-    let authors: [String]?
-    let narrators: [String]?
-    let series: [String]?
-}
-
 struct CatalogResponse: Codable {
     let total: Int?
     let totalExact: Bool?
     let hasMore: Bool?
     let items: [BrowseItem]
-    let source: String?
-    let title: String?
-    let snapshot: String?
+
+    init(items: [BrowseItem], total: Int?, totalExact: Bool?, hasMore: Bool?) {
+        self.items = items
+        self.total = total
+        self.totalExact = totalExact
+        self.hasMore = hasMore
+    }
+
+    /// One v2 catalog page as the card grids show it.
+    init(catalogPage page: APIv2CatalogPage) {
+        self.init(items: page.items, total: page.total, totalExact: page.totalExact, hasMore: page.page.hasMore)
+    }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -142,9 +132,6 @@ struct CatalogResponse: Codable {
         totalExact = try c.decodeIfPresent(Bool.self, forKey: .totalExact)
         hasMore = try c.decodeIfPresent(Bool.self, forKey: .hasMore)
         items = try c.decodeIfPresent([BrowseItem].self, forKey: .items) ?? []
-        source = try c.decodeIfPresent(String.self, forKey: .source)
-        title = try c.decodeIfPresent(String.self, forKey: .title)
-        snapshot = try c.decodeIfPresent(String.self, forKey: .snapshot)
     }
 }
 
@@ -176,14 +163,51 @@ struct SectionItem: Codable, Identifiable, Hashable {
     let positionSeconds: Double?
     let durationSeconds: Double?
     let progressUpdatedAt: String?
-    let posterUrl: String?
+    @ArtworkURL var posterUrl: String? = nil
     let posterThumbhash: String?
-    let backdropUrl: String?
+    @ArtworkURL var backdropUrl: String? = nil
     let backdropThumbhash: String?
-    let logoUrl: String?
+    @ArtworkURL var logoUrl: String? = nil
     let userState: MediaItemUserState?
     let overlaySummary: OverlaySummary?
     var id: String { contentId }
+
+    /// Lift a catalog row into a section row so client-composed shelves
+    /// (Watch Party's picker) render through the same `SectionRow` as Home.
+    init(browseItem item: BrowseItem, positionSeconds: Double? = nil, durationSeconds: Double? = nil) {
+        contentId = item.contentId
+        type = item.type
+        title = item.title
+        seriesId = nil
+        seriesTitle = nil
+        seasonNumber = nil
+        episodeNumber = nil
+        year = item.year
+        genres = item.genres
+        status = item.status
+        ratingImdb = item.ratingImdb
+        ratingTmdb = item.ratingTmdb
+        ratingRtCritic = item.ratingRtCritic
+        ratingRtAudience = item.ratingRtAudience
+        contentRating = item.contentRating
+        runtime = item.runtime
+        originalLanguage = item.originalLanguage
+        studios = item.studios
+        networks = item.networks
+        showStatus = item.showStatus
+        overview = item.overview
+        itemSource = nil
+        self.positionSeconds = positionSeconds
+        self.durationSeconds = durationSeconds
+        progressUpdatedAt = nil
+        posterUrl = item.posterUrl
+        posterThumbhash = item.posterThumbhash
+        backdropUrl = item.backdropUrl
+        backdropThumbhash = item.backdropThumbhash
+        logoUrl = nil
+        userState = item.userState
+        overlaySummary = item.overlaySummary
+    }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -212,11 +236,11 @@ struct SectionItem: Codable, Identifiable, Hashable {
         positionSeconds = try c.decodeIfPresent(Double.self, forKey: .positionSeconds)
         durationSeconds = try c.decodeIfPresent(Double.self, forKey: .durationSeconds)
         progressUpdatedAt = try c.decodeIfPresent(String.self, forKey: .progressUpdatedAt)
-        posterUrl = try c.decodeIfPresent(String.self, forKey: .posterUrl)
+        posterUrl = try c.decode(ArtworkURL.self, forKey: .posterUrl).wrappedValue
         posterThumbhash = try c.decodeIfPresent(String.self, forKey: .posterThumbhash)
-        backdropUrl = try c.decodeIfPresent(String.self, forKey: .backdropUrl)
+        backdropUrl = try c.decode(ArtworkURL.self, forKey: .backdropUrl).wrappedValue
         backdropThumbhash = try c.decodeIfPresent(String.self, forKey: .backdropThumbhash)
-        logoUrl = try c.decodeIfPresent(String.self, forKey: .logoUrl)
+        logoUrl = try c.decode(ArtworkURL.self, forKey: .logoUrl).wrappedValue
         userState = try c.decodeIfPresent(MediaItemUserState.self, forKey: .userState)
         overlaySummary = try c.decodeIfPresent(OverlaySummary.self, forKey: .overlaySummary)
     }
@@ -301,6 +325,16 @@ enum PrairieMediaType {
 
 extension BrowseItem {
     var isAudiobook: Bool { PrairieMediaType.isAudiobook(type) }
+
+    /// Section rows carry the same catalog fields under the same keys, so a
+    /// Home card can be re-decoded as a catalog row when a client-composed
+    /// shelf (Watch Party's picker) needs the browse shape. Artwork URLs are
+    /// already absolute on a decoded section item, so no server URL is needed.
+    init?(sectionItem item: SectionItem) {
+        guard let data = try? JSONEncoder().encode(item),
+              let decoded = try? JSONDecoder().decode(BrowseItem.self, from: data) else { return nil }
+        self = decoded
+    }
 }
 
 extension SectionItem {
@@ -429,11 +463,11 @@ struct ItemDetail: Codable {
     let releaseDate: String?
     let firstAirDate: String?
     let lastAirDate: String?
-    let posterUrl: String?
+    @ArtworkURL var posterUrl: String? = nil
     let posterThumbhash: String?
-    let backdropUrl: String?
+    @ArtworkURL var backdropUrl: String? = nil
     let backdropThumbhash: String?
-    let logoUrl: String?
+    @ArtworkURL var logoUrl: String? = nil
     let seasonCount: Int?
     let seriesId: String?
     let seriesTitle: String?
@@ -444,6 +478,7 @@ struct ItemDetail: Codable {
     let isSpecials: Bool?
     let userData: LeafItemUserData?
     let versions: [FileVersion]?
+    var playbackVariants: [PlaybackVariant]? = nil
     let subtitles: [SubtitleInfoBasic]?
     let intro: TimeRange?
     let credits: TimeRange?
@@ -476,6 +511,10 @@ struct ItemDetail: Codable {
     /// Local extras discovered by the scanner. Each carries its own
     /// `contentId`, playable through the normal `/watch` flow.
     var extras: [ItemExtra]? = nil
+    /// The viewer's favorite, watchlist and played flags from the v2 detail
+    /// read (`user_state`); absent without a profile. `var` with a default
+    /// for the same memberwise-initializer reason as `videos`.
+    var userState: MediaItemUserState? = nil
 }
 
 extension ItemDetail {
@@ -559,20 +598,6 @@ struct ItemExtra: Codable, Hashable, Identifiable {
     }
 }
 
-/// Outcome of `POST /api/v1/items/{id}/trailers/refresh`.
-///
-/// `status` is `queued` (HTTP 202 — a refresh started), `cooldown` (200 — the
-/// item was checked recently, `nextAllowedAt` says when it can be retried),
-/// or `disabled` (200 — every library containing the item has remote videos
-/// turned off). Only `queued` is worth polling for; the other two are
-/// rendered states rather than errors.
-struct TrailerRefreshResponse: Codable, Hashable {
-    let status: String
-    /// RFC-3339 on the wire; parsed by the shared decoder's custom ISO-8601
-    /// strategy (fractional seconds tolerated).
-    let nextAllowedAt: Date?
-}
-
 struct AudiobookDetail: Codable, Hashable {
     let authors: [AudiobookPerson]
     let narrators: [AudiobookPerson]
@@ -597,7 +622,7 @@ struct AudiobookDetail: Codable, Hashable {
 struct AudiobookPerson: Codable, Identifiable, Hashable {
     let personId: String?
     let name: String
-    let photoUrl: String?
+    @ArtworkURL var photoUrl: String? = nil
     let photoThumbhash: String?
     var id: String { personId ?? name }
 }
@@ -628,7 +653,7 @@ struct AudiobookRelatedItem: Codable, Identifiable, Hashable {
     let contentId: String
     let title: String
     let year: Int?
-    let posterUrl: String?
+    @ArtworkURL var posterUrl: String? = nil
     let seriesIndex: Int?
     var id: String { contentId }
 }
@@ -649,7 +674,7 @@ struct CastMember: Codable, Identifiable, Hashable {
     let tmdbId: String?
     let tvdbId: String?
     let imdbId: String?
-    let photoUrl: String?
+    @ArtworkURL var photoUrl: String? = nil
     let photoThumbhash: String?
     var id: String { personId ?? "\(name)-\(character ?? "")" }
 }
@@ -661,30 +686,25 @@ struct CrewMember: Codable, Identifiable, Hashable {
     let tmdbId: String?
     let tvdbId: String?
     let imdbId: String?
-    let photoUrl: String?
+    @ArtworkURL var photoUrl: String? = nil
     let photoThumbhash: String?
     var id: String { "\(personId ?? name)-\(job ?? "")" }
 }
 
 struct Person: Codable, Identifiable, Hashable {
-    let id: Int
+    let id: String
     let name: String
     let bio: String?
     let birthDate: String?
     let deathDate: String?
     let birthplace: String?
     let homepage: String?
-    let photoUrl: String?
+    @ArtworkURL var photoUrl: String? = nil
     let photoThumbhash: String?
     let tmdbId: String?
     let imdbId: String?
     let tvdbId: String?
     let plexGuid: String?
-}
-
-struct PersonRefreshQueuedResponse: Codable, Hashable {
-    let status: String
-    let personId: Int
 }
 
 struct Season: Codable, Identifiable, Hashable {
@@ -695,10 +715,18 @@ struct Season: Codable, Identifiable, Hashable {
     let overview: String?
     let airDate: String?
     let episodeCount: Int
-    let posterUrl: String?
+    @ArtworkURL var posterUrl: String? = nil
     let posterThumbhash: String?
     let userData: SeasonUserData?
     var id: String { contentId }
+
+    /// Consistent label for season pickers and episode-section headings.
+    var downloadDisplayName: String {
+        if isSpecials == true || seasonNumber == 0 {
+            return title ?? "Specials"
+        }
+        return "Season \(seasonNumber)"
+    }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -709,18 +737,19 @@ struct Season: Codable, Identifiable, Hashable {
         overview = try c.decodeIfPresent(String.self, forKey: .overview)
         airDate = try c.decodeIfPresent(String.self, forKey: .airDate)
         episodeCount = try c.decodeIfPresent(Int.self, forKey: .episodeCount) ?? 0
-        posterUrl = try c.decodeIfPresent(String.self, forKey: .posterUrl)
+        posterUrl = try c.decode(ArtworkURL.self, forKey: .posterUrl).wrappedValue
         posterThumbhash = try c.decodeIfPresent(String.self, forKey: .posterThumbhash)
         userData = try c.decodeIfPresent(SeasonUserData.self, forKey: .userData)
     }
 }
 
 extension Array where Element == Season {
+    /// Specials lead, then numbered seasons ascending.
     func sortedForDisplay() -> [Season] {
         sorted { lhs, rhs in
             let lhsSpecials = lhs.isSpecials == true || lhs.seasonNumber == 0
             let rhsSpecials = rhs.isSpecials == true || rhs.seasonNumber == 0
-            if lhsSpecials != rhsSpecials { return !lhsSpecials }
+            if lhsSpecials != rhsSpecials { return lhsSpecials }
             if lhs.seasonNumber != rhs.seasonNumber { return lhs.seasonNumber < rhs.seasonNumber }
             if (lhs.title ?? "") != (rhs.title ?? "") { return (lhs.title ?? "") < (rhs.title ?? "") }
             return lhs.contentId < rhs.contentId
@@ -754,7 +783,7 @@ struct EpisodeListItem: Codable, Identifiable, Hashable {
     let imdbId: String?
     let tmdbId: String?
     let tvdbId: String?
-    let stillUrl: String?
+    @ArtworkURL var stillUrl: String? = nil
     let stillThumbhash: String?
     let userData: LeafItemUserData?
     let files: [EpisodeFile]?
@@ -798,14 +827,13 @@ struct FileVersion: Codable, Identifiable, Hashable {
     /// while `editionKey` is the stable grouping key.
     let editionRaw: String?
     let editionKey: String?
-    /// Legacy pre-`edition_raw` label kept as a decode fallback.
-    let edition: String?
     /// Server-resolved default audio track ordinal for this version.
     let effectiveAudioTrackIndex: Int?
     let effectiveAudioLanguage: String?
     var id: Int { fileId }
     var editionDisplayLabel: String {
-        Self.normalizedEditionLabel(Self.firstNonEmpty(editionRaw, edition))
+        let trimmed = editionRaw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? "Standard" : trimmed
     }
 
     init(
@@ -832,7 +860,6 @@ struct FileVersion: Codable, Identifiable, Hashable {
         presentationPartTotal: Int? = nil,
         editionRaw: String? = nil,
         editionKey: String? = nil,
-        edition: String? = nil,
         effectiveAudioTrackIndex: Int? = nil,
         effectiveAudioLanguage: String? = nil
     ) {
@@ -859,7 +886,6 @@ struct FileVersion: Codable, Identifiable, Hashable {
         self.presentationPartTotal = presentationPartTotal
         self.editionRaw = editionRaw
         self.editionKey = editionKey
-        self.edition = edition
         self.effectiveAudioTrackIndex = effectiveAudioTrackIndex
         self.effectiveAudioLanguage = effectiveAudioLanguage
     }
@@ -889,22 +915,28 @@ struct FileVersion: Codable, Identifiable, Hashable {
         presentationPartTotal = try c.decodeIfPresent(Int.self, forKey: .presentationPartTotal)
         editionRaw = try c.decodeIfPresent(String.self, forKey: .editionRaw)
         editionKey = try c.decodeIfPresent(String.self, forKey: .editionKey)
-        edition = try c.decodeIfPresent(String.self, forKey: .edition)
         effectiveAudioTrackIndex = try c.decodeIfPresent(Int.self, forKey: .effectiveAudioTrackIndex)
         effectiveAudioLanguage = try c.decodeIfPresent(String.self, forKey: .effectiveAudioLanguage)
     }
+}
 
-    private static func normalizedEditionLabel(_ raw: String?) -> String {
-        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? "Standard" : trimmed
-    }
+struct PlaybackVariant: Codable, Hashable {
+    let variantId: String
+    let editionRaw: String?
+    let editionKey: String?
+    let presentationKind: String?
+    let presentationGroupKey: String?
+    let partCount: Int
+    let totalDuration: Double?
+    let defaultFileId: Int?
+    let parts: [PlaybackVariantPart]
+}
 
-    private static func firstNonEmpty(_ values: String?...) -> String? {
-        values.first { value in
-            guard let value else { return false }
-            return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        } ?? nil
-    }
+struct PlaybackVariantPart: Codable, Hashable {
+    let partIndex: Int
+    let defaultFileId: Int?
+    let totalDuration: Double?
+    let versions: [FileVersion]
 }
 
 /// Sprite-sheet metadata for seek scrubbing, matching prairie-server
@@ -1006,6 +1038,15 @@ struct SubtitleTrack: Codable, Identifiable, Hashable {
     let external: Bool?
     let externalPath: String?
     var id: String { "\(index ?? -1)|\(externalPath ?? "")" }
+
+    /// The FFmpeg stream index the detail selector and player use to select
+    /// this track. The server emits `index,omitempty`, so an embedded track at
+    /// stream 0 arrives with no `index`; embedded is the only case where nil
+    /// means 0. External sidecars have no stream index and stay nil.
+    var selectionIndex: Int? {
+        if let index { return index }
+        return external == true ? nil : 0
+    }
 
     enum CodingKeys: String, CodingKey {
         case index
@@ -1175,19 +1216,6 @@ struct SubtitleUrl: Codable, Identifiable, Hashable {
     }
 }
 
-// MARK: - Transcode Start Response
-
-struct TranscodeStartResponse: Codable {
-    let sessionId: String
-    let status: String
-    let switchedFileId: Int?
-    let manifestUrl: String
-    let durationSeconds: Double?
-    let playerStartSeconds: Double
-    let timelineOffsetSeconds: Double
-    let canSeekAnywhere: Bool
-}
-
 // MARK: - Watch Detail
 
 struct WatchDetail: Codable {
@@ -1248,40 +1276,19 @@ struct UserCollection: Codable, Identifiable {
     let groupId: String?
     let sortOrder: Int?
     let itemCount: Int?
-    let posterUrl: String?
+    @ArtworkURL var posterUrl: String? = nil
     let posterThumbhash: String?
     let includeInServerCollections: Bool?
 }
 
-/// A user-defined grouping bucket for personal collections. Matches the
-/// server's `/api/v1/collections` `groups[*]` shape.
+/// A user-defined grouping bucket for personal collections: the v2
+/// `CollectionGroup` shape (`/api/v2/collections` `groups[*]`).
 struct CollectionGroup: Codable, Identifiable, Hashable {
     let id: String
     let name: String
     let slug: String?
     let defaultSortMode: String?
     let sortOrder: Int?
-}
-
-struct CollectionItemsResponse: Codable {
-    let items: [BrowseItem]
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        items = try c.decodeIfPresent([BrowseItem].self, forKey: .items) ?? []
-    }
-}
-
-// MARK: - Admin
-
-struct AdminStats: Codable {
-    let totalItems: Int?
-    let totalFiles: Int?
-    let totalUsers: Int?
-    let totalMovies: Int?
-    let totalShows: Int?
-    let activeStreams: Int?
-    let totalStorageBytes: Int64?
 }
 
 // MARK: - Search (uses CatalogResponse)
@@ -1293,7 +1300,7 @@ struct Library: Codable, Identifiable, Hashable {
     let name: String
     let type: String
     let sortOrder: Int?
-    let posterUrl: String?
+    @ArtworkURL var posterUrl: String? = nil
 
     var isMovieLibrary: Bool { PrairieMediaType.isMovieLibrary(type) }
     var isAudiobookLibrary: Bool { PrairieMediaType.isAudiobookLibrary(type) }
@@ -1310,6 +1317,10 @@ struct Library: Codable, Identifiable, Hashable {
     }
 }
 
+/// The viewer's libraries as the app keeps them: built from
+/// `GET /api/v2/user/libraries` by `PrairieAPI.libraries()` and persisted by
+/// `ResponseCache` in its own `{"libraries": [...]}` shape. It is not a wire
+/// model; the v2 rows are `APIv2UserLibrary`.
 struct LibrariesResponse: Codable {
     let libraries: [Library]
 
@@ -1318,11 +1329,6 @@ struct LibrariesResponse: Codable {
     }
 
     init(from decoder: Decoder) throws {
-        if let list = try? [Library](from: decoder) {
-            libraries = list.filter(\.isSupportedLibrary)
-            return
-        }
-
         let c = try decoder.container(keyedBy: CodingKeys.self)
         libraries = try c.decodeIfPresent([Library].self, forKey: .libraries)?
             .filter(\.isSupportedLibrary) ?? []
@@ -1337,7 +1343,7 @@ enum LibraryCollectionKind: String, Codable, Hashable {
     case userCollections = "user_collections"
 
     /// Value to pass as the `source` query parameter when resolving
-    /// collection items through the unified `/api/v1/catalog` endpoint.
+    /// collection items through the unified `/api/v2/catalog` endpoint.
     var catalogSource: String {
         switch self {
         case .regular: return "library_collection"
@@ -1351,10 +1357,9 @@ struct LibraryCollection: Codable, Identifiable, Hashable {
     let name: String
     let collectionType: String?
     let itemCount: Int?
-    let posterUrl: String?
+    @ArtworkURL var posterUrl: String? = nil
     let posterThumbhash: String?
-    /// Populated when the collection was decoded inside a
-    /// `LibraryTabGroup`. Flat-response cards leave this nil; treat as
+    /// Set from the Collections tab group that holds the card. Nil means
     /// regular.
     let kind: LibraryCollectionKind?
     /// Creator profile id, populated only for [LibraryCollectionKind.userCollections].
@@ -1402,7 +1407,7 @@ struct LibraryCollection: Codable, Identifiable, Hashable {
         name = try c.decode(String.self, forKey: .name)
         collectionType = try c.decodeIfPresent(String.self, forKey: .collectionType)
         itemCount = try c.decodeIfPresent(Int.self, forKey: .itemCount)
-        posterUrl = try c.decodeIfPresent(String.self, forKey: .posterUrl)
+        posterUrl = try c.decode(ArtworkURL.self, forKey: .posterUrl).wrappedValue
         posterThumbhash = try c.decodeIfPresent(String.self, forKey: .posterThumbhash)
         // Tolerate unknown raw values by decoding through String first —
         // unrecognized kinds become nil rather than aborting the whole
@@ -1416,13 +1421,12 @@ struct LibraryCollection: Codable, Identifiable, Hashable {
     }
 }
 
-/// Runtime-synthesized response from `ContinuumAPI.libraryCollections`.
-/// Not decoded from wire JSON directly — `LibraryCollectionsWireResponse`
-/// handles that and is mapped into this shape at the API boundary.
+/// Runtime-synthesized response from `PrairieAPI.libraryCollections`, mapped
+/// from the v2 `APIv2LibraryCollectionTab` at the API boundary.
 struct LibraryCollectionsResponse {
     let collections: [LibraryCollection]
-    /// Ordered render sections. Empty when the server returned a flat
-    /// response — use [resolvedSections] to get a render-ready list that
+    /// Ordered render sections. Empty when the server has no groups
+    /// configured — use [resolvedSections] to get a render-ready list that
     /// transparently wraps the flat case.
     let sections: [LibraryCollectionSection]
 
@@ -1445,6 +1449,8 @@ struct LibraryCollectionsResponse {
 struct SeasonsResponse: Codable {
     let seasons: [Season]
 
+    init(seasons: [Season]) { self.seasons = seasons }
+
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         seasons = try c.decodeIfPresent([Season].self, forKey: .seasons) ?? []
@@ -1454,97 +1460,25 @@ struct SeasonsResponse: Codable {
 struct EpisodesResponse: Codable {
     let episodes: [EpisodeListItem]
 
+    init(episodes: [EpisodeListItem]) { self.episodes = episodes }
+
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         episodes = try c.decodeIfPresent([EpisodeListItem].self, forKey: .episodes) ?? []
     }
 }
 
-// MARK: - Progress Report (sent to server)
-
-struct ProgressReport: Codable {
-    let position: Double
-    let isPaused: Bool
-}
-
-struct SyncProgressRequest: Codable {
-    let items: [SyncProgressItem]
-}
-
-struct SyncProgressItem: Codable {
-    let mediaItemId: String
-    let position: Double
-    let duration: Double
-    let forceOverwrite: Bool
-    /// Client **event** time for offline-queued items (RFC3339). Present →
-    /// last-write-wins merge on the bounded event time; absent → server
-    /// uses `now()`. See §5.1 of `docs/download-api.md`.
-    let updatedAt: Date?
-
-    init(
-        mediaItemId: String,
-        position: Double,
-        duration: Double,
-        forceOverwrite: Bool,
-        updatedAt: Date? = nil
-    ) {
-        self.mediaItemId = mediaItemId
-        self.position = position
-        self.duration = duration
-        self.forceOverwrite = forceOverwrite
-        self.updatedAt = updatedAt
-    }
-}
-
-// MARK: - Playback Start Request (sent to server)
-
-/// Body for POST /api/v1/playback/start.
-///
-/// Server shape is **flat** — there is no `client_capabilities` wrapper
-/// (see `Continuum/internal/api/handlers/playback.go::startPlaybackRequest`).
-/// Apple normally requests the selected original file (`playMethod == direct`)
-/// and performs route selection locally. `preserveDirectAudioSelection` tells
-/// the server not to remux solely to map a selected embedded audio track.
-struct StartPlaybackRequest: Codable {
-    let fileId: Int
-    let profileId: String?
-    let playMethod: String?
-    let startPosition: Double?
-    let audioTrackIndex: Int?
-    let preserveDirectAudioSelection: Bool
-    let codecsVideo: [String]
-    let codecsAudio: [String]
-    let containers: [String]
-    let maxResolution: String?
-    let hdr: Bool
-    /// Audiobooks only: the session's file-local position must not overwrite
-    /// the book-level resume point, which the client reports separately via
-    /// `/api/v1/sync/progress` on the whole-book timeline.
-    var disableProgressPersistence: Bool?
-}
-
-struct TranscodeStartRequest: Codable {
-    let sessionId: String
-    let seekSeconds: Double
-    let targetResolution: String?
-    let targetCodecVideo: String?
-    let targetCodecAudio: String?
-    let targetBitrateKbps: Int
-    let segmentDuration: Int
-    let subtitleTrackIndex: Int
-    let subtitleBurnIn: Bool
-}
-
 // MARK: - Collection Create
 
-struct CreateCollectionRequest: Codable {
+/// `POST /api/v2/collections` body.
+struct CreateCollectionRequest: Encodable {
     let name: String
     let collectionType: String
 }
 
 // MARK: - User Info
 
-struct UserInfo: Codable {
+struct UserInfo: Codable, Sendable {
     let id: String?
     let username: String
     let isAdmin: Bool?
@@ -1552,9 +1486,8 @@ struct UserInfo: Codable {
 
 // MARK: - Collections Response (array wrapper)
 
-/// Server payload for `GET /api/v1/collections`. The server emits both
-/// `collections` and `groups` arrays alongside each other; the latter is
-/// optional for backward compatibility with older deployments.
+/// The personal-collections page as the screen caches it
+/// (`CacheKey.collections`), built from ``APIv2PersonalCollections``.
 struct CollectionsResponse: Codable {
     let collections: [UserCollection]?
     let groups: [CollectionGroup]?
@@ -1573,13 +1506,14 @@ struct CollectionsResponse: Codable {
 
 // MARK: - Collection group requests
 
-struct CreateCollectionGroupRequest: Codable {
+/// `POST /api/v2/collections/groups` body; the server derives the slug.
+struct CreateCollectionGroupRequest: Encodable {
     let name: String
-    let slug: String?
 }
 
-struct UpdateCollectionGroupRequest: Codable {
-    let name: String?
+/// `PATCH /api/v2/collections/groups/{id}` body.
+struct UpdateCollectionGroupRequest: Encodable {
+    let name: String
 }
 
 /// Move-to-group payload. Always serializes `group_id`, including the
@@ -1602,34 +1536,4 @@ struct UpdateUserCollectionGroupBody: Encodable {
             try c.encodeNil(forKey: .groupId)
         }
     }
-}
-
-struct ReorderCollectionsRequest: Codable {
-    let orderedIds: [String]
-    let groupId: String?
-}
-
-struct ReorderCollectionGroupsRequest: Codable {
-    let orderedIds: [String]
-}
-
-// MARK: - Settings (generic key/value)
-
-/// Generic user-setting envelope returned by `GET /api/v1/settings/{key}`.
-struct SettingEntryResponse: Codable {
-    let key: String
-    let value: String
-}
-
-/// PUT body for `/api/v1/settings/{key}` and `/api/v1/settings/device/{key}`.
-struct SetSettingBody: Codable {
-    let value: String
-}
-
-/// Server-wide overlay configuration. `defaults` is a JSON-stringified
-/// `CardOverlayPrefs` document the admin set as the baseline for users
-/// who haven't customized; absent when no baseline is configured.
-struct OverlayConfigResponse: Codable {
-    let enabled: Bool
-    let defaults: String?
 }

@@ -6,7 +6,7 @@ name: Unit Tests
 #
 # Coverage gate choice:
 #   Default scope is `/Networking/` minus live HTTP / session modules
-#   (ContinuumAPI, HTTPClient, store refreshers, FramedJSONSession, …).
+#   (PrairieAPI, HTTPClient, store refreshers, FramedJSONSession, …).
 #   See scripts/check-xccov-coverage.sh.
 #
 # CI speed:
@@ -84,9 +84,9 @@ jobs:
             PrairieNetworkingTests/NetworkingGateBoostTests
             PrairieNetworkingTests/NetworkingModelsCoverageTests
             PrairieNetworkingTests/NetworkingModelsGateFillTests
-            PrairieNetworkingTests/NetworkingSiloGateFillTests
-            PrairieNetworkingTests/NetworkingSiloRegistryGateFillTests
-            PrairieNetworkingTests/NetworkingSiloTokenStoreGateFillTests
+            PrairieNetworkingTests/NetworkingPrairieGateFillTests
+            PrairieNetworkingTests/NetworkingPrairieRegistryGateFillTests
+            PrairieNetworkingTests/NetworkingPrairieTokenStoreGateFillTests
             PrairieNetworkingTests/TokenStorePersistenceTests
             PrairieNetworkingTests/TokenStoreDiagnosticsTests
             PrairieNetworkingTests/ServerRegistryMigrationTests

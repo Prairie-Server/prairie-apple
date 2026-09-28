@@ -22,7 +22,7 @@ enum CalendarFilter: String, CaseIterable, Identifiable {
 
 // MARK: - Wire types
 
-/// Response from `GET /api/v1/calendar`. Snake_case keys are mapped by the
+/// Response from `GET /api/v2/calendar`. Snake_case keys are mapped by the
 /// shared decoder's `.convertFromSnakeCase` strategy.
 struct CalendarResponse: Codable {
     let events: [CalendarDay]
@@ -52,7 +52,7 @@ struct CalendarEvent: Codable, Identifiable {
     let airAt: String?
     let airTimezone: String?
     let localAirDate: String?
-    let posterUrl: String?
+    @ArtworkURL var posterUrl: String?
     let posterThumbhash: String?
     let watched: Bool?
     let badges: [String]?
@@ -61,8 +61,20 @@ struct CalendarEvent: Codable, Identifiable {
 
     /// Where tapping the event should land: episodes and season premieres
     /// open their series; movies open themselves.
-    var navigationContentId: String {
-        type == "movie" ? contentId : (seriesId ?? contentId)
+    var detailRoute: Route {
+        guard type == "episode" || type == "season_premiere",
+              let seriesId = seriesId?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !seriesId.isEmpty else {
+            return .itemDetail(contentId: contentId)
+        }
+        return .itemDetail(
+            contentId: seriesId,
+            seriesContext: SeriesDetailContext(
+                seriesContentId: seriesId,
+                episodeContentId: type == "episode" ? contentId : nil,
+                seasonNumber: seasonNumber
+            )
+        )
     }
 
     var isWatched: Bool { watched == true }

@@ -130,7 +130,7 @@ enum DiagLogAttributeRegistry {
         }
     }
 
-    // Mirrors silo-server docs/design/schemas/client-diagnostics/v1/attr-registry.json,
+    // Mirrors prairie-server docs/design/schemas/client-diagnostics/v1/attr-registry.json,
     // vendored at Tests/Fixtures/DiagnosticsContract/attr-registry.json. Re-vendor the
     // fixture and update this table together; never edit one alone.
     static let registry: [DiagnosticsLogCategory: [String: ValueType]] = [

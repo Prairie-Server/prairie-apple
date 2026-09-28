@@ -117,31 +117,10 @@ final class DiagnosticsReviewFixesTests: XCTestCase {
         XCTAssertEqual(tracker.recentSessionIDs(for: binding), ["failed-run-session"])
     }
 
-    func testCMPLogCaptureRequiresDiagnosticsGateAndVerboseOptIn() {
-        XCTAssertFalse(shouldCaptureCMPLog(
-            verbose: false,
-            debugLoggingEnabled: true,
-            captureEnabled: false
-        ))
-        XCTAssertTrue(shouldCaptureCMPLog(
-            verbose: false,
-            debugLoggingEnabled: false,
-            captureEnabled: true
-        ))
-        XCTAssertFalse(shouldCaptureCMPLog(
-            verbose: true,
-            debugLoggingEnabled: false,
-            captureEnabled: true
-        ))
-        XCTAssertTrue(shouldCaptureCMPLog(
-            verbose: true,
-            debugLoggingEnabled: true,
-            captureEnabled: true
-        ))
-    }
-
     // MARK: - Byte-safe stack truncation (#11)
 
+#if os(iOS)
+    // MetricKitDiagnosticParser is iOS-only.
     func testStackExcerptTruncatesToUTF8ByteLimit() throws {
         // 12 frames of multibyte symbols exceed 8192 UTF-8 bytes when joined.
         let frame: [String: Any] = ["symbolName": String(repeating: "é", count: 1000), "offset": 1]
@@ -160,6 +139,7 @@ final class DiagnosticsReviewFixesTests: XCTestCase {
         // Passes the same validation the server enforces.
         XCTAssertNoThrow(try crash.validate())
     }
+#endif
 
     // MARK: - Declined-prompt suppression (round 2 #6)
 
@@ -289,6 +269,14 @@ final class DiagnosticsReviewFixesTests: XCTestCase {
         XCTAssertTrue(DiagnosticsCoordinator.isTransientCaptureFallbackFailure(
             HostedDiagnosticsAPIError.http(statusCode: 429, code: "rate_limited")
         ))
+        // The v2 account read reports server errors as `APIv2Error`.
+        XCTAssertTrue(DiagnosticsCoordinator.isTransientCaptureFallbackFailure(
+            APIv2Error.httpStatus(502)
+        ))
+        XCTAssertTrue(DiagnosticsCoordinator.isTransientCaptureFallbackFailure(
+            APIv2Error.problem(APIv2Problem(type: "about:blank", title: "Unavailable", status: 503,
+                detail: "", instance: nil, errors: nil))
+        ))
     }
 
     func testSelfHostedBindingRejectsReservedHostedPrefix() {
@@ -318,6 +306,15 @@ final class DiagnosticsReviewFixesTests: XCTestCase {
                 "HTTP \(status) must fail closed"
             )
         }
+        for status in [401, 403, 404, 410] {
+            XCTAssertFalse(
+                DiagnosticsCoordinator.isTransientCaptureFallbackFailure(APIv2Error.httpStatus(status)),
+                "v2 HTTP \(status) must fail closed"
+            )
+        }
+        XCTAssertFalse(DiagnosticsCoordinator.isTransientCaptureFallbackFailure(
+            APIv2Error.serverUpdateRequired
+        ))
         XCTAssertFalse(DiagnosticsCoordinator.isTransientCaptureFallbackFailure(
             HTTPError.invalidResponse
         ))
@@ -457,6 +454,8 @@ final class DiagnosticsReviewFixesTests: XCTestCase {
         XCTAssertNotEqual(store.currentURL, store.leftoverURL)
     }
 
+#if os(iOS)
+    // MetricKitCapture is iOS-only; the rest of this file runs on tvOS too.
     // MARK: - MetricKit evidence isolation (PR #98)
 
     func testMetricKitCaptureOmitsUncorrelatedProcessEvidence() throws {
@@ -497,6 +496,7 @@ final class DiagnosticsReviewFixesTests: XCTestCase {
         ))
         XCTAssertTrue(report.manifest.playbackSessionIds.isEmpty)
     }
+#endif
 
     func testEmptyFailedRunLogSnapshotStillFreezesLogsArtifact() async {
         DiagLog.ring.clear()
