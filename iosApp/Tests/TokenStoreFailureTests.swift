@@ -84,7 +84,7 @@ final class TokenStoreFailureTests: XCTestCase {
 
     private func temporaryScope() -> TemporaryAuthScope {
         TemporaryAuthScope(serverId: "temp-server", serverURL: "https://temp.example", accessToken: "t-access",
-                           refreshToken: "t-refresh", profileId: "temp-profile", profileToken: nil,
+                           refreshToken: "t-refresh", profileId: "temp-profile", profileToken: "t-proof",
                            controllerDeviceId: "controller", expiresAt: Date().addingTimeInterval(600))
     }
 
