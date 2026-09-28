@@ -266,20 +266,33 @@ final class APIv2PlaybackModelsTests: XCTestCase {
         XCTAssertNotNil(startBody["client_capabilities"])
         XCTAssertNotNil(startBody["client_playback_context"])
 
-        let replan = try PlaybackV3FixtureTestSupport.decode(PlaybackV3ReplanRequest.self, named: "replan_request",
-                                                              bundleClass: Self.self)
+        let data = try APIv2FixtureTestSupport.data(named: "playback_start_opaque_ids", bundleClass: Self.self)
+        let plan = try XCTUnwrap(HTTPClient.makeJSONDecoder().decode(APIv2PlaybackDecision.self, from: data)
+            .legacy().playbackPlan)
+        let replan = PlaybackV3ReplanRequest(
+            protocolVersion: 3, clientFeatures: start.clientFeatures, operation: "failure_recovery",
+            playbackAttemptId: start.playbackAttemptId, replanRequestId: "replan-1", failedPlanId: plan.planId,
+            planAttemptId: "plan-attempt-1", planAttemptKey: plan.planAttemptKey,
+            attemptedPlanKeys: [plan.planAttemptKey], attemptCount: 1, qualityPreference: "auto",
+            positionSeconds: 30, metered: false, bandwidthEstimateKbps: nil, bandwidthCapKbps: nil,
+            selectedTracks: plan.selectedTracks, failure: nil, localMutations: [],
+            clientCapabilities: start.clientCapabilities, clientPlaybackContext: start.clientPlaybackContext)
         let replanBody = try object(APIv2PlaybackReplanBody(installationID: "install-1", request: replan))
         XCTAssertEqual(replanBody["installation_id"] as? String, "install-1")
-        XCTAssertEqual(replanBody["replan_request_id"] as? String, "replan-golden-0001")
-        XCTAssertEqual(replanBody["operation"] as? String, "failure_recovery")
+        XCTAssertEqual(replanBody["replan_request_id"] as? String, "replan-1")
+        XCTAssertEqual(replanBody["failed_plan_id"] as? String, plan.planId)
+        XCTAssertEqual(replanBody["attempted_plan_keys"] as? [String], [plan.planAttemptKey])
 
-        let event = try PlaybackV3FixtureTestSupport.decode(PlaybackV3RouteEvent.self, named: "route_event",
-                                                             bundleClass: Self.self)
+        let event = PlaybackV3RouteEvent(
+            protocolVersion: 3, playbackAttemptId: start.playbackAttemptId, sessionId: plan.sessionId,
+            planId: plan.planId, planAttemptId: "plan-attempt-1", planAttemptKey: plan.planAttemptKey,
+            event: "first_frame", failureClassification: nil, fallbackReason: nil, appliedQuirkIds: [],
+            quirkRegistryRevision: nil, outputContextId: "7", diagnostics: ["first_frame_ms": "412"])
         let eventBody = try object(APIv2PlaybackRouteEventBody(installationID: "install-1", eventID: "evt-1", event: event))
         XCTAssertEqual(eventBody["installation_id"] as? String, "install-1")
         XCTAssertEqual(eventBody["event_id"] as? String, "evt-1")
         XCTAssertEqual(eventBody["event"] as? String, "first_frame")
-        XCTAssertEqual(eventBody["plan_attempt_key"] as? String, "v3:f0144c47fa349e3e")
+        XCTAssertEqual(eventBody["plan_attempt_key"] as? String, plan.planAttemptKey)
     }
 
     func testTerminalDecisionWithoutPlanProjects() throws {
