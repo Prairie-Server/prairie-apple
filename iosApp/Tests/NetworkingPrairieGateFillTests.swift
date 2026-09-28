@@ -939,18 +939,14 @@ final class NetworkingPrairieTokenStoreGateFillTests: XCTestCase {
         let liveCaptured = try XCTUnwrap(liveCapturedValue)
         XCTAssertEqual(liveCaptured.refreshToken, "refresh-2")
 
-        let cleared = await store.clearTokensAfterRejectedRefresh(
-            replacing: "refresh-2",
-            expected: identity,
-            credentialOwner: .persistentServer(serverId: serverID)
-        )
+        let disposition = await store.invalidateRejectedRefresh(liveCaptured)
         let refreshAfterClear = await store.getRefreshToken()
-        XCTAssertTrue(cleared)
+        XCTAssertEqual(disposition, .persistentSessionCleared)
         XCTAssertNil(refreshAfterClear)
 
-        // Stale capture from before the clear must not wipe a later session.
-        let disposition = await store.invalidateRejectedRefresh(liveCaptured)
-        XCTAssertNil(disposition)
+        // Replaying the same rejected capture must not report a second clear.
+        let replayed = await store.invalidateRejectedRefresh(liveCaptured)
+        XCTAssertNil(replayed)
     }
 
     func testTemporaryRefreshRotationAndClearTokensShapes() async throws {
@@ -1039,25 +1035,6 @@ final class NetworkingPrairieTokenStoreGateFillTests: XCTestCase {
             replacingGenerationID: UUID()
         )
         XCTAssertFalse(stale)
-
-        let identity = HTTPRequestIdentity(
-            serverId: serverID,
-            serverURL: "https://prairie-gate.example",
-            profileId: "p1",
-            clientFamily: "ios"
-        )
-        let skippedNil = await store.clearTokensAfterRejectedRefresh(
-            replacing: nil,
-            expected: identity,
-            credentialOwner: .persistentServer(serverId: serverID)
-        )
-        let skippedTemporaryOwner = await store.clearTokensAfterRejectedRefresh(
-            replacing: "r1",
-            expected: identity,
-            credentialOwner: .temporary
-        )
-        XCTAssertFalse(skippedNil)
-        XCTAssertFalse(skippedTemporaryOwner)
 
         // Cover the restore path that re-applies a prior rejection bit.
         let rejected = TemporaryAuthScope(

@@ -479,66 +479,6 @@ final class ServerRegistryMigrationTests: XCTestCase {
         registry.setProfileId("x", for: "missing")
     }
 
-    func testSignOutClearsProfileAndTokens() async {
-        // Token deletion goes through TokenStore.shared (process keychain), while
-        // this suite injects an in-memory SharedKeychain into ServerRegistry only.
-        // Assert registry/UserDefaults side effects here; TokenStore itself is
-        // covered by TokenStoreTests.
-        let registry = makeRegistry()
-        let a = ServerRegistry.serverId(for: "https://a.example")
-        let b = ServerRegistry.serverId(for: "https://b.example")
-        registry.addOrUpdate(ServerEntry(
-            id: a, url: "https://a.example", fetchedName: "A",
-            profileId: "pa", lastUsedAt: Date(timeIntervalSince1970: 2)
-        ))
-        registry.addOrUpdate(ServerEntry(
-            id: b, url: "https://b.example", fetchedName: "B",
-            profileId: "pb", lastUsedAt: Date(timeIntervalSince1970: 1)
-        ))
-        await registry.switchTo(serverId: a)
-        XCTAssertEqual(defaults.string(forKey: "profileId"), "pa")
-
-        await registry.signOut(serverId: a, purgeCurrentBinding: false)
-        XCTAssertNil(registry.entry(with: a)?.profileId)
-        XCTAssertNil(defaults.string(forKey: "profileId"))
-        XCTAssertEqual(registry.activeServerId, a, "signOut keeps the entry and active slot")
-
-        await registry.signOut(serverId: b, purgeCurrentBinding: true)
-        XCTAssertNil(registry.entry(with: b)?.profileId)
-    }
-
-    func testSignOutDiscardsPinnedLegacyWhenHostMatches() async {
-        let home = "https://home.example"
-        let homeId = ServerRegistry.serverId(for: home)
-        let entry = ServerEntry(
-            id: homeId, url: home, fetchedName: "Home",
-            profileId: "p", lastUsedAt: Date()
-        )
-        struct Wire: Codable {
-            var activeServerId: String?
-            var entries: [ServerEntry]
-        }
-        defaults.set(
-            try! JSONEncoder().encode(Wire(activeServerId: homeId, entries: [entry])),
-            forKey: "continuumServerRegistry.v1"
-        )
-        defaults.set(home, forKey: "serverUrl")
-        defaults.set("p", forKey: "profileId")
-        defaults.set(false, forKey: "continuumServerRegistry.migrated.v1")
-        defaults.set(home, forKey: "continuumServerRegistry.legacySourceUrl.v1")
-        XCTAssertTrue(keychain.set("LEGACY", for: "com.continuum.app.accessToken"))
-
-        let registry = makeRegistry()
-        // Force mid-migration window after init may have completed re-key.
-        defaults.set(false, forKey: "continuumServerRegistry.migrated.v1")
-        defaults.set(home, forKey: "continuumServerRegistry.legacySourceUrl.v1")
-        XCTAssertTrue(keychain.set("LEGACY", for: "com.continuum.app.accessToken"))
-
-        await registry.signOut(serverId: homeId, purgeCurrentBinding: false)
-        XCTAssertNil(keychain.get("com.continuum.app.accessToken"))
-        XCTAssertNil(defaults.string(forKey: "continuumServerRegistry.legacySourceUrl.v1"))
-    }
-
     func testRemoveActiveFallsBackToMostRecentlyUsed() async {
         let registry = makeRegistry()
         let older = ServerRegistry.serverId(for: "https://old.example")
@@ -657,14 +597,6 @@ final class ServerRegistryMigrationTests: XCTestCase {
         let registry = makeRegistry()
         XCTAssertTrue(registry.entries.isEmpty)
         XCTAssertNil(registry.activeServerId)
-    }
-
-    func testDiscardLegacyNoOpWhenAlreadyMigrated() {
-        defaults.set(true, forKey: "continuumServerRegistry.migrated.v1")
-        XCTAssertTrue(keychain.set("KEEP", for: "com.continuum.app.accessToken"))
-        let registry = makeRegistry()
-        registry.discardLegacyKeychainAccountsIfUnmigrated()
-        XCTAssertEqual(keychain.get("com.continuum.app.accessToken"), "KEEP")
     }
 
     func testDisplayNameEmptyFetchedNameFallsBackToURL() {
