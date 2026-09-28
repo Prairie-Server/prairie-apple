@@ -254,6 +254,34 @@ final class APIv2PlaybackModelsTests: XCTestCase {
         XCTAssertThrowsError(try HTTPClient.makeJSONDecoder().decode(APIv2PlaybackDecision.self, from: opaque).legacy())
     }
 
+    func testMutationBodiesWrapTheProtocolV3Requests() throws {
+        let start = try PlaybackV3FixtureTestSupport.decode(PlaybackV3StartRequest.self, named: "start_request",
+                                                             bundleClass: Self.self)
+        let startBody = try object(APIv2PlaybackStartBody(start, installationID: "install-1"))
+        XCTAssertEqual(startBody["installation_id"] as? String, "install-1")
+        XCTAssertEqual(startBody["file_id"] as? String, "42", "v2 file ids are opaque strings")
+        XCTAssertEqual(startBody["protocol_version"] as? Int, start.protocolVersion)
+        XCTAssertEqual(startBody["playback_attempt_id"] as? String, start.playbackAttemptId)
+        XCTAssertEqual(startBody["start_position"] as? Double, 12.5)
+        XCTAssertNotNil(startBody["client_capabilities"])
+        XCTAssertNotNil(startBody["client_playback_context"])
+
+        let replan = try PlaybackV3FixtureTestSupport.decode(PlaybackV3ReplanRequest.self, named: "replan_request",
+                                                              bundleClass: Self.self)
+        let replanBody = try object(APIv2PlaybackReplanBody(installationID: "install-1", request: replan))
+        XCTAssertEqual(replanBody["installation_id"] as? String, "install-1")
+        XCTAssertEqual(replanBody["replan_request_id"] as? String, "replan-golden-0001")
+        XCTAssertEqual(replanBody["operation"] as? String, "failure_recovery")
+
+        let event = try PlaybackV3FixtureTestSupport.decode(PlaybackV3RouteEvent.self, named: "route_event",
+                                                             bundleClass: Self.self)
+        let eventBody = try object(APIv2PlaybackRouteEventBody(installationID: "install-1", eventID: "evt-1", event: event))
+        XCTAssertEqual(eventBody["installation_id"] as? String, "install-1")
+        XCTAssertEqual(eventBody["event_id"] as? String, "evt-1")
+        XCTAssertEqual(eventBody["event"] as? String, "first_frame")
+        XCTAssertEqual(eventBody["plan_attempt_key"] as? String, "v3:f0144c47fa349e3e")
+    }
+
     func testTerminalDecisionWithoutPlanProjects() throws {
         let decision = try decode(APIv2PlaybackDecision.self, """
         { "protocol_version": 3, "server_features": ["playback_plan_v3"], "outcome": "terminal",

@@ -504,6 +504,8 @@ targets:
           - TokenStoreSessionTests.swift
           - CatalogShapeModelsTests.swift
           - WatchPartyModelsTests.swift
+          - APIv2SubtitleSearchModelsTests.swift
+          - PlaybackV3FixtureTestSupport.swift
           - CredentialIdentityTests.swift
           - MediaRequestAuthorizationTests.swift
           - MetadataSingleFlightTests.swift
@@ -516,6 +518,10 @@ targets:
       - path: Tests/Fixtures/SettingsContract/conformance.json
         buildPhase: resources
       - path: Tests/Fixtures/APIv2
+        buildPhase: resources
+        excludes:
+          - SOURCE
+      - path: Tests/Fixtures/PlaybackV3
         buildPhase: resources
         excludes:
           - SOURCE

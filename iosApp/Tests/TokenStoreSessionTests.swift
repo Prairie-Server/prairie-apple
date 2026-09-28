@@ -194,7 +194,9 @@ final class TokenStoreSessionTests: XCTestCase {
             flags[index] = false
             seen.insert(reason(flags))
         }
-        XCTAssertEqual(seen.count, 8, "\(seen)")
+        // Both account-identity mismatches share one reason.
+        XCTAssertEqual(seen.count, 7, "\(seen)")
+        XCTAssertTrue(seen.contains("accountIdentityChanged"))
         XCTAssertEqual(reason(Array(repeating: false, count: 8)), "missingServerId")
     }
 
