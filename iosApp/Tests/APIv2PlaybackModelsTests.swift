@@ -233,6 +233,27 @@ final class APIv2PlaybackModelsTests: XCTestCase {
         }
     }
 
+    func testPlayableDecisionProjectsThePlanOntoLegacyIDs() throws {
+        let data = try APIv2FixtureTestSupport.data(named: "playback_start_opaque_ids", bundleClass: Self.self)
+        let decision = try HTTPClient.makeJSONDecoder().decode(APIv2PlaybackDecision.self, from: data).legacy()
+        XCTAssertEqual(decision.outcome, "playable")
+        XCTAssertEqual(decision.sessionId, "11111111-1111-4111-8111-111111111111")
+        let plan = try XCTUnwrap(decision.playbackPlan)
+        XCTAssertEqual(plan.protocolVersion, 3)
+        XCTAssertEqual(plan.delivery, "original_http")
+        XCTAssertEqual(plan.requestedMediaFileId, 42)
+        XCTAssertEqual(plan.effectiveMediaFileId, 42)
+        XCTAssertEqual(plan.source.mediaFileId, 42)
+        XCTAssertEqual(plan.sessionId, decision.sessionId)
+
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        var planObject = try XCTUnwrap(object["playback_plan"] as? [String: Any])
+        planObject["effective_media_file_id"] = "file-42"
+        object["playback_plan"] = planObject
+        let opaque = try JSONSerialization.data(withJSONObject: object)
+        XCTAssertThrowsError(try HTTPClient.makeJSONDecoder().decode(APIv2PlaybackDecision.self, from: opaque).legacy())
+    }
+
     func testTerminalDecisionWithoutPlanProjects() throws {
         let decision = try decode(APIv2PlaybackDecision.self, """
         { "protocol_version": 3, "server_features": ["playback_plan_v3"], "outcome": "terminal",

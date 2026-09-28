@@ -499,6 +499,8 @@ targets:
           - APIv2PlaybackModelsTests.swift
           - APIv2WireModelsTests.swift
           - APIv2CatalogQueryAndSyncTests.swift
+          - MetadataRequestPoolTests.swift
+          - ServerIdentityProbeTests.swift
           - CredentialIdentityTests.swift
           - MediaRequestAuthorizationTests.swift
           - MetadataSingleFlightTests.swift
