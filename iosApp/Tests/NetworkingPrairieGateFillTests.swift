@@ -387,7 +387,9 @@ final class NetworkingPrairieRegistryGateFillTests: XCTestCase {
     }
 
     override func tearDown() {
+        #if PRAIRIE_NETWORKING_HOST
         AuthService.shared.isLoggedIn = false
+        #endif
         suite.removePersistentDomain(forName: suiteName)
         standard.removePersistentDomain(forName: standardName)
         suite = nil
@@ -566,8 +568,12 @@ final class NetworkingPrairieRegistryGateFillTests: XCTestCase {
             profileId: "solo", lastUsedAt: Date()
         ))
         await registry.switchTo(serverId: only)
+        // The networking host's AuthService stub has a settable login flag;
+        // the app's real AuthService derives it.
+        #if PRAIRIE_NETWORKING_HOST
         AuthService.shared.isLoggedIn = true
         defer { AuthService.shared.isLoggedIn = false }
+        #endif
         // AuthService stub resolve returns false, but still executes the gated
         // remove path with the flag set while logged in.
         let removed = await registry.remove(serverId: only, resolveFallbackProfile: true)
@@ -623,8 +629,12 @@ final class NetworkingPrairieRegistryGateFillTests: XCTestCase {
         // fixed-name keychain accounts.
         defaults.set(false, forKey: "continuumServerRegistry.migrated.v1")
         defaults.set("https://keep-pin.example", forKey: "continuumServerRegistry.legacySourceUrl.v1")
+        // The networking host's AuthService stub has a settable login flag;
+        // the app's real AuthService derives it.
+        #if PRAIRIE_NETWORKING_HOST
         AuthService.shared.isLoggedIn = true
         defer { AuthService.shared.isLoggedIn = false }
+        #endif
         let switched = await registry.switchTo(serverId: other, resolveDestinationProfile: true)
         XCTAssertTrue(switched)
         XCTAssertEqual(registry.activeServerId, other)

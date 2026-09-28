@@ -434,6 +434,8 @@ targets:
         PRODUCT_NAME: Prairie
         PRODUCT_MODULE_NAME: Prairie
         PRODUCT_BUNDLE_IDENTIFIER: org.prairieserver.prairie.networkinghost
+        # Lets shared tests reach the settable stand-ins in CI/NetworkingHost.
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) PRAIRIE_NETWORKING_HOST"
         GENERATE_INFOPLIST_FILE: "YES"
         MARKETING_VERSION: "1.0.0"
         CURRENT_PROJECT_VERSION: 1
@@ -534,6 +536,7 @@ targets:
     settings:
       base:
         PRODUCT_NAME: PrairieNetworkingTests
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) PRAIRIE_NETWORKING_HOST"
         GENERATE_INFOPLIST_FILE: "YES"
         SDKROOT: macosx
         SUPPORTED_PLATFORMS: macosx
@@ -568,6 +571,8 @@ targets:
           - "PrairieControlWireCompatibilityTests.swift"
           # OnboardingTourViewModel / OnboardingTourAPI are declared under #if !os(tvOS).
           - "OnboardingInvitationTests.swift"
+          # ViewInspector is linked into the iOS test bundle only.
+          - "LiveTVChannelListViewInspectorTests.swift"
           # Same non-fixture files as PrairieTests, re-added below with no phase.
           - "Fixtures/ASS/README.md"
           - "Fixtures/ASS/generate-font.py"
