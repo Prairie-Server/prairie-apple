@@ -432,7 +432,7 @@ private struct GroupActionSheet: View {
         switch action {
         case .create: return "plus"
         case .rename: return "square.and.arrow.down"
-        case .delete: return "trash"
+        case .delete, .deleteCollection: return "trash"
         case .move: return "folder"
         }
     }

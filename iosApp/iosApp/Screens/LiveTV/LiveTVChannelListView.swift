@@ -281,7 +281,7 @@ struct LiveTVChannelListView: View {
     private func guideProgramCard(_ program: LiveTVProgram) -> some View {
         let canRecord = program.stop > Date()
             && !program.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        VStack(alignment: .leading, spacing: 6) {
+        return VStack(alignment: .leading, spacing: 6) {
             Text(program.displayTitle)
                 .font(.prairieCaption)
                 .foregroundStyle(Color.prairieOnSurface)
@@ -313,7 +313,9 @@ struct LiveTVChannelListView: View {
             #if !os(tvOS)
             Section {
                 TextField("Filter channels…", text: $channelFilter)
+                    #if os(iOS)
                     .textInputAutocapitalization(.never)
+                    #endif
                     .autocorrectionDisabled()
             }
             #endif

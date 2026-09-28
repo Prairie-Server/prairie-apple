@@ -88,7 +88,8 @@ enum TVRootDestination: Hashable {
 
     static func == (lhs: TVRootDestination, rhs: TVRootDestination) -> Bool {
         switch (lhs, rhs) {
-        case (.home, .home), (.recommendations, .recommendations), (.calendar, .calendar):
+        case (.home, .home), (.recommendations, .recommendations), (.calendar, .calendar),
+             (.liveTV, .liveTV):
             return true
         case (.libraryType(let lhsType), .libraryType(let rhsType)):
             return lhsType == rhsType
@@ -113,6 +114,8 @@ enum TVRootDestination: Hashable {
             hasher.combine(libraryId)
         case .calendar:
             hasher.combine(4)
+        case .liveTV:
+            hasher.combine(5)
         }
     }
 

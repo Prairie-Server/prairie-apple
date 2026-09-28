@@ -9,7 +9,9 @@ struct QuickConnectView: View {
         Form {
             Section {
                 TextField("ABCD-EFGH", text: $viewModel.codeInput)
+                    #if !os(macOS)
                     .textInputAutocapitalization(.characters)
+                    #endif
                     .autocorrectionDisabled()
                     .font(.body.monospaced())
                     .disabled(viewModel.phase != .enterCode && viewModel.phase != .loading)

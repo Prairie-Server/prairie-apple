@@ -221,6 +221,18 @@ struct TVMainTabView: View {
             )
             .id(payload.id)
         }
+        .fullScreenCover(item: $router.presentedLivePlayer) { session in
+            LiveTVPlayerView(
+                session: LiveTVPlayerSession(
+                    sessionId: session.sessionId,
+                    streamURL: session.streamURL,
+                    title: session.title,
+                    isHLS: session.isHLS
+                )
+            ) {
+                router.presentedLivePlayer = nil
+            }
+        }
         // Outside the presentation modifiers so presented covers (audio
         // player) inherit the router — ErrorView requires it and traps
         // when it's absent.
@@ -465,6 +477,12 @@ struct TVMainTabView: View {
                 isTopMenuFocused: menuOwnsFocus,
                 onTopMenuFocusRequest: { focusTopMenuIfVisible() }
             )
+        case .liveTV:
+            LiveTVChannelListView(
+                viewModel: LiveTVChannelListViewModel(),
+                focusRequest: contentFocusRequest,
+                onTopMenuFocusRequest: { focusTopMenuIfVisible() }
+            )
         }
     }
 
@@ -531,7 +549,7 @@ struct TVMainTabView: View {
             switch root {
             case .libraryType, .libraryShortcut, .recommendations:
                 return .root(root)
-            case .home, .calendar:
+            case .home, .calendar, .liveTV:
                 return nil
             }
         }
@@ -657,7 +675,7 @@ struct TVMainTabView: View {
                 )
             case .recommendations:
                 forYouPanel(isActive: isActive)
-            case .home, .calendar:
+            case .home, .calendar, .liveTV:
                 EmptyView()
             }
         case .profile:
@@ -1017,6 +1035,11 @@ struct TVMainTabView: View {
             if let root, !roots.contains(root) { roots.append(root) }
         }
         if !roots.contains(.home) { roots.insert(.home, at: 0) }
+        // Prairie: surface Live TV only when the channel probe found at
+        // least one enabled channel (mirrors Downloads gating on iOS).
+        if LiveTVFeatureStore.shared.isEnabled, !roots.contains(.liveTV) {
+            roots.append(.liveTV)
+        }
         return roots
     }
 

@@ -332,6 +332,7 @@ final class AuthService: @unchecked Sendable {
             await AICapabilities.shared.refresh()
             await ImageSizeCapability.shared.refresh()
             await RequestsFeatureStore.shared.refresh()
+            await LiveTVFeatureStore.shared.refresh()
             await CurrentProfileStore.shared.refresh(force: true)
             // Unlike the two above, this one gates *enablement* of an entry
             // point that stays visible either way, and it defaults to
@@ -646,6 +647,7 @@ final class AuthService: @unchecked Sendable {
         ImageSizeCapability.shared.reset()
         WatchPartySession.shared.leave(forgetRecent: !preservingWatchPartyRecent)
         RequestsFeatureStore.shared.reset()
+        LiveTVFeatureStore.shared.reset()
         CurrentProfileStore.shared.reset()
         SubtitleProvidersStore.shared.reset()
         RequestsEventBus.shared.reset()
@@ -781,6 +783,7 @@ final class AuthService: @unchecked Sendable {
         ImageSizeCapability.shared.reset()
         WatchPartySession.shared.leave(forgetRecent: true)
         RequestsFeatureStore.shared.reset()
+        LiveTVFeatureStore.shared.reset()
         CurrentProfileStore.shared.reset()
         SubtitleProvidersStore.shared.reset()
         RequestsEventBus.shared.reset()

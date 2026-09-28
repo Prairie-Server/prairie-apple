@@ -225,6 +225,35 @@ class AppRouter {
     }
 
     var presentedPlayer: PlayerPresentation?
+
+    /// Live TV session presented as a full-screen cover. Distinct from
+    /// `presentedPlayer` so VOD/offline playback and live tuner sessions do
+    /// not share lifecycle or dismiss semantics (live must DELETE the session).
+    struct LivePlayerPresentation: Identifiable, Equatable {
+        let id = UUID()
+        let sessionId: String
+        let streamURL: URL?
+        let title: String
+        let isHLS: Bool
+    }
+
+    var presentedLivePlayer: LivePlayerPresentation?
+
+    /// Present a Live TV stream from a started session. Callers must have
+    /// already started the session; dismiss releases it via `LiveTVPlayerView`.
+    func presentLivePlayer(
+        sessionId: String,
+        streamURL: URL?,
+        title: String,
+        isHLS: Bool
+    ) {
+        presentedLivePlayer = LivePlayerPresentation(
+            sessionId: sessionId,
+            streamURL: streamURL,
+            title: title,
+            isHLS: isHLS
+        )
+    }
     @ObservationIgnored private var watchPartySheetPresented = false
     @ObservationIgnored private var pendingWatchPartyPresentation: WatchPartyPlaybackContext?
 

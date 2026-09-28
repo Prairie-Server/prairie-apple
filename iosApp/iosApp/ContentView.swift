@@ -300,6 +300,7 @@ struct ContentView: View {
                 // the next profile switch.
                 await ImageSizeCapability.shared.refresh()
                 await RequestsFeatureStore.shared.refresh()
+                await LiveTVFeatureStore.shared.refresh()
                 await SubtitleProvidersStore.shared.refresh()
                 await CurrentProfileStore.shared.refresh()
                 await uiCustomization.refresh()
@@ -461,6 +462,7 @@ struct ContentView: View {
             Task { await AICapabilities.shared.refresh() }
             Task { await ImageSizeCapability.shared.refresh() }
             Task { await RequestsFeatureStore.shared.refresh() }
+            Task { await LiveTVFeatureStore.shared.refresh() }
             Task { await SubtitleProvidersStore.shared.refresh() }
             Task { await uiCustomization.refresh() }
             Task { await SeekIntervalPreferences.shared.refresh() }
@@ -2338,6 +2340,18 @@ struct MainTabView: View {
                 .presentationDetents([.large])
         }
         #endif
+        .fullScreenCover(item: $router.presentedLivePlayer) { session in
+            LiveTVPlayerView(
+                session: LiveTVPlayerSession(
+                    sessionId: session.sessionId,
+                    streamURL: session.streamURL,
+                    title: session.title,
+                    isHLS: session.isHLS
+                )
+            ) {
+                router.presentedLivePlayer = nil
+            }
+        }
         #endif
         // Outside the presentation modifiers so presented covers (audio
         // player, video player) inherit the router — ErrorView requires
@@ -2424,6 +2438,11 @@ struct MainTabView: View {
             showAudiobooks: navPrefs.showAudiobooks
         )
         #if !os(tvOS)
+        // Prairie: Live TV appears once the server reports an enabled channel.
+        if LiveTVFeatureStore.shared.isEnabled,
+           !destinations.contains(where: { $0.id == .app(.liveTV) }) {
+            destinations.append(.app(.liveTV))
+        }
         if DownloadManager.shared.downloadsEnabled,
            !destinations.contains(where: { $0.id == .app(.downloads) }) {
             destinations.append(.app(.downloads))
@@ -2814,6 +2833,9 @@ struct MainTabView: View {
 
         case .calendar:
             CalendarView()
+
+        case .liveTV:
+            LiveTVChannelListView(viewModel: LiveTVChannelListViewModel())
 
         case .downloads:
             #if os(tvOS)

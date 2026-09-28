@@ -6,4 +6,9 @@ iosApp/Tests/DiagnosticsPathTemplateTests.swift	54
 iosApp/Tests/Fixtures/DiagnosticsContract/fixtures/valid/loglines.jsonl	1
 iosApp/Tests/Fixtures/SettingsContract/SOURCE	1
 iosApp/Tests/HTTPClientRequestPathTests.swift	2
+iosApp/Tests/LanDiscoveryTests.swift	1
+iosApp/Tests/LiveTVModelDecodingTests.swift	11
+iosApp/iosApp/Discovery/LanDiscovery.swift	3
 iosApp/iosApp/Networking/ConnectionMonitor.swift	1
+iosApp/iosApp/Networking/LiveTVModels.swift	4
+iosApp/iosApp/Networking/PrairieAPI+LiveTV.swift	10

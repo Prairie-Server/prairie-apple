@@ -519,6 +519,7 @@ final class ServerRegistry {
             ImageSizeCapability.shared.reset()
             WatchPartySession.shared.leave(forgetRecent: true)
             RequestsFeatureStore.shared.reset()
+            LiveTVFeatureStore.shared.reset()
             CurrentProfileStore.shared.reset()
             SubtitleProvidersStore.shared.reset()
             RequestsEventBus.shared.reset()
@@ -528,6 +529,7 @@ final class ServerRegistry {
             // until the next foreground. Fire-and-forget — the probe
             // degrades to disabled on any failure.
             Task { await RequestsFeatureStore.shared.refresh() }
+            Task { await LiveTVFeatureStore.shared.refresh() }
             Task { await CurrentProfileStore.shared.refresh() }
             // Same shape: without a re-probe the destination server's
             // image-size support would stay unknown, and TV requests would
@@ -745,6 +747,7 @@ final class ServerRegistry {
                 ImageSizeCapability.shared.reset()
                 WatchPartySession.shared.leave(forgetRecent: true)
                 RequestsFeatureStore.shared.reset()
+                LiveTVFeatureStore.shared.reset()
                 CurrentProfileStore.shared.reset()
                 SubtitleProvidersStore.shared.reset()
                 RequestsEventBus.shared.reset()
@@ -752,6 +755,7 @@ final class ServerRegistry {
                 // already be signed in, with no auth-state change to
                 // trigger the usual probe.
                 Task { await RequestsFeatureStore.shared.refresh() }
+                Task { await LiveTVFeatureStore.shared.refresh() }
                 Task { await CurrentProfileStore.shared.refresh() }
                 Task { await ImageSizeCapability.shared.refresh() }
                 Task { await SubtitleProvidersStore.shared.refresh() }

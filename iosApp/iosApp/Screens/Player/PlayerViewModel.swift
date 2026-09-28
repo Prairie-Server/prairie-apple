@@ -784,6 +784,23 @@ class PlayerViewModel {
     private var resolvedServerUrl: String = ""
     private var currentWatchDetail: WatchDetail?
     private var currentSelectedVersion: FileVersion?
+
+    // MARK: Prairie trickplay scrub previews
+
+    /// Interval sprite sheets for scrub previews, from the active file version.
+    var trickplay: VersionTrickplay? { currentSelectedVersion?.trickplay }
+
+    /// Chapter still URL at `time`, when the file version supplies one.
+    func chapterThumbnailURL(at time: Double) -> String? {
+        currentSelectedVersion?.chapters?
+            .last(where: { $0.startSeconds <= time })?
+            .thumbnailUrl
+    }
+
+    func chapterTitle(at time: Double) -> String? {
+        guard let chapter = chapters.last(where: { $0.time <= time }) else { return nil }
+        return chapter.title ?? "Chapter \(chapter.index + 1)"
+    }
     private var activePreparedProtocolV3: PreparedPlaybackV3?
     private var activePlaybackSessionId: String?
     var watchPartyAdapter: WatchPartyPlaybackAdapter?
