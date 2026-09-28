@@ -222,6 +222,9 @@ extension FileVersion {
         self.editionKey = value.editionKey
         self.effectiveAudioTrackIndex = try value.effectiveAudioTrackIndex.map { try catalogLegacyInt($0) }
         self.effectiveAudioLanguage = value.effectiveAudioLanguage
+        // Prairie: the v2 catalog read carries no trickplay yet; scrub
+        // previews fall back to chapter stills until the server adds it.
+        self.trickplay = nil
     }
 }
 
@@ -251,6 +254,9 @@ extension FileVersion {
         self.editionKey = value.editionKey
         self.effectiveAudioTrackIndex = try value.effectiveAudioTrackIndex.map { try catalogLegacyInt($0) }
         self.effectiveAudioLanguage = value.effectiveAudioLanguage
+        // Prairie: the v2 catalog read carries no trickplay yet; scrub
+        // previews fall back to chapter stills until the server adds it.
+        self.trickplay = nil
     }
 }
 

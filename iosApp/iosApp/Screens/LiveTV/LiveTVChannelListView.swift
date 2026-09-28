@@ -218,10 +218,8 @@ struct LiveTVChannelListView: View {
                     #endif
             }
         }
-        #if os(tvOS)
-        .listStyle(.plain)
-        #else
-        .listStyle(.insetGrouped)
+        .prairieGroupedListStyle()
+        #if !os(tvOS)
         .scrollContentBackground(.hidden)
         #endif
         .accessibilityIdentifier("livetv-guide")
@@ -330,10 +328,8 @@ struct LiveTVChannelListView: View {
                 }
             }
         }
-        #if os(tvOS)
-        .listStyle(.plain)
-        #else
-        .listStyle(.insetGrouped)
+        .prairieGroupedListStyle()
+        #if !os(tvOS)
         .scrollContentBackground(.hidden)
         #endif
         .accessibilityIdentifier("livetv-channel-list")
@@ -361,10 +357,8 @@ struct LiveTVChannelListView: View {
                 recordings: viewModel.historyRecordings
             )
         }
-        #if os(tvOS)
-        .listStyle(.plain)
-        #else
-        .listStyle(.insetGrouped)
+        .prairieGroupedListStyle()
+        #if !os(tvOS)
         .scrollContentBackground(.hidden)
         #endif
         .accessibilityIdentifier("livetv-recordings")

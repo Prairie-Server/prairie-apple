@@ -201,3 +201,28 @@ enum LiveTVChannelListViewModel {
     }
 }
 
+
+/// ServerRegistry leaves the active watch party on a server switch; the real
+/// session pulls sockets and the player adapter.
+@MainActor
+final class WatchPartySession {
+    static let shared = WatchPartySession()
+    func leave(forgetRecent: Bool) {}
+    func refreshCapabilities() async {}
+}
+
+/// Mirrors the real type in PlaybackSessionBridge.swift, which pulls the
+/// player stack. APIv2PlaybackModels maps terminal server failures onto it.
+struct PlaybackV3TerminalFailure: LocalizedError, Equatable {
+    let reason: String
+    let message: String
+    let retryable: Bool
+
+    var errorDescription: String? { message }
+}
+
+/// Only the destination CalendarModels builds; the full Route enum pulls
+/// browse filters and player seeds into the host.
+enum Route: Hashable {
+    case itemDetail(contentId: String, seriesContext: SeriesDetailContext? = nil)
+}

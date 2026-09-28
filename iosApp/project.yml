@@ -407,6 +407,14 @@ targets:
       - path: iosApp/Screens/Calendar/CalendarModels.swift
       - path: iosApp/Screens/Player/Subtitles/SubtitleAppearance.swift
       - path: iosApp/Screens/Player/ProtocolV3/PlaybackProtocolV3Models.swift
+      # Pure-Foundation helpers the API v2 client and models depend on.
+      - path: iosApp/Shared/ArtworkURL.swift
+      - path: iosApp/Shared/MediaLogRedactor.swift
+      - path: iosApp/Shared/CatalogPathSegment.swift
+      - path: iosApp/Shared/AccountSessionPersistence.swift
+      - path: iosApp/Downloads/DownloadModels.swift
+      - path: iosApp/Screens/Profiles/ProfileTransitionError.swift
+      - path: iosApp/Navigation/SeriesDetailContext.swift
       - path: CI/NetworkingHost
     settings:
       base:
