@@ -505,6 +505,8 @@ targets:
           - CatalogShapeModelsTests.swift
           - WatchPartyModelsTests.swift
           - APIv2SubtitleSearchModelsTests.swift
+          - TokenStoreFailureTests.swift
+          - ServerRegistryEdgeTests.swift
           - PlaybackV3FixtureTestSupport.swift
           - CredentialIdentityTests.swift
           - MediaRequestAuthorizationTests.swift
