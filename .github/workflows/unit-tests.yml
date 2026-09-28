@@ -169,7 +169,8 @@ jobs:
         working-directory: iosApp
         if: always()
         run: |
-          set -uo pipefail
+          # Diagnostic only: never fail the job from here.
+          set +e
           [[ -d TestResults.xcresult ]] || exit 0
           # Print the unexecuted line ranges of each partly covered file in the
           # gate scope, so a coverage drop can be traced without a Mac.
@@ -178,7 +179,7 @@ jobs:
               ranges=$(xcrun xccov view --archive --file "$file" TestResults.xcresult 2>/dev/null \
                 | awk -F: '$2 ~ /^ *0( |$)/ { n = $1 + 0; if (n == last + 1) { last = n } else { if (start) printf "%s%s ", start, (last > start ? "-" last : ""); start = n; last = n } }
                            END { if (start) printf "%s%s", start, (last > start ? "-" last : "") }')
-              [[ -n "$ranges" ]] && echo "${file##*/iosApp/iosApp/}: $ranges"
+              if [[ -n "$ranges" ]]; then echo "${file##*/iosApp/iosApp/}: $ranges"; fi
             done
           exit 0
 
