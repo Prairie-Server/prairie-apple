@@ -163,6 +163,23 @@ jobs:
           fi
           xcrun xccov view --report --json TestResults.xcresult > coverage.json
 
+      - name: List uncovered Networking lines
+        working-directory: iosApp
+        if: always()
+        run: |
+          set -uo pipefail
+          [[ -d TestResults.xcresult ]] || exit 0
+          # Print the unexecuted line ranges of each partly covered file in the
+          # gate scope, so a coverage drop can be traced without a Mac.
+          xcrun xccov view --archive --file-list TestResults.xcresult 2>/dev/null \
+            | grep '/Networking/' | while read -r file; do
+              ranges=$(xcrun xccov view --archive --file "$file" TestResults.xcresult 2>/dev/null \
+                | awk -F: '$2 ~ /^ *0( |$)/ { n = $1 + 0; if (n == last + 1) { last = n } else { if (start) printf "%s%s ", start, (last > start ? "-" last : ""); start = n; last = n } }
+                           END { if (start) printf "%s%s", start, (last > start ? "-" last : "") }')
+              [[ -n "$ranges" ]] && echo "${file##*/iosApp/iosApp/}: $ranges"
+            done
+          exit 0
+
       - name: Enforce 95% Networking unit-test coverage gate
         run: |
           set -euo pipefail
