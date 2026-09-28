@@ -78,13 +78,10 @@ final class ImageSizeCapability: @unchecked Sendable {
     func refresh() async {}
 }
 
+/// The API v2 sync removed SubtitleProvidersStatus; nothing in the host calls
+/// PrairieAI any more, so the stand-in only has to exist.
 actor PrairieAI {
     static let shared = PrairieAI()
-
-    func subtitleProvidersStatus() async throws -> SubtitleProvidersStatus {
-        let data = Data("{\"enabled\":true}".utf8)
-        return try JSONDecoder().decode(SubtitleProvidersStatus.self, from: data)
-    }
 }
 
 /// Feature-store refresher; excluded from the host like ``RequestsFeatureStore``.
@@ -145,6 +142,9 @@ final class ConnectionMonitor {
     func noteServerUnreachable() {
         serverStatus = .unreachable
     }
+
+    /// Same route as the real monitor; HTTPClient treats it as unauthenticated.
+    nonisolated static let healthPath = "/api/v1/health"
 
     /// API v2 contract gate. The host never probes, so no server is flagged.
     var isServerUpdateRequired: Bool { false }
