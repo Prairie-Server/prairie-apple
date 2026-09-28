@@ -148,12 +148,16 @@ final class APIv2PlaybackModelsTests: XCTestCase {
         XCTAssertThrowsError(try PlaybackSequencedSample(sequence: 0, position: 1, isPaused: false))
         XCTAssertThrowsError(try PlaybackSequencedSample(sequence: 1, position: -1, isPaused: false))
         XCTAssertThrowsError(try PlaybackSequencedSample(sequence: 1, position: .infinity, isPaused: false))
-        XCTAssertThrowsError(try decode(PlaybackSequencedSample.self,
-                                        #"{ "sequence": 0, "position": 1, "is_paused": false }"#))
+        // The sample spells its snake_case keys out, so read it with a
+        // coder that does not convert keys.
+        let plain = JSONDecoder()
+        XCTAssertThrowsError(try plain.decode(PlaybackSequencedSample.self,
+                                              from: Data(#"{ "sequence": 0, "position": 1, "is_paused": false }"#.utf8)))
 
         let sample = try PlaybackSequencedSample(sequence: 7, position: 12.5, isPaused: true)
-        XCTAssertEqual(try decode(PlaybackSequencedSample.self,
-                                  #"{ "sequence": 7, "position": 12.5, "is_paused": true }"#), sample)
+        XCTAssertEqual(try plain.decode(PlaybackSequencedSample.self,
+                                        from: Data(#"{ "sequence": 7, "position": 12.5, "is_paused": true }"#.utf8)), sample)
+        XCTAssertEqual(try plain.decode(PlaybackSequencedSample.self, from: JSONEncoder().encode(sample)), sample)
 
         let progress = try object(APIv2PlaybackProgressBody(installationID: "i1", sample: sample))
         XCTAssertEqual(progress["installation_id"] as? String, "i1")
