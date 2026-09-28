@@ -156,7 +156,11 @@ enum ArtworkVariantURL {
             return components.string
         }
 
-        return rewriteWebPPath(trimmed, ext: ext)
+        // A server-relative path may carry a signed query; rewrite only the
+        // path and keep the query and fragment as they are.
+        let suffixStart = trimmed.firstIndex(where: { $0 == "?" || $0 == "#" }) ?? trimmed.endIndex
+        guard let rewritten = rewriteWebPPath(String(trimmed[..<suffixStart]), ext: ext) else { return nil }
+        return rewritten + trimmed[suffixStart...]
     }
 
     private static func rewriteWebPPath(_ path: String, ext: String) -> String? {
