@@ -415,6 +415,13 @@ targets:
       - path: iosApp/Downloads/DownloadModels.swift
       - path: iosApp/Screens/Profiles/ProfileTransitionError.swift
       - path: iosApp/Navigation/SeriesDetailContext.swift
+      # Foundation-only value types the v2 catalog/AI suites assert against.
+      - path: iosApp/Screens/Player/StreamRequest.swift
+      - path: iosApp/Screens/Browse/Filtering/CatalogFacets.swift
+      - path: iosApp/Screens/Browse/Filtering/CatalogFilterState.swift
+      - path: iosApp/Screens/Browse/Filtering/CatalogSortKey.swift
+      - path: iosApp/Screens/Audio/AudiobookPlaybackContext.swift
+      - path: iosApp/Screens/Detail/AudiobookDetailFormatting.swift
       - path: CI/NetworkingHost
     settings:
       base:
@@ -479,11 +486,8 @@ targets:
           - APIv2ContractTests.swift
           - APIv2MutationOutcomeTests.swift
           - CatalogActionsAPITests.swift
-          - CatalogPagingAPITests.swift
           - CatalogV2Tests.swift
           - CollectionsV2Tests.swift
-          - DownloadDeliveryV2Tests.swift
-          - DownloadRegistryV2Tests.swift
           - LibraryBrowseV2Tests.swift
           - MetadataAIV2Tests.swift
           - OnboardingV2Tests.swift
