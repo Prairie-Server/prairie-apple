@@ -471,8 +471,36 @@ targets:
           - SettingsContractResolve.swift
           - NetworkingPrairieGateFillTests.swift
           - ItemVideosDecodingTests.swift
+          # Upstream's API v2 client, model and projection tests, run against
+          # the host through the shared URLProtocol stub and vendored fixtures.
+          - APIv2FixtureTestSupport.swift
+          - Support/APIv2TestStub.swift
+          - Support/StubURLProtocol.swift
+          - Support/OnboardingServerStub.swift
+          - APIv2ContractStateTests.swift
+          - APIv2ContractTests.swift
+          - APIv2MutationOutcomeTests.swift
+          - APIv2ProbeTests.swift
+          - AuthDeviceV2Tests.swift
+          - CatalogActionsAPITests.swift
+          - CatalogPagingAPITests.swift
+          - CatalogV2Tests.swift
+          - CollectionsV2Tests.swift
+          - DiagnosticsCapabilitiesV2Tests.swift
+          - DownloadDeliveryV2Tests.swift
+          - DownloadRegistryV2Tests.swift
+          - LibraryBrowseV2Tests.swift
+          - MetadataAIV2Tests.swift
+          - OnboardingV2Tests.swift
+          - RequestsV2Tests.swift
+          - TrackPreferencesV2Tests.swift
+          - WatchStateV2Tests.swift
       - path: Tests/Fixtures/SettingsContract/conformance.json
         buildPhase: resources
+      - path: Tests/Fixtures/APIv2
+        buildPhase: resources
+        excludes:
+          - SOURCE
       - path: Tests/Fixtures/SettingsContract/manifest.json
         buildPhase: resources
     dependencies:
