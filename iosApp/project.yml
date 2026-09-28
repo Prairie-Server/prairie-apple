@@ -501,6 +501,7 @@ targets:
           - APIv2CatalogQueryAndSyncTests.swift
           - MetadataRequestPoolTests.swift
           - ServerIdentityProbeTests.swift
+          - TokenStoreSessionTests.swift
           - CredentialIdentityTests.swift
           - MediaRequestAuthorizationTests.swift
           - MetadataSingleFlightTests.swift
