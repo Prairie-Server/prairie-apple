@@ -53,10 +53,10 @@ else
   PATH_FILTERS=("$@")
 fi
 
-# Built-in excludes: PrairieAPI / HTTPClient / store refreshers / LAN session
-# I/O / capability probes. These are integration-heavy; PrairieTests covers the
-# pure-logic sibling modules (models, TokenStore, ServerRegistry migration,
-# PrairieFrame, …).
+# Built-in excludes: PrairieAPI / API v2 client / HTTPClient / store
+# refreshers / LAN session I/O / capability probes. These are
+# integration-heavy; PrairieTests covers the pure-logic sibling modules
+# (models, TokenStore, ServerRegistry migration, PrairieFrame, …).
 DEFAULT_EXCLUDES=(
   "/Networking/PrairieAPI.swift"
   "/Networking/PrairieAPI+LiveTV.swift"
@@ -77,6 +77,26 @@ DEFAULT_EXCLUDES=(
   "/Networking/ServerIdentityResolver.swift"
   "/Networking/RequestsFeatureStore.swift"
   "/Networking/LiveTVFeatureStore.swift"
+  # API v2 client: the per-operation request/response plumbing over HTTPClient
+  # (same category as PrairieAPI*). Its wire models, projections and error
+  # classification live in sibling APIv2/*Models*, *Projection and *Outcome
+  # files, which stay in scope.
+  "/Networking/APIv2/APIv2Client+Collections.swift"
+  "/Networking/APIv2/APIv2Client+Diagnostics.swift"
+  "/Networking/APIv2/APIv2Client+DownloadSubscriptions.swift"
+  "/Networking/APIv2/APIv2Client+Downloads.swift"
+  "/Networking/APIv2/APIv2Client+MetadataAI.swift"
+  "/Networking/APIv2/APIv2Client+PersonalLists.swift"
+  "/Networking/APIv2/APIv2Client+Playback.swift"
+  "/Networking/APIv2/APIv2Client+Progress.swift"
+  "/Networking/APIv2/APIv2Client+Requests.swift"
+  "/Networking/APIv2/APIv2Client+Settings.swift"
+  "/Networking/APIv2/APIv2Client+SubtitleAI.swift"
+  "/Networking/APIv2/APIv2Client+Subtitles.swift"
+  "/Networking/APIv2/APIv2Client+WatchParty.swift"
+  "/Networking/APIv2/APIv2Client.swift"
+  # Live unauthenticated /api/v2/system/info probe (network I/O only).
+  "/Networking/APIv2/APIv2Probe.swift"
 )
 
 if [[ "${XCCOV_NO_EXCLUDES:-}" == "1" ]]; then
