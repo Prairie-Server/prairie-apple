@@ -1119,7 +1119,13 @@ actor HTTPClient {
         let normalizedPath = path.hasPrefix("/") ? path : "/" + path
         return normalizedPath == "/api/v2" || normalizedPath.hasPrefix("/api/v2/")
             || normalizedPath == ConnectionMonitor.healthPath
+            // Prairie: Live TV stays on its Prairie-only v1 routes
+            // (`PrairieAPI+LiveTV.swift`, recorded in the API v1 allowlist).
+            || normalizedPath.hasPrefix(Self.prairieLiveTVPathPrefix)
     }
+
+    /// Prairie-only Live TV routes, the one v1 surface this client still calls.
+    static let prairieLiveTVPathPrefix = "/api/v1/livetv/"
 
     /// Builds every request this client sends to the active or a candidate
     /// Prairie server, except token refresh.
