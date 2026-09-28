@@ -422,6 +422,9 @@ targets:
       - path: iosApp/Screens/Browse/Filtering/CatalogSortKey.swift
       - path: iosApp/Screens/Audio/AudiobookPlaybackContext.swift
       - path: iosApp/Screens/Detail/AudiobookDetailFormatting.swift
+      - path: iosApp/WatchParty/WatchPartyInvitation.swift
+      - path: iosApp/WatchParty/WatchPartySocket.swift
+      - path: iosApp/Shared/PrairieURLScheme.swift
       - path: CI/NetworkingHost
     settings:
       base:
@@ -492,6 +495,16 @@ targets:
           - MetadataAIV2Tests.swift
           - OnboardingV2Tests.swift
           - TrackPreferencesV2Tests.swift
+          - CredentialIdentityTests.swift
+          - MediaRequestAuthorizationTests.swift
+          - MetadataSingleFlightTests.swift
+          - PersonalListsAPITests.swift
+          - ServerIdentityMatchingTests.swift
+          - SettingValueWritesTests.swift
+          - SharedDefaultsTests.swift
+          - SharedKeychainCheckedReadTests.swift
+          - HTTPClientDiagnosticsClassificationTests.swift
+          - WatchPartyAPITests.swift
       - path: Tests/Fixtures/SettingsContract/conformance.json
         buildPhase: resources
       - path: Tests/Fixtures/APIv2
