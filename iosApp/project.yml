@@ -496,6 +496,7 @@ targets:
           - OnboardingV2Tests.swift
           - TrackPreferencesV2Tests.swift
           - APIv2CatalogReadProjectionTests.swift
+          - APIv2PlaybackModelsTests.swift
           - CredentialIdentityTests.swift
           - MediaRequestAuthorizationTests.swift
           - MetadataSingleFlightTests.swift

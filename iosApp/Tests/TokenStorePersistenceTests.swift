@@ -66,7 +66,6 @@ final class TokenStorePersistenceTests: XCTestCase {
         let store = makeStore()
         await store.setServerUrl("https://tv.example/")
         await store.switchActiveServer(serverId: serverId)
-        await store.setServerUrl("https://home.example")
         await store.saveTokens(accessToken: "A1", refreshToken: "R1")
         await store.setProfileToken("P1")
         await store.setProfileId("profile-9")
