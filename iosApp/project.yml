@@ -67,7 +67,9 @@ packages:
     exactVersion: 1.4.0
   ViewInspector:
     url: https://github.com/nalexn/ViewInspector
-    from: "0.10.3"
+    # 0.10.4's manifest uses `.visionOS(.v2)` under swift-tools-version 5.9,
+    # which Xcode 26 rejects; stay on 0.10.3 until upstream fixes it.
+    exactVersion: 0.10.3
   Nuke:
     url: https://github.com/kean/Nuke
     from: "13.2.0"
