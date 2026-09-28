@@ -52,10 +52,10 @@ final class ResponseCacheTests: XCTestCase {
     }
 
     func testCacheKeyBuilders() {
-        XCTAssertEqual(CacheKey.browse(libraryId: 3, filterKey: "g:action"), "browse:3:g:action")
-        XCTAssertEqual(CacheKey.browse(libraryId: nil, filterKey: "all"), "browse:all:all")
+        XCTAssertEqual(CacheKey.browse(libraryId: 3, filterKey: "g:action"), "browse:v2:3:g:action")
+        XCTAssertEqual(CacheKey.browse(libraryId: nil, filterKey: "all"), "browse:v2:all:all")
         XCTAssertEqual(CacheKey.catalogFilters(libraryId: 1, includeTechnical: false), "catalogFilters:1:basic")
-        XCTAssertEqual(CacheKey.tvLibrary(libraryId: 9, filterKey: "x"), "tvlibrary:9:x")
+        XCTAssertEqual(CacheKey.tvLibrary(libraryId: 9, filterKey: "x"), "tvlibrary:v2:9:x")
         XCTAssertEqual(CacheKey.calendarWeek("2026-01-01", filter: "all"), "calendar:2026-01-01:all")
         XCTAssertFalse(CacheKey.perProfilePrefixes.isEmpty)
     }

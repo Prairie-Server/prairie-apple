@@ -71,9 +71,10 @@ final class WireFormatAndRequestsModelTests: XCTestCase {
 
     func testFeatureStatusAndCreateInputEncode() throws {
         let status = try decode(RequestsFeatureStatus.self, """
-        { "requests_enabled": true }
+        { "requests_enabled": true, "state": "available", "allowed": true }
         """)
         XCTAssertTrue(status.requestsEnabled)
+        XCTAssertTrue(status.isAvailable)
 
         let encoder = JSONEncoder()
         encoder.keyEncodingStrategy = .convertToSnakeCase

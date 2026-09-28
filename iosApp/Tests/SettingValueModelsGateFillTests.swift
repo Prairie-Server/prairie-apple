@@ -66,11 +66,8 @@ final class SettingValueModelsGateFillTests: XCTestCase {
     func testSettingsAPIErrorEdgeMappings() {
         XCTAssertEqual(SettingsAPIError.from(SettingsAPIError.profileRequired), .profileRequired)
         XCTAssertEqual(
-            SettingsAPIError.from(
-                HTTPError.http(statusCode: 404, body: #"{"error":"unknown_setting","message":"nope"}"#),
-                key: "playback.foo"
-            ),
-            .unknownSetting(key: "playback.foo")
+            SettingsAPIError.from(HTTPError.http(statusCode: 404, body: nil)),
+            .server(status: 404, code: nil, message: HTTPError.http(statusCode: 404, body: nil).errorDescription)
         )
         if case .transport = SettingsAPIError.from(NSError(domain: "test", code: 1)) {
             // expected

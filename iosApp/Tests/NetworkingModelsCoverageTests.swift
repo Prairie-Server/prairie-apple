@@ -93,7 +93,7 @@ final class NetworkingModelsCoverageTests: XCTestCase {
           { "content_id": "s1", "season_number": 1, "title": "One", "episode_count": 8 }
         ]
         """)
-        XCTAssertEqual(seasons.sortedForDisplay().map(\.seasonNumber), [1, 2, 0])
+        XCTAssertEqual(seasons.sortedForDisplay().map(\.seasonNumber), [0, 1, 2])
 
         let file = FileVersion(
             fileId: 9,

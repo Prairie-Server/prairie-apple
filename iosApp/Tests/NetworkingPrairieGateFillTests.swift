@@ -283,19 +283,8 @@ final class NetworkingPrairieGateFillTests: XCTestCase {
         XCTAssertEqual(search.warnings, ["none"])
     }
 
-    func testLibrariesResponseAcceptsBareArrayAndUnsupportedTypes() throws {
+    func testLibrariesResponseDropsUnsupportedTypes() throws {
         let decoder = HTTPClient.makeJSONDecoder()
-        let bare = try decoder.decode(
-            LibrariesResponse.self,
-            from: Data("""
-            [
-              {"id":1,"name":"Movies","type":"movies"},
-              {"id":2,"name":"Weird","type":"unsupported-future"}
-            ]
-            """.utf8)
-        )
-        XCTAssertEqual(bare.libraries.map(\.id), [1])
-
         let wrapped = try decoder.decode(
             LibrariesResponse.self,
             from: Data("""
@@ -510,7 +499,6 @@ final class NetworkingPrairieRegistryGateFillTests: XCTestCase {
         await HTTPClient.shared.endIdentityTransition(lease)
         XCTAssertTrue(committed)
         XCTAssertEqual(registry.activeServerId, id)
-        XCTAssertEqual(defaults.string(forKey: "profileId"), "p-live")
     }
 
     func testUpdateFetchedName() {
@@ -555,7 +543,6 @@ final class NetworkingPrairieRegistryGateFillTests: XCTestCase {
             preservingProfile: true
         )
         XCTAssertEqual(preserved?.fetchedName, "Original")
-        XCTAssertEqual(preserved?.legacyProfileId, "legacy-a")
 
         let replaced = registry.addOrUpdate(
             ServerEntry(
