@@ -93,7 +93,7 @@ final class ServerRegistryMigrationTests: XCTestCase {
         XCTAssertEqual(registry.activeServer?.url, normalized)
         // Profile identity now lives in ProfileLaunchPreferences; the registry
         // row only keeps a transient legacy field until that migration lands.
-        XCTAssertNil(registry.activeServer?.profileId)
+        XCTAssertNil(registry.activeServer?.legacyProfileId)
         XCTAssertEqual(
             launchPreferences.rememberedProfile(for: id)?.profileID,
             "profile-1"
@@ -181,7 +181,7 @@ final class ServerRegistryMigrationTests: XCTestCase {
             profileId: nil,
             lastUsedAt: Date()
         ))
-        XCTAssertEqual(registry.entry(with: id)?.profileId, "P1")
+        XCTAssertEqual(registry.entry(with: id)?.legacyProfileId, "P1")
         XCTAssertEqual(registry.entry(with: id)?.fetchedName, "Home 2")
     }
 
@@ -202,7 +202,7 @@ final class ServerRegistryMigrationTests: XCTestCase {
         let reloaded = makeRegistry()
         XCTAssertEqual(reloaded.entry(with: id)?.fetchedName, "Persist")
         // Access token present → legacy profileId migrates into launch prefs.
-        XCTAssertNil(reloaded.entry(with: id)?.profileId)
+        XCTAssertNil(reloaded.entry(with: id)?.legacyProfileId)
         XCTAssertEqual(
             launchPreferences.rememberedProfile(for: id)?.profileID,
             "prof"
@@ -273,10 +273,8 @@ final class ServerRegistryMigrationTests: XCTestCase {
         )
         registry.addOrUpdate(older)
         registry.addOrUpdate(newer)
-        registry.setProfileId("p-new", for: "new")
         registry.updateFetchedName(for: "new", fetchedName: "New Name")
 
-        XCTAssertEqual(registry.entry(with: "new")?.profileId, "p-new")
         XCTAssertEqual(registry.entry(with: "new")?.fetchedName, "New Name")
         XCTAssertEqual(registry.sortedEntries.map(\.id), ["new", "old"])
         XCTAssertFalse(registry.hasActiveServer)
@@ -470,13 +468,12 @@ final class ServerRegistryMigrationTests: XCTestCase {
             ),
             preservingProfile: false
         )
-        XCTAssertNil(registry.entry(with: id)?.profileId)
+        XCTAssertNil(registry.entry(with: id)?.legacyProfileId)
         XCTAssertEqual(registry.entry(with: id)?.fetchedName, "Home")
 
         registry.updateFetchedName(for: id, fetchedName: "")
         XCTAssertEqual(registry.entry(with: id)?.fetchedName, "Home")
         registry.updateFetchedName(for: "missing", fetchedName: "Nope")
-        registry.setProfileId("x", for: "missing")
     }
 
     func testRemoveActiveFallsBackToMostRecentlyUsed() async {

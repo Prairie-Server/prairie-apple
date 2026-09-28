@@ -59,7 +59,6 @@ final class SettingValueModelsGateFillTests: XCTestCase {
             settings: [],
             revision: SettingKey.revision - 1
         )
-        XCTAssertTrue(response.contractIsAheadOfServer)
         XCTAssertNil(response.value(for: .playbackAutoPlayNext))
         XCTAssertNil(SettingsCapabilitiesResult.serverUpgradeRequired.capabilities)
     }

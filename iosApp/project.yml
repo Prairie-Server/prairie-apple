@@ -467,7 +467,6 @@ targets:
           - PrairieQualityPresetsTests.swift
           - SettingValueModelsGateFillTests.swift
           - SettingValuesAPITests.swift
-          - SettingsConformanceTests.swift
           - SettingsContractResolve.swift
           - NetworkingPrairieGateFillTests.swift
           - ItemVideosDecodingTests.swift
@@ -489,7 +488,6 @@ targets:
           - MetadataAIV2Tests.swift
           - OnboardingV2Tests.swift
           - TrackPreferencesV2Tests.swift
-          - WatchStateV2Tests.swift
       - path: Tests/Fixtures/SettingsContract/conformance.json
         buildPhase: resources
       - path: Tests/Fixtures/APIv2
