@@ -75,7 +75,7 @@ final class ImageSizeCapability: @unchecked Sendable {
     static let shared = ImageSizeCapability()
     var requestQuery: [String: String] { [:] }
     func reset() {}
-    func refresh() async {}
+    func refresh(retryFailed: Bool = true) async {}
 }
 
 /// The API v2 sync removed SubtitleProvidersStatus; nothing in the host calls
