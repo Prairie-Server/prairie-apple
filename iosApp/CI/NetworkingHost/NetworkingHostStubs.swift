@@ -145,6 +145,11 @@ final class ConnectionMonitor {
     func noteServerUnreachable() {
         serverStatus = .unreachable
     }
+
+    /// API v2 contract gate. The host never probes, so no server is flagged.
+    var isServerUpdateRequired: Bool { false }
+
+    func noteContractProbe(_ result: APIv2ProbeResult, serverId: String) {}
 }
 
 /// Referenced by AIModels helpers; real type lives under player subtitles.
