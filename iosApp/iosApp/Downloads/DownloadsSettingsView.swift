@@ -14,6 +14,14 @@ struct DownloadsSettingsView: View {
         return available.isEmpty ? [.original] : available
     }
 
+    /// Mentions the resolution only when the server reports one; an older
+    /// server's presets are labelled by bitrate alone.
+    private var qualityFooter: String {
+        let base = "Original prefers source quality and may prepare a compatibility file if this device needs one. For single items, bitrate presets are prepared on the server when the original is larger"
+        let showsResolution = manager.capability?.qualityOptions.contains { ($0.maxHeight ?? 0) > 0 } ?? false
+        return base + (showsResolution ? ", at up to the resolution shown." : ".") + " Series and season downloads use original quality."
+    }
+
     private var heldProgressFooter: String {
         let count = manager.heldProgressCount
         let subject = count == 1 ? "1 offline watch position" : "\(count) offline watch positions"
@@ -36,7 +44,7 @@ struct DownloadsSettingsView: View {
                 if formats.count > 1 {
                     Picker("Quality", selection: $settings.preferredFormat) {
                         ForEach(formats, id: \.self) { format in
-                            Text(format.displayName).tag(format.rawValue)
+                            Text(manager.capability?.label(for: format) ?? format.displayName).tag(format.rawValue)
                         }
                     }
                 }
@@ -47,7 +55,7 @@ struct DownloadsSettingsView: View {
                 // quality picker, which is hidden when the server offers a
                 // single preset.
                 if formats.count > 1 {
-                    Text("Original prefers source quality and may prepare a compatibility file if this device needs one. Bitrate presets are prepared on the server before download starts.")
+                    Text(qualityFooter)
                 }
             }
             .listRowBackground(Color.prairieGroupedCell)
