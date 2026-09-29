@@ -1,5 +1,5 @@
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 /// The request detail page's status line. A failed request must not read as
 /// declined, and a title's requestability code (`already_requested`, …) is

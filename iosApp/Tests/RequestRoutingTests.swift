@@ -1,5 +1,5 @@
 import XCTest
-@testable import Silo
+@testable import Prairie
 
 /// Where a request card opens: the library item only when its chip reads
 /// "In library", so a request still in flight on a title in the library
