@@ -365,7 +365,7 @@ struct CreateProfileView: View {
                                     .foregroundColor(.prairieSecondaryText)
                             }
                         }
-                        .tint(.prairieAccent)
+                        .tint(.prairieSwitchOn)
 
                         if isChild {
                             childAccessControls
@@ -456,7 +456,7 @@ struct CreateProfileView: View {
             }
 
             Toggle("Restrict libraries", isOn: $libraryRestrictionsEnabled)
-                .tint(.prairieAccent)
+                .tint(.prairieSwitchOn)
 
             if libraryRestrictionsEnabled {
                 if case .loading = libraryLoad {
@@ -507,7 +507,7 @@ struct CreateProfileView: View {
                                     }
                                 )
                             )
-                            .tint(.prairieAccent)
+                            .tint(.prairieSwitchOn)
                         }
                     }
                 }

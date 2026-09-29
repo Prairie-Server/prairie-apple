@@ -42,6 +42,7 @@ struct TVControlStandbyView: View {
                     receiver.disconnectRemoteControl()
                 }
                 .buttonStyle(.borderedProminent)
+                .foregroundStyle(Color.prairieBackground)
                 .controlSize(.large)
                 .focused($isDisconnectFocused)
             }

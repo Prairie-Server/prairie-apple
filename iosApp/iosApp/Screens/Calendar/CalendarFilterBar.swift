@@ -91,7 +91,15 @@ struct CalendarFilterBar: View {
         }
         .padding(containerPadding)
         .prairieGlass(in: .capsule)
+        // Full-width focus section: the capsule only occupies the leading
+        // corner, and a narrow section can't catch up-moves from day
+        // buttons on the right side of the strip below — the focus engine
+        // would skip past it to the (full-width) top menu.
+        .frame(maxWidth: .infinity, alignment: .leading)
         .focusSection()
+        // Entering from the week strip lands on the active scope, not the
+        // segment nearest the focused day.
+        .defaultFocus($focusedFilter, selected, priority: .userInitiated)
         .onMoveCommand { direction in
             if direction == .up {
                 onMoveUp?()

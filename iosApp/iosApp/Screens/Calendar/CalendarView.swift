@@ -19,11 +19,9 @@ struct CalendarView: View {
     /// scrolls to that day's shelf and kicks focus onto its first card.
     @State private var shelfFocusRequest = 0
     @State private var shelfFocusDay: Date?
-    /// Focus hand-back for the boundary up-move: a shelf whose up-press the
-    /// focus engine couldn't resolve (empty days above, strip off-screen)
-    /// asks the week strip to reclaim focus.
-    @State private var stripFocusRequest = 0
-    /// Scroll target for the ride home to the strip/filter area.
+    /// Day of the shelf that last took focus.
+    @State private var focusedShelfDay: Date?
+    /// Scroll target for the page's opening position.
     private static let topContentId = "calendar-top"
     #endif
 
@@ -189,27 +187,17 @@ struct CalendarView: View {
     private var tvContent: some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
-                LazyVStack(alignment: .leading, spacing: 30) {
-                    // Full-width focus section: the filter capsule only
-                    // occupies the leading corner, and a narrow section
-                    // can't catch up-moves from day buttons on the right
-                    // side of the strip below — the focus engine would
-                    // skip past it to the (full-width) top menu. The
-                    // spacer stretches the section across the row so
-                    // every up-move from the strip lands here first.
-                    HStack(spacing: 0) {
-                        CalendarFilterBar(
-                            selected: viewModel.filter,
-                            onSelect: { viewModel.select(filter: $0) },
-                            focusRequest: entryFocusRequest,
-                            onMoveUp: onTopMenuFocusRequest
-                        )
-
-                        Spacer(minLength: 0)
-                    }
+                // Not lazy: a recycled filter bar or shelf would lose its
+                // applied focus token and replay it from `onAppear`, and the
+                // focus engine can only move to views that are mounted.
+                VStack(alignment: .leading, spacing: 30) {
+                    CalendarFilterBar(
+                        selected: viewModel.filter,
+                        onSelect: { viewModel.select(filter: $0) },
+                        focusRequest: entryFocusRequest,
+                        onMoveUp: onTopMenuFocusRequest
+                    )
                     .padding(.horizontal, PrairieTheme.safePadding)
-                    .focusSection()
-                    .id(Self.topContentId)
 
                     CalendarWeekStrip(
                         week: viewModel.week,
@@ -221,13 +209,14 @@ struct CalendarView: View {
                         onPreviousWeek: { viewModel.goToPreviousWeek() },
                         onNextWeek: { viewModel.goToNextWeek() },
                         onToday: { Task { await viewModel.goToToday() } },
-                        focusRequest: stripFocusRequest
+                        onFocusGained: { returnToTop(proxy: proxy) }
                     )
 
                     shelfArea(proxy: proxy)
                 }
                 .padding(.top, TVTopMenuLayout.contentTopInset)
                 .padding(.bottom, PrairieTheme.largePadding)
+                .id(Self.topContentId)
             }
             .modifier(TVMenuEntryScroll(request: focusRequest, isTopMenuFocused: isTopMenuFocused) { entryFocusRequest = $0 })
         }
@@ -246,7 +235,6 @@ struct CalendarView: View {
         } else if viewModel.isEmpty {
             emptyState
         } else {
-            let firstNonEmptyDay = viewModel.week.days.first { viewModel.hasEvents(on: $0) }
             ForEach(viewModel.week.days, id: \.self) { day in
                 CalendarDayShelf(
                     heading: viewModel.sectionHeading(for: day),
@@ -254,9 +242,13 @@ struct CalendarView: View {
                     onEventTap: { event in
                         router.navigate(to: event.detailRoute)
                     },
-                    prefersDefaultFocusOnFirstItem: day == firstNonEmptyDay,
+                    // Every shelf, not just the first: the focus engine
+                    // otherwise keeps the horizontal position focus had
+                    // before a default-focus redirect, so Down from a
+                    // shelf's first card can land mid-row in the next one.
+                    prefersDefaultFocusOnFirstItem: true,
                     focusRequest: shelfFocusRequest(for: day),
-                    onMoveUp: shelfMoveUpHandler(for: day, proxy: proxy)
+                    onFocusGained: shelfFocusHandler(for: day, proxy: proxy)
                 )
                 .id(day)
                 .padding(.bottom, shelfBottomPadding)
@@ -292,47 +284,57 @@ struct CalendarView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, PrairieTheme.largePadding)
 
-            if viewModel.filter != .everything {
-                Button("Show Everything", systemImage: "line.3.horizontal.decrease.circle") {
-                    viewModel.select(filter: .everything)
+            // Every view links to the other two, which also gives tvOS
+            // focus a target below the week strip so d-pad down from it
+            // doesn't dead-end (see RecommendationsView's empty state).
+            HStack(spacing: PrairieTheme.padding) {
+                ForEach(viewModel.filter.emptyStateLinks) { filter in
+                    Button {
+                        viewModel.select(filter: filter)
+                    } label: {
+                        // Fill the fixed width so iOS 26 glass pills match.
+                        Text(filter.displayLabel)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .prairiePrimaryButton()
+                    .frame(width: emptyButtonWidth)
+                    .accessibilityLabel("Show \(filter.displayLabel)")
                 }
-                .prairiePrimaryButton()
-                .frame(width: emptyButtonWidth)
-                .padding(.top, PrairieTheme.smallPadding)
-            } else {
-                // tvOS focus needs at least one target below the filter
-                // bar so d-pad down from it doesn't dead-end (see
-                // RecommendationsView's empty state).
-                #if os(tvOS)
-                Button("Refresh", systemImage: "arrow.clockwise") {
-                    Task { await viewModel.refresh() }
-                }
-                .buttonStyle(PrairiePrimaryButtonStyle())
-                .frame(width: emptyButtonWidth)
-                .padding(.top, PrairieTheme.smallPadding)
-                #endif
             }
+            .padding(.top, PrairieTheme.smallPadding)
         }
         .frame(maxWidth: .infinity, minHeight: 320)
+        #if os(tvOS)
+        // Full-width section so down from any day in the strip reaches
+        // the centered buttons, not just from the days above them.
+        .focusSection()
+        #endif
     }
 
     private var emptyTitle: String {
-        viewModel.filter == .following
-            ? "Nothing from shows you follow"
-            : "Nothing scheduled this week"
+        switch viewModel.filter {
+        case .following: return "Nothing from shows you follow"
+        case .trending: return "Nothing trending this week"
+        case .everything: return "Nothing scheduled this week"
+        }
     }
 
     private var emptySubtitle: String {
-        viewModel.filter == .following
-            ? "No upcoming releases this week from shows you watch, favorite, or watchlist."
-            : "No movie releases or episode airings in this week."
+        switch viewModel.filter {
+        case .following:
+            return "No upcoming releases this week from shows you watch, favorite, or watchlist."
+        case .trending:
+            return "No trending movie releases or episode airings in this week."
+        case .everything:
+            return "No movie releases or episode airings in this week."
+        }
     }
 
     private var emptyButtonWidth: CGFloat {
         #if os(tvOS)
-        return 360
+        return 300
         #else
-        return 220
+        return 150
         #endif
     }
 
@@ -354,14 +356,25 @@ struct CalendarView: View {
         #if os(tvOS)
         // Hand focus to the selected day's shelf so the remote lands on
         // its first card instead of staying parked in the week strip.
-        // Day-less shelves have nothing to focus — leave focus on the
-        // strip so the user can pick another day.
-        if viewModel.hasEvents(on: day) {
-            shelfFocusDay = day
+        // A day-less shelf has nothing to focus, and the strip scrolls
+        // off-screen, so focus the nearest day with events instead.
+        if let target = shelfFocusTarget(forSelected: day) {
+            focusedShelfDay = target
+            shelfFocusDay = target
             shelfFocusRequest += 1
         }
         #endif
     }
+
+    #if os(tvOS)
+    /// The selected day if it has events, otherwise the next day with
+    /// events, otherwise the previous one.
+    private func shelfFocusTarget(forSelected day: Date) -> Date? {
+        let days = viewModel.week.days.filter { viewModel.hasEvents(on: $0) }
+        if days.contains(day) { return day }
+        return days.first { $0 > day } ?? days.last { $0 < day }
+    }
+    #endif
 
     /// Per-shelf kick token: only the most recently selected day sees a
     /// non-zero, changing value, so exactly one shelf claims focus.
@@ -373,38 +386,40 @@ struct CalendarView: View {
         #endif
     }
 
-    /// tvOS: boundary up-move escape hatch. When the focus engine can't
-    /// resolve an up-press out of a shelf natively — the days above are
-    /// empty "Nothing scheduled" stubs and the week strip has scrolled
-    /// off-screen — the press bubbles to the shelf's `onMoveCommand` and
-    /// lands here: hop to the previous day with events, or ride home to
-    /// the week strip when nothing focusable is above.
-    private func shelfMoveUpHandler(for day: Date, proxy: ScrollViewProxy) -> (() -> Void)? {
+    private func shelfFocusHandler(for day: Date, proxy: ScrollViewProxy) -> (() -> Void)? {
         #if os(tvOS)
-        guard viewModel.hasEvents(on: day) else { return nil }
-        return { handleShelfMoveUp(from: day, proxy: proxy) }
+        return { shelfGainedFocus(day, proxy: proxy) }
         #else
         return nil
         #endif
     }
 
     #if os(tvOS)
-    private func handleShelfMoveUp(from day: Date, proxy: ScrollViewProxy) {
-        if let previous = viewModel.week.days.last(where: {
-            $0 < day && viewModel.hasEvents(on: $0)
-        }) {
-            withAnimation(PrairieTheme.springAnimation) {
-                proxy.scrollTo(previous, anchor: .top)
+    /// The focus engine reveals a shelf with the least scrolling. Moving up,
+    /// or down onto the last shelf, that leaves the heading under the top
+    /// menu. Frame every shelf-to-shelf move where the engine places rows
+    /// on the way down: bottom-aligned.
+    private func shelfGainedFocus(_ day: Date, proxy: ScrollViewProxy) {
+        defer { focusedShelfDay = day }
+        guard let previous = focusedShelfDay, day != previous else { return }
+        DispatchQueue.main.async {
+            withAnimation(Self.focusScrollAnimation) {
+                proxy.scrollTo(day, anchor: .bottom)
             }
-            shelfFocusDay = previous
-            shelfFocusRequest += 1
-        } else {
-            withAnimation(PrairieTheme.springAnimation) {
-                proxy.scrollTo(Self.topContentId, anchor: .top)
-            }
-            stripFocusRequest += 1
         }
     }
-    #endif
 
+    /// Focus reaching the week strip restores the opening scroll position.
+    private func returnToTop(proxy: ScrollViewProxy) {
+        focusedShelfDay = nil
+        DispatchQueue.main.async {
+            withAnimation(Self.focusScrollAnimation) {
+                proxy.scrollTo(Self.topContentId, anchor: .top)
+            }
+        }
+    }
+
+    /// Match the pace of the focus engine's own reveal scrolls.
+    private static let focusScrollAnimation = Animation.easeInOut(duration: 0.45)
+    #endif
 }

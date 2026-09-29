@@ -265,13 +265,14 @@ struct DownloadActionButton: View {
     // MARK: - Actions
 
     /// One-tap entry: start immediately with defaults unless the size that
-    /// would land on disk (max of the Auto range, or the exact size of the
-    /// selected version) warrants confirming first.
+    /// would land on disk (the displayed version's size, or the max across
+    /// candidates when that size is unknown) warrants confirming first.
     private func handleDownloadTap() {
         guard !isRegistrationPending, record == nil else { return }
         let estimate = versions.isEmpty
             ? DownloadSizeEstimate.estimate(fileSizes: candidateFileSizes)
-            : DownloadSizeEstimate.estimate(versions: versions, fileId: selectedVersionFileId)
+            : (DownloadSizeEstimate.estimate(versions: versions, fileId: displayedVersionFileId)
+                ?? DownloadSizeEstimate.estimate(fileSizes: candidateFileSizes))
         let available = DownloadFilePaths.deviceStorage().available
         if let warning = estimate?.warningMessage(availableBytes: available) {
             largeDownloadWarning = warning
@@ -280,12 +281,12 @@ struct DownloadActionButton: View {
         startWithDefaults()
     }
 
-    /// The version picked on the detail screen (Auto when none — matching
-    /// what the options sheet preselects) + the global Downloads quality
-    /// preference, clamped to what the server currently offers.
+    /// The version the detail screen displays, with Auto resolved the same
+    /// way the selector shows it, + the global Downloads quality preference,
+    /// clamped to what the server currently offers.
     private func startWithDefaults() {
         startDownload(DownloadRequestOptions(
-            fileId: selectedVersionFileId,
+            fileId: displayedVersionFileId,
             quality: DownloadSettings.shared.resolvedFormat(
                 allowedFormats: manager.capability?.qualityPresets ?? []
             )
@@ -353,6 +354,17 @@ struct DownloadActionButton: View {
                 announceStartFailure()
             }
         }
+    }
+
+    /// Nil only in compact style, which has no version metadata; the
+    /// server then picks the file.
+    private var displayedVersionFileId: Int? {
+        DownloadRequestOptions.fileId(
+            versions: versions,
+            selectedFileId: selectedVersionFileId,
+            lastFileId: lastVersionFileId,
+            preferredQualityId: PlayerSettings.shared.preferredQuality
+        )
     }
 
     private func pause() {

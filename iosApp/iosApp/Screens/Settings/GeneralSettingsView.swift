@@ -8,18 +8,10 @@ struct GeneralSettingsView: View {
 
     var body: some View {
         List {
-            SettingsPageHeader(
-                title: "General",
-                subtitle: "Choose what happens when you open Prairie on this device.",
-                systemImage: "gearshape.fill",
-                tint: .purple
-            )
-            .settingsPageHeaderRow()
-
             profileSection
         }
         .settingsListChrome()
-        .navigationTitle("")
+        .navigationTitle("General")
         .prairieNavigationTitleDisplayMode(.inline)
         .prairieToolbarColorSchemeDark()
     }
@@ -48,7 +40,7 @@ struct GeneralSettingsView: View {
             Text(launchPreferences.behavior.standardDescription)
                 .foregroundStyle(Color.prairieSecondaryText)
         }
-        .listRowBackground(Color.prairieSurfaceElevated)
+        .listRowBackground(Color.prairieGroupedCell)
     }
 }
 #endif
