@@ -349,7 +349,7 @@ final class RequestsV2Tests: XCTestCase {
     @MainActor
     func testDetailOpensTheLibraryOnlyWithoutAnActiveRequest() async throws {
         let tokens = try await tokens()
-        let api = SiloAPI(http: HTTPClient(session: stub.makeSession(), tokenStore: tokens), tokenStore: tokens)
+        let api = PrairieAPI(http: HTTPClient(session: stub.makeSession(), tokenStore: tokens), tokenStore: tokens)
         let model = RequestDetailViewModel(mediaType: .series, tmdbId: 1399, api: api)
         // A title in the library, with the given request state.
         func inLibrary(_ request: String) -> String {
