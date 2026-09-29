@@ -118,6 +118,34 @@ final class RequestsV2Tests: XCTestCase {
         XCTAssertEqual(stub.requestedPaths, ["/api/v2/requests/detail/series/1399"])
     }
 
+    func testRequestStateDecodesWhenPresentAbsentOrUnknown() async throws {
+        let (api, _) = try await client()
+        func record(_ id: String, state: String?) -> String {
+            let member = state.map { #","state":"\#($0)""# } ?? ""
+            return Self.record
+                .replacingOccurrences(of: #""id":"request-one""#, with: #""id":"\#(id)""#)
+                .replacingOccurrences(of: #""status":"pending""#, with: #""status":"completed""# + member)
+        }
+        stub.reply(200, #"{"items":[\#(record("new", state: "processing")),\#(record("old", state: nil)),\#(record("newer", state: "archived"))],"page":{"has_more":false}}"#)
+        let records = try await api.myRequests()
+        XCTAssertEqual(records.map(\.id), ["new", "old", "newer"])
+        XCTAssertEqual(records.map(\.state), [.processing, nil, .unknown])
+
+        // The title detail's compact state carries the same member.
+        let active = #""request":{"status":"completed","state":"processing","requestable":false,"reason":"already_requested","request_id":"request-one","following":false,"requested_by_viewer":true}"#
+        for (body, expected) in [
+            (Self.detail.replacingOccurrences(of: #""request":{"requestable":true}"#, with: active), RequestUserState.processing),
+            (Self.detail.replacingOccurrences(of: #""request":{"requestable":true}"#, with: active.replacingOccurrences(of: "processing", with: "archived")), .unknown),
+        ] {
+            stub.reply(200, body)
+            let detail = try await api.requestMediaDetail(mediaType: .movie, tmdbId: 949)
+            XCTAssertEqual(detail.request.state, expected)
+        }
+        stub.reply(200, Self.detail)
+        let requestable = try await api.requestMediaDetail(mediaType: .movie, tmdbId: 949)
+        XCTAssertNil(requestable.request.state)
+    }
+
     func testEveryOperationNeedsASelectedProfile() async throws {
         let (api, _) = try await client(profile: nil)
         do {
@@ -316,6 +344,38 @@ final class RequestsV2Tests: XCTestCase {
         await model.load()
         XCTAssertEqual(model.primaryAction, .status(.pending))
         XCTAssertNil(model.actionErrorMessage)
+    }
+
+    @MainActor
+    func testDetailOpensTheLibraryOnlyWithoutAnActiveRequest() async throws {
+        let tokens = try await tokens()
+        let api = PrairieAPI(http: HTTPClient(session: stub.makeSession(), tokenStore: tokens), tokenStore: tokens)
+        let model = RequestDetailViewModel(mediaType: .series, tmdbId: 1399, api: api)
+        // A title in the library, with the given request state.
+        func inLibrary(_ request: String) -> String {
+            Self.detail
+                .replacingOccurrences(of: #""availability":"missing""#,
+                    with: #""availability":"available","library_content_id":"series-1""#)
+                .replacingOccurrences(of: #""request":{"requestable":true}"#, with: #""request":\#(request)"#)
+        }
+        let cases: [(String, RequestPrimaryAction)] = [
+            (#"{"requestable":false,"reason":"already_available"}"#, .openInLibrary(contentId: "series-1")),
+            // A request for the missing seasons, on its way or failed.
+            (#"{"requestable":false,"reason":"already_requested","status":"downloading","state":"processing"}"#,
+             .status(.onTheWay)),
+            (#"{"requestable":false,"reason":"already_requested","status":"completed","state":"partially_available"}"#,
+             .status(.onTheWay)),
+            (#"{"requestable":false,"reason":"already_requested","status":"queued","state":"failed"}"#,
+             .status(.needsAttention(.failed, reason: nil))),
+            // A server without `state`: availability decides, as before.
+            (#"{"requestable":false,"reason":"already_requested","status":"downloading"}"#,
+             .openInLibrary(contentId: "series-1")),
+        ]
+        for (request, expected) in cases {
+            stub.reply(200, inLibrary(request))
+            await model.load()
+            XCTAssertEqual(model.primaryAction, expected, request)
+        }
     }
 
     @MainActor

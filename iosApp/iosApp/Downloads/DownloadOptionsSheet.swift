@@ -157,7 +157,7 @@ struct DownloadOptionsSheet: View {
     }
 
     private var summaryDetail: String {
-        let qualityLabel = DownloadFormat(rawValue: quality)?.displayName ?? quality
+        let qualityLabel = DownloadFormat(rawValue: quality).map(label(for:)) ?? quality
         let versionLabel = effectiveVersion.map(DetailPlaybackFormatting.versionPrimaryText)
             ?? (fileId == nil ? "Auto version" : "Selected version")
         var parts = [versionLabel, qualityLabel]
@@ -291,7 +291,7 @@ struct DownloadOptionsSheet: View {
             if formats.count > 1 {
                 ForEach(formats, id: \.self) { format in
                     optionButton(
-                        title: format.displayName,
+                        title: label(for: format),
                         detail: qualityDetail(for: format),
                         isSelected: quality == format.rawValue
                     ) {
@@ -300,7 +300,7 @@ struct DownloadOptionsSheet: View {
                 }
             } else {
                 optionButton(
-                    title: formats.first?.displayName ?? DownloadFormat.original.displayName,
+                    title: label(for: formats.first ?? .original),
                     detail: qualityDetail(for: formats.first ?? .original),
                     isSelected: true,
                     isEnabled: false
@@ -313,12 +313,16 @@ struct DownloadOptionsSheet: View {
         }
     }
 
+    private func label(for format: DownloadFormat) -> String {
+        manager.capability?.label(for: format) ?? format.displayName
+    }
+
     private func qualityDetail(for format: DownloadFormat) -> String {
         switch format {
         case .original:
             return "Source quality, with compatibility fallback if needed"
         case .twentyMbps, .tenMbps, .fiveMbps, .twoMbps, .oneMbps:
-            return "Prepared on the server before download starts"
+            return "Prepared on the server when the original is larger"
         }
     }
 
