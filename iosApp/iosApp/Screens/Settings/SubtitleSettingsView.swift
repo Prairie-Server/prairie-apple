@@ -13,14 +13,6 @@ struct SubtitleSettingsView: View {
 
     var body: some View {
         List {
-            SettingsPageHeader(
-                title: "Subtitles",
-                subtitle: "Language, behavior, and on-screen appearance.",
-                systemImage: "captions.bubble.fill",
-                tint: .pink
-            )
-            .settingsPageHeaderRow()
-
             profileBackedSection
             if AICapabilities.shared.metadataEnabled {
                 metadataLanguageSection
@@ -34,7 +26,7 @@ struct SubtitleSettingsView: View {
             appearanceSection
         }
         .settingsListChrome()
-        .navigationTitle("")
+        .navigationTitle("Subtitles")
         .prairieNavigationTitleDisplayMode(.inline)
         .prairieToolbarColorSchemeDark()
         .onChange(of: viewModel.prefs.subtitleLanguage) { _, _ in
@@ -80,7 +72,7 @@ struct SubtitleSettingsView: View {
                 .foregroundStyle(Color.prairieSecondaryText)
         }
         .disabled(viewModel.prefs.serverUpgradeRequired)
-        .listRowBackground(Color.prairieSurfaceElevated)
+        .listRowBackground(Color.prairieGroupedCell)
     }
 
     // MARK: - Profile prefs (server-backed)
@@ -125,7 +117,7 @@ struct SubtitleSettingsView: View {
                 )
             )
             .foregroundStyle(Color.prairieOnSurface)
-            .tint(.prairieAccent)
+            .tint(.prairieSwitchOn)
         } header: {
             Text("Profile")
                 .foregroundStyle(Color.prairieSecondaryText)
@@ -151,7 +143,7 @@ struct SubtitleSettingsView: View {
             .foregroundStyle(Color.prairieSecondaryText)
         }
         .disabled(viewModel.prefs.serverUpgradeRequired || viewModel.subtitleMatchesSystemAppearance)
-        .listRowBackground(Color.prairieSurfaceElevated)
+        .listRowBackground(Color.prairieGroupedCell)
     }
 
     // MARK: - Appearance (per-device override)
@@ -174,7 +166,7 @@ struct SubtitleSettingsView: View {
                     .foregroundStyle(Color.prairieError)
             }
         }
-        .listRowBackground(Color.prairieSurfaceElevated)
+        .listRowBackground(Color.prairieGroupedCell)
 
         Section {
             Toggle(
@@ -187,7 +179,7 @@ struct SubtitleSettingsView: View {
                 )
             )
             .foregroundStyle(Color.prairieOnSurface)
-            .tint(.prairieAccent)
+            .tint(.prairieSwitchOn)
 
             Toggle(
                 "Custom Appearance",
@@ -199,7 +191,7 @@ struct SubtitleSettingsView: View {
                 )
             )
             .foregroundStyle(Color.prairieOnSurface)
-            .tint(.prairieAccent)
+            .tint(.prairieSwitchOn)
             .disabled(manualEditingDisabled)
         } footer: {
             VStack(alignment: .leading, spacing: 6) {
@@ -218,7 +210,7 @@ struct SubtitleSettingsView: View {
             }
             .foregroundStyle(Color.prairieSecondaryText)
         }
-        .listRowBackground(Color.prairieSurfaceElevated)
+        .listRowBackground(Color.prairieGroupedCell)
 
         Section {
             Picker("Font Size", selection: appearanceBinding(\.fontSize)) {
@@ -253,7 +245,7 @@ struct SubtitleSettingsView: View {
 
             Toggle("Text Outline", isOn: appearanceBinding(\.textOutline))
                 .foregroundStyle(Color.prairieOnSurface)
-                .tint(.prairieAccent)
+                .tint(.prairieSwitchOn)
 
             ColorChoicePicker(
                 title: "Outline Color",
@@ -266,7 +258,7 @@ struct SubtitleSettingsView: View {
             Text("Text")
                 .foregroundStyle(Color.prairieSecondaryText)
         }
-        .listRowBackground(Color.prairieSurfaceElevated)
+        .listRowBackground(Color.prairieGroupedCell)
         .disabled(manualEditingDisabled)
         .opacity(manualEditingDisabled ? 0.45 : 1)
 
@@ -298,7 +290,7 @@ struct SubtitleSettingsView: View {
             Text("Background")
                 .foregroundStyle(Color.prairieSecondaryText)
         }
-        .listRowBackground(Color.prairieSurfaceElevated)
+        .listRowBackground(Color.prairieGroupedCell)
         .disabled(manualEditingDisabled)
         .opacity(manualEditingDisabled ? 0.45 : 1)
 
@@ -318,7 +310,7 @@ struct SubtitleSettingsView: View {
             Text("Layout")
                 .foregroundStyle(Color.prairieSecondaryText)
         }
-        .listRowBackground(Color.prairieSurfaceElevated)
+        .listRowBackground(Color.prairieGroupedCell)
         .disabled(manualEditingDisabled)
         .opacity(manualEditingDisabled ? 0.45 : 1)
     }
@@ -361,7 +353,7 @@ struct SubtitleSettingsView: View {
                 next.backgroundOpacity = percent
                 Task { await viewModel.setSubtitleAppearance(next) }
             }
-            .tint(.prairieAccent)
+            .tint(.prairieOnSurface)
             Text("\(Int(draftOpacity ?? committed))%")
                 .monospacedDigit()
                 .foregroundStyle(Color.prairieSecondaryText)

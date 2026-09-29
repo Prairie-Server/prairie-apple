@@ -533,12 +533,14 @@ extension View {
         // only way a modifier can: disable the button and overlay a spinner.
         self
             .buttonStyle(.glassProminent)
-            .tint(.prairieAccent)
+            .tint(.prairieOnSurface)
+            .foregroundStyle(Color.prairieBackground)
             .disabled(isLoading)
             .overlay {
                 if isLoading {
                     ProgressView()
                         .controlSize(.small)
+                        .tint(Color.prairieBackground)
                 }
             }
     }

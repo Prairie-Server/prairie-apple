@@ -1,6 +1,28 @@
 #if !os(tvOS)
 import SwiftUI
 
+/// The episode highlighted on the series page with the version state its
+/// selector shows, so downloading that one episode saves the displayed file.
+struct SeriesEpisodeDownloadTarget {
+    let episode: EpisodeListItem
+    let versions: [FileVersion]
+    let selectedFileId: Int?
+    let lastFileId: Int?
+
+    var title: String { episode.title ?? "Episode \(episode.episodeNumber)" }
+    var code: String { "S\(episode.seasonNumber)·E\(episode.episodeNumber)" }
+    var displaySubtitle: String { "S\(episode.seasonNumber) · E\(episode.episodeNumber)" }
+
+    var displayedVersion: FileVersion? {
+        DetailVersionSelection.displayVersion(
+            versions: versions,
+            selectedFileId: selectedFileId,
+            lastFileId: lastFileId,
+            preferredQualityId: PlayerSettings.shared.preferredQuality
+        )
+    }
+}
+
 /// Series-level download + monitoring control for the series/season detail
 /// action row. A circle menu offering whole-season / whole-series download
 /// and a series-monitoring subscription editor. Reads
@@ -12,10 +34,20 @@ struct SeriesDownloadMenuButton: View {
     let selectedSeason: Season?
     let episodes: [EpisodeListItem]
     let episodesBySeason: [Int: [EpisodeListItem]]
+    var episodeTarget: SeriesEpisodeDownloadTarget? = nil
 
     private var manager: DownloadManager { DownloadManager.shared }
     @State private var activeSheet: SeriesDownloadSheet?
-    @State private var pendingMonitorSheet = false
+    @State private var pendingSheet: SeriesDownloadSheet?
+    /// Captured when Episode Options is chosen, so a reload of the page's
+    /// highlighted episode cannot blank the sheet or retarget its download.
+    @State private var optionsTarget: SeriesEpisodeDownloadTarget?
+    @State private var episodeErrorMessage: String?
+    /// True from presenting a sheet until its dismissal finishes. An alert
+    /// raised while a sheet is still animating away can be dropped, so a
+    /// failure in that window waits in `pendingEpisodeError`.
+    @State private var sheetOnScreen = false
+    @State private var pendingEpisodeError: String?
 
     /// Presentation of the trigger. `labeled` matches the detail page's named
     /// action row; `circle` is the original chrome, still used elsewhere.
@@ -87,9 +119,13 @@ struct SeriesDownloadMenuButton: View {
         // fails to present when teardown runs long (slow device,
         // accessibility animations, low power).
         .sheet(item: $activeSheet, onDismiss: {
-            if pendingMonitorSheet {
-                pendingMonitorSheet = false
-                activeSheet = .monitor
+            sheetOnScreen = false
+            if let pendingSheet {
+                self.pendingSheet = nil
+                activeSheet = pendingSheet
+            } else if let pendingEpisodeError {
+                self.pendingEpisodeError = nil
+                episodeErrorMessage = pendingEpisodeError
             }
         }) { sheet in
             switch sheet {
@@ -104,11 +140,66 @@ struct SeriesDownloadMenuButton: View {
                     canDownloadSeason: manager.canDownloadSeason,
                     canMonitorSeries: manager.canMonitorSeries,
                     isMonitored: isMonitored,
-                    onMonitor: { pendingMonitorSheet = true }
+                    episodeTarget: episodeTarget,
+                    onEpisodeOptions: { target in
+                        optionsTarget = target
+                        pendingSheet = .episodeOptions
+                    },
+                    onMonitor: { pendingSheet = .monitor }
                 )
                 .environment(\.browseLibraryId, libraryId)
+            case .episodeOptions:
+                if let target = optionsTarget {
+                    DownloadOptionsSheet(
+                        title: "\(target.code) · \(target.title)",
+                        versions: target.versions,
+                        selectedVersionFileId: target.selectedFileId,
+                        lastVersionFileId: target.lastFileId,
+                        onStart: { startEpisodeDownload($0, target: target) }
+                    )
+                }
             case .monitor:
                 SeriesMonitorSheet(seriesId: seriesId, seriesTitle: detail.title, seasons: seasons)
+            }
+        }
+        .onChange(of: activeSheet) { _, sheet in
+            if sheet != nil { sheetOnScreen = true }
+        }
+        // The options sheet dismisses as soon as it hands off, so a failed
+        // registration has to surface from here.
+        .alert(
+            "Download Failed",
+            isPresented: Binding(
+                get: { episodeErrorMessage != nil },
+                set: { if !$0 { episodeErrorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(episodeErrorMessage ?? "")
+        }
+    }
+
+    private func startEpisodeDownload(_ options: DownloadRequestOptions, target: SeriesEpisodeDownloadTarget) {
+        Task {
+            do {
+                try await manager.downloadEpisode(
+                    seriesId: seriesId,
+                    episodeId: target.episode.contentId,
+                    displayTitle: target.title,
+                    displaySubtitle: target.displaySubtitle,
+                    posterThumbhash: detail.posterThumbhash,
+                    fileId: options.fileId,
+                    quality: options.quality
+                )
+            } catch DownloadError.registrationAlreadyInFlight {
+                // The original request owns the Preparing state.
+            } catch {
+                if sheetOnScreen {
+                    pendingEpisodeError = error.localizedDescription
+                } else {
+                    episodeErrorMessage = error.localizedDescription
+                }
             }
         }
     }
@@ -116,11 +207,13 @@ struct SeriesDownloadMenuButton: View {
 
 private enum SeriesDownloadSheet: Identifiable {
     case downloadOptions
+    case episodeOptions
     case monitor
 
     var id: String {
         switch self {
         case .downloadOptions: return "downloadOptions"
+        case .episodeOptions: return "episodeOptions"
         case .monitor: return "monitor"
         }
     }
@@ -136,16 +229,26 @@ private struct SeriesDownloadOptionsSheet: View {
     let canDownloadSeason: Bool
     let canMonitorSeries: Bool
     let isMonitored: Bool
+    let episodeTarget: SeriesEpisodeDownloadTarget?
+    let onEpisodeOptions: (SeriesEpisodeDownloadTarget) -> Void
     let onMonitor: () -> Void
 
     @Environment(\.dismiss) private var dismiss
     private var manager: DownloadManager { DownloadManager.shared }
     @State private var errorMessage: String?
-    @State private var isWorking = false
+    /// The option being registered, which shows a spinner in its row.
+    @State private var workingOption: String?
+    @State private var finishedCount = 0
+
+    private var isWorking: Bool { workingOption != nil }
 
     var body: some View {
         NavigationStack {
             Form {
+                if let episodeTarget {
+                    episodeSection(episodeTarget)
+                }
+
                 Section {
                     if !availableSeasons.isEmpty {
                         NavigationLink {
@@ -157,21 +260,25 @@ private struct SeriesDownloadOptionsSheet: View {
                                 posterThumbhash: posterThumbhash
                             )
                         } label: {
+                            // The navigation link draws its own chevron.
                             optionLabel(
                                 title: "Choose Episodes",
                                 detail: "Open a season and select episodes",
-                                icon: "checklist"
+                                icon: "checklist",
+                                showsChevron: false
                             )
                         }
+                        .disabled(isWorking)
                     }
 
                     if canDownloadSeason, let selectedSeason {
                         optionButton(
                             title: "Download Season \(selectedSeason.seasonNumber)",
                             detail: "Original quality · \(selectedSeason.episodeCount) episode\(selectedSeason.episodeCount == 1 ? "" : "s")",
-                            icon: "arrow.down.square.on.square"
+                            icon: "square.and.arrow.down.on.square",
+                            option: "season"
                         ) {
-                            startDownload {
+                            startDownload(option: "season") {
                                 try await manager.downloadSeason(seriesId: seriesId, seasonNumber: selectedSeason.seasonNumber)
                             }
                         }
@@ -180,9 +287,10 @@ private struct SeriesDownloadOptionsSheet: View {
                     optionButton(
                         title: "Download All Episodes",
                         detail: "Original quality",
-                        icon: "arrow.down.circle"
+                        icon: "arrow.down.circle",
+                        option: "series"
                     ) {
-                        startDownload {
+                        startDownload(option: "series") {
                             try await manager.downloadSeries(seriesId: seriesId)
                         }
                     }
@@ -244,6 +352,72 @@ private struct SeriesDownloadOptionsSheet: View {
         }
     }
 
+    /// The highlighted episode, downloaded with the version its selector
+    /// shows. Batch rows below cannot carry a version, so this is the one
+    /// place a series-page version choice reaches a download.
+    @ViewBuilder
+    private func episodeSection(_ target: SeriesEpisodeDownloadTarget) -> some View {
+        let isRegistering = manager.isRegistering(contentId: target.episode.contentId)
+        let record = manager.record(forContentId: target.episode.contentId)
+        // A failed entry holds no playable bytes, so it offers a retry like
+        // the episode card instead of claiming the episode is downloaded.
+        let failed = record?.localStatus == .failed
+        Section {
+            if (record != nil && !failed) || isRegistering {
+                optionLabel(
+                    title: target.code,
+                    detail: "Already in Downloads",
+                    icon: "checkmark.circle",
+                    showsChevron: false
+                )
+            } else {
+                optionButton(
+                    title: failed ? "Retry \(target.code)" : "Download \(target.code)",
+                    detail: episodeVersionDetail(target),
+                    icon: failed ? "arrow.clockwise" : "arrow.down.to.line",
+                    option: "episode"
+                ) {
+                    startDownload(option: "episode") {
+                        try await manager.downloadEpisode(
+                            seriesId: seriesId,
+                            episodeId: target.episode.contentId,
+                            displayTitle: target.title,
+                            displaySubtitle: target.displaySubtitle,
+                            posterThumbhash: posterThumbhash,
+                            fileId: target.displayedVersion?.fileId,
+                            quality: DownloadSettings.shared.resolvedFormat(
+                                allowedFormats: manager.capability?.qualityPresets ?? []
+                            )
+                        )
+                    }
+                }
+            }
+            // Stays available once downloaded, like the movie page's
+            // Download Options, so a different version replaces the entry.
+            if !isRegistering {
+                optionButton(
+                    title: "Episode Options…",
+                    detail: "Choose the version and quality",
+                    icon: "slider.horizontal.3"
+                ) {
+                    dismiss()
+                    onEpisodeOptions(target)
+                }
+            }
+        } header: {
+            Text("Episode")
+        }
+    }
+
+    private func episodeVersionDetail(_ target: SeriesEpisodeDownloadTarget) -> String {
+        guard let version = target.displayedVersion else { return target.title }
+        let label = DetailPlaybackFormatting.versionPrimaryText(version)
+        guard let estimate = DownloadSizeEstimate.estimate(versions: target.versions, fileId: version.fileId) else {
+            return label
+        }
+        return "\(label) · \(estimate.sizeLabel)"
+    }
+
     private var availableSeasons: [Season] {
         let sorted = seasons.sortedForDisplay()
         if sorted.isEmpty, let selectedSeason { return [selectedSeason] }
@@ -252,17 +426,18 @@ private struct SeriesDownloadOptionsSheet: View {
 
     /// Run a download request, dismissing only on success — a silent
     /// `try?` here made an offline/unauthenticated tap look like it worked.
-    private func startDownload(_ work: @escaping () async throws -> Void) {
+    private func startDownload(option: String, _ work: @escaping () async throws -> Void) {
         guard !isWorking else { return }
-        isWorking = true
+        workingOption = option
         Task {
             do {
                 try await work()
+                finishedCount += 1
                 dismiss()
             } catch {
                 errorMessage = error.localizedDescription
             }
-            isWorking = false
+            workingOption = nil
         }
     }
 
@@ -270,15 +445,20 @@ private struct SeriesDownloadOptionsSheet: View {
         title: String,
         detail: String,
         icon: String,
+        option: String? = nil,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            optionLabel(title: title, detail: detail, icon: icon)
+            optionLabel(title: title, detail: detail, icon: icon, showsSpinner: option != nil && workingOption == option)
         }
         .buttonStyle(.plain)
+        .disabled(isWorking)
+        .sensoryFeedback(.success, trigger: finishedCount)
     }
 
-    private func optionLabel(title: String, detail: String, icon: String) -> some View {
+    private func optionLabel(
+        title: String, detail: String, icon: String, showsSpinner: Bool = false, showsChevron: Bool = true
+    ) -> some View {
         HStack(spacing: 12) {
             Image(systemName: icon)
                 .font(.system(size: 17, weight: .semibold))
@@ -293,11 +473,17 @@ private struct SeriesDownloadOptionsSheet: View {
                     .foregroundColor(.prairieSecondaryText)
             }
             Spacer(minLength: 8)
-            Image(systemName: "chevron.right")
-                .font(.system(size: 12, weight: .bold))
-                .foregroundColor(.prairieSecondaryText)
+            if showsSpinner {
+                ProgressView()
+            } else if showsChevron {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundColor(.prairieSecondaryText)
+            }
         }
         .padding(.vertical, 4)
+        // The whole row answers a tap, not just its text and icons.
+        .contentShape(Rectangle())
     }
 }
 
@@ -728,13 +914,13 @@ struct SeriesMonitorSheet: View {
                                     else { selectedSeasons.remove(season.seasonNumber) }
                                 }
                             ))
-                            .tint(.prairieAccent)
+                            .tint(.prairieSwitchOn)
                         }
                     }
                 }
                 Section("Storage") {
                     Toggle("Delete watched episodes", isOn: $deleteWatched)
-                        .tint(.prairieAccent)
+                        .tint(.prairieSwitchOn)
                     Picker("Limit", selection: $maxStorageGB) {
                         ForEach(storageLimitOptionsGB, id: \.self) { gb in
                             Text(gb == 0 ? "Unlimited" : "\(gb) GB").tag(gb)

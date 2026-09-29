@@ -6,6 +6,7 @@
 	<array>
 		<string>org.prairieserver.prairie.downloads-refresh</string>
 		<string>com.continuum.play.downloads-refresh</string>
+		<string>$(PRODUCT_BUNDLE_IDENTIFIER).downloads.continued.*</string>
 	</array>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
@@ -77,6 +78,7 @@
 	<array>
 		<string>audio</string>
 		<string>fetch</string>
+		<string>processing</string>
 		<string>remote-notification</string>
 	</array>
 	<key>UILaunchScreen</key>

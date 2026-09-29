@@ -195,7 +195,7 @@ struct FilterView: View {
                     .font(.prairieBody)
                     .foregroundColor(.prairieOnSurface)
             }
-            .tint(Color.prairieAccent)
+            .tint(.prairieSwitchOn)
             .listRowBackground(Color.clear)
             .filterListRowSeparatorHidden()
             .onChange(of: preserve) { _, newValue in

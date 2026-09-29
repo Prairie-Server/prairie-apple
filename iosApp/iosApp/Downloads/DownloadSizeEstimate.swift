@@ -1,11 +1,11 @@
 #if !os(tvOS)
 import Foundation
 
-/// Pre-flight size expectation for a download. When the user picks Auto the
-/// server resolves the actual file, so the only honest disclosure is the
-/// min–max range across the item's candidate versions; a chosen version is
-/// exact. Sizes come from the catalog's original-file metadata, so for
-/// transcoded qualities the estimate is an upper bound.
+/// Pre-flight size expectation for a download. A known version is exact;
+/// when the server picks the file (episode cards carry no versions) the only
+/// honest disclosure is the min–max range across the candidate files. Sizes
+/// come from the catalog's original-file metadata, so for transcoded
+/// qualities the estimate is an upper bound.
 struct DownloadSizeEstimate {
     /// Downloads past this point warrant an explicit confirmation before the
     /// one-tap path proceeds. Decimal bytes so the threshold lines up with

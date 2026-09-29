@@ -13,10 +13,6 @@ struct CompanionPairingCard: View {
     /// mid-flow retry lives INSIDE the card ("Try Again" on the error step).
     var onDismiss: () -> Void
 
-    /// System blue matches the native pairing look; the app's global tint is
-    /// near-white, which would wash out the primary button.
-    private let accent = Color.blue
-
     @State private var coordinator: CompanionPairingCoordinator?
     @State private var startupTask: Task<Void, Never>?
     @State private var selection: Set<String> = []
@@ -136,7 +132,7 @@ struct CompanionPairingCard: View {
                 Image(systemName: "server.rack")
                     .font(.system(size: 16, weight: .semibold))
                     .frame(width: 34, height: 34)
-                    .background(accent, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    .background(Color.prairieIconTile, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                     .foregroundStyle(.white)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(server.displayName)
@@ -154,7 +150,7 @@ struct CompanionPairingCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 Image(systemName: isOn ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 22))
-                    .foregroundStyle(isOn ? accent : Color.secondary)
+                    .foregroundStyle(isOn ? Color.prairieOnSurface : Color.secondary)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
@@ -284,7 +280,9 @@ struct CompanionPairingCard: View {
         }
         .buttonStyle(.borderedProminent)
         .controlSize(.large)
-        .tint(accent)
+        // White fill with dark text, like the app's other primary buttons.
+        .tint(.prairieOnSurface)
+        .foregroundStyle(Color.prairieBackground)
     }
 
     private func tertiaryButton(
@@ -305,7 +303,7 @@ struct CompanionPairingCard: View {
             .padding(.vertical, 8)
         }
         .buttonStyle(.plain)
-        .foregroundStyle(accent)
+        .foregroundStyle(Color.prairieSecondaryText)
     }
 
     private func cancelButton() -> some View {

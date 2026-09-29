@@ -18,6 +18,11 @@ enum CalendarFilter: String, CaseIterable, Identifiable {
         case .everything: return "All"
         }
     }
+
+    /// Presets an empty week links to: the other two, in filter-bar order.
+    var emptyStateLinks: [CalendarFilter] {
+        Self.allCases.filter { $0 != self }
+    }
 }
 
 // MARK: - Wire types

@@ -10,20 +10,39 @@ import SwiftUI
 struct DownloadActiveRow: View {
     let record: DownloadRecord
     /// Smoothed transfer rate from the manager; nil until enough progress
-    /// deltas have landed for the estimate to be meaningful.
+    /// deltas have landed for the estimate to be meaningful, and again once
+    /// progress stops arriving.
     var bytesPerSecond: Double? = nil
+    /// What the download waits for, when it can't move right now.
+    var wait: DownloadManager.Wait? = nil
+    var selecting: Bool = false
+    var selected: Bool = false
+    /// This row's place in the Downloading group; drawn inside the context
+    /// menu so the lifted preview keeps the cell's shape.
+    var groupPosition: DownloadGroupPosition = .only
+    var onSelectToggle: () -> Void = {}
     var onPauseResume: () -> Void = {}
     var onCancel: () -> Void = {}
 
     @State private var confirmingCancel = false
 
     var body: some View {
+        if selecting {
+            Button(action: onSelectToggle) { card }
+                .buttonStyle(.plain)
+                .downloadGroupSlice(groupPosition)
+        } else {
+            actionableCard
+        }
+    }
+
+    private var actionableCard: some View {
         DownloadSwipeRevealContainer(actionLabel: "Cancel") {
             confirmingCancel = true
         } content: {
             card
         }
-        .padding(.horizontal, 16)
+        .downloadGroupSlice(groupPosition)
         .contextMenu { menuItems }
         .confirmationDialog(
             cancelPrompt,
@@ -37,6 +56,7 @@ struct DownloadActiveRow: View {
 
     private var card: some View {
         HStack(spacing: 12) {
+            if selecting { DownloadSelectionCircle(selected: selected) }
             DownloadPosterThumb(
                 thumbhash: record.posterThumbhash,
                 fileURL: DownloadManager.shared.posterImageURL(for: record),
@@ -55,18 +75,13 @@ struct DownloadActiveRow: View {
             }
 
             Spacer(minLength: 8)
-            progressRing
+            if !selecting { progressRing }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color.prairieSurfaceElevated)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(Color.prairieOutline, lineWidth: 1)
-                )
-        )
+        .contentShape(Rectangle())
+        // Opaque so the swipe-revealed Cancel action stays hidden underneath.
+        .background(Color.prairieGroupedCell)
     }
 
     @ViewBuilder private var menuItems: some View {
@@ -103,17 +118,27 @@ struct DownloadActiveRow: View {
     private var statusLine: String {
         switch record.localStatus {
         case .downloading:
+            if rateParts.isEmpty {
+                if let waitText {
+                    return record.bytesDownloaded > 0 ? "\(waitText) · \(percentText)" : waitText
+                }
+                // Handed to iOS, which hasn't started the transfer yet.
+                if record.bytesDownloaded == 0 { return "Waiting…" }
+            }
             return ([percentText, sizeText] + rateParts).joined(separator: " · ")
         case .paused:
             return "Paused · \(percentText) · \(sizeText)"
-        case .registering, .queued: return "Queued"
+        case .registering, .queued: return waitText ?? "Queued"
         case .preparing: return "Preparing on server…"
-        case .fetchingAssets: return "Finishing…"
+        // Fetching the manifest, before the transfer starts.
+        case .fetchingAssets: return waitText ?? "Starting…"
         case .completed: return DownloadFormatting.bytes(record.fileSize)
         case .failed: return "Failed"
         case .revoked: return "No longer available"
         }
     }
+
+    private var waitText: String? { wait?.label }
 
     private var percentText: String {
         "\(Int((record.progressFraction * 100).rounded()))%"
@@ -210,12 +235,9 @@ struct DownloadSwipeRevealContainer<Content: View>: View {
                     .font(.system(size: 11.5, weight: .semibold))
             }
             .foregroundColor(.white)
-            .frame(width: revealWidth - 8)
+            .frame(width: revealWidth)
             .frame(maxHeight: .infinity)
-            .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color.prairieError)
-            )
+            .background(Color.prairieError)
         }
         .buttonStyle(.plain)
         .opacity(offset < -8 ? 1 : 0)
@@ -269,9 +291,10 @@ struct DownloadAttentionRow: View {
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundColor(.prairieOnSurface)
                     .lineLimit(1)
-                Text("Download failed")
+                Text(record.failureReason)
                     .font(.system(size: 12.5))
                     .foregroundColor(.prairieError)
+                    .lineLimit(2)
             }
             Spacer(minLength: 8)
             Button(action: onRetry) {
@@ -291,15 +314,6 @@ struct DownloadAttentionRow: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color.prairieSurfaceVariant)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(Color.prairieOutline, lineWidth: 1)
-                )
-        )
-        .padding(.horizontal, 16)
     }
 }
 
@@ -321,27 +335,19 @@ struct DownloadMovieRow: View {
                     fileURL: DownloadManager.shared.posterImageURL(for: record),
                     width: 40
                 )
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 7) {
-                        Text(record.title ?? record.contentId)
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundColor(.prairieOnSurface)
-                            .lineLimit(1)
-                        DownloadKindChip(text: "Movie")
-                    }
-                    if !meta.isEmpty {
-                        Text(meta)
-                            .font(.system(size: 12))
-                            .foregroundColor(.prairieSecondaryText)
-                            .lineLimit(1)
-                    }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(record.title ?? record.contentId)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.prairieOnSurface)
+                        .lineLimit(1)
+                    Text(meta)
+                        .font(.subheadline)
+                        .foregroundColor(.prairieSecondaryText)
+                        .lineLimit(1)
                 }
                 Spacer(minLength: 8)
-                Text(DownloadFormatting.bytes(record.fileSize))
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(.prairieOnSurface)
             }
-            .padding(.horizontal, 18)
+            .padding(.horizontal, 16)
             .padding(.vertical, 10)
             .contentShape(Rectangle())
         }
@@ -351,6 +357,7 @@ struct DownloadMovieRow: View {
     private var meta: String {
         var parts: [String] = []
         if let sub = record.subtitle, !sub.isEmpty { parts.append(sub) }
+        parts.append(DownloadFormatting.bytes(record.fileSize))
         if watched { parts.append("watched") }
         return parts.joined(separator: " · ")
     }
@@ -392,20 +399,10 @@ struct DownloadSeriesRow: View {
                 }
             }
         }
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(expanded ? Color.prairieSurfaceElevated : Color.prairieSurfaceVariant)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .stroke(Color.prairieOutline, lineWidth: 1)
-                )
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .padding(.horizontal, 16)
     }
 
     private var header: some View {
-        HStack(spacing: 13) {
+        HStack(spacing: 12) {
             if selecting { DownloadSelectionCircle(selected: selected) }
             posterStack
             VStack(alignment: .leading, spacing: 4) {
@@ -414,17 +411,15 @@ struct DownloadSeriesRow: View {
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundColor(.prairieOnSurface)
                         .lineLimit(1)
+                        .layoutPriority(1)
                     if group.isMonitored { monitorBadge }
                 }
                 Text(subtitleLine)
-                    .font(.system(size: 12.5))
+                    .font(.subheadline)
                     .foregroundColor(.prairieSecondaryText)
                     .lineLimit(1)
             }
             Spacer(minLength: 6)
-            Text(DownloadFormatting.bytes(group.totalBytes))
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundColor(.prairieOnSurface)
             if !selecting {
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
@@ -439,7 +434,9 @@ struct DownloadSeriesRow: View {
                 .accessibilityLabel(expanded ? "Collapse episodes" : "Expand episodes")
             }
         }
-        .padding(12)
+        .padding(.leading, 16)
+        .padding(.trailing, 10)
+        .padding(.vertical, 10)
         .contentShape(Rectangle())
         .onTapGesture(perform: headerTap)
     }
@@ -454,25 +451,25 @@ struct DownloadSeriesRow: View {
         }
     }
 
+    /// The series poster with two cards peeking out behind it, marking the
+    /// row as a group of episodes.
     private var posterStack: some View {
         ZStack(alignment: .leading) {
             RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(Color.prairieSurfaceVariant)
-                .frame(width: 46, height: 62)
-                .offset(x: 9)
-                .opacity(0.45)
+                .fill(Color.white.opacity(0.10))
+                .frame(width: 40, height: 54)
+                .offset(x: 7)
             RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(Color.prairieSurface)
-                .frame(width: 46, height: 64)
-                .offset(x: 4)
-                .opacity(0.7)
+                .fill(Color.white.opacity(0.18))
+                .frame(width: 40, height: 57)
+                .offset(x: 3.5)
             DownloadPosterThumb(
                 thumbhash: group.posterThumbhash,
                 fileURL: posterFileURL,
-                width: 46
+                width: 40
             )
         }
-        .frame(width: 59, height: 66, alignment: .leading)
+        .frame(width: 47, height: 60, alignment: .leading)
     }
 
     /// First on-disk poster among the group's episodes — every episode of a
@@ -483,24 +480,13 @@ struct DownloadSeriesRow: View {
             .first
     }
 
+    /// Antenna glyph after the title of a series with an active monitoring
+    /// subscription — the same glyph as the Monitoring section.
     private var monitorBadge: some View {
-        HStack(spacing: 4) {
-            Image(systemName: "antenna.radiowaves.left.and.right")
-                .font(.system(size: 9, weight: .semibold))
-            Text("Monitoring")
-                .font(.system(size: 9.5, weight: .semibold))
-        }
-        .foregroundColor(.prairieOnSurface)
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
-        .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Color.prairieChromeRestingFill)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(Color.prairieChromeRestingBorder, lineWidth: 1)
-                )
-        )
+        Image(systemName: "antenna.radiowaves.left.and.right")
+            .font(.footnote.weight(.semibold))
+            .foregroundColor(.prairieSecondaryText)
+            .accessibilityLabel("Monitoring")
     }
 
     private var subtitleLine: String {
@@ -510,6 +496,7 @@ struct DownloadSeriesRow: View {
             : (group.seasons.first.map { $0.isSpecials ? "Specials" : "Season \($0.seasonNumber)" } ?? "")
         var line = "\(group.episodeCount) episode\(group.episodeCount == 1 ? "" : "s")"
         if !seasonPart.isEmpty { line += " · \(seasonPart)" }
+        line += " · \(DownloadFormatting.bytes(group.totalBytes))"
         if group.allWatched {
             line += " · all watched"
         } else if group.watchedCount > 0 {
@@ -528,7 +515,7 @@ struct DownloadSeriesRow: View {
                 .font(.system(size: 11.5))
                 .foregroundColor(.prairieSecondaryText)
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 16)
         .padding(.top, 9)
         .padding(.bottom, 5)
     }

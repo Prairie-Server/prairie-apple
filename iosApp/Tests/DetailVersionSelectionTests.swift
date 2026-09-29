@@ -37,6 +37,47 @@ final class DetailVersionSelectionTests: XCTestCase {
         )
     }
 
+    #if !os(tvOS)
+    func testAutoDownloadPinsTheDisplayedLastPlayedVersion() {
+        // Auto displays the last-played 720p file (the one with the sidecar
+        // subtitles); sending nil let the server pick the 1080p file instead.
+        let versions = [
+            version(fileId: 1, resolution: "720p"),
+            version(fileId: 2, resolution: "1080p")
+        ]
+
+        XCTAssertEqual(DownloadRequestOptions.fileId(
+            versions: versions,
+            selectedFileId: nil,
+            lastFileId: 1,
+            preferredQualityId: nil
+        ), 1)
+    }
+
+    func testDownloadPinsAnExplicitVersionOverLastPlayed() {
+        let versions = [
+            version(fileId: 1, resolution: "720p"),
+            version(fileId: 2, resolution: "1080p")
+        ]
+
+        XCTAssertEqual(DownloadRequestOptions.fileId(
+            versions: versions,
+            selectedFileId: 2,
+            lastFileId: 1,
+            preferredQualityId: nil
+        ), 2)
+    }
+
+    func testDownloadLeavesTheFileToTheServerWithoutVersions() {
+        XCTAssertNil(DownloadRequestOptions.fileId(
+            versions: [],
+            selectedFileId: nil,
+            lastFileId: 1,
+            preferredQualityId: nil
+        ))
+    }
+    #endif
+
     func testVersionSelectorUsesRichPrePlaySummary() {
         let version = decodedVersions("""
         [

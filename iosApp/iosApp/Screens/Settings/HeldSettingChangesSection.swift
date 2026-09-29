@@ -24,7 +24,7 @@ struct HeldSettingChangesSection: View {
             Text(message)
                 .foregroundStyle(Color.prairieSecondaryText)
         }
-        .listRowBackground(Color.prairieSurfaceElevated)
+        .listRowBackground(Color.prairieGroupedCell)
     }
 }
 #endif

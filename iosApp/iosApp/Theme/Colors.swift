@@ -36,6 +36,23 @@ extension Color {
     /// Muted/secondary text (#9AA3B2)
     static let prairieSecondaryText = Color(hex: "#9AA3B2")
 
+    /// Track of an on switch. Prairie keeps its amber accent on switches
+    /// (upstream uses the system green because its palette is monochrome).
+    static let prairieSwitchOn = Color.prairieAccent
+
+    /// Row background of an inset-grouped list, shared by Settings and
+    /// Downloads — Prairie's elevated slate surface.
+    static let prairieGroupedCell = Color(hex: "#1C222C")
+
+    /// Fill behind Settings row icons.
+    static let prairieIconTile = Color(hex: "#222B38")
+
+    /// Storage-breakdown series color (Prairie sky).
+    static let prairieBrandBlue = Color(hex: "#38BDF8")
+
+    /// Storage-breakdown movies color (Prairie rose).
+    static let prairieBrandRed = Color(hex: "#FB7185")
+
     /// Error red (#B00020)
     static let prairieError = Color(hex: "#B00020")
 

@@ -4,6 +4,26 @@ import SwiftUI
 struct DownloadRequestOptions: Hashable {
     let fileId: Int?
     let quality: String
+
+    /// The file a download pins: the version the detail screen displays.
+    /// Auto resolves the way the version selector shows it (last played,
+    /// then quality preference), so the saved file and the sidecar
+    /// subtitles that travel with it match what the user saw. Leaving Auto
+    /// to the server let it pick its own default, a different file. Nil
+    /// only when the item has no version metadata.
+    static func fileId(
+        versions: [FileVersion],
+        selectedFileId: Int?,
+        lastFileId: Int?,
+        preferredQualityId: String?
+    ) -> Int? {
+        DetailVersionSelection.displayVersion(
+            versions: versions,
+            selectedFileId: selectedFileId,
+            lastFileId: lastFileId,
+            preferredQualityId: preferredQualityId
+        )?.fileId
+    }
 }
 
 struct DownloadOptionsSheet: View {
@@ -100,7 +120,9 @@ struct DownloadOptionsSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Download", systemImage: "arrow.down.circle") {
-                        onStart(DownloadRequestOptions(fileId: fileId, quality: quality))
+                        // Auto sends the version this sheet summarizes, not
+                        // nil, so the server can't substitute another file.
+                        onStart(DownloadRequestOptions(fileId: effectiveVersion?.fileId, quality: quality))
                         dismiss()
                     }
                 }
@@ -136,20 +158,19 @@ struct DownloadOptionsSheet: View {
 
     private var summaryDetail: String {
         let qualityLabel = DownloadFormat(rawValue: quality)?.displayName ?? quality
-        let versionLabel = fileId == nil
-            ? "Auto version"
-            : (effectiveVersion.map(DetailPlaybackFormatting.versionPrimaryText) ?? "Selected version")
+        let versionLabel = effectiveVersion.map(DetailPlaybackFormatting.versionPrimaryText)
+            ?? (fileId == nil ? "Auto version" : "Selected version")
         var parts = [versionLabel, qualityLabel]
         if let estimate = selectionEstimate {
-            parts.append(estimate.isRange ? "\(estimate.sizeLabel) depending on server choice" : estimate.sizeLabel)
+            parts.append(estimate.sizeLabel)
         }
         return parts.joined(separator: " · ")
     }
 
-    /// Size expectation for what the current selection would download:
-    /// candidate range for Auto, exact size for a chosen version.
+    /// Exact size of the file the current selection downloads; Auto
+    /// resolves to a concrete version before the request is sent.
     private var selectionEstimate: DownloadSizeEstimate? {
-        DownloadSizeEstimate.estimate(versions: versions, fileId: fileId)
+        DownloadSizeEstimate.estimate(versions: versions, fileId: effectiveVersion?.fileId)
     }
 
     /// Over-threshold / insufficient-space caveat for the current selection,
@@ -247,16 +268,22 @@ struct DownloadOptionsSheet: View {
         return "File \(version.fileId)"
     }
 
-    /// Auto spans every version the server might pick, so disclose the full
-    /// candidate range rather than pretending the size is unknown.
+    /// Names the version Auto resolves to, the one the detail screen shows,
+    /// so choosing Auto never hides which file will be saved.
     private var autoVersionDetail: String {
-        guard let estimate = DownloadSizeEstimate.estimate(versions: versions, fileId: nil) else {
+        guard let autoVersion = DetailVersionSelection.displayVersion(
+            versions: versions,
+            selectedFileId: nil,
+            lastFileId: lastVersionFileId,
+            preferredQualityId: PlayerSettings.shared.preferredQuality
+        ) else {
             return "Let the server choose the file"
         }
-        if estimate.isRange {
-            return "\(estimate.sizeLabel) depending on server choice"
+        let label = DetailPlaybackFormatting.versionPrimaryText(autoVersion)
+        guard let estimate = DownloadSizeEstimate.estimate(versions: versions, fileId: autoVersion.fileId) else {
+            return label
         }
-        return "\(estimate.sizeLabel) · Let the server choose the file"
+        return "\(label) · \(estimate.sizeLabel)"
     }
 
     private var qualitySection: some View {

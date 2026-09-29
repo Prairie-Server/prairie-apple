@@ -239,6 +239,8 @@ struct PlayerView: View {
                     viewModel.retry()
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(.prairieOnSurface)
+                .foregroundStyle(Color.prairieBackground)
 
                 Button("Close", systemImage: "xmark") {
                     dismiss()

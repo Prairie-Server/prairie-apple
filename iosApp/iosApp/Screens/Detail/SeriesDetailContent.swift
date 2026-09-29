@@ -238,6 +238,7 @@ struct SeriesDetailContent<BelowOverview: View>: View {
                         selectedSeason: selectedSeason,
                         episodes: episodes,
                         episodesBySeason: episodesBySeason,
+                        episodeTarget: episodeDownloadTarget,
                         style: .labeled
                     )
                 }
@@ -434,6 +435,21 @@ struct SeriesDetailContent<BelowOverview: View>: View {
         }
         guard (episode.files ?? []).contains(where: { $0.fileId == selectedNextUpFileId }) else { return nil }
         return selectedNextUpFileId
+    }
+
+    /// Nil until the highlighted episode's own versions have loaded, so the
+    /// menu never offers a download labeled with another episode's version.
+    private var episodeDownloadTarget: SeriesEpisodeDownloadTarget? {
+        guard let episode = nextUpEpisode,
+              let watchDetail = nextUpWatchDetail,
+              watchDetail.contentId == episode.contentId,
+              !watchDetail.versions.isEmpty else { return nil }
+        return SeriesEpisodeDownloadTarget(
+            episode: episode,
+            versions: watchDetail.versions,
+            selectedFileId: selectedNextUpFileId,
+            lastFileId: watchDetail.userData?.lastFileId
+        )
     }
 
     private var nextUpVersions: [FileVersion] {

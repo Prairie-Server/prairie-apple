@@ -41,7 +41,7 @@ struct ServerListView: View {
         #else
         contentList
             .disabled(isResolvingServer)
-            .navigationTitle("")
+            .navigationTitle("Servers")
             .prairieNavigationTitleDisplayMode(.inline)
             .alert(
                 "Remove this server?",
@@ -176,14 +176,6 @@ struct ServerListView: View {
     #if !os(tvOS)
     private var contentList: some View {
         List {
-            SettingsPageHeader(
-                title: "Servers",
-                subtitle: "Manage saved Prairie connections for this device.",
-                systemImage: "server.rack",
-                tint: .teal
-            )
-            .settingsPageHeaderRow()
-
             Section {
                 ForEach(registry.sortedEntries) { entry in
                     row(for: entry)
@@ -192,7 +184,7 @@ struct ServerListView: View {
                 Text("Saved servers")
                     .foregroundColor(.prairieSecondaryText)
             }
-            .listRowBackground(Color.prairieSurfaceElevated)
+            .listRowBackground(Color.prairieGroupedCell)
 
             Section {
                 Button {
@@ -202,7 +194,7 @@ struct ServerListView: View {
                         .foregroundColor(.prairieOnSurface)
                 }
             }
-            .listRowBackground(Color.prairieSurfaceElevated)
+            .listRowBackground(Color.prairieGroupedCell)
         }
         .settingsListChrome()
     }

@@ -22,16 +22,17 @@ struct DownloadsSettingsView: View {
 
     var body: some View {
         Form {
-            SettingsPageHeader(
-                title: "Downloads",
-                subtitle: "Offline quality, cleanup, and storage preferences.",
-                systemImage: "arrow.down.circle.fill"
-            )
-            .settingsPageHeaderRow()
-
             Section {
                 Toggle("Download over Wi-Fi only", isOn: $settings.wifiOnly)
-                    .tint(.prairieAccent)
+                    .tint(.prairieSwitchOn)
+                Picker("Simultaneous Downloads", selection: $settings.simultaneousDownloads) {
+                    ForEach(DownloadSettings.simultaneousDownloadChoices, id: \.self) { count in
+                        Text("\(count)").tag(count)
+                    }
+                }
+                .onChange(of: settings.simultaneousDownloads) {
+                    manager.applyTransferLimit()
+                }
                 if formats.count > 1 {
                     Picker("Quality", selection: $settings.preferredFormat) {
                         ForEach(formats, id: \.self) { format in
@@ -49,11 +50,11 @@ struct DownloadsSettingsView: View {
                     Text("Original prefers source quality and may prepare a compatibility file if this device needs one. Bitrate presets are prepared on the server before download starts.")
                 }
             }
-            .listRowBackground(Color.prairieSurfaceElevated.opacity(0.92))
+            .listRowBackground(Color.prairieGroupedCell)
 
             Section("Series Monitoring Defaults") {
                 Toggle("Delete watched episodes", isOn: $settings.defaultDeleteWatched)
-                    .tint(.prairieAccent)
+                    .tint(.prairieSwitchOn)
                 Stepper(
                     settings.defaultMaxStorageGB == 0
                         ? "Storage limit: Unlimited"
@@ -63,17 +64,17 @@ struct DownloadsSettingsView: View {
                     step: 5
                 )
             }
-            .listRowBackground(Color.prairieSurfaceElevated.opacity(0.92))
+            .listRowBackground(Color.prairieGroupedCell)
 
             Section {
                 Toggle("Keep watched downloads", isOn: $settings.keepWatchedDownloads)
-                    .tint(.prairieAccent)
+                    .tint(.prairieSwitchOn)
             } header: {
                 Text("Cleanup")
             } footer: {
                 Text("When off, the Downloads tab suggests freeing up space by removing items you've finished watching.")
             }
-            .listRowBackground(Color.prairieSurfaceElevated.opacity(0.92))
+            .listRowBackground(Color.prairieGroupedCell)
 
             Section("Storage") {
                 HStack {
@@ -90,7 +91,7 @@ struct DownloadsSettingsView: View {
                     }
                 }
             }
-            .listRowBackground(Color.prairieSurfaceElevated.opacity(0.92))
+            .listRowBackground(Color.prairieGroupedCell)
 
             if manager.heldProgressCount > 0 {
                 Section {
@@ -102,10 +103,10 @@ struct DownloadsSettingsView: View {
                 } footer: {
                     Text(heldProgressFooter)
                 }
-                .listRowBackground(Color.prairieSurfaceElevated.opacity(0.92))
+                .listRowBackground(Color.prairieGroupedCell)
             }
         }
-        .navigationTitle("")
+        .navigationTitle("Downloads")
         .task {
             // The quality picker is hidden when the cached capability only
             // offers one preset; re-fetch so permission changes show up here
@@ -117,10 +118,11 @@ struct DownloadsSettingsView: View {
         #endif
         .settingsListChrome()
         .prairieToolbarColorSchemeDark()
-        .confirmationDialog(
+        // Centered alert: a confirmation dialog anchors to the whole form
+        // and appears at the top of the page.
+        .alert(
             "Remove all downloaded files?",
-            isPresented: $showDeleteAllConfirm,
-            titleVisibility: .visible
+            isPresented: $showDeleteAllConfirm
         ) {
             Button("Remove All", systemImage: "trash", role: .destructive) {
                 manager.deleteDownloads(ids: manager.records.map(\.id))
