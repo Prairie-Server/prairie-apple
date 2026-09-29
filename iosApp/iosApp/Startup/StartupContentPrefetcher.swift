@@ -15,6 +15,12 @@ enum StartupContentPrefetcher {
     private static let maxHomeArtworkURLs = 12
     #endif
     private static let maxSectionArtworkURLs = 12
+    /// For You shows two eight-card rows in its initial viewport. Logos are
+    /// tiny compared with backdrops, so warm exactly those visible candidates
+    /// rather than waiting for each focus rest to begin its own request.
+    #if os(tvOS)
+    private static let maxRecommendationLogoURLs = 16
+    #endif
     private static let maxBrowseArtworkURLs = 12
     private static let maxProfileArtworkURLs = 8
     private static let browsePageSize = 60
@@ -26,11 +32,19 @@ enum StartupContentPrefetcher {
     ]
 
     private static var profilesTask: Task<[UserProfile], Error>?
-    private static var homeSectionsTask: Task<SectionsResponse, Error>?
+    private static var homeSectionsTask: Task<APIv2HomeSectionsRead, Error>?
     private static var recommendationsTask: Task<SectionsResponse, Error>?
     private static var userLibrariesTask: Task<LibrariesResponse, Error>?
-    private static var librarySectionsTasks: [Int: Task<SectionsResponse, Error>] = [:]
-    private static var browseFirstPageTasks: [String: Task<CatalogResponse, Error>] = [:]
+    private static var librarySectionsTasks: [Int: Task<APIv2LibrarySectionsRead, Error>] = [:]
+    private static var browseFirstPageTasks: [String: Task<CatalogListPage, Error>] = [:]
+    #if os(tvOS)
+    /// One bounded cold-start warmup for the Series library the top-level tab
+    /// will actually open. This is separate from `librarySectionsTasks`: the
+    /// latter makes the landing page available, while this task also primes
+    /// the first Series hero payload so Select never has to paint a loading
+    /// action pill before the real detail screen.
+    private static var tvSeriesLandingTasks: [Int: Task<Void, Never>] = [:]
+    #endif
     private static var profileScopedGeneration = 0
     private static var homeSectionsGeneration = 0
     private static var profilesGeneration = 0
@@ -43,12 +57,18 @@ enum StartupContentPrefetcher {
         userLibrariesTask?.cancel()
         librarySectionsTasks.values.forEach { $0.cancel() }
         browseFirstPageTasks.values.forEach { $0.cancel() }
+        #if os(tvOS)
+        tvSeriesLandingTasks.values.forEach { $0.cancel() }
+        #endif
 
         homeSectionsTask = nil
         recommendationsTask = nil
         userLibrariesTask = nil
         librarySectionsTasks.removeAll()
         browseFirstPageTasks.removeAll()
+        #if os(tvOS)
+        tvSeriesLandingTasks.removeAll()
+        #endif
     }
 
     static func resetAllPrefetches() {
@@ -120,6 +140,19 @@ enum StartupContentPrefetcher {
         homeSectionsTask = nil
     }
 
+    /// Capture the active profile/server generation when a player is created.
+    /// Call only AFTER its progress write completes. A late previous-profile
+    /// player must never invalidate or refresh the new profile's Home cache.
+    static func homeRefreshAfterPlaybackWrite() -> @MainActor () -> Void {
+        let generation = profileScopedGeneration
+        return {
+            guard generation == profileScopedGeneration else { return }
+            invalidateHomeSectionsInFlight()
+            ResponseCache.shared.remove(CacheKey.homeSections)
+            NotificationCenter.default.post(name: .homeSectionsShouldRefresh, object: nil)
+        }
+    }
+
     static func fetchHomeSections() async throws -> SectionsResponse {
         let profileGeneration = profileScopedGeneration
         let homeGeneration = homeSectionsGeneration
@@ -127,20 +160,25 @@ enum StartupContentPrefetcher {
         #if os(iOS) || os(tvOS)
         let probe = PrefetchProbe.begin("home_sections", isOriginator: homeSectionsTask == nil)
         #endif
-        let task: Task<SectionsResponse, Error>
+        let task: Task<APIv2HomeSectionsRead, Error>
         if let homeSectionsTask {
             task = homeSectionsTask
         } else {
             task = Task {
-                try await ContinuumAPI.shared.homeSections()
+                try await PrairieAPI.shared.homeSections()
             }
             homeSectionsTask = task
         }
 
         do {
-            let response = try await task.value
+            let read = try await task.value
+            // The rows belong to the profile they were fetched for. Never
+            // cache or show them once the session acts as someone else.
+            let isCurrentOwner = await PrairieAPI.shared.isCurrentOwner(read.auth)
             try validateProfileScopedGeneration(profileGeneration)
             try validateHomeSectionsGeneration(homeGeneration)
+            guard isCurrentOwner else { throw HTTPError.requestIdentityChanged }
+            let response = read.response
             if profileScopedGeneration == profileGeneration,
                homeSectionsGeneration == homeGeneration {
                 homeSectionsTask = nil
@@ -173,8 +211,11 @@ enum StartupContentPrefetcher {
     }
 
     nonisolated static func indicatesInvalidProfile(_ error: Error) -> Bool {
-        guard let error = error as? HTTPError else { return false }
-        return ["profile_unverified", "profile_not_found"].contains(error.serverErrorCode)
+        // v2 names a locked profile without a valid X-Profile-Token this way.
+        // A missing profile is a plain `not_found`, which v2 does not tell
+        // apart from any other missing resource.
+        guard case .problem(let problem) = error as? APIv2Error else { return false }
+        return problem.identifier == "profile_verification_required"
     }
 
     #if os(iOS) || os(tvOS)
@@ -204,6 +245,23 @@ enum StartupContentPrefetcher {
     /// `indicatesCancellation`.
     nonisolated static func prefetchFailureReason(_ error: Error) -> String {
         if indicatesCancellation(error) { return "cancelled" }
+        if let apiError = error as? APIv2Error {
+            if indicatesInvalidProfile(apiError) { return "invalid_profile" }
+            switch apiError {
+            case .serverUpdateRequired:
+                return "server_update_required"
+            case .problem(let problem):
+                return statusReason(problem.status)
+            case .httpStatus(let statusCode):
+                return statusReason(statusCode)
+            default:
+                return "decode_failed"
+            }
+        }
+        // v2 reads decode their 2xx bodies outside `mapErrors`, so a
+        // malformed body arrives as a bare `DecodingError`, not as
+        // `HTTPError.decodingFailed`.
+        if error is DecodingError { return "decode_failed" }
         guard let httpError = error as? HTTPError else {
             // URLSession surfaces transport failures as NSError before
             // HTTPClient wraps them; the cancelled case was already claimed
@@ -213,11 +271,10 @@ enum StartupContentPrefetcher {
             if nsError.domain == NSURLErrorDomain { return "network" }
             return "other"
         }
-        if indicatesInvalidProfile(httpError) { return "invalid_profile" }
         switch httpError {
         case .serverUrlNotConfigured:
             return "no_server"
-        case .requestIdentityChanged:
+        case .requestIdentityChanged, .authorityChanged:
             return "identity_changed"
         case .network(let underlying):
             // A cancellation reaches here wrapped: `HTTPClient.perform` catches
@@ -235,15 +292,19 @@ enum StartupContentPrefetcher {
         case .decodingFailed:
             return "decode_failed"
         case .http(let statusCode, _):
-            // Bucketed, not verbatim: the status class is what distinguishes
-            // "the server rejected us" from "the server is broken", and the
-            // exact code adds cardinality without adding meaning here.
-            if statusCode == 401 || statusCode == 403 { return "unauthorized" }
-            if (500..<600).contains(statusCode) { return "server_error" }
-            return "http_\(statusCode / 100)xx"
-        case .invalidURL, .invalidResponse, .encodingFailed:
+            return statusReason(statusCode)
+        case .invalidURL, .invalidResponse:
             return "other"
         }
+    }
+
+    /// Bucketed, not verbatim: the status class is what distinguishes "the
+    /// server rejected us" from "the server is broken", and the exact code
+    /// adds cardinality without adding meaning here.
+    nonisolated private static func statusReason(_ statusCode: Int) -> String {
+        if statusCode == 401 || statusCode == 403 { return "unauthorized" }
+        if (500..<600).contains(statusCode) { return "server_error" }
+        return "http_\(statusCode / 100)xx"
     }
 
     /// True for every shape a cancelled prefetch can take.
@@ -347,7 +408,7 @@ enum StartupContentPrefetcher {
             task = recommendationsTask
         } else {
             task = Task {
-                try await ContinuumAPI.shared.recommendationsDiscover()
+                try await PrairieAPI.shared.recommendationsDiscover()
             }
             recommendationsTask = task
         }
@@ -363,6 +424,9 @@ enum StartupContentPrefetcher {
             #endif
             ResponseCache.shared.set(response, for: CacheKey.recommendations)
             prefetchSectionArtwork(for: response, maxCount: maxSectionArtworkURLs)
+            #if os(tvOS)
+            prefetchRecommendationLogos(for: response)
+            #endif
             return response
         } catch {
             if profileScopedGeneration == generation {
@@ -372,12 +436,6 @@ enum StartupContentPrefetcher {
             probe.finish(error: error)
             #endif
             throw error
-        }
-    }
-
-    static func prefetchUserLibraries() {
-        Task {
-            _ = try? await fetchUserLibraries()
         }
     }
 
@@ -391,7 +449,7 @@ enum StartupContentPrefetcher {
             task = userLibrariesTask
         } else {
             task = Task {
-                try await ContinuumAPI.shared.libraries()
+                try await PrairieAPI.shared.libraries()
             }
             userLibrariesTask = task
         }
@@ -433,6 +491,52 @@ enum StartupContentPrefetcher {
         }
     }
 
+    #if os(tvOS)
+    /// Warm the exact cold path used by a Series root tab: its section payload
+    /// plus one initial Series detail. The work is deliberately limited to a
+    /// single card and does not fetch cast portraits; Series cast sits below
+    /// the first viewport and keeps its existing lazy path.
+    static func prefetchTVSeriesLanding(libraryId: Int) {
+        guard tvSeriesLandingTasks[libraryId] == nil else { return }
+        let generation = profileScopedGeneration
+
+        tvSeriesLandingTasks[libraryId] = Task(priority: .userInitiated) {
+            defer {
+                // A task from the prior profile must never clear a replacement
+                // registered for the same numeric library id.
+                if profileScopedGeneration == generation {
+                    tvSeriesLandingTasks[libraryId] = nil
+                }
+            }
+
+            guard let response = try? await fetchLibrarySections(libraryId: libraryId),
+                  !Task.isCancelled,
+                  profileScopedGeneration == generation,
+                  let item = firstSeriesItem(in: response) else { return }
+
+            let key = CacheKey.itemDetail(item.contentId)
+            if let _: ItemDetail = ResponseCache.shared.get(key) { return }
+
+            guard let detail = try? await MetadataRequestPool.shared.itemDetail(
+                contentId: item.contentId
+            ),
+            !Task.isCancelled,
+            profileScopedGeneration == generation else { return }
+
+            ResponseCache.shared.set(detail, for: key)
+        }
+    }
+
+    private static func firstSeriesItem(in response: SectionsResponse) -> SectionItem? {
+        for section in response.sections where !section.isFeatured && !section.items.isEmpty {
+            if let item = section.items.first(where: { PrairieMediaType.isSeries($0.type) }) {
+                return item
+            }
+        }
+        return nil
+    }
+    #endif
+
     static func fetchLibrarySections(libraryId: Int) async throws -> SectionsResponse {
         let generation = profileScopedGeneration
         // Verbose: these two run once per library on the landing prefetch and
@@ -447,19 +551,24 @@ enum StartupContentPrefetcher {
             isOriginator: librarySectionsTasks[libraryId] == nil
         )
         #endif
-        let task: Task<SectionsResponse, Error>
+        let task: Task<APIv2LibrarySectionsRead, Error>
         if let existing = librarySectionsTasks[libraryId] {
             task = existing
         } else {
             task = Task {
-                try await ContinuumAPI.shared.librarySections(libraryId: libraryId)
+                try await PrairieAPI.shared.librarySections(libraryId: libraryId)
             }
             librarySectionsTasks[libraryId] = task
         }
 
         do {
-            let response = try await task.value
+            let read = try await task.value
+            // Sections belong to the profile they were fetched for. Never
+            // cache or show them once the session acts as someone else.
+            let isCurrentOwner = await PrairieAPI.shared.isCurrentOwner(read.auth)
             try validateProfileScopedGeneration(generation)
+            guard isCurrentOwner else { throw HTTPError.requestIdentityChanged }
+            let response = read.response
             if profileScopedGeneration == generation {
                 librarySectionsTasks[libraryId] = nil
             }
@@ -486,10 +595,12 @@ enum StartupContentPrefetcher {
         }
     }
 
+    /// Page 1 of a browse grid. The page carries the continuation the grid
+    /// uses for page 2, so the prefetch and the live grid share one query.
     static func fetchBrowseFirstPage(
         libraryId: Int?,
         state: CatalogFilterState = .none
-    ) async throws -> CatalogResponse {
+    ) async throws -> CatalogListPage {
         let generation = profileScopedGeneration
         let key = CacheKey.browse(libraryId: libraryId, filterKey: state.cacheKeyFragment)
         // Verbose for the same reason as `library_sections`, and the cache key
@@ -501,29 +612,28 @@ enum StartupContentPrefetcher {
             isOriginator: browseFirstPageTasks[key] == nil
         )
         #endif
-        let task: Task<CatalogResponse, Error>
+        let task: Task<CatalogListPage, Error>
         if let existing = browseFirstPageTasks[key] {
             task = existing
         } else {
             task = Task {
                 // iOS omits `type` (library_id already scopes the page); the
-                // builder is the single source of the wire format shared with
-                // BrowseViewModel so prefetch and live fetch hit the same key.
+                // builder is the single source of the wire format, and later
+                // pages follow this page's continuation.
                 let query = CatalogQueryBuilder.build(
                     state,
                     libraryId: libraryId,
                     mediaType: .movie,
-                    offset: 0,
                     limit: browsePageSize,
                     includeType: false
                 )
-                return try await ContinuumAPI.shared.catalog(query: query)
+                return try await PrairieAPI.shared.catalogPage(query)
             }
             browseFirstPageTasks[key] = task
         }
 
         do {
-            let response = try await task.value
+            let page = try await task.value
             try validateProfileScopedGeneration(generation)
             if profileScopedGeneration == generation {
                 browseFirstPageTasks[key] = nil
@@ -531,9 +641,9 @@ enum StartupContentPrefetcher {
             #if os(iOS) || os(tvOS)
             probe.finish(error: nil)
             #endif
-            ResponseCache.shared.set(response, for: key)
-            prefetchBrowseArtwork(for: response)
-            return response
+            ResponseCache.shared.set(page.response, for: key)
+            prefetchBrowseArtwork(for: page.response)
+            return page
         } catch {
             if profileScopedGeneration == generation {
                 browseFirstPageTasks[key] = nil
@@ -581,18 +691,36 @@ enum StartupContentPrefetcher {
             prefetchProfiles()
         case .needsProfile:
             prefetchProfiles()
-        case .loading, .needsServerSetup, .needsLogin:
+        case .loading, .needsServerSetup, .needsLogin, .serverRecovery:
             break
         }
     }
 
     private static func prefetchActiveLibraryLanding() {
         Task {
-            guard let response = try? await fetchUserLibraries(),
-                  let library = preferredLibrary(from: response.libraries) else {
-                return
+            guard let response = try? await fetchUserLibraries() else { return }
+
+            // Preserve the existing selected-library landing prefetch on every
+            // platform. tvOS additionally has a dedicated Series root tab;
+            // warm its persisted scope during the same launch window instead
+            // of waiting for the user to enter that tab.
+            if let library = preferredLibrary(from: response.libraries) {
+                prefetchLibraryLanding(libraryId: library.id)
             }
-            prefetchLibraryLanding(libraryId: library.id)
+
+            #if os(tvOS)
+            let seriesLibraries = response.libraries
+                .filter { TVLibraryTabType.series.matches($0) }
+                .sorted {
+                    ($0.sortOrder ?? Int.max, $0.id) < ($1.sortOrder ?? Int.max, $1.id)
+                }
+            if let library = TVLibraryScopeStore.shared.resolvedLibrary(
+                for: .series,
+                in: seriesLibraries
+            ) {
+                prefetchTVSeriesLanding(libraryId: library.id)
+            }
+            #endif
         }
     }
 
@@ -614,17 +742,41 @@ enum StartupContentPrefetcher {
     }
 
     private static func prefetchHomeArtwork(for response: SectionsResponse) {
-        var urls: [URL] = []
-        var seen = Set<String>()
+        // Each kind is warmed at the size its consumer reads synchronously:
+        // cards at the shared card thumbnail, the marquee logo at its native
+        // size, and the initial backdrop at the exact hero decode size. Warming
+        // full-size decodes instead used to cost ~4 MB per poster and ~8 MB
+        // per backdrop, which overflowed the 96 MB budget on 3 GB Apple TVs
+        // and evicted the very cards the warm-up was meant to paint.
+        var cardURLs: [URL] = []
+        var backdropURLs: [URL] = []
+        var logoURLs: [URL] = []
+        // Deduplicated per bucket: the same URL is a different cache key as
+        // a card thumbnail and as the hero decode, so an episode still that
+        // is also the marquee backdrop legitimately belongs to both.
+        var seenCards = Set<String>()
+        var seenBackdrops = Set<String>()
+        var seenLogos = Set<String>()
+        // Tracked separately: reading the arrays while one is bound as an
+        // `inout` bucket is an exclusivity violation.
+        var count = 0
 
-        func append(_ urlString: String?) {
-            guard urls.count < maxHomeArtworkURLs,
-                  let url = normalizedURL(from: urlString) else {
+        func append(_ urlString: String?, into bucket: inout [URL], seen: inout Set<String>) {
+            guard count < maxHomeArtworkURLs,
+                  let url = normalizedURL(from: urlString),
+                  seen.insert(url.absoluteString).inserted else {
                 return
             }
-            let key = url.absoluteString
-            guard seen.insert(key).inserted else { return }
-            urls.append(url)
+            bucket.append(url)
+            count += 1
+        }
+
+        /// Hero backdrops render only on tvOS; other platforms must not
+        /// spend their smaller budget on requests that are never started.
+        func appendBackdrop(_ urlString: String?) {
+            #if os(tvOS)
+            append(urlString, into: &backdropURLs, seen: &seenBackdrops)
+            #endif
         }
 
         // No client renders a featured hero anymore — featured sections show
@@ -636,33 +788,45 @@ enum StartupContentPrefetcher {
         // harmless.)
         let contentSections = response.sections.filter { !$0.items.isEmpty }
         if let firstRow = contentSections.first {
-            append(firstRow.items.first?.logoUrl)
+            append(firstRow.items.first?.logoUrl, into: &logoURLs, seen: &seenLogos)
+            // Only the marquee's initial selection earns a hero-size decode.
+            // A w1920 backdrop is ~8 MB decoded, so warming the whole first
+            // row would spend the entire 96 MB tvOS budget on artwork the
+            // user may never rest on and evict the very cards this warm-up
+            // exists to paint. The neighbours the user is most likely to
+            // reach are pulled into the disk cache (bytes only) by
+            // `PosterImageCache.warmNeighborBackdrops` once the marquee
+            // rests, which removes the network round trip without a decode.
+            appendBackdrop(firstRow.items.first?.backdropUrl)
             for item in firstRow.items {
                 if episodeSectionTypes.contains(firstRow.sectionType) {
-                    // Episode thumbs already render the backdrop, so the card
-                    // art and the first-row art are one fetch.
-                    append(item.backdropUrl ?? item.posterUrl)
+                    // Episode stills render the backdrop as the card art and
+                    // the marquee shows the same image as the hero. One
+                    // download, two decode sizes.
+                    append(item.backdropUrl ?? item.posterUrl, into: &cardURLs, seen: &seenCards)
                 } else {
-                    append(item.posterUrl)
-                    append(item.backdropUrl)
+                    append(item.posterUrl, into: &cardURLs, seen: &seenCards)
                 }
-                if urls.count >= maxHomeArtworkURLs { break }
+                if count >= maxHomeArtworkURLs { break }
             }
         }
         for section in contentSections.dropFirst() {
             for item in section.items {
                 if episodeSectionTypes.contains(section.sectionType) {
-                    append(item.backdropUrl ?? item.posterUrl)
+                    append(item.backdropUrl ?? item.posterUrl, into: &cardURLs, seen: &seenCards)
                 } else {
-                    append(item.posterUrl)
+                    append(item.posterUrl, into: &cardURLs, seen: &seenCards)
                 }
-                if urls.count >= maxHomeArtworkURLs { break }
+                if count >= maxHomeArtworkURLs { break }
             }
-            if urls.count >= maxHomeArtworkURLs { break }
+            if count >= maxHomeArtworkURLs { break }
         }
 
-        guard !urls.isEmpty else { return }
-        PosterImageCache.prefetcher.startPrefetching(with: urls)
+        PosterImageCache.prefetchOriginalArtwork(logoURLs)
+        PosterImageCache.prefetchCardArtwork(cardURLs)
+        #if os(tvOS)
+        PosterImageCache.prefetchHeroBackdrops(backdropURLs)
+        #endif
 
         // Warm the marquee's initial tint: tvOS seeds the marquee with the
         // first row's first item on cold entry, and a cached sample lets the
@@ -702,9 +866,32 @@ enum StartupContentPrefetcher {
             if urls.count >= maxCount { break }
         }
 
-        guard !urls.isEmpty else { return }
-        PosterImageCache.prefetcher.startPrefetching(with: urls)
+        PosterImageCache.prefetchCardArtwork(urls)
     }
+
+    #if os(tvOS)
+    /// Match `RecommendationsViewModel` ordering so the first two rows the
+    /// user can actually focus are the ones whose logo art is ready first.
+    private static func prefetchRecommendationLogos(for response: SectionsResponse) {
+        let nonEmpty = response.sections.filter { !$0.items.isEmpty }
+        let forYou = nonEmpty.filter { $0.title.lowercased() == "for you" }
+        let others = nonEmpty.filter { $0.title.lowercased() != "for you" }
+        let initialRows = (forYou + others).prefix(2)
+
+        var urls: [URL] = []
+        var seen = Set<String>()
+        for section in initialRows {
+            for item in section.items.prefix(8) {
+                guard urls.count < maxRecommendationLogoURLs,
+                      let url = normalizedURL(from: item.logoUrl),
+                      seen.insert(url.absoluteString).inserted else { continue }
+                urls.append(url)
+            }
+        }
+
+        PosterImageCache.prefetchOriginalArtwork(urls)
+    }
+    #endif
 
     private static func prefetchBrowseArtwork(for response: CatalogResponse) {
         var urls: [URL] = []
@@ -720,8 +907,7 @@ enum StartupContentPrefetcher {
             urls.append(url)
         }
 
-        guard !urls.isEmpty else { return }
-        PosterImageCache.prefetcher.startPrefetching(with: urls)
+        PosterImageCache.prefetchCardArtwork(urls)
     }
 
     private static func prefetchProfileArtwork(for profiles: [UserProfile]) {
@@ -753,8 +939,7 @@ enum StartupContentPrefetcher {
             urls.append(url)
         }
 
-        guard !urls.isEmpty else { return }
-        PosterImageCache.prefetcher.startPrefetching(with: urls)
+        PosterImageCache.prefetchCardArtwork(urls)
     }
 
     private static func validateProfileScopedGeneration(_ generation: Int) throws {
@@ -782,7 +967,7 @@ enum StartupContentPrefetcher {
         }
         // Warm the AVIF sibling when available so CachedAsyncImage's first
         // request hits the memory/disk cache.
-        let preferred = ArtworkURL.preferred(trimmed)
+        let preferred = ArtworkVariantURL.preferred(trimmed)
         guard let url = URL(string: preferred), url.scheme != nil else {
             return nil
         }

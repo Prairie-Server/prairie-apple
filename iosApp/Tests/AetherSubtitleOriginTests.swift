@@ -13,16 +13,16 @@ final class AetherSubtitleOriginTests: XCTestCase {
         XCTAssertEqual(
             AetherLoadSpec.subtitleRequestHeaders(
                 headers,
-                resourceURL: URL(string: "https://silo.test:443/subtitles/1.vtt")!,
-                trustedOriginURLs: [URL(string: "https://silo.test/stream/v3/abc")!]
+                resourceURL: URL(string: "https://prairie.test:443/subtitles/1.vtt")!,
+                trustedOriginURLs: [URL(string: "https://prairie.test/stream/v3/abc")!]
             ),
             headers
         )
         XCTAssertEqual(
             AetherLoadSpec.subtitleRequestHeaders(
                 headers,
-                resourceURL: URL(string: "https://silo.test/subtitles/1.vtt")!,
-                trustedOriginURLs: [URL(string: "https://silo.test:443/stream/v3/abc")!]
+                resourceURL: URL(string: "https://prairie.test/subtitles/1.vtt")!,
+                trustedOriginURLs: [URL(string: "https://prairie.test:443/stream/v3/abc")!]
             ),
             headers
         )
@@ -32,8 +32,8 @@ final class AetherSubtitleOriginTests: XCTestCase {
         XCTAssertEqual(
             AetherLoadSpec.subtitleRequestHeaders(
                 headers,
-                resourceURL: URL(string: "http://silo.test:80/subtitles/1.vtt")!,
-                trustedOriginURLs: [URL(string: "http://silo.test/stream/v3/abc")!]
+                resourceURL: URL(string: "http://prairie.test:80/subtitles/1.vtt")!,
+                trustedOriginURLs: [URL(string: "http://prairie.test/stream/v3/abc")!]
             ),
             headers
         )
@@ -43,8 +43,8 @@ final class AetherSubtitleOriginTests: XCTestCase {
         XCTAssertEqual(
             AetherLoadSpec.subtitleRequestHeaders(
                 headers,
-                resourceURL: URL(string: "https://silo.test:8443/subtitles/1.vtt")!,
-                trustedOriginURLs: [URL(string: "https://silo.test/stream/v3/abc")!]
+                resourceURL: URL(string: "https://prairie.test:8443/subtitles/1.vtt")!,
+                trustedOriginURLs: [URL(string: "https://prairie.test/stream/v3/abc")!]
             ),
             [:]
         )
@@ -54,16 +54,16 @@ final class AetherSubtitleOriginTests: XCTestCase {
         XCTAssertEqual(
             AetherLoadSpec.subtitleRequestHeaders(
                 headers,
-                resourceURL: URL(string: "http://silo.test/subtitles/1.vtt")!,
-                trustedOriginURLs: [URL(string: "https://silo.test/stream/v3/abc")!]
+                resourceURL: URL(string: "http://prairie.test/subtitles/1.vtt")!,
+                trustedOriginURLs: [URL(string: "https://prairie.test/stream/v3/abc")!]
             ),
             [:]
         )
         XCTAssertEqual(
             AetherLoadSpec.subtitleRequestHeaders(
                 headers,
-                resourceURL: URL(string: "https://cdn.silo.test/subtitles/1.vtt")!,
-                trustedOriginURLs: [URL(string: "https://silo.test/stream/v3/abc")!]
+                resourceURL: URL(string: "https://cdn.prairie.test/subtitles/1.vtt")!,
+                trustedOriginURLs: [URL(string: "https://prairie.test/stream/v3/abc")!]
             ),
             [:]
         )
@@ -76,14 +76,14 @@ final class AetherSubtitleOriginTests: XCTestCase {
             AetherLoadSpec.subtitleRequestHeaders(
                 headers,
                 resourceURL: URL(fileURLWithPath: "/tmp/movie.en.srt"),
-                trustedOriginURLs: [URL(string: "https://silo.test/stream/v3/abc")!]
+                trustedOriginURLs: [URL(string: "https://prairie.test/stream/v3/abc")!]
             ),
             [:]
         )
         XCTAssertEqual(
             AetherLoadSpec.subtitleRequestHeaders(
                 headers,
-                resourceURL: URL(string: "https://silo.test/subtitles/1.vtt")!,
+                resourceURL: URL(string: "https://prairie.test/subtitles/1.vtt")!,
                 trustedOriginURLs: [URL(fileURLWithPath: "/tmp/movie.mkv")]
             ),
             [:]
@@ -96,10 +96,10 @@ final class AetherSubtitleOriginTests: XCTestCase {
         XCTAssertEqual(
             AetherLoadSpec.subtitleRequestHeaders(
                 headers,
-                resourceURL: URL(string: "https://silo.test/api/v1/stream/s/subtitles/1.vtt")!,
+                resourceURL: URL(string: "https://prairie.test/api/v2/stream/s/subtitles/1.vtt")!,
                 trustedOriginURLs: [
-                    URL(string: "https://proxy.silo.test:8443/stream/v3/s")!,
-                    URL(string: "https://silo.test:443")!,
+                    URL(string: "https://proxy.prairie.test:8443/stream/v3/s")!,
+                    URL(string: "https://prairie.test:443")!,
                 ]
             ),
             headers

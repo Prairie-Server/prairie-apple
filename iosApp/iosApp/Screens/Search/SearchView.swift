@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Full-screen search with debounced query and grid results — Plezy style.
 struct SearchView: View {
-    @State private var viewModel = SearchViewModel()
+    @State private var viewModel = SearchViewModel(includesPeople: true)
     @State private var requestsViewModel = RequestSearchSectionViewModel()
     @State private var navPrefs = AppNavPreferences.shared
     @Environment(AppRouter.self) private var router
@@ -10,18 +10,25 @@ struct SearchView: View {
     @FocusState private var isSearchFieldFocused: Bool
     #endif
     private let usesTVTopMenuInset: Bool
+    /// A query handed over by Siri. Search replaces whatever the field held
+    /// with it, then clears it so no later Search picks it up again.
+    @Binding private var seededQuery: AppRouter.SearchRequest?
 
-    init(usesTVTopMenuInset: Bool = true) {
+    init(
+        usesTVTopMenuInset: Bool = true,
+        seededQuery: Binding<AppRouter.SearchRequest?> = .constant(nil)
+    ) {
         self.usesTVTopMenuInset = usesTVTopMenuInset
+        self._seededQuery = seededQuery
     }
 
     var body: some View {
         ScrollView {
-            VStack(spacing: ContinuumTheme.padding) {
+            VStack(spacing: PrairieTheme.padding) {
                 if shouldShowFilters {
                     mediaTypeFilter
                     #if os(tvOS)
-                        .padding(.horizontal, ContinuumTheme.padding)
+                        .padding(.horizontal, PrairieTheme.padding)
                         // The picker is a centered 760pt pill inside a
                         // 1600pt column. Stretch its focus section across
                         // the full row so up-moves from the grid's outer
@@ -30,7 +37,7 @@ struct SearchView: View {
                         .frame(maxWidth: .infinity)
                         .focusSection()
                     #elseif os(macOS)
-                        .padding(.horizontal, ContinuumTheme.padding)
+                        .padding(.horizontal, PrairieTheme.padding)
                     #endif
                 }
 
@@ -41,34 +48,43 @@ struct SearchView: View {
                 // server has requests disabled.
                 RequestSearchSectionView(viewModel: requestsViewModel)
             }
-            .padding(.horizontal, ContinuumTheme.padding)
+            .padding(.horizontal, PrairieTheme.padding)
             #if os(tvOS)
-            .padding(.top, usesTVTopMenuInset ? TVTopMenuLayout.contentTopInset : ContinuumTheme.padding)
+            .padding(.top, usesTVTopMenuInset ? TVTopMenuLayout.contentTopInset : PrairieTheme.padding)
             #else
-            .padding(.top, ContinuumTheme.smallPadding)
+            .padding(.top, PrairieTheme.smallPadding)
             #endif
 #if os(tvOS)
-            .continuumFormWidth(tvSearchContentWidth)
+            .prairieFormWidth(tvSearchContentWidth)
 #endif
         }
-        .continuumBackground()
+        .prairiePageBackground()
         #if os(tvOS)
         .safeAreaPadding(.horizontal, tvSearchSafeHorizontalPadding)
         #endif
         .navigationTitle("Search")
-        .continuumNavigationTitleDisplayMode(.inline)
-        .continuumToolbarColorSchemeDark()
-        .continuumNavigationBarSurfaceBackground()
-        .continuumSearchable(text: $viewModel.query, prompt: searchPrompt)
+        .prairieNavigationTitleDisplayMode(.inline)
+        .prairieToolbarColorSchemeDark()
+        .prairieNavigationBarSurfaceBackground()
+        .prairieSearchable(text: $viewModel.query, prompt: searchPrompt)
         #if os(iOS)
         .searchFocused($isSearchFieldFocused)
         .task {
+            // A Siri search shows its results; the keyboard would cover them.
+            guard seededQuery == nil else { return }
             await focusSearchField()
         }
         #endif
         .onChange(of: viewModel.query) { _, _ in
             viewModel.onQueryChanged()
             requestsViewModel.onQueryChanged(viewModel.query)
+        }
+        .task(id: seededQuery?.id) {
+            guard let seed = seededQuery else { return }
+            // A filter left from an earlier search could hide the title.
+            viewModel.selectedMediaType = .all
+            viewModel.query = seed.query
+            seededQuery = nil
         }
         .onChange(of: viewModel.selectedMediaType) { _, _ in
             Task { await viewModel.applyMediaType() }
@@ -126,11 +142,12 @@ struct SearchView: View {
 
     @ViewBuilder
     private var content: some View {
-        if viewModel.isSearching && viewModel.results.isEmpty {
+        if (viewModel.isSearching || viewModel.isSearchingPeople)
+            && viewModel.results.isEmpty && viewModel.people.isEmpty {
             Color.clear
         } else if let error = viewModel.error {
             ErrorView(state: error, onRetry: { Task { await viewModel.performSearch() } })
-        } else if viewModel.hasSearched && viewModel.results.isEmpty {
+        } else if viewModel.hasSearched && viewModel.results.isEmpty && viewModel.people.isEmpty {
             VStack {
                 Spacer(minLength: 80)
                 EmptyStateView(
@@ -139,46 +156,78 @@ struct SearchView: View {
                     subtitle: "Try a different search term"
                 )
             }
-        } else if viewModel.results.isEmpty {
+        } else if viewModel.results.isEmpty && viewModel.people.isEmpty {
             VStack {
                 Spacer(minLength: 80)
                 EmptyStateView(
                     icon: "magnifyingglass",
                     title: "Search Prairie",
-                    subtitle: "Find movies and series"
+                    subtitle: "Find movies, series, and people"
                 )
             }
         } else {
-            VStack(alignment: .leading, spacing: ContinuumTheme.padding) {
-                Text("\(viewModel.total) result\(viewModel.total == 1 ? "" : "s")")
-                    .font(.continuumCaption)
-                    .foregroundColor(.continuumSecondaryText)
+            VStack(alignment: .leading, spacing: PrairieTheme.padding) {
+                if !viewModel.people.isEmpty {
+                    peopleSection
+                }
+
+                if !viewModel.results.isEmpty {
+                    titleResults
+                }
+            }
+        }
+    }
+
+    /// Matching actors, directors, and other credited people. Each opens
+    /// the person's page.
+    private var peopleSection: some View {
+        let people = viewModel.people.map(CastMember.init(searchResult:))
+        let openPerson: (String) -> Void = { router.navigate(to: .personDetail(personId: $0)) }
+        #if os(tvOS)
+        return VStack(alignment: .leading, spacing: TVDetailLayout.sectionHeaderSpacing) {
+            TVSectionHeader(title: "People")
+            TVDetailCastRail(cast: people, onTap: openPerson)
+        }
+        #else
+        return VStack(alignment: .leading, spacing: 14) {
+            PhoneSectionHeader(title: "People")
+            PhoneCastRail(cast: people, onTap: openPerson)
+                // The rail insets its own cards, so let it scroll edge to edge.
+                .padding(.horizontal, -PrairieTheme.padding)
+        }
+        #endif
+    }
+
+    private var titleResults: some View {
+        VStack(alignment: .leading, spacing: PrairieTheme.padding) {
+            Text("\(viewModel.total) result\(viewModel.total == 1 ? "" : "s")")
+                .font(.prairieCaption)
+                .foregroundColor(.prairieSecondaryText)
 
 #if os(tvOS)
-                TVCatalogGrid(
-                    items: viewModel.results,
-                    isLoading: viewModel.isSearching,
-                    hasMore: viewModel.hasMore,
-                    onItemTap: { router.navigate(to: .itemDetail(contentId: $0)) },
-                    onNearEnd: { _ in
-                        Task { await viewModel.loadMore() }
-                    },
-                    columnCount: 6,
-                    cardWidth: 220,
-                    prefersDefaultFocusOnFirstItem: true
-                )
+            TVCatalogGrid(
+                items: viewModel.results,
+                isLoading: viewModel.isSearching,
+                hasMore: viewModel.hasMore,
+                onItemTap: { router.navigate(to: .itemDetail(browseItem: $0)) },
+                onNearEnd: { _ in
+                    Task { await viewModel.loadMore() }
+                },
+                columnCount: 6,
+                cardWidth: 220,
+                prefersDefaultFocusOnFirstItem: true
+            )
 #else
-                CatalogGrid(
-                    items: viewModel.results,
-                    isLoading: viewModel.isSearching,
-                    hasMore: viewModel.hasMore,
-                    onItemTap: { router.navigate(to: .itemDetail(contentId: $0)) },
-                    onLoadMore: {
-                        Task { await viewModel.loadMore() }
-                    }
-                )
+            CatalogGrid(
+                items: viewModel.results,
+                isLoading: viewModel.isSearching,
+                hasMore: viewModel.hasMore,
+                onItemTap: { router.navigate(to: .itemDetail(browseItem: $0)) },
+                onLoadMore: {
+                    Task { await viewModel.loadMore() }
+                }
+            )
 #endif
-            }
         }
     }
 
@@ -211,7 +260,7 @@ struct SearchView: View {
         }
         .pickerStyle(.segmented)
 #if os(tvOS)
-        .continuumFormWidth(tvFilterWidth)
+        .prairieFormWidth(tvFilterWidth)
 #endif
     }
 
@@ -229,4 +278,21 @@ struct SearchView: View {
     /// centered pill rather than stretching across the whole search page.
     private var tvFilterWidth: CGFloat { 760 }
 #endif
+}
+
+private extension CastMember {
+    /// A people search result shown on a cast rail: no role, just the person.
+    init(searchResult person: Person) {
+        self.init(
+            name: person.name,
+            character: nil,
+            order: nil,
+            personId: person.id,
+            tmdbId: person.tmdbId,
+            tvdbId: person.tvdbId,
+            imdbId: person.imdbId,
+            photoUrl: person.photoUrl,
+            photoThumbhash: person.photoThumbhash
+        )
+    }
 }

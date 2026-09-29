@@ -53,6 +53,8 @@ public enum SettingKey: String, CaseIterable, Sendable {
     case playbackAutoSkipIntro = "playback.auto_skip_intro"
     /// Auto-skip recaps
     case playbackAutoSkipRecap = "playback.auto_skip_recap"
+    /// Skip intros
+    case playbackIntroSkipMode = "playback.intro_skip_mode"
     /// Maximum bitrate
     case playbackMaxBitrateKbps = "playback.max_bitrate_kbps"
     /// Next up prompt
@@ -69,6 +71,10 @@ public enum SettingKey: String, CaseIterable, Sendable {
     case playbackSubtitleMode = "playback.subtitle_mode"
     /// Audio sync offset
     case playerAudioSyncMs = "player.audio_sync_ms"
+    /// Audiobook rewind interval
+    case playerAudiobookSkipBackSeconds = "player.audiobook_skip_back_seconds"
+    /// Audiobook fast-forward interval
+    case playerAudiobookSkipForwardSeconds = "player.audiobook_skip_forward_seconds"
     /// Dolby Vision
     case playerDolbyVisionEnabled = "player.dolby_vision_enabled"
     /// Dolby Vision Profile 7 fallback
@@ -95,14 +101,24 @@ public enum SettingKey: String, CaseIterable, Sendable {
     case playerSubtitleSyncMs = "player.subtitle_sync_ms"
     /// Video sizing
     case playerVideoGravity = "player.video_gravity"
+    /// Video rewind interval
+    case playerVideoSkipBackSeconds = "player.video_skip_back_seconds"
+    /// Video fast-forward interval
+    case playerVideoSkipForwardSeconds = "player.video_skip_forward_seconds"
     /// Search scope
     case searchMediaScope = "search.media_scope"
     /// Match device caption settings
     case subtitleMatchesDevice = "subtitle.matches_device"
     /// Poster badges
     case uiCardOverlays = "ui.card_overlays"
+    /// Card overlays enabled
+    case uiCardOverlaysEnabled = "ui.card_overlays_enabled"
     /// Media cards
     case uiCardPresentation = "ui.card_presentation"
+    /// Card quick actions
+    case uiCardQuickActions = "ui.card_quick_actions"
+    /// Card quick actions enabled
+    case uiCardQuickActionsEnabled = "ui.card_quick_actions_enabled"
     /// Custom CSS
     case uiCustomCss = "ui.custom_css"
     /// Custom theme variables
@@ -134,7 +150,7 @@ public enum SettingKey: String, CaseIterable, Sendable {
 }
 
 public extension SettingKey {
-    static let revision = 5
+    static let revision = 9
 
     /// Keys the server stores. The rest never leave the device.
     static let remote: [SettingKey] = [
@@ -148,6 +164,7 @@ public extension SettingKey {
         .playbackAutoSkipCredits,
         .playbackAutoSkipIntro,
         .playbackAutoSkipRecap,
+        .playbackIntroSkipMode,
         .playbackMaxBitrateKbps,
         .playbackNextUpPromptSeconds,
         .playbackPreferredQuality,
@@ -156,6 +173,8 @@ public extension SettingKey {
         .playbackSubtitleLanguage,
         .playbackSubtitleMode,
         .playerAudioSyncMs,
+        .playerAudiobookSkipBackSeconds,
+        .playerAudiobookSkipForwardSeconds,
         .playerDolbyVisionEnabled,
         .playerDvProfile7Hdr10Fallback,
         .playerHdrEnabled,
@@ -166,9 +185,14 @@ public extension SettingKey {
         .playerSleepTimerDefaultMinutes,
         .playerSubtitleSyncMs,
         .playerVideoGravity,
+        .playerVideoSkipBackSeconds,
+        .playerVideoSkipForwardSeconds,
         .searchMediaScope,
         .uiCardOverlays,
+        .uiCardOverlaysEnabled,
         .uiCardPresentation,
+        .uiCardQuickActions,
+        .uiCardQuickActionsEnabled,
         .uiCustomCss,
         .uiCustomThemeVars,
         .uiDateFormat,
@@ -195,6 +219,13 @@ public extension SettingKey {
         .playerResumeRewindSeconds,
         .subtitleMatchesDevice,
     ]
+
+    /// Keys another definition supersedes. Still readable, never offered as
+    /// a second control beside their replacement: the server mirrors the pair
+    /// at write time, so editing either would rewrite the other.
+    static let deprecated: Set<SettingKey> = [
+        .playbackAutoSkipIntro,
+    ]
 }
 
 public enum SettingPresentationMetadata {
@@ -206,13 +237,18 @@ public enum SettingPresentationMetadata {
                 SettingSuggestedOption(value: "bn", introducedIn: 1),
                 SettingSuggestedOption(value: "bg", introducedIn: 1),
                 SettingSuggestedOption(value: "zh", introducedIn: 1),
+                SettingSuggestedOption(value: "zh-Hans", introducedIn: 8),
+                SettingSuggestedOption(value: "zh-Hant", introducedIn: 8),
                 SettingSuggestedOption(value: "hr", introducedIn: 1),
                 SettingSuggestedOption(value: "cs", introducedIn: 1),
                 SettingSuggestedOption(value: "da", introducedIn: 1),
                 SettingSuggestedOption(value: "nl", introducedIn: 1),
                 SettingSuggestedOption(value: "en", introducedIn: 1),
+                SettingSuggestedOption(value: "en-US", introducedIn: 8),
+                SettingSuggestedOption(value: "en-GB", introducedIn: 8),
                 SettingSuggestedOption(value: "fi", introducedIn: 1),
                 SettingSuggestedOption(value: "fr", introducedIn: 1),
+                SettingSuggestedOption(value: "fr-CA", introducedIn: 8),
                 SettingSuggestedOption(value: "de", introducedIn: 1),
                 SettingSuggestedOption(value: "el", introducedIn: 1),
                 SettingSuggestedOption(value: "he", introducedIn: 1),
@@ -227,11 +263,15 @@ public enum SettingPresentationMetadata {
                 SettingSuggestedOption(value: "fa", introducedIn: 1),
                 SettingSuggestedOption(value: "pl", introducedIn: 1),
                 SettingSuggestedOption(value: "pt", introducedIn: 1),
+                SettingSuggestedOption(value: "pt-BR", introducedIn: 8),
+                SettingSuggestedOption(value: "pt-PT", introducedIn: 8),
                 SettingSuggestedOption(value: "ro", introducedIn: 1),
                 SettingSuggestedOption(value: "ru", introducedIn: 1),
                 SettingSuggestedOption(value: "sk", introducedIn: 1),
                 SettingSuggestedOption(value: "sl", introducedIn: 1),
                 SettingSuggestedOption(value: "es", introducedIn: 1),
+                SettingSuggestedOption(value: "es-419", introducedIn: 8),
+                SettingSuggestedOption(value: "es-ES", introducedIn: 8),
                 SettingSuggestedOption(value: "sv", introducedIn: 1),
                 SettingSuggestedOption(value: "ta", introducedIn: 1),
                 SettingSuggestedOption(value: "te", introducedIn: 1),
@@ -248,13 +288,18 @@ public enum SettingPresentationMetadata {
                 SettingSuggestedOption(value: "bn", introducedIn: 1),
                 SettingSuggestedOption(value: "bg", introducedIn: 1),
                 SettingSuggestedOption(value: "zh", introducedIn: 1),
+                SettingSuggestedOption(value: "zh-Hans", introducedIn: 8),
+                SettingSuggestedOption(value: "zh-Hant", introducedIn: 8),
                 SettingSuggestedOption(value: "hr", introducedIn: 1),
                 SettingSuggestedOption(value: "cs", introducedIn: 1),
                 SettingSuggestedOption(value: "da", introducedIn: 1),
                 SettingSuggestedOption(value: "nl", introducedIn: 1),
                 SettingSuggestedOption(value: "en", introducedIn: 1),
+                SettingSuggestedOption(value: "en-US", introducedIn: 8),
+                SettingSuggestedOption(value: "en-GB", introducedIn: 8),
                 SettingSuggestedOption(value: "fi", introducedIn: 1),
                 SettingSuggestedOption(value: "fr", introducedIn: 1),
+                SettingSuggestedOption(value: "fr-CA", introducedIn: 8),
                 SettingSuggestedOption(value: "de", introducedIn: 1),
                 SettingSuggestedOption(value: "el", introducedIn: 1),
                 SettingSuggestedOption(value: "he", introducedIn: 1),
@@ -269,11 +314,15 @@ public enum SettingPresentationMetadata {
                 SettingSuggestedOption(value: "fa", introducedIn: 1),
                 SettingSuggestedOption(value: "pl", introducedIn: 1),
                 SettingSuggestedOption(value: "pt", introducedIn: 1),
+                SettingSuggestedOption(value: "pt-BR", introducedIn: 8),
+                SettingSuggestedOption(value: "pt-PT", introducedIn: 8),
                 SettingSuggestedOption(value: "ro", introducedIn: 1),
                 SettingSuggestedOption(value: "ru", introducedIn: 1),
                 SettingSuggestedOption(value: "sk", introducedIn: 1),
                 SettingSuggestedOption(value: "sl", introducedIn: 1),
                 SettingSuggestedOption(value: "es", introducedIn: 1),
+                SettingSuggestedOption(value: "es-419", introducedIn: 8),
+                SettingSuggestedOption(value: "es-ES", introducedIn: 8),
                 SettingSuggestedOption(value: "sv", introducedIn: 1),
                 SettingSuggestedOption(value: "ta", introducedIn: 1),
                 SettingSuggestedOption(value: "te", introducedIn: 1),
@@ -290,13 +339,18 @@ public enum SettingPresentationMetadata {
                 SettingSuggestedOption(value: "bn", introducedIn: 1),
                 SettingSuggestedOption(value: "bg", introducedIn: 1),
                 SettingSuggestedOption(value: "zh", introducedIn: 1),
+                SettingSuggestedOption(value: "zh-Hans", introducedIn: 8),
+                SettingSuggestedOption(value: "zh-Hant", introducedIn: 8),
                 SettingSuggestedOption(value: "hr", introducedIn: 1),
                 SettingSuggestedOption(value: "cs", introducedIn: 1),
                 SettingSuggestedOption(value: "da", introducedIn: 1),
                 SettingSuggestedOption(value: "nl", introducedIn: 1),
                 SettingSuggestedOption(value: "en", introducedIn: 1),
+                SettingSuggestedOption(value: "en-US", introducedIn: 8),
+                SettingSuggestedOption(value: "en-GB", introducedIn: 8),
                 SettingSuggestedOption(value: "fi", introducedIn: 1),
                 SettingSuggestedOption(value: "fr", introducedIn: 1),
+                SettingSuggestedOption(value: "fr-CA", introducedIn: 8),
                 SettingSuggestedOption(value: "de", introducedIn: 1),
                 SettingSuggestedOption(value: "el", introducedIn: 1),
                 SettingSuggestedOption(value: "he", introducedIn: 1),
@@ -311,11 +365,15 @@ public enum SettingPresentationMetadata {
                 SettingSuggestedOption(value: "fa", introducedIn: 1),
                 SettingSuggestedOption(value: "pl", introducedIn: 1),
                 SettingSuggestedOption(value: "pt", introducedIn: 1),
+                SettingSuggestedOption(value: "pt-BR", introducedIn: 8),
+                SettingSuggestedOption(value: "pt-PT", introducedIn: 8),
                 SettingSuggestedOption(value: "ro", introducedIn: 1),
                 SettingSuggestedOption(value: "ru", introducedIn: 1),
                 SettingSuggestedOption(value: "sk", introducedIn: 1),
                 SettingSuggestedOption(value: "sl", introducedIn: 1),
                 SettingSuggestedOption(value: "es", introducedIn: 1),
+                SettingSuggestedOption(value: "es-419", introducedIn: 8),
+                SettingSuggestedOption(value: "es-ES", introducedIn: 8),
                 SettingSuggestedOption(value: "sv", introducedIn: 1),
                 SettingSuggestedOption(value: "ta", introducedIn: 1),
                 SettingSuggestedOption(value: "te", introducedIn: 1),

@@ -159,6 +159,10 @@ struct DiagnosticsStatusRefreshEpoch {
         return generation
     }
 
+    mutating func invalidate() {
+        generation &+= 1
+    }
+
     func isCurrent(_ generation: UInt64, destination: DiagnosticsDestinationChoice) -> Bool {
         self.generation == generation && self.destination == destination
     }
@@ -261,6 +265,12 @@ enum DiagnosticsUploadDecision: Equatable {
     case keptTooLarge
     case keptStaleConsent
     case keptDestinationMismatch
+    /// The self-hosted server refused the report as invalid without saying
+    /// why. Kept, never retried automatically.
+    case keptServerRejected
+    /// A request that may have delivered the report got no answer. Kept and
+    /// never sent again.
+    case keptDeliveryUncertain
     case discardedInvalidLocalBundle
 }
 
@@ -363,7 +373,7 @@ actor DiagnosticsCoordinator {
 
     private let api: DiagnosticsAPI
     private let hostedAPI: HostedDiagnosticsAPI
-    private let continuumAPI: ContinuumAPI
+    private let prairieAPI: PrairieAPI
     private let consentStore: DiagnosticsConsentStore
     private let destinationStore: DiagnosticsDestinationStore
     private let pendingStore: PendingReportStore
@@ -396,7 +406,7 @@ actor DiagnosticsCoordinator {
     init(
         api: DiagnosticsAPI = .shared,
         hostedAPI: HostedDiagnosticsAPI = .shared,
-        continuumAPI: ContinuumAPI = .shared,
+        prairieAPI: PrairieAPI = .shared,
         consentStore: DiagnosticsConsentStore = .shared,
         destinationStore: DiagnosticsDestinationStore = .shared,
         pendingStore: PendingReportStore = .shared,
@@ -406,7 +416,7 @@ actor DiagnosticsCoordinator {
     ) {
         self.api = api
         self.hostedAPI = hostedAPI
-        self.continuumAPI = continuumAPI
+        self.prairieAPI = prairieAPI
         self.consentStore = consentStore
         self.destinationStore = destinationStore
         self.pendingStore = pendingStore
@@ -444,8 +454,8 @@ actor DiagnosticsCoordinator {
             throw DiagnosticsCoordinatorError.identityChanged
         }
 
-        let status = try await api.getDiagnosticsStatus()
-        let user = try await continuumAPI.currentUser()
+        let status = try await prairieAPI.apiV2Client.diagnosticsCapabilities()
+        let user = try await prairieAPI.currentUser()
         // Re-check the *stable* identity after the awaits: the active server
         // registry id plus the freshly fetched account user id. Comparing
         // these rather than raw access-token fingerprints means a transparent
@@ -510,7 +520,7 @@ actor DiagnosticsCoordinator {
         }
 
         async let capabilitiesRequest = hostedAPI.capabilities()
-        async let currentUserRequest = continuumAPI.currentUser()
+        async let currentUserRequest = prairieAPI.currentUser()
         let (capabilities, user) = try await (capabilitiesRequest, currentUserRequest)
         guard statusRefreshEpoch.isCurrent(requestGeneration, destination: .hosted),
               requestServerRegistryID == ServerRegistry.activeServerIDSnapshot,
@@ -689,13 +699,6 @@ actor DiagnosticsCoordinator {
             return false
         }
         return profileEligibilityStore.isChild(profileID: activeProfileID, binding: binding)
-    }
-
-    func pendingReportsForCurrentBinding() async -> [PendingReport] {
-        guard let context = await captureContext(requirePersistentCapture: false) else {
-            return []
-        }
-        return await pendingReports(for: context.binding)
     }
 
     func pendingReports(for binding: DiagnosticsBinding) async -> [PendingReport] {
@@ -1042,6 +1045,11 @@ actor DiagnosticsCoordinator {
             hostedNetworkCandidates[report.id] = report.binding.binding
             return await pollHostedStatus(report)
         }
+        // An earlier attempt got no answer, so the server may already hold
+        // this report. It stays on the device until the user deletes it.
+        if destination == .selfHosted, report.state.deliveryUncertain {
+            return .keptDeliveryUncertain
+        }
         // A non-persistent capture context is nil only when the status refresh
         // failed (offline or identity mid-change) — the destination was never
         // actually checked. Returning keptDestinationMismatch here would show
@@ -1141,6 +1149,11 @@ actor DiagnosticsCoordinator {
             let destinationServerRegistryID = ServerRegistry.activeServerIDSnapshot
             let destinationProfileID = await TokenStore.shared.getProfileId()
             let capturedProfileID = report.manifest.report.profileID
+            // Every upload request runs under this owner, so a switch after
+            // this point refuses the requests instead of redirecting them.
+            guard let destinationOwner = try? await api.captureOwner() else {
+                return .keptRetryable
+            }
             let bundle = try await buildBundle(for: report)
             let activeProfileID = await TokenStore.shared.getProfileId()
             guard await Self.currentAccessTokenFingerprint() != nil,
@@ -1152,19 +1165,42 @@ actor DiagnosticsCoordinator {
                   ) else {
                 return .keptRetryable
             }
+            // The upload and chunked create/complete are non_retryable. Record
+            // the attempt before the first request can leave the device, so an
+            // unanswered request, or a process that dies mid-upload, leaves
+            // the report held instead of sent again. A definite answer releases
+            // the claim; an earlier attempt still holding it blocks this one.
+            let claimed: Bool
+            do {
+                claimed = try pendingStore.claimSelfHostedDelivery(report)
+            } catch {
+                return .keptRetryable
+            }
+            guard claimed else {
+                return .keptDeliveryUncertain
+            }
             let response: DiagnosticsUploadResponse
             do {
-                response = try await api.upload(
-                    manifestData: bundle.manifestData,
-                    bundleData: bundle.bundleData
-                )
-            } catch DiagnosticsUploadError.requestBlockedByProxy {
-                // A proxy in front of the server capped the request body below
-                // the bundle size (nginx defaults to 1 MiB; bundles may be
-                // 10 MiB). Retrying the same request can never succeed, so
-                // fall back to the chunked upload, whose per-request size
-                // stays under such caps.
-                response = try await uploadChunkedFallback(report: report, bundle: bundle)
+                do {
+                    response = try await api.upload(
+                        manifestData: bundle.manifestData,
+                        bundleData: bundle.bundleData,
+                        auth: destinationOwner
+                    )
+                } catch DiagnosticsUploadError.requestBlockedByProxy {
+                    // A proxy in front of the server capped the request body
+                    // below the bundle size (nginx defaults to 1 MiB; bundles
+                    // may be 10 MiB). Retrying the same request can never
+                    // succeed, so fall back to the chunked upload, whose
+                    // per-request size stays under such caps.
+                    response = try await uploadChunkedFallback(
+                        bundle: bundle,
+                        destinationOwner: destinationOwner
+                    )
+                }
+            } catch let error as DiagnosticsUploadError where error != .deliveryUncertain {
+                pendingStore.releaseSelfHostedDelivery(report)
+                throw error
             }
             pendingStore.delete(report)
             return .uploaded(response)
@@ -1438,8 +1474,8 @@ actor DiagnosticsCoordinator {
     /// refused. Throws `DiagnosticsUploadError` for the caller's shared
     /// error mapping.
     private func uploadChunkedFallback(
-        report: PendingReport,
-        bundle: DiagnosticsBundleBuildResult
+        bundle: DiagnosticsBundleBuildResult,
+        destinationOwner: CapturedOrdinaryRequestAuth
     ) async throws -> DiagnosticsUploadResponse {
         // Chunking needs server support (upload_chunk_bytes in status). An
         // older server behind a capping proxy can't take this bundle by any
@@ -1449,25 +1485,16 @@ actor DiagnosticsCoordinator {
         guard cachedStatus?.status.supportsChunkedUpload == true else {
             throw DiagnosticsUploadError.unsupportedSchema
         }
-        // Pin the destination identity for the whole multi-request sequence.
-        // HTTPClient resolves the active server URL and auth per request, so
-        // without this a server/account/profile switch between chunk PUTs
-        // would send the remaining bundle bytes to the newly active
-        // destination. Same stable identity as the single-shot pre-POST check:
-        // server registry id + profile, token presence only (a transparent
-        // token refresh mid-upload must not abort the sequence).
-        let destinationServerRegistryID = ServerRegistry.activeServerIDSnapshot
-        let destinationProfileID = await TokenStore.shared.getProfileId()
+        // The whole multi-request sequence runs under the owner captured
+        // before the bundle was built, so a server/account/profile switch
+        // between chunk PUTs stops the upload instead of sending the rest of
+        // the bundle to the newly active destination. A transparent token
+        // refresh keeps the same owner and does not stop it.
         do {
             return try await api.uploadChunked(
                 manifestData: bundle.manifestData,
                 bundleData: bundle.bundleData,
-                destinationUnchanged: {
-                    guard await Self.currentAccessTokenFingerprint() != nil else { return false }
-                    guard ServerRegistry.activeServerIDSnapshot == destinationServerRegistryID else { return false }
-                    let activeProfileID = await TokenStore.shared.getProfileId()
-                    return activeProfileID == destinationProfileID
-                }
+                auth: destinationOwner
             )
         } catch DiagnosticsUploadError.requestBlockedByProxy {
             // Even individual chunk-sized requests are blocked: the proxy cap
@@ -1632,7 +1659,7 @@ actor DiagnosticsCoordinator {
         }
         let serverRegistryID = requestCredentialIdentity.serverId
 
-        if let user = try? await continuumAPI.currentUser(),
+        if let user = try? await prairieAPI.currentUser(),
            Self.hostedCredentialIdentityMatches(
                expected: requestCredentialIdentity,
                current: await TokenStore.shared.refreshAccountIdentity(),
@@ -1740,23 +1767,29 @@ actor DiagnosticsCoordinator {
         )
     }
 
+    /// Local erasure must work offline and while the HTTP identity gate is
+    /// closed. Known bindings already identify the data; fetching a new status
+    /// here can refresh an expiring session during logout.
     @discardableResult
-    func purgeDiagnosticsForCurrentBinding() async -> Bool {
-        let binding: DiagnosticsBinding?
-        if let context = await captureContext(requirePersistentCapture: false) {
-            binding = context.binding
-        } else {
-            binding = Self.currentBreadcrumbBinding()
+    func purgeDiagnosticsForServerRegistryID(_ serverId: String) -> Bool {
+        var bindings = Set(DiagnosticsDestinationChoice.allCases.compactMap {
+            Self.LastKnownStatusStore.snapshot(for: serverId, destination: $0)?.binding
+        })
+        if cachedStatusServerRegistryID == serverId, let binding = cachedStatus?.binding {
+            bindings.insert(binding)
         }
-
-        if let binding {
-            await purgeDiagnostics(for: binding)
+        if ServerRegistry.activeServerIDSnapshot == serverId {
+            statusRefreshEpoch.invalidate()
+            if let binding = Self.currentBreadcrumbBinding() { bindings.insert(binding) }
+            DiagLog.ring.clear()
+            #if os(tvOS)
+            ExitSentinel.shared.purge()
+            #endif
         }
-        Self.purgeBreadcrumbJournal()
-        return binding != nil
-    }
-
-    func purgeDiagnosticsForServerRegistryID(_ serverId: String) async {
+        for binding in bindings {
+            RecentSessionTracker.shared.purge(binding: binding)
+            clearContext(for: binding)
+        }
         let hostedServerInstanceID = DiagnosticsBinding.hosted(
             serverRegistryID: serverId,
             accountUserID: "local-purge"
@@ -1768,10 +1801,15 @@ actor DiagnosticsCoordinator {
                 binding.serverInstanceID == hostedServerInstanceID ? reportID : nil
             }
         )
-        try? pendingStore.stageHostedDeletionsAndPurge(
-            serverInstanceID: hostedServerInstanceID,
-            additionalRemoteReportIDs: additionalReportIDs
-        )
+        do {
+            try pendingStore.stageHostedDeletionsAndPurge(
+                serverInstanceID: hostedServerInstanceID,
+                additionalRemoteReportIDs: additionalReportIDs
+            )
+        } catch {
+            // Keep the binding and consent records so removal can be retried.
+            return false
+        }
         consentStore.remove(serverInstanceID: hostedServerInstanceID)
         profileEligibilityStore.remove(serverInstanceID: hostedServerInstanceID)
         let serverInstanceIDs = Self.ServerBindingIndex.serverInstanceIDs(for: serverId)
@@ -1788,7 +1826,8 @@ actor DiagnosticsCoordinator {
         }
         Self.ServerBindingIndex.remove(serverId: serverId)
         Self.purgeBreadcrumbJournal()
-        _ = await drainHostedDeletionIntents()
+        scheduleHostedDeletionMaintenance()
+        return true
     }
 
     #if os(tvOS)
@@ -2218,12 +2257,6 @@ actor DiagnosticsCoordinator {
         return Data(rendered.joined(separator: "\n").appending("\n").utf8)
     }
 
-    private func purgeDiagnostics(for binding: DiagnosticsBinding) async {
-        _ = await turnOffAndDelete(binding: binding)
-        consentStore.remove(binding: binding)
-        clearContext(for: binding)
-    }
-
     /// After purging a binding (e.g. an active-server sign-out) the pending
     /// files and consent record are gone, but the cached/persisted status and
     /// the breadcrumb consent context can still point at it. Since the consent
@@ -2236,6 +2269,7 @@ actor DiagnosticsCoordinator {
             cachedStatusDestination = nil
             cachedStatusServerRegistryID = nil
             cachedStatusAccessTokenFingerprint = nil
+            cachedHostedCredentialIdentity = nil
         }
         Self.LastKnownStatusStore.removeSnapshots(matching: binding)
         profileEligibilityStore.remove(binding: binding)
@@ -2273,6 +2307,16 @@ actor DiagnosticsCoordinator {
             // here; if it does surface (fallback path itself unavailable),
             // the report is kept — a proxy config fix makes it sendable again.
             return .keptRetryable
+        case .serverRejected:
+            // Status-only fallback: without a distinct problem type the
+            // client cannot tell a stale consent from a bad archive, so it
+            // neither retries nor deletes. The user can send it manually or
+            // delete it.
+            pendingStore.markServerRejected(report)
+            return .keptServerRejected
+        case .deliveryUncertain:
+            // The delivery claim recorded before dispatch stays in place.
+            return .keptDeliveryUncertain
         case .disabled, .storageUnavailable, .quotaExceeded, .busy, .retryable, .underlying:
             return .keptRetryable
         }
@@ -2349,6 +2393,19 @@ actor DiagnosticsCoordinator {
                 return false
             }
         }
+        // The capabilities read and the account read (`PrairieAPI.currentUser`)
+        // are v2, so their non-2xx answers arrive as `APIv2Error`; transport
+        // failures stay `HTTPError`.
+        if let apiError = error as? APIv2Error {
+            switch apiError {
+            case .httpStatus(let statusCode):
+                return (500...599).contains(statusCode)
+            case .problem(let problem):
+                return (500...599).contains(problem.status)
+            default:
+                return false
+            }
+        }
         if let httpError = error as? HTTPError {
             switch httpError {
             case .network:
@@ -2356,7 +2413,8 @@ actor DiagnosticsCoordinator {
             case .http(let statusCode, _):
                 return (500...599).contains(statusCode)
             case .serverUrlNotConfigured, .invalidURL, .invalidResponse,
-                 .requestIdentityChanged, .encodingFailed, .decodingFailed:
+                 .requestIdentityChanged, .authorityChanged,
+                 .decodingFailed:
                 return false
             }
         }

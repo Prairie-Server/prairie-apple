@@ -25,7 +25,7 @@ struct AudioCoverPalette: Equatable {
             Color(red: 0.09, green: 0.09, blue: 0.13),
         ],
         center: Color(red: 0.07, green: 0.08, blue: 0.11),
-        accent: .continuumPrimary
+        accent: .prairiePrimary
     )
 }
 
@@ -39,17 +39,9 @@ enum AudioCoverPaletteSampler {
 
     static func palette(for urlString: String?) async -> AudioCoverPalette? {
         guard let urlString, let url = URL(string: urlString) else { return nil }
-        let request = ImageRequest(
-            url: url,
-            processors: [
-                ImageProcessors.Resize(
-                    size: CGSize(width: 64, height: 64),
-                    contentMode: .aspectFill,
-                    upscale: false
-                )
-            ],
-            priority: .low
-        )
+        // 64 px ImageIO thumbnail: decoded straight from the data instead of
+        // decoding the full cover and resizing it.
+        let request = PosterImageCache.paletteSampleRequest(for: url)
         guard let image = try? await ImagePipeline.shared.image(for: request) else {
             return nil
         }

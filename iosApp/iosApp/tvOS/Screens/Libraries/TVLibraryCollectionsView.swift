@@ -12,7 +12,7 @@ struct TVLibraryCollectionsView: View {
     /// Whether the top menu currently holds focus; deferred entry claims
     /// are dropped while the user is up in the menu.
     var isTopMenuFocused: Bool = false
-    /// Boundary hand-up toward the pill row for the first card.
+    /// Boundary hand-up toward the pill row for the first visual grid row.
     let onMoveUp: (() -> Void)?
 
     @State private var collectionSections: [LibraryCollectionSection] = []
@@ -22,7 +22,6 @@ struct TVLibraryCollectionsView: View {
     @State private var hasPendingFocusClaim = false
     @State private var lastShellFocusRequest = 0
     @State private var contentFocusToken = 0
-    @FocusState private var isEmptyContentFocused: Bool
 
     @Environment(AppRouter.self) private var router
     @Namespace private var collectionsFocusNamespace
@@ -31,24 +30,27 @@ struct TVLibraryCollectionsView: View {
         ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(spacing: 44, pinnedViews: []) {
                 Color.clear
-                    .frame(height: ContinuumTheme.Skyline.libraryContentTopInset)
+                    .frame(height: PrairieTheme.Skyline.libraryContentTopInset)
 
                 gridContent
             }
-            .padding(.bottom, ContinuumTheme.largePadding)
+            .padding(.bottom, PrairieTheme.largePadding)
         }
+        .modifier(TVMenuEntryScroll(request: focusRequest, isTopMenuFocused: isTopMenuFocused, onReady: noteShellFocusRequest))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task {
             guard collectionSections.isEmpty else { return }
             await loadCollections()
         }
-        .onAppear { noteShellFocusRequest(focusRequest) }
-        .onChange(of: focusRequest) { _, request in noteShellFocusRequest(request) }
         .onChange(of: collectionSections.isEmpty) { _, isEmpty in
             if !isEmpty, hasPendingFocusClaim {
                 claimContentFocusIfReady()
             }
         }
+        .onChange(of: isTopMenuFocused) { _, menuOwnsFocus in
+            if menuOwnsFocus { hasPendingFocusClaim = false }
+        }
+        .onDisappear { hasPendingFocusClaim = false }
     }
 
     @ViewBuilder
@@ -66,6 +68,9 @@ struct TVLibraryCollectionsView: View {
                 .first(where: { !$0.collections.isEmpty })
             let firstSectionId = focusTarget?.id
             let firstCardId = focusTarget?.collections.first?.id
+            let firstVisualRowIds = Set(
+                focusTarget?.collections.prefix(resolvedColumnCount).map(\.id) ?? []
+            )
 
             VStack(alignment: .leading, spacing: 44) {
                 ForEach(collectionSections) { section in
@@ -75,35 +80,38 @@ struct TVLibraryCollectionsView: View {
                             // cascade/dropdown section headers, at grid scale.
                             Text(section.name.uppercased())
                                 .font(.system(
-                                    size: ContinuumTheme.Skyline.collectionGridGroupHeaderSize,
+                                    size: PrairieTheme.Skyline.collectionGridGroupHeaderSize,
                                     design: .monospaced
                                 ))
-                                .tracking(ContinuumTheme.Skyline.collectionGridGroupHeaderSize * 0.26)
-                                .foregroundColor(.continuumOnSurface.opacity(0.38))
+                                .tracking(PrairieTheme.Skyline.collectionGridGroupHeaderSize * 0.26)
+                                .foregroundColor(.prairieOnSurface.opacity(0.38))
                                 .lineLimit(1)
-                                .padding(.leading, ContinuumTheme.safePadding)
+                                .padding(.leading, PrairieTheme.safePadding)
                         }
                         LazyVGrid(
                             columns: Array(
                                 repeating: GridItem(
                                     .flexible(),
-                                    spacing: ContinuumTheme.Skyline.collectionGridColumnSpacing,
+                                    spacing: PrairieTheme.Skyline.collectionGridColumnSpacing,
                                     alignment: .top
                                 ),
                                 count: resolvedColumnCount
                             ),
                             alignment: .leading,
-                            spacing: ContinuumTheme.Skyline.collectionGridRowSpacing
+                            spacing: PrairieTheme.Skyline.collectionGridRowSpacing
                         ) {
                             ForEach(section.collections) { collection in
                                 let isFirstOverall =
                                     section.id == firstSectionId && collection.id == firstCardId
+                                let isInFirstVisualRow =
+                                    section.id == firstSectionId
+                                    && firstVisualRowIds.contains(collection.id)
                                 TVCollectionCard(
                                     collection: collection,
                                     prefersDefaultFocus: isFirstOverall,
                                     defaultFocusNamespace: collectionsFocusNamespace,
                                     focusRequest: isFirstOverall ? contentFocusToken : 0,
-                                    onMoveUp: isFirstOverall ? onMoveUp : nil,
+                                    onMoveUp: isInFirstVisualRow ? onMoveUp : nil,
                                     action: {
                                         router.navigate(to: .libraryCollection(
                                             libraryId: library.id,
@@ -116,7 +124,7 @@ struct TVLibraryCollectionsView: View {
                                 .frame(maxWidth: .infinity)
                             }
                         }
-                        .padding(.horizontal, ContinuumTheme.safePadding)
+                        .padding(.horizontal, PrairieTheme.safePadding)
                     }
                 }
             }
@@ -138,22 +146,12 @@ struct TVLibraryCollectionsView: View {
             }
         }
         .frame(maxWidth: .infinity, minHeight: 400)
-        .contentShape(Rectangle())
-        .focusable(true)
-        .focused($isEmptyContentFocused)
-        .focusEffectDisabled()
-        .accessibilityLabel(isLoadingCollections ? "Loading collections" : "No collections yet")
-        .onMoveCommand { direction in
-            if direction == .up {
-                onMoveUp?()
-            }
-        }
-        .task(id: focusRequest) {
-            guard !isTopMenuFocused else { return }
-            await Task.yield()
-            guard collectionSections.isEmpty, !isTopMenuFocused else { return }
-            isEmptyContentFocused = true
-        }
+        .tvPageFocusOwner(
+            focusRequest: focusRequest,
+            isTopMenuFocused: isTopMenuFocused,
+            accessibilityLabel: isLoadingCollections ? "Loading collections" : "No collections yet",
+            onMoveUp: onMoveUp
+        )
     }
 
     // MARK: - Focus hand-down
@@ -165,12 +163,12 @@ struct TVLibraryCollectionsView: View {
     }
 
     private func claimContentFocusIfReady() {
-        guard collectionSections.contains(where: { !$0.collections.isEmpty }) else {
-            hasPendingFocusClaim = true
+        guard !isTopMenuFocused else {
+            hasPendingFocusClaim = false
             return
         }
-        if hasPendingFocusClaim, isTopMenuFocused {
-            hasPendingFocusClaim = false
+        guard collectionSections.contains(where: { !$0.collections.isEmpty }) else {
+            hasPendingFocusClaim = true
             return
         }
         hasPendingFocusClaim = false
@@ -182,7 +180,7 @@ struct TVLibraryCollectionsView: View {
     private func loadCollections() async {
         isLoadingCollections = true
         do {
-            let response = try await ContinuumAPI.shared.libraryCollections(libraryId: library.id)
+            let response = try await PrairieAPI.shared.libraryCollections(libraryId: library.id)
             collectionSections = response.resolvedSections
         } catch {
             collectionSections = []
@@ -191,7 +189,7 @@ struct TVLibraryCollectionsView: View {
     }
 
     private var resolvedColumnCount: Int {
-        let standard = ContinuumTheme.Skyline.collectionGridColumnCount
+        let standard = PrairieTheme.Skyline.collectionGridColumnCount
         switch uiCustomization.cardPresentation.posterSize {
         case .compact: return standard + 1
         case .standard: return standard
@@ -202,9 +200,8 @@ struct TVLibraryCollectionsView: View {
 
 // MARK: - Collection card
 
-/// Attaches an Up-move handler only when one is supplied, so that cards which
-/// should NOT hand focus up (every card except the first) don't intercept and
-/// consume the Up command the focus engine needs to move between grid rows.
+/// Attaches an Up-move handler only when one is supplied, so lower grid rows
+/// do not intercept the command the focus engine needs to move upward.
 private struct TVCollectionCardMoveUpHandler: ViewModifier {
     let onMoveUp: (() -> Void)?
 
@@ -224,7 +221,7 @@ private struct TVCollectionCardMoveUpHandler: ViewModifier {
 
 /// Grid wrapper around `TVCollectionPosterCard` (§6.3) that carries the
 /// Collections pill's focus machinery: the programmatic entry kick, the
-/// first-card hand-up to the pill row, and the recycle guard. The visual
+/// first-row hand-up to the pill row, and the recycle guard. The visual
 /// is the shared poster card; this struct owns only focus plumbing.
 private struct TVCollectionCard: View {
     let collection: LibraryCollection
@@ -235,10 +232,9 @@ private struct TVCollectionCard: View {
     /// `prefersDefaultFocus` alone doesn't fire when the scope isn't being
     /// entered by the engine.
     var focusRequest: Int = 0
-    /// Supplied only to the first collection card: Up returns focus to the
-    /// pill row — the Collections analogue of the Browse layout's first-row
-    /// hand-up. Attached to this card alone so Up from lower grid rows still
-    /// moves to the row above instead of jumping to the chrome.
+    /// Supplied to every card in the first visual grid row: Up returns focus
+    /// to the pill row. Lower rows omit it so native grid movement still walks
+    /// through every intervening collection row.
     var onMoveUp: (() -> Void)? = nil
     let action: () -> Void
 

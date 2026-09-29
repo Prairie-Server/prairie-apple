@@ -17,6 +17,7 @@ import SwiftUI
 /// Below-fold rows/rails are ordinary vertical focus progression.
 struct TVAudiobookDetailView: View {
     let detail: ItemDetail
+    let libraryId: Int?
     let onNavigateToItem: (String) -> Void
 
     @Environment(AudioPlaybackStore.self) private var audioStore
@@ -32,8 +33,9 @@ struct TVAudiobookDetailView: View {
     /// for every `model.` read in `body`.
     private let model: TVAudiobookViewModel
 
-    init(detail: ItemDetail, onNavigateToItem: @escaping (String) -> Void) {
+    init(detail: ItemDetail, libraryId: Int? = nil, onNavigateToItem: @escaping (String) -> Void) {
         self.detail = detail
+        self.libraryId = libraryId
         self.onNavigateToItem = onNavigateToItem
         self.model = TVAudiobookViewModel(detail: detail)
     }
@@ -43,9 +45,9 @@ struct TVAudiobookDetailView: View {
             background
             scrollBody
         }
-        .continuumBackground()
+        .prairieBackground()
         .fullScreenCover(isPresented: $showChapters) {
-            TVAudiobookChaptersView(detail: detail)
+            TVAudiobookChaptersView(detail: detail, libraryId: libraryId)
         }
     }
 
@@ -73,7 +75,7 @@ struct TVAudiobookDetailView: View {
                         detail: detail,
                         onNavigateToItem: onNavigateToItem
                     )
-                    .padding(.horizontal, ContinuumTheme.safePadding)
+                    .padding(.horizontal, PrairieTheme.safePadding)
                     .padding(.top, 64)
                     .padding(.bottom, 80)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -149,7 +151,7 @@ struct TVAudiobookDetailView: View {
             identity
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.horizontal, ContinuumTheme.safePadding)
+        .padding(.horizontal, PrairieTheme.safePadding)
         .padding(.leading, 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -164,8 +166,8 @@ struct TVAudiobookDetailView: View {
                     contentMode: .fill
                 )
             } else {
-                RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius, style: .continuous)
-                    .fill(Color.continuumSurfaceElevated)
+                RoundedRectangle(cornerRadius: PrairieTheme.cornerRadius, style: .continuous)
+                    .fill(Color.prairieSurfaceElevated)
                     .overlay {
                         Image(systemName: "book.closed")
                             .font(.system(size: 460 * 0.22, weight: .semibold))
@@ -174,9 +176,9 @@ struct TVAudiobookDetailView: View {
             }
         }
         .frame(width: 460, height: 460)
-        .clipShape(RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: PrairieTheme.cornerRadius, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius, style: .continuous)
+            RoundedRectangle(cornerRadius: PrairieTheme.cornerRadius, style: .continuous)
                 .stroke(Color.white.opacity(0.14), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.65), radius: 40, x: 0, y: 24)
@@ -308,7 +310,7 @@ struct TVAudiobookDetailView: View {
                 icon: model.primaryIcon,
                 title: model.primaryLabel
             ) {
-                model.performPrimary(audioStore)
+                model.performPrimary(audioStore, libraryId: libraryId)
             }
             .focused($focusedAction, equals: .primary)
             .onAppear(perform: claimInitialActionFocus)
@@ -321,7 +323,7 @@ struct TVAudiobookDetailView: View {
             }
 
             TVSecondaryPillButton(icon: "arrow.counterclockwise", title: "Start Over") {
-                audioStore.play(contentId: detail.contentId, restart: true)
+                audioStore.play(contentId: detail.contentId, restart: true, libraryId: libraryId)
             }
             .focused($focusedAction, equals: .startOver)
         }

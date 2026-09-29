@@ -8,6 +8,8 @@ import OSLog
 /// different directory tree with no migration.
 ///
 /// ```
+/// <AppSupport>/PrairieDownloads/
+///   .legacy-downloads-removed    (see `LegacyDownloadStorage`)
 /// <AppSupport>/PrairieDownloads/<serverId>/<profileId>/
 ///   store.json
 ///   <downloadId>/
@@ -22,7 +24,7 @@ import OSLog
 /// launches. Absolute URLs are rebuilt here against the current container.
 enum DownloadFilePaths {
     private static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "com.continuum.app",
+        subsystem: Bundle.main.bundleIdentifier ?? "org.prairieserver.prairie",
         category: "Downloads"
     )
 
@@ -38,16 +40,16 @@ enum DownloadFilePaths {
         return root
     }
 
-    static func scopeDirectory(serverId: String, profileId: String) -> URL {
-        let dir = rootDirectory()
+    static func scopeDirectory(serverId: String, profileId: String, root: URL = rootDirectory()) -> URL {
+        let dir = root
             .appendingPathComponent(sanitize(serverId), isDirectory: true)
             .appendingPathComponent(sanitize(profileId), isDirectory: true)
         ensureDirectory(dir)
         return dir
     }
 
-    static func storeFileURL(serverId: String, profileId: String) -> URL {
-        scopeDirectory(serverId: serverId, profileId: profileId)
+    static func storeFileURL(serverId: String, profileId: String, root: URL = rootDirectory()) -> URL {
+        scopeDirectory(serverId: serverId, profileId: profileId, root: root)
             .appendingPathComponent(storeFileName, isDirectory: false)
     }
 

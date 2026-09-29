@@ -6,10 +6,14 @@ import SwiftUI
 struct TVDetailCastRail: View {
     let cast: [CastMember]
     let onTap: (String) -> Void
+    /// Non-zero changes explicitly hand focus into the first cast card from
+    /// the composite Series episode carousel.
+    var focusRequest = 0
+    var onFocusChange: ((Bool) -> Void)? = nil
 
     private let photoWidth: CGFloat = 200
     private let photoHeight: CGFloat = 200
-    private let cardSpacing: CGFloat = 44
+    private let cardSpacing: CGFloat = 60
     private let maxEntries = 24
     @FocusState private var focusedCastId: String?
 
@@ -25,11 +29,18 @@ struct TVDetailCastRail: View {
                     .focused($focusedCastId, equals: member.id)
                 }
             }
-            .padding(.vertical, 24)
+            .padding(.vertical, 12)
         }
         .focusSection()
         .applyCastRailDefaultFocus(defaultFocusId, binding: $focusedCastId)
         .scrollClipDisabled()
+        .onChange(of: focusedCastId != nil) { _, focused in
+            onFocusChange?(focused)
+        }
+        .onChange(of: focusRequest) { _, request in
+            guard request > 0, let defaultFocusId else { return }
+            focusedCastId = defaultFocusId
+        }
     }
 
     private var defaultFocusId: String? {
@@ -87,23 +98,23 @@ private struct CastCardLabel: View {
     @Environment(\.isFocused) private var isFocused
 
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 12) {
             photo
             VStack(spacing: 4) {
                 Text(member.name)
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundColor(isFocused ? .continuumOnSurface : Color.continuumOnSurface.opacity(0.88))
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundColor(isFocused ? .prairieOnSurface : Color.prairieOnSurface.opacity(0.88))
                     .lineLimit(2, reservesSpace: true)
                     .multilineTextAlignment(.center)
                 if let character = member.character, !character.isEmpty {
                     Text(character)
-                        .font(.system(size: 18, weight: .regular))
-                        .foregroundColor(.continuumSecondaryText)
+                        .font(.system(size: 17, weight: .regular))
+                        .foregroundColor(.prairieSecondaryText)
                         .lineLimit(1)
                         .multilineTextAlignment(.center)
                 }
             }
-            .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
+            .animation(.easeOut(duration: PrairieTheme.fastDuration), value: isFocused)
         }
         .frame(width: photoSize.width)
     }
@@ -111,17 +122,18 @@ private struct CastCardLabel: View {
     @ViewBuilder
     private var photo: some View {
         ZStack {
-            Color.continuumSurfaceElevated
+            Color.prairieSurfaceElevated
             if let url = member.photoUrl, !url.isEmpty {
                 CachedAsyncImage(
                     url: url,
                     targetSize: photoSize,
+                    thumbhash: member.photoThumbhash,
                     contentMode: .fill
                 )
             } else {
                 Image(systemName: "person.fill")
                     .font(.system(size: photoSize.width * 0.4))
-                    .foregroundColor(.continuumSecondaryText)
+                    .foregroundColor(.prairieSecondaryText)
             }
         }
         .frame(width: photoSize.width, height: photoSize.height)

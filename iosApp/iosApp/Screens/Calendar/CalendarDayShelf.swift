@@ -32,9 +32,9 @@ struct CalendarDayShelf: View {
     var body: some View {
         VStack(alignment: .leading, spacing: rowVerticalSpacing) {
             Text(heading)
-                .font(.continuumHeadline)
-                .foregroundColor(events.isEmpty ? .continuumSecondaryText : .continuumOnSurface)
-                .padding(.horizontal, ContinuumTheme.safePadding)
+                .font(.prairieHeadline)
+                .foregroundColor(events.isEmpty ? .prairieSecondaryText : .prairieOnSurface)
+                .padding(.horizontal, PrairieTheme.safePadding)
 
             if events.isEmpty {
                 emptyRow
@@ -68,7 +68,7 @@ struct CalendarDayShelf: View {
 
     private var shelfContent: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            LazyHStack(spacing: cardSpacing) {
+            LazyHStack(alignment: HorizontalMediaRailLayout.cardAlignment, spacing: cardSpacing) {
                 ForEach(events) { event in
                     CalendarEventCard(
                         event: event,
@@ -77,8 +77,9 @@ struct CalendarDayShelf: View {
                     )
                 }
             }
-            .padding(.horizontal, ContinuumTheme.safePadding)
+            .padding(.horizontal, PrairieTheme.safePadding)
             .padding(.vertical, verticalCardPadding)
+            .phoneMediaRailBounds()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         #if os(tvOS)
@@ -94,13 +95,13 @@ struct CalendarDayShelf: View {
     private var emptyRow: some View {
         HStack(spacing: 8) {
             Image(systemName: "moon.stars")
-                .font(.continuumCaption)
-                .foregroundColor(.continuumSecondaryText.opacity(0.5))
+                .font(.prairieCaption)
+                .foregroundColor(.prairieSecondaryText.opacity(0.5))
             Text("Nothing scheduled")
-                .font(.continuumCaption)
-                .foregroundColor(.continuumSecondaryText)
+                .font(.prairieCaption)
+                .foregroundColor(.prairieSecondaryText)
         }
-        .padding(.horizontal, ContinuumTheme.safePadding)
+        .padding(.horizontal, PrairieTheme.safePadding)
     }
 
     private var shelfFocusBinding: FocusState<String?>.Binding? {
@@ -117,7 +118,7 @@ struct CalendarDayShelf: View {
         #if os(tvOS)
         return 20
         #else
-        return ContinuumTheme.smallPadding
+        return PrairieTheme.smallPadding
         #endif
     }
 
@@ -125,7 +126,7 @@ struct CalendarDayShelf: View {
         #if os(tvOS)
         return 40
         #else
-        return ContinuumTheme.spacing
+        return PrairieTheme.spacing
         #endif
     }
 

@@ -40,7 +40,7 @@ struct DiagnosticsPromptReviewView: View {
                     .disabled(model.isWorking)
             }
         }
-        .continuumGroupedListStyle()
+        .prairieGroupedListStyle()
         .navigationTitle("Report Summary")
     }
 }

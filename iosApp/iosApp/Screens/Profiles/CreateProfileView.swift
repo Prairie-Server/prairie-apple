@@ -22,17 +22,25 @@ struct CreateProfileView: View {
     @State private var libraryRestrictionsEnabled: Bool = false
     @State private var allowedLibraryIds: Set<Int> = []
     @State private var libraries: [Library] = []
+    @State private var libraryLoad: LibraryLoad = .loading
+    /// A retry after a failed read runs with the failed state still shown,
+    /// so the focused Try Again button stays mounted on tvOS.
+    @State private var isRetryingLibraries: Bool = false
     @State private var isLoading: Bool = false
-    @State private var formError: FormError?
+    @State private var formError: CreateProfileFailure?
     @Environment(\.dismiss) private var dismiss
 
     @FocusState private var focusedField: Field?
 
     private enum Field: Hashable { case name, pin }
 
-    private struct FormError: Equatable {
-        var title: String = "Couldn't Create Profile"
-        var message: String
+    /// Whether the assignable libraries are known yet. A failed read is kept
+    /// apart from an empty list so the form never claims there is nothing to
+    /// assign when it simply could not ask.
+    private enum LibraryLoad: Equatable {
+        case loading
+        case loaded
+        case failed(String)
     }
 
     private var presets: [ProfileAvatarPresets.Preset] {
@@ -79,13 +87,18 @@ struct CreateProfileView: View {
                 set: { if !$0 { formError = nil } }
             ),
             presenting: formError
-        ) { _ in
-            Button("OK", role: .cancel) { formError = nil }
+        ) { err in
+            Button("OK", role: .cancel) {
+                formError = nil
+                // The server may already have the profile: close the form so
+                // the refreshed list shows whether it exists before any retry.
+                if err.closesForm { onCreated() }
+            }
         } message: { err in
             Text(err.message)
         }
         .task {
-            libraries = (try? await ContinuumAPI.shared.libraries().libraries) ?? []
+            await loadLibraries()
         }
         .onChange(of: isChild) { _, child in
             if child {
@@ -104,7 +117,7 @@ struct CreateProfileView: View {
     #if os(tvOS)
     private var tvOSLayout: some View {
         ZStack {
-            Color.continuumBackground.ignoresSafeArea()
+            Color.prairieBackground.ignoresSafeArea()
             RadialGradient(
                 colors: [Color.white.opacity(0.06), Color.black.opacity(0)],
                 center: .center,
@@ -223,7 +236,7 @@ struct CreateProfileView: View {
 
             section(title: "Name") {
                 TextField("Profile name", text: $name)
-                    .textFieldStyle(ContinuumTextFieldStyle())
+                    .textFieldStyle(PrairieTextFieldStyle())
                     .focused($focusedField, equals: .name)
                     .autocorrectionDisabled()
                     #if !os(macOS)
@@ -234,7 +247,7 @@ struct CreateProfileView: View {
 
             section(title: "PIN (optional)") {
                 TextField("4-digit PIN", text: $pin)
-                    .textFieldStyle(ContinuumTextFieldStyle())
+                    .textFieldStyle(PrairieTextFieldStyle())
                     .focused($focusedField, equals: .pin)
                     .autocorrectionDisabled()
                     .onChange(of: pin) { _, newValue in
@@ -253,7 +266,7 @@ struct CreateProfileView: View {
                 guard !isLoading else { return }
                 Task { await createProfile() }
             }
-            .buttonStyle(ContinuumPrimaryButtonStyle(isLoading: isLoading))
+            .buttonStyle(PrairiePrimaryButtonStyle(isLoading: isLoading))
             // Gate validity via .disabled, but not the in-flight state: disabling
             // the focused button mid-create bounces focus to a neighbour. The
             // spinner label signals progress and re-entry is guarded above.
@@ -288,10 +301,10 @@ struct CreateProfileView: View {
     private var iOSLayout: some View {
         NavigationStack {
             ZStack {
-                Color.continuumBackground.ignoresSafeArea()
+                PrairiePageBackdrop()
 
                 ScrollView {
-                    VStack(spacing: ContinuumTheme.largePadding) {
+                    VStack(spacing: PrairieTheme.largePadding) {
                         ProfileTile(profile: previewProfile, action: {})
                             .allowsHitTesting(false)
                             .disabled(true)
@@ -304,8 +317,8 @@ struct CreateProfileView: View {
                             VStack(alignment: .leading, spacing: 10) {
                                 HStack {
                                     Text("Avatar")
-                                        .font(.continuumCaption)
-                                        .foregroundColor(.continuumSecondaryText)
+                                        .font(.prairieCaption)
+                                        .foregroundColor(.prairieSecondaryText)
                                     Spacer()
                                     shuffleButton
                                 }
@@ -315,10 +328,10 @@ struct CreateProfileView: View {
 
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Name")
-                                .font(.continuumCaption)
-                                .foregroundColor(.continuumSecondaryText)
+                                .font(.prairieCaption)
+                                .foregroundColor(.prairieSecondaryText)
                             TextField("Profile name", text: $name)
-                                .textFieldStyle(ContinuumTextFieldStyle())
+                                .textFieldStyle(PrairieTextFieldStyle())
                                 .focused($focusedField, equals: .name)
                                 .autocorrectionDisabled()
                                 #if !os(macOS)
@@ -328,10 +341,10 @@ struct CreateProfileView: View {
 
                         VStack(alignment: .leading, spacing: 6) {
                             Text("PIN (optional)")
-                                .font(.continuumCaption)
-                                .foregroundColor(.continuumSecondaryText)
+                                .font(.prairieCaption)
+                                .foregroundColor(.prairieSecondaryText)
                             TextField("4-digit PIN", text: $pin)
-                                .textFieldStyle(ContinuumTextFieldStyle())
+                                .textFieldStyle(PrairieTextFieldStyle())
                                 .focused($focusedField, equals: .pin)
                                 #if !os(macOS)
                                 .keyboardType(.numberPad)
@@ -345,14 +358,14 @@ struct CreateProfileView: View {
                         Toggle(isOn: $isChild) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("Child Profile")
-                                    .font(.continuumBody)
-                                    .foregroundColor(.continuumOnSurface)
+                                    .font(.prairieBody)
+                                    .foregroundColor(.prairieOnSurface)
                                 Text("Restricts content to kid-friendly ratings")
-                                    .font(.continuumCaption)
-                                    .foregroundColor(.continuumSecondaryText)
+                                    .font(.prairieCaption)
+                                    .foregroundColor(.prairieSecondaryText)
                             }
                         }
-                        .tint(.continuumAccent)
+                        .tint(.prairieAccent)
 
                         if isChild {
                             childAccessControls
@@ -361,30 +374,30 @@ struct CreateProfileView: View {
                         Button("Create Profile") {
                             Task { await createProfile() }
                         }
-                        .siloPrimaryButton(isLoading: isLoading)
+                        .prairiePrimaryButton(isLoading: isLoading)
                         .disabled(isLoading || name.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
-                    .padding(.horizontal, ContinuumTheme.largePadding)
-                    .padding(.vertical, ContinuumTheme.largePadding)
+                    .padding(.horizontal, PrairieTheme.largePadding)
+                    .padding(.vertical, PrairieTheme.largePadding)
                 }
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
-                        .foregroundColor(.continuumPrimary)
+                        .foregroundColor(.prairiePrimary)
                 }
             }
             .navigationTitle("New Profile")
-            .continuumNavigationTitleDisplayMode(.inline)
-            .continuumToolbarColorSchemeDark()
+            .prairieNavigationTitleDisplayMode(.inline)
+            .prairieToolbarColorSchemeDark()
         }
     }
 
     private var stylePickerRow: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Style")
-                .font(.continuumCaption)
-                .foregroundColor(.continuumSecondaryText)
+                .font(.prairieCaption)
+                .foregroundColor(.prairieSecondaryText)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(ProfileAvatarPresets.styles) { style in
@@ -432,8 +445,8 @@ struct CreateProfileView: View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 7) {
                 Text("Maximum content rating")
-                    .font(.continuumCaption)
-                    .foregroundStyle(Color.continuumSecondaryText)
+                    .font(.prairieCaption)
+                    .foregroundStyle(Color.prairieSecondaryText)
                 Picker("Maximum content rating", selection: $maxContentRating) {
                     ForEach(Self.contentRatings, id: \.value) { option in
                         Text(option.label).tag(option.value)
@@ -443,18 +456,43 @@ struct CreateProfileView: View {
             }
 
             Toggle("Restrict libraries", isOn: $libraryRestrictionsEnabled)
-                .tint(.continuumAccent)
+                .tint(.prairieAccent)
 
             if libraryRestrictionsEnabled {
-                if libraries.isEmpty {
+                if case .loading = libraryLoad {
+                    ProgressView("Loading libraries…")
+                        .font(.prairieCaption)
+                } else if case .failed(let message) = libraryLoad {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Couldn't load libraries. \(message)")
+                            .font(.prairieCaption)
+                            .foregroundStyle(Color.prairieSecondaryText)
+                        // Not `.disabled` while retrying: that would move focus
+                        // off the button, which is what keeping it mounted avoids.
+                        Button {
+                            guard !isRetryingLibraries else { return }
+                            Task { await loadLibraries() }
+                        } label: {
+                            HStack(spacing: 6) {
+                                if isRetryingLibraries {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                }
+                                Text("Try Again")
+                            }
+                        }
+                        .buttonStyle(GhostChipButtonStyle())
+                        .accessibilityValue(isRetryingLibraries ? "Loading" : "")
+                    }
+                } else if libraries.isEmpty {
                     Text("No libraries are available to assign.")
-                        .font(.continuumCaption)
-                        .foregroundStyle(Color.continuumSecondaryText)
+                        .font(.prairieCaption)
+                        .foregroundStyle(Color.prairieSecondaryText)
                 } else {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Allowed libraries")
-                            .font(.continuumCaption)
-                            .foregroundStyle(Color.continuumSecondaryText)
+                            .font(.prairieCaption)
+                            .foregroundStyle(Color.prairieSecondaryText)
                         ForEach(libraries) { library in
                             Toggle(
                                 library.name,
@@ -469,14 +507,14 @@ struct CreateProfileView: View {
                                     }
                                 )
                             )
-                            .tint(.continuumAccent)
+                            .tint(.prairieAccent)
                         }
                     }
                 }
             }
         }
         .padding(14)
-        .background(Color.continuumSurfaceElevated, in: RoundedRectangle(cornerRadius: 12))
+        .background(Color.prairieSurfaceElevated, in: RoundedRectangle(cornerRadius: 12))
     }
 
     /// Drive the preview tile from a synthetic `UserProfile`. The avatar
@@ -535,7 +573,7 @@ struct CreateProfileView: View {
             #if os(tvOS)
             .font(.system(size: 18, weight: .medium))
             #else
-            .font(.continuumCaption)
+            .font(.prairieCaption)
             #endif
         }
         .buttonStyle(GhostChipButtonStyle())
@@ -551,15 +589,34 @@ struct CreateProfileView: View {
         selectedSeed = nil
     }
 
+    // MARK: - Libraries
+
+    /// The first read shows a progress row. A retry leaves the failed state
+    /// (and its focused button) in place until the new result arrives.
+    private func loadLibraries() async {
+        if case .failed = libraryLoad {
+            isRetryingLibraries = true
+        } else {
+            libraryLoad = .loading
+        }
+        defer { isRetryingLibraries = false }
+        do {
+            libraries = try await PrairieAPI.shared.libraries().libraries
+            libraryLoad = .loaded
+        } catch {
+            libraryLoad = .failed(ErrorState(error).message)
+        }
+    }
+
     // MARK: - Submit
 
     private func createProfile() async {
         guard !name.trimmingCharacters(in: .whitespaces).isEmpty else {
-            formError = FormError(title: "Name Required", message: "Please enter a name.")
+            formError = CreateProfileFailure(title: "Name Required", message: "Please enter a name.")
             return
         }
         guard !libraryRestrictionsEnabled || !allowedLibraryIds.isEmpty else {
-            formError = FormError(
+            formError = CreateProfileFailure(
                 title: "Choose a Library",
                 message: "Select at least one library for this child profile."
             )
@@ -584,37 +641,66 @@ struct CreateProfileView: View {
             )
             onCreated()
         } catch {
-            formError = Self.mapSubmitError(error)
+            formError = CreateProfileFailure(error)
         }
     }
+}
 
-    /// Translate a submit failure into a user-facing title/message.
-    ///
-    /// Detection is layered so the dialog degrades gracefully:
-    /// 1. Prefer the server's machine-readable `error` code from the JSON
-    ///    envelope (parsed inside `HTTPError`).
-    /// 2. Fall back to the raw HTTP status — on this endpoint the server
-    ///    only returns 409 for `profile_limit_reached`, so we can trust
-    ///    the status even when the body didn't parse (e.g. a proxy
-    ///    rewrote it).
-    /// 3. Otherwise surface whatever message the server sent.
-    private static func mapSubmitError(_ error: Error) -> FormError {
-        if let http = error as? HTTPError {
-            let fallback = http.errorDescription ?? "Something went wrong."
+/// What the new-profile form tells the user after a submit fails.
+///
+/// `POST /api/v2/profiles` is `non_retryable`, so nothing here re-sends it:
+/// - a server answer or a request that never left the device is a definite
+///   failure; the form stays open with the server's reason;
+/// - a request that was sent without an answer, or whose answer was
+///   discarded because the server, account or profile changed, may have
+///   created the profile, so the form closes and the refreshed profile list
+///   shows the result instead of inviting a duplicate.
+struct CreateProfileFailure: Equatable {
+    let title: String
+    let message: String
+    /// Close the form and reload the profile list when the alert is dismissed.
+    let closesForm: Bool
 
-            if http.serverErrorCode == "profile_limit_reached"
-                || http.statusCode == 409 {
-                return FormError(
-                    title: "Profile Limit Reached",
-                    message: "You've reached the maximum number of profiles for this account."
-                )
-            }
-            if http.serverErrorCode == "bad_request" {
-                return FormError(title: "Can't Create Profile", message: fallback)
-            }
-            return FormError(message: fallback)
+    init(title: String = "Couldn't Create Profile", message: String, closesForm: Bool = false) {
+        self.title = title
+        self.message = message
+        self.closesForm = closesForm
+    }
+
+    init(_ error: Error) {
+        switch MutationDelivery(error) {
+        case .unconfirmed:
+            self.init(
+                title: "Profile May Have Been Created",
+                message: "Prairie didn't get an answer from the server. Check the profile list before trying again.",
+                closesForm: true
+            )
+            return
+        case .ownerChanged:
+            // The fence can fire after the server already answered 201, so
+            // the profile may exist. Closing is safe either way.
+            self.init(
+                title: "Profile May Have Been Created",
+                message: "The server or account changed while creating the profile. Check the profile list before trying again.",
+                closesForm: true
+            )
+            return
+        case .definite:
+            break
         }
-        return FormError(message: error.localizedDescription)
+        // v2 reports a taken name and a full household as 409 `conflict`, a
+        // rejected member as 422 `validation_failed`, and a refusal (such as
+        // a demo-mode server) as 403 `permission_denied`; the detail names
+        // which, and none of them is worth an immediate retry.
+        if case APIv2Error.problem(let problem) = error,
+           UpdateRequirement(error) == nil,
+           [403, 409, 422].contains(problem.status) {
+            let reason = problem.errors?.first(where: { !$0.detail.isEmpty })?.detail ?? problem.detail
+            self.init(title: "Can't Create Profile",
+                      message: reason.isEmpty ? ErrorState(error).message : reason)
+            return
+        }
+        self.init(message: ErrorState(error).message)
     }
 }
 
@@ -666,15 +752,15 @@ private struct StyleChip: View {
             #if os(tvOS)
             .focusEffectDisabled()
             #endif
-            .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
-            .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isSelected)
+            .animation(.easeOut(duration: PrairieTheme.fastDuration), value: isFocused)
+            .animation(.easeOut(duration: PrairieTheme.fastDuration), value: isSelected)
             .accessibilityLabel(style.label)
             .accessibilityHint(style.summary)
             .accessibilityAddTraits(.isButton)
     }
 
     private var foreground: Color {
-        if isSelected { return Color.continuumBackground }
+        if isSelected { return Color.prairieBackground }
         return Color.white.opacity(isFocused ? 1.0 : 0.75)
     }
 
@@ -730,8 +816,8 @@ private struct PresetCell: View {
             #if os(tvOS)
             .focusEffectDisabled()
             #endif
-            .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
-            .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isSelected)
+            .animation(.easeOut(duration: PrairieTheme.fastDuration), value: isFocused)
+            .animation(.easeOut(duration: PrairieTheme.fastDuration), value: isSelected)
             .accessibilityLabel("Avatar \(preset.seed)")
             .accessibilityAddTraits(.isButton)
     }
@@ -797,7 +883,7 @@ private struct ChildProfileRow: View {
         #if os(tvOS)
         .focusEffectDisabled()
         #endif
-        .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
+        .animation(.easeOut(duration: PrairieTheme.fastDuration), value: isFocused)
         .animation(.spring(response: 0.28, dampingFraction: 0.75), value: isOn)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
@@ -811,12 +897,12 @@ private struct ChildProfileRow: View {
                 .fill(isOn ? Color.white : Color.white.opacity(0.2))
                 .frame(width: switchWidth, height: switchHeight)
             Circle()
-                .fill(isOn ? Color.continuumBackground : Color.white)
+                .fill(isOn ? Color.prairieBackground : Color.white)
                 .frame(width: puckSize, height: puckSize)
                 .padding(4)
         }
     }
 }
 
-// `GhostChipButtonStyle` now lives in `Theme/ContinuumButtonStyles.swift`
+// `GhostChipButtonStyle` now lives in `Theme/PrairieButtonStyles.swift`
 // (shared with `ProfileSelectionView`).

@@ -47,7 +47,7 @@ final class LiveTVChannelListViewInspectorTests: XCTestCase {
         XCTAssertEqual(try message.string(), "Tuner offline")
     }
 
-    func testPopulatedListExposesChannelListAccessibilityId() throws {
+    func testPopulatedListOpensOnTheGuideWithEveryTab() throws {
         let channel = LiveTVChannel(
             id: "ch-1",
             tunerId: "tuner-a",
@@ -64,11 +64,15 @@ final class LiveTVChannelListViewInspectorTests: XCTestCase {
         let view = host(LiveTVChannelListView(
             viewModel: .preview(state: .loaded, channels: [channel])
         ))
-        let channelsTab = try view.inspect().find(viewWithAccessibilityIdentifier: "livetv-tab-channels")
-        try channelsTab.button().tap()
-        let list = try view.inspect().find(viewWithAccessibilityIdentifier: "livetv-channel-list")
-        XCTAssertNotNil(list)
-        let name = try view.inspect().find(text: "KXYZ-HD")
-        XCTAssertEqual(try name.string(), "KXYZ-HD")
+        // ViewInspector inspects a fresh copy of the view, so a tapped tab's
+        // @State does not carry into the next inspection. Check the tab bar
+        // and the Guide tab the list opens on instead.
+        for tab in ["guide", "channels", "recordings"] {
+            XCTAssertNoThrow(try view.inspect().find(viewWithAccessibilityIdentifier: "livetv-tab-\(tab)"), tab)
+        }
+        let guide = try view.inspect().find(viewWithAccessibilityIdentifier: "livetv-guide")
+        XCTAssertNotNil(guide)
+        let noGuide = try view.inspect().find(text: "No guide data")
+        XCTAssertEqual(try noGuide.string(), "No guide data")
     }
 }

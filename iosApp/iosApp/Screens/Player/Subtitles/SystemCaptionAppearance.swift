@@ -1,6 +1,6 @@
 //
 //  SystemCaptionAppearance.swift
-//  Continuum (iOS + tvOS + macOS)
+//  Prairie (iOS + tvOS + macOS)
 //
 //  Maps Apple's Media Accessibility caption preferences (Settings →
 //  Accessibility → Subtitles & Captioning) onto `SubtitleAppearance` so

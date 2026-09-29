@@ -9,18 +9,25 @@ import SwiftUI
 /// next-up Play action, same horizontal episode rail — sized for touch.
 struct SeriesDetailContent<BelowOverview: View>: View {
     let detail: ItemDetail
+    var libraryId: Int? = nil
     let isFavorite: Bool
     let inWatchlist: Bool
     let isWatched: Bool
     let seasons: [Season]
     let selectedSeason: Season?
     let episodes: [EpisodeListItem]
+    let episodeFavoriteStates: [String: Bool]
+    let episodeWatchlistStates: [String: Bool]
     let episodesBySeason: [Int: [EpisodeListItem]]
     let isLoadingEpisodes: Bool
+    let hierarchyError: String?
+    let onRetryHierarchy: () async -> Void
     let selectedNextUpFileId: Int?
     let selectedNextUpAudioTrackIndex: Int?
     let selectedNextUpSubtitleTrackIndex: Int?
     let nextUpWatchDetail: WatchDetail?
+    let isLoadingSelectedEpisodePlayback: Bool
+    let selectedEpisodeContentId: String?
     let onSelectSeason: (Season) -> Void
     let onPlayEpisode: (_ contentId: String, _ fileId: Int?, _ startFromBeginning: Bool) -> Void
     let onEpisodeTap: (String) -> Void
@@ -30,6 +37,10 @@ struct SeriesDetailContent<BelowOverview: View>: View {
     let onToggleFavorite: () -> Void
     let onToggleWatchlist: () -> Void
     let onToggleWatched: () -> Void
+    let onSetSeasonWatched: (Season, Bool) async -> PersonalStateOutcome
+    let onSetEpisodeWatched: (EpisodeListItem, Bool) async -> PersonalStateOutcome
+    let onSetEpisodeFavorite: (String, Bool) async -> PersonalStateOutcome
+    let onSetEpisodeWatchlist: (String, Bool) async -> PersonalStateOutcome
     let onPersonTap: (String) -> Void
     let onNavigateToItem: (String) -> Void
     /// Play a local extra from the trailers rail. Routed separately from
@@ -46,32 +57,98 @@ struct SeriesDetailContent<BelowOverview: View>: View {
     let isFindingTrailers: Bool
     /// Called once a terminal status message has been on screen long enough.
     let onTrailerStatusShown: () -> Void
+    /// Reference-backed scroll state observed only by the small parallax and
+    /// pinned-chrome views, keeping the native ScrollView's body stable.
+    let scrollState: PhoneDetailScrollState
     /// On-view description-translation affordance, built at the detail call
     /// site (which owns the view model) and rendered under the overview.
     @ViewBuilder let belowOverview: () -> BelowOverview
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @State private var showResumeDialog = false
+    @State private var hierarchyRetryTask: Task<Void, Never>?
+    @State private var pendingResumeEpisode: EpisodeListItem?
+    @State private var isUpdatingWatched = false
+    @State private var watchedUpdateFailed = false
+    @State private var watchedNotice: PersonalStateNotice?
+    private struct PendingEpisodePlayRequest: Equatable {
+        let seasonNumber: Int?
+    }
+    /// A tap can arrive before the first episode page finishes hydrating.
+    /// Keep the primary control interactive from frame one and fulfill that
+    /// intent as soon as the target episode is known.
+    @State private var pendingEpisodePlayRequest: PendingEpisodePlayRequest?
 
     var body: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: heroToContentSpacing) {
-                hero
-                belowFold
+        PhoneDetailPageSurface(
+            backdropURL: detail.backdropUrl,
+            backdropThumbhash: detail.backdropThumbhash,
+            enablesArtworkGlass: true
+        ) {
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: heroToContentSpacing) {
+                    hero
+                    belowFold
+                }
+                .padding(.bottom, 40)
             }
-            .padding(.bottom, 40)
+            .ignoresSafeArea(edges: .top)
+            .coordinateSpace(name: PhoneDetailScrollCoordinateSpace.name)
+            #if os(iOS)
+            .environment(\.watchPartyEpisodePreview) { [detail, seasons] episode in
+                WatchPartySelectedItem(previewing: episode, series: detail, seasons: seasons)
+            }
+            #endif
+            .detailScrollDismissal()
+            .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                let offset = max(0, geometry.contentOffset.y + geometry.contentInsets.top)
+                return offset <= 150 ? 0 : min(offset, 480)
+            } action: { _, offset in
+                scrollState.update(offset)
+            }
         }
-        .ignoresSafeArea(edges: .top)
-        .continuumResumePlaybackAlert(
-            isPresented: $showResumeDialog,
+        .prairieResumePlaybackAlert(
+            isPresented: Binding(
+                get: { pendingResumeEpisode != nil },
+                set: { if !$0 { pendingResumeEpisode = nil } }
+            ),
             stoppedAt: resumeTimestamp
         ) {
-            guard let nextUp = nextUpEpisode else { return }
-            onPlayEpisode(nextUp.contentId, selectedFileId(for: nextUp), false)
+            guard let episode = pendingResumeEpisode else { return }
+            onPlayEpisode(episode.contentId, playbackFileId(for: episode), false)
         } onRestart: {
-            guard let nextUp = nextUpEpisode else { return }
-            onPlayEpisode(nextUp.contentId, selectedFileId(for: nextUp), true)
+            guard let episode = pendingResumeEpisode else { return }
+            onPlayEpisode(episode.contentId, playbackFileId(for: episode), true)
         }
+        .onDisappear {
+            hierarchyRetryTask?.cancel()
+            hierarchyRetryTask = nil
+            pendingEpisodePlayRequest = nil
+        }
+        .onChange(of: hierarchyError) { _, error in
+            if error != nil { pendingEpisodePlayRequest = nil }
+        }
+        .onChange(of: nextUpEpisode?.contentId) { _, contentID in
+            guard hierarchyError == nil,
+                  let request = pendingEpisodePlayRequest, contentID != nil,
+                  let episode = nextUpEpisode else { return }
+            if let requestedSeason = request.seasonNumber,
+               episode.seasonNumber != requestedSeason {
+                pendingEpisodePlayRequest = nil
+                return
+            }
+            pendingEpisodePlayRequest = nil
+            handlePlayTap(for: episode)
+        }
+        .onChange(of: isLoadingEpisodes) { _, isLoading in
+            guard !isLoading, nextUpEpisode == nil else { return }
+            pendingEpisodePlayRequest = nil
+        }
+        .alert("Couldn't Update Watched Status", isPresented: $watchedUpdateFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Please check your connection and try again.")
+        }
+        .personalStateNoticeAlert($watchedNotice)
     }
 
     private var heroToContentSpacing: CGFloat {
@@ -83,7 +160,6 @@ struct SeriesDetailContent<BelowOverview: View>: View {
     private var hero: some View {
         PhoneDetailHero(
             title: detail.title,
-            seriesTitle: nil,
             logoUrl: detail.logoUrl,
             posterUrl: detail.posterUrl,
             posterThumbhash: detail.posterThumbhash,
@@ -94,22 +170,36 @@ struct SeriesDetailContent<BelowOverview: View>: View {
             ratingChip: PhoneHeroMetadata.contentRatingChip(from: detail),
             overview: detail.overview,
             factsLine: PhoneHeroMetadata.seriesFactsLine(from: detail),
+            creditText: PhoneHeroMetadata.creditText(from: detail),
             overlayData: OverlayData.from(detail),
+            enablesArtworkParallax: true,
             actions: { actionStack },
-            belowOverview: belowOverview
+            // Match MovieDetailContent exactly through the playback controls:
+            // Play/actions, show overview and credits, translation affordance,
+            // then selectors. Seasons and episodes are the only series-only
+            // extension and begin immediately after this shared hero.
+            belowOverview: {
+                VStack(spacing: 14) {
+                    belowOverview()
+                    playbackSelectorSlot
+                        .opacity(isLoadingEpisodes || nextUpEpisode != nil ? 1 : 0)
+                        .accessibilityHidden(!isLoadingEpisodes && nextUpEpisode == nil)
+                }
+            }
         )
     }
 
     @ViewBuilder
     private var actionStack: some View {
-        VStack(spacing: 16) {
-            if let nextUp = nextUpEpisode {
-                PhoneRefinedPlayButton(
-                    icon: "play.fill",
-                    title: playButtonLabel(for: nextUp),
-                    action: { handlePlayTap(for: nextUp) }
-                )
-            }
+        VStack(spacing: 14) {
+            PhonePrimaryPillButton(
+                icon: "play.fill",
+                title: nextUpEpisode.map(playButtonLabel)
+                    ?? (isLoadingEpisodes ? "Loading episodes…" : "Play"),
+                action: handlePrimaryPlayTap,
+                fullWidth: true
+            )
+            .disabled(nextUpEpisode == nil && !isLoadingEpisodes)
 
             PhoneLabeledActionRow {
                 PhoneLabeledAction(
@@ -134,24 +224,23 @@ struct SeriesDetailContent<BelowOverview: View>: View {
                     icon: "checkmark.circle",
                     iconActive: "checkmark.circle.fill",
                     isActive: isWatched,
-                    label: isWatched ? "Watched" : "Mark Seen",
+                    label: "Watched",
                     accessibilityLabelOverride: isWatched
                         ? "Mark Series Unwatched" : "Mark Series Watched",
                     action: onToggleWatched
                 )
+                .disabled(isUpdatingWatched)
                 if DownloadManager.shared.downloadsEnabled {
-                    // Season downloads and future-episode monitoring live
-                    // behind this control; without it the series page has no
-                    // download entry point at all.
                     SeriesDownloadMenuButton(
                         detail: detail,
+                        libraryId: libraryId,
                         seasons: seasons,
                         selectedSeason: selectedSeason,
+                        episodes: episodes,
+                        episodesBySeason: episodesBySeason,
                         style: .labeled
                     )
                 }
-                // The series page has no other overflow entries today; the
-                // menu exists solely so the trailer fetch is reachable.
                 PhoneLabeledMenu(label: "More") {
                     overflowMenuItems
                 }
@@ -165,47 +254,139 @@ struct SeriesDetailContent<BelowOverview: View>: View {
                 )
             }
 
-            if nextUpEpisode != nil, let effectiveNextUpVersion {
-                nextUpSelectors(for: effectiveNextUpVersion)
-            }
         }
         .frame(maxWidth: .infinity)
         .animation(.easeInOut(duration: 0.18), value: trailerStatusMessage)
     }
 
+    /// A fixed-height selector slot is the anchor that keeps the whole page
+    /// still while a centered episode fetches its version/audio/subtitle data.
+    /// Three 44pt rows are the normal selector footprint. The skeleton uses
+    /// the identical card geometry, so neither the overview nor the episode
+    /// carousel moves between loading and loaded states.
+    private var playbackSelectorSlot: some View {
+        ZStack(alignment: .top) {
+            PhonePlaybackSelectorSkeleton()
+                .opacity(isLoadingSelectedEpisodePlayback || effectiveNextUpVersion == nil ? 1 : 0)
+
+            if let effectiveNextUpVersion {
+                PhonePlaybackSelectorRow(
+                    versions: nextUpVersions,
+                    currentVersion: effectiveNextUpVersion,
+                    selectedVersionFileId: selectedNextUpFileId,
+                    selectedAudioTrackIndex: selectedNextUpAudioTrackIndex,
+                    selectedSubtitleTrackIndex: selectedNextUpSubtitleTrackIndex,
+                    onSelectVersion: onSelectNextUpVersion,
+                    onSelectAudioTrack: onSelectNextUpAudioTrack,
+                    onSelectSubtitleTrack: onSelectNextUpSubtitleTrack
+                )
+                .opacity(isLoadingSelectedEpisodePlayback ? 0 : 1)
+                .allowsHitTesting(!isLoadingSelectedEpisodePlayback)
+            }
+        }
+        .frame(minHeight: PhonePlaybackSelectorSkeleton.standardHeight, alignment: .top)
+        .animation(
+            .easeInOut(duration: 0.16),
+            value: isLoadingSelectedEpisodePlayback
+        )
+        .accessibilityElement(children: isLoadingSelectedEpisodePlayback ? .ignore : .contain)
+        .accessibilityLabel(isLoadingSelectedEpisodePlayback ? "Loading playback options" : "Playback options")
+    }
+
     /// Menu contents for the action row's named "More" entry.
     @ViewBuilder
     private var overflowMenuItems: some View {
+        #if os(iOS)
+        if let episode = nextUpEpisode {
+            WatchPartyMenuButton(contentId: episode.contentId, title: episode.title ?? "Episode", type: "episode",
+                fileId: playbackFileId(for: episode), episode: episode)
+        }
+        #endif
+        if let selectedSeason {
+            Button {
+                setSeasonWatched(selectedSeason, !(selectedSeason.userData?.played ?? false))
+            } label: {
+                Label(
+                    "Mark \(selectedSeason.downloadDisplayName) \(selectedSeason.userData?.played == true ? "Unwatched" : "Watched")",
+                    systemImage: selectedSeason.userData?.played == true ? "circle" : "checkmark.circle"
+                )
+            }
+            .disabled(isUpdatingWatched || selectedSeason.episodeCount == 0)
+            Divider()
+        }
         Button(action: onFindTrailers) {
             Label("Find Trailers", systemImage: "film")
         }
         .disabled(isFindingTrailers)
     }
 
-    private func nextUpSelectors(for version: FileVersion) -> some View {
-        PhonePlaybackSelectorRow(
-            versions: nextUpVersions,
-            currentVersion: version,
-            selectedVersionFileId: selectedNextUpFileId,
-            selectedAudioTrackIndex: selectedNextUpAudioTrackIndex,
-            selectedSubtitleTrackIndex: selectedNextUpSubtitleTrackIndex,
-            onSelectVersion: onSelectNextUpVersion,
-            onSelectAudioTrack: onSelectNextUpAudioTrack,
-            onSelectSubtitleTrack: onSelectNextUpSubtitleTrack
-        )
-    }
-
     private func handlePlayTap(for episode: EpisodeListItem) {
         if episode.userData?.isInProgress == true {
-            showResumeDialog = true
+            pendingResumeEpisode = episode
         } else {
-            onPlayEpisode(episode.contentId, selectedFileId(for: episode), false)
+            onPlayEpisode(episode.contentId, playbackFileId(for: episode), false)
         }
     }
+
+    private func handlePrimaryPlayTap() {
+        guard let nextUpEpisode else {
+            pendingEpisodePlayRequest = PendingEpisodePlayRequest(
+                seasonNumber: selectedSeason?.seasonNumber
+            )
+            return
+        }
+        pendingEpisodePlayRequest = nil
+        handlePlayTap(for: nextUpEpisode)
+    }
+
+    private func handleSeasonSelection(_ season: Season) {
+        pendingEpisodePlayRequest = nil
+        onSelectSeason(season)
+    }
+
+    private func setSeasonWatched(_ season: Season, _ played: Bool) {
+        guard !isUpdatingWatched else { return }
+        isUpdatingWatched = true
+        Task {
+            defer { isUpdatingWatched = false }
+            reportWatchedOutcome(await onSetSeasonWatched(season, played))
+        }
+    }
+
+    private func setEpisodeWatched(_ episode: EpisodeListItem, _ played: Bool) {
+        guard !isUpdatingWatched else { return }
+        isUpdatingWatched = true
+        Task {
+            defer { isUpdatingWatched = false }
+            reportWatchedOutcome(await onSetEpisodeWatched(episode, played))
+        }
+    }
+
+    private func reportWatchedOutcome(_ outcome: PersonalStateOutcome) {
+        switch outcome {
+        case .applied, .skipped: break
+        // An update requirement uses the shared notice, which names the update
+        // instead of asking the viewer to check the connection.
+        case .failed(nil): watchedUpdateFailed = true
+        case .failed, .held: watchedNotice = PersonalStateNotice(outcome)
+        }
+    }
+
+    private func handleEpisodeSelection(_ contentId: String) {
+        pendingEpisodePlayRequest = nil
+        onEpisodeTap(contentId)
+    }
+
     /// Next-up episode for the series Play button: prefer one in
     /// progress, then the first unwatched in the selected season,
     /// then fall back to the first episode we have.
     private var nextUpEpisode: EpisodeListItem? {
+        if let selectedEpisodeContentId,
+           let selected = episodes.first(where: {
+               $0.contentId == selectedEpisodeContentId
+           }) {
+            return selected
+        }
         if let inProgress = episodes.first(where: { $0.userData?.isInProgress == true }) {
             return inProgress
         }
@@ -222,16 +403,24 @@ struct SeriesDetailContent<BelowOverview: View>: View {
     }
 
     private var resumeTimestamp: String {
-        guard let pos = nextUpResumePositionSeconds else { return "0:00" }
+        guard let pos = resumePositionSeconds(for: pendingResumeEpisode) else { return "0:00" }
         return PlayerTimeFormatter.formatHMS(pos)
     }
 
-    private var nextUpResumePositionSeconds: Double? {
-        guard let pos = nextUpEpisode?.userData?.positionSeconds, pos > 30 else { return nil }
-        if let dur = nextUpEpisode?.userData?.durationSeconds, dur > 0, pos >= dur - 5 {
+    private func resumePositionSeconds(for episode: EpisodeListItem?) -> Double? {
+        guard let pos = episode?.userData?.positionSeconds, pos > 30 else { return nil }
+        if let dur = episode?.userData?.durationSeconds, dur > 0, pos >= dur - 5 {
             return nil
         }
         return pos
+    }
+
+    /// Version/audio/subtitle state belongs only to the currently selected
+    /// episode. A centered Play tap on another card starts that episode using
+    /// server defaults instead of leaking the selected episode's track ids.
+    private func playbackFileId(for episode: EpisodeListItem) -> Int? {
+        guard episode.contentId == nextUpEpisode?.contentId else { return nil }
+        return selectedFileId(for: episode)
     }
 
     private func selectedFileId(for episode: EpisodeListItem) -> Int? {
@@ -270,7 +459,7 @@ struct SeriesDetailContent<BelowOverview: View>: View {
             }
             trailersSection
             detailsSection
-                .padding(.horizontal, ContinuumTheme.safePadding)
+                .padding(.horizontal, PrairieTheme.safePadding)
             similarSection
         }
     }
@@ -310,23 +499,85 @@ struct SeriesDetailContent<BelowOverview: View>: View {
     @ViewBuilder
     private var episodesSection: some View {
         VStack(alignment: .leading, spacing: 14) {
+            if seasons.isEmpty {
+                HStack(spacing: 10) {
+                    ForEach(0..<3) { _ in
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(.secondary.opacity(0.12))
+                            .frame(width: 100, height: 36)
+                    }
+                }
+                .padding(.vertical, 4)
+                .padding(.horizontal, PrairieTheme.safePadding)
+                .opacity(isLoadingEpisodes ? 1 : 0)
+                .accessibilityHidden(!isLoadingEpisodes)
+                .accessibilityLabel("Loading seasons")
+            } else {
+                PhoneSeasonChips(
+                    seasons: seasons,
+                    selected: selectedSeason,
+                    onSelect: handleSeasonSelection,
+                    onSetWatched: setSeasonWatched,
+                    isUpdatingWatched: isUpdatingWatched
+                )
+            }
+
             PhoneSectionHeader(
-                label: selectedSeason.map { "Season \($0.seasonNumber)" } ?? "Episodes",
-                title: "Episodes",
+                title: episodeSectionTitle,
                 trailingText: episodeCountSubtitle
             )
-            .padding(.horizontal, ContinuumTheme.safePadding)
+            .padding(.horizontal, PrairieTheme.safePadding)
 
-            PhoneSeasonEpisodeBrowser(
-                seasons: seasons,
-                selectedSeason: selectedSeason,
-                episodes: episodes,
-                episodesBySeason: episodesBySeason,
-                isLoadingEpisodes: isLoadingEpisodes,
-                onSelectSeason: onSelectSeason,
-                onSelectEpisode: onEpisodeTap
-            )
+            ZStack(alignment: .topLeading) {
+                PhoneEpisodeRailSkeleton(captionStyleOverride: .titleMetadata)
+                    .hidden()
+                VStack(alignment: .leading, spacing: 14) {
+                    if let hierarchyError {
+                        HStack {
+                            Text(hierarchyError)
+                            Button("Retry") {
+                                pendingEpisodePlayRequest = nil
+                                hierarchyRetryTask?.cancel()
+                                hierarchyRetryTask = Task { await onRetryHierarchy() }
+                            }
+                        }
+                        .padding(.horizontal, PrairieTheme.safePadding)
+                    }
+
+                    if hierarchyError == nil && !isLoadingEpisodes && seasons.isEmpty {
+                        Text("No episodes available")
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, PrairieTheme.safePadding)
+                    } else if hierarchyError == nil || !episodes.isEmpty {
+                        PhoneEpisodeCarousel(
+                            episodes: episodes,
+                            isLoading: isLoadingEpisodes,
+                            onSelect: handleEpisodeSelection,
+                            onPlay: { contentId in
+                                guard let episode = episodes.first(where: {
+                                    $0.contentId == contentId
+                                }) else { return }
+                                handlePlayTap(for: episode)
+                            },
+                            currentContentId: nextUpEpisode?.contentId,
+                            selectsCenteredEpisode: true,
+                            captionStyleOverride: .titleMetadata,
+                            onSetWatched: setEpisodeWatched,
+                            isUpdatingWatched: isUpdatingWatched,
+                            favoriteStates: episodeFavoriteStates,
+                            watchlistStates: episodeWatchlistStates,
+                            onSetFavorite: onSetEpisodeFavorite,
+                            onSetWatchlist: onSetEpisodeWatchlist
+                        )
+                    }
+                }
+            }
         }
+    }
+
+    private var episodeSectionTitle: String {
+        guard let selectedSeason else { return "Episodes" }
+        return "\(selectedSeason.downloadDisplayName) Episodes"
     }
 
     private var episodeCountSubtitle: String? {
@@ -340,7 +591,7 @@ struct SeriesDetailContent<BelowOverview: View>: View {
     private func castSection(cast: [CastMember]) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             PhoneSectionHeader(title: "Cast & Crew")
-                .padding(.horizontal, ContinuumTheme.safePadding)
+                .padding(.horizontal, PrairieTheme.safePadding)
             PhoneCastRail(cast: cast, onTap: onPersonTap)
         }
     }

@@ -38,6 +38,7 @@ struct DownloadsView: View {
                 content
             }
         }
+        .prairiePageBackground()
         .navigationTitle(isSelecting ? "\(selection.count) Selected" : "Downloads")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.large)
@@ -63,7 +64,7 @@ struct DownloadsView: View {
             }
             Button("Cancel", role: .cancel) {}
         }
-        .continuumToolbarColorSchemeDark()
+        .prairieToolbarColorSchemeDark()
     }
 
     // MARK: - Content
@@ -79,26 +80,26 @@ struct DownloadsView: View {
         VStack(spacing: 12) {
             Image(systemName: "arrow.down.circle")
                 .font(.system(size: 44))
-                .foregroundColor(.continuumOnSurface.opacity(0.3))
+                .foregroundColor(.prairieOnSurface.opacity(0.3))
             Text("No Downloads")
-                .font(.continuumSubheadline)
-                .foregroundColor(.continuumOnSurface)
+                .font(.prairieSubheadline)
+                .foregroundColor(.prairieOnSurface)
             Text("Downloaded movies and episodes appear here for offline viewing.")
-                .font(.continuumCaption)
-                .foregroundColor(.continuumSecondaryText)
+                .font(.prairieCaption)
+                .foregroundColor(.prairieSecondaryText)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, ContinuumTheme.largePadding)
+                .padding(.horizontal, PrairieTheme.largePadding)
             Button {
                 router.switchTab(to: .libraries)
             } label: {
                 Text("Browse Libraries")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(.continuumOnSurface)
+                    .foregroundColor(.prairieOnSurface)
                     .padding(.horizontal, 18)
                     .padding(.vertical, 10)
                     .background(
-                        Capsule().fill(Color.continuumChromeSelectedFill)
-                            .overlay(Capsule().stroke(Color.continuumChromeSelectedBorder, lineWidth: 1))
+                        Capsule().fill(Color.prairieChromeSelectedFill)
+                            .overlay(Capsule().stroke(Color.prairieChromeSelectedBorder, lineWidth: 1))
                     )
             }
             .buttonStyle(.plain)
@@ -166,7 +167,6 @@ struct DownloadsView: View {
             .padding(.bottom, 8)
             .animation(.easeInOut(duration: 0.2), value: isSelecting)
         }
-        .background(Color.continuumBackground)
     }
 
     @ViewBuilder
@@ -236,16 +236,16 @@ struct DownloadsView: View {
         HStack(spacing: 12) {
             Image(systemName: "antenna.radiowaves.left.and.right")
                 .font(.system(size: 17))
-                .foregroundColor(.continuumOnSurface)
+                .foregroundColor(.prairieOnSurface)
                 .frame(width: 40, height: 40)
             VStack(alignment: .leading, spacing: 3) {
                 Text(subscription.seriesTitle ?? subscription.seriesId)
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundColor(.continuumOnSurface)
+                    .foregroundColor(.prairieOnSurface)
                     .lineLimit(1)
                 Text(SubscriptionMode(rawValue: subscription.mode)?.displayName ?? subscription.mode)
                     .font(.system(size: 12))
-                    .foregroundColor(.continuumSecondaryText)
+                    .foregroundColor(.prairieSecondaryText)
             }
             Spacer(minLength: 8)
         }
@@ -253,10 +253,10 @@ struct DownloadsView: View {
         .padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color.continuumSurfaceVariant)
+                .fill(Color.prairieSurfaceVariant)
                 .overlay(
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(Color.continuumOutline, lineWidth: 1)
+                        .stroke(Color.prairieOutline, lineWidth: 1)
                 )
         )
         .padding(.horizontal, 16)
@@ -274,11 +274,11 @@ struct DownloadsView: View {
             Text(text.uppercased())
                 .font(.system(size: 12.5, weight: .semibold))
                 .tracking(0.3)
-                .foregroundColor(.continuumSecondaryText)
+                .foregroundColor(.prairieSecondaryText)
             Spacer()
             Text("\(count)")
                 .font(.system(size: 12.5))
-                .foregroundColor(.continuumOnSurface.opacity(0.38))
+                .foregroundColor(.prairieOnSurface.opacity(0.38))
         }
         .padding(.horizontal, 22)
         .padding(.top, 14)
@@ -323,7 +323,7 @@ struct DownloadsView: View {
                 .font(.system(size: 15))
                 .frame(maxWidth: .infinity)
                 .frame(height: 50)
-                .background(Color.continuumOnSurface)
+                .background(Color.prairieOnSurface)
                 .foregroundColor(.black)
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             }

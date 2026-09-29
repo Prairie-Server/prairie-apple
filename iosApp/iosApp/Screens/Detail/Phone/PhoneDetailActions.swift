@@ -8,28 +8,57 @@ import SwiftUI
 ///
 /// `fullWidth` lets the button expand to its container — used in the
 /// Apple-TV-style centered hero where Play is the dominant CTA.
+///
+/// `progress` (0...1) draws a thin track along the bottom of the pill for
+/// items resumed from a saved position, such as a half-listened audiobook.
 struct PhonePrimaryPillButton: View {
     let icon: String
     let title: String
     let action: () -> Void
     var fullWidth: Bool = false
+    var progress: Double? = nil
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 10) {
                 Image(systemName: icon)
-                    .font(.system(size: 17, weight: .bold))
+                    .font(.body.bold())
                 Text(title)
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.body.weight(.semibold))
                     .lineLimit(1)
             }
             .foregroundColor(.black)
             .frame(maxWidth: fullWidth ? .infinity : nil)
             .padding(.horizontal, fullWidth ? 24 : 24)
-            .frame(height: 52)
-            .background(Capsule().fill(Color.white))
+            .padding(.vertical, 12)
+            .frame(minHeight: 52)
+            .background {
+                ZStack {
+                    Capsule().fill(Color.white)
+                    if let progress, progress > 0 {
+                        progressTrack(progress)
+                    }
+                }
+            }
         }
         .buttonStyle(.plain)
+    }
+
+    private func progressTrack(_ progress: Double) -> some View {
+        GeometryReader { geometry in
+            let width = max(0, geometry.size.width - 48)
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.black.opacity(0.14))
+                Capsule()
+                    .fill(Color.black.opacity(0.78))
+                    .frame(width: max(4, width * min(1, progress)))
+            }
+            .frame(width: width, height: 3)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            .padding(.bottom, 6)
+        }
+        .accessibilityHidden(true)
     }
 }
 
@@ -66,7 +95,7 @@ struct PhoneCircleActionButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: resolvedIcon)
-                .font(.system(size: 16, weight: .semibold))
+                .font(.callout.weight(.semibold))
                 .foregroundColor(.white)
                 .frame(width: 44, height: 44)
                 .background(
@@ -110,7 +139,7 @@ struct PhoneCircleMenuButton<MenuContent: View>: View {
             menu()
         } label: {
             Image(systemName: icon)
-                .font(.system(size: 16, weight: .semibold))
+                .font(.callout.weight(.semibold))
                 .foregroundColor(.white)
                 .frame(width: 44, height: 44)
                 .background(

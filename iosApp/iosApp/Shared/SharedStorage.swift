@@ -24,26 +24,64 @@ enum SharedStorage {
     static let keychainAccessGroup = RuntimeConfiguration.sharedKeychainAccessGroup
 
     /// Shared Keychain service name. Same on both sides.
-    static let keychainService = "com.continuum.app"
+    static let keychainService = "org.prairieserver.prairie"
+
+    /// Every Keychain account the apps own starts with this prefix.
+    static let keychainAccountPrefix = "org.prairieserver.prairie."
+
+    /// Builds before the continuum → prairie rename stored every item under
+    /// this service, with `com.continuum.` where accounts now use
+    /// `keychainAccountPrefix`. `SharedKeychain`
+    /// moves an item to its current name the first time it is read, so
+    /// whichever process runs first after an update (app or extension)
+    /// migrates it.
+    static let legacyKeychainService = "com.continuum.app"
+    static let legacyKeychainAccountPrefix = "com.continuum."
+
+    /// The account that held `account` under the legacy service.
+    static func legacyKeychainAccount(for account: String) -> String {
+        if account.hasPrefix(keychainAccountPrefix) {
+            return legacyKeychainAccountPrefix + account.dropFirst(keychainAccountPrefix.count)
+        }
+        // Unprefixed names (`watchParty.recent.v1`) and names read as-is from
+        // before the rename (the single-server tokens `ServerRegistry`
+        // migrates) keep their account under the legacy service.
+        return account
+    }
 
     /// Stable account names for the mirrored active-server tokens.
-    static let mirroredAccessTokenAccount = "com.continuum.topshelf.accessToken"
-    static let mirroredProfileTokenAccount = "com.continuum.topshelf.profileToken"
+    static let mirroredAccessTokenAccount = keychainAccountPrefix + "topshelf.accessToken"
+    static let mirroredProfileTokenAccount = keychainAccountPrefix + "topshelf.profileToken"
+
+    /// Long-lived, profile-scoped token the server returns from Apple push
+    /// registration. The Notification Service extension prefers it over the
+    /// mirrored access token because it cannot refresh an expired one.
+    /// Written by `ApplePushRegistrationCoordinator`, cleared with the mirrors.
+    static let applePushDisplayTokenAccount = keychainAccountPrefix + "push.displayToken"
+    /// App Group defaults key: RFC 3339 expiry of the stored display token,
+    /// used by the app to renew it before the extension starts sending an
+    /// expired credential. Not read by the extension.
+    static let applePushDisplayTokenExpiresAtKey = "applePush.displayTokenExpiresAt"
+    /// App Group defaults key: registry id of the server the stored display
+    /// token was minted for. `TokenStore` clears the token only when the
+    /// active server actually changes, not when the actor rehydrates the
+    /// same persisted server on a cold launch.
+    static let applePushDisplayTokenServerIdKey = "applePush.displayTokenServerId"
 
     static func accessTokenAccount(for serverID: String) -> String {
-        "com.continuum.\(serverID).accessToken"
+        keychainAccountPrefix + "\(serverID).accessToken"
     }
 
     static func refreshTokenAccount(for serverID: String) -> String {
-        "com.continuum.\(serverID).refreshToken"
+        keychainAccountPrefix + "\(serverID).refreshToken"
     }
 
     static func profileTokenAccount(for serverID: String) -> String {
-        "com.continuum.\(serverID).profileToken"
+        keychainAccountPrefix + "\(serverID).profileToken"
     }
 
     static func accountEpochAccount(for serverID: String) -> String {
-        "com.continuum.\(serverID).accountEpoch"
+        keychainAccountPrefix + "\(serverID).accountEpoch"
     }
 
     /// UserDefaults keys shared between the app and the Top Shelf
@@ -69,34 +107,90 @@ enum SharedStorage {
     }
 }
 
+enum SideloadKeychainFallbackPolicy {
+    private static let canonicalAccessGroup = "org.prairieserver.prairie.shared"
+
+    static func isEnabled(buildChannel: String, isPreIOS26: Bool) -> Bool {
+        buildChannel == "sideload" && isPreIOS26
+    }
+
+    static func resolvedAccessGroup(
+        from configuredValue: String,
+        allowsUnprefixedSideloadGroup: Bool
+    ) -> String? {
+        if configuredValue.hasSuffix(".\(canonicalAccessGroup)") {
+            return configuredValue
+        }
+        if allowsUnprefixedSideloadGroup,
+           configuredValue == canonicalAccessGroup {
+            return configuredValue
+        }
+        return nil
+    }
+
+    static func teamPrefix(from resolvedAccessGroup: String) -> String? {
+        let sharedGroupSuffix = ".\(canonicalAccessGroup)"
+        guard resolvedAccessGroup.hasSuffix(sharedGroupSuffix) else { return nil }
+        return String(resolvedAccessGroup.dropLast(sharedGroupSuffix.count)) + "."
+    }
+}
+
 private enum RuntimeConfiguration {
     private static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "com.continuum.app",
+        subsystem: Bundle.main.bundleIdentifier ?? "org.prairieserver.prairie",
         category: "RuntimeConfiguration"
     )
 
+    /// Third-party re-signers commonly cannot preserve Prairie's shared
+    /// Keychain entitlement. On legacy iOS, keep core authentication usable
+    /// by allowing the explicitly stamped sideload build to use the app's
+    /// implicit Keychain group when Security reports that exact mismatch.
+    /// Release/dev builds, iOS 26+, tvOS, and macOS retain the shared-only
+    /// behavior.
+    static let allowsAppLocalKeychainFallback: Bool = {
+        #if os(iOS) && !DEBUG
+        let rawChannel = Bundle.main.object(forInfoDictionaryKey: "PrairieBuildChannel") as? String
+        let buildChannel = rawChannel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let isPreIOS26: Bool
+        if #available(iOS 26.0, *) {
+            isPreIOS26 = false
+        } else {
+            isPreIOS26 = true
+        }
+        return SideloadKeychainFallbackPolicy.isEnabled(
+            buildChannel: buildChannel,
+            isPreIOS26: isPreIOS26
+        )
+        #else
+        return false
+        #endif
+    }()
+
     static let sharedKeychainAccessGroup: String? = {
         guard let group = Bundle.main.object(
-            forInfoDictionaryKey: "ContinuumKeychainAccessGroup"
+            forInfoDictionaryKey: "PrairieKeychainAccessGroup"
         ) as? String else {
-            logger.error("Missing ContinuumKeychainAccessGroup Info.plist value; shared auth tokens may not persist.")
+            logger.error("Missing PrairieKeychainAccessGroup Info.plist value; shared auth tokens may not persist.")
             return nil
         }
-        if group.hasSuffix(".org.prairieserver.prairie.shared") {
-            return group
+        if let resolved = SideloadKeychainFallbackPolicy.resolvedAccessGroup(
+            from: group,
+            allowsUnprefixedSideloadGroup: allowsAppLocalKeychainFallback
+        ) {
+            return resolved
         }
-        logger.error("Unexpected ContinuumKeychainAccessGroup value: \(group, privacy: .public)")
+        logger.error("Unexpected PrairieKeychainAccessGroup value: \(group, privacy: .public)")
         return nil
     }()
 
     static let usesUserIndependentKeychain: Bool = {
         if let value = Bundle.main.object(
-            forInfoDictionaryKey: "ContinuumUsesUserIndependentKeychain"
+            forInfoDictionaryKey: "PrairieUsesUserIndependentKeychain"
         ) as? Bool {
             return value
         }
         guard let value = Bundle.main.object(
-            forInfoDictionaryKey: "ContinuumUsesUserIndependentKeychain"
+            forInfoDictionaryKey: "PrairieUsesUserIndependentKeychain"
         ) as? String else {
             return false
         }
@@ -105,10 +199,10 @@ private enum RuntimeConfiguration {
 
     static let legacyTeamPrefix: String? = {
         if let group = sharedKeychainAccessGroup,
-           let dot = group.firstIndex(of: ".") {
-            return String(group[...dot])
+           let prefix = SideloadKeychainFallbackPolicy.teamPrefix(from: group) {
+            return prefix
         }
-        logger.error("Could not derive team prefix from ContinuumKeychainAccessGroup; legacy keychain migration will only try the default access group.")
+        logger.error("Could not derive team prefix from PrairieKeychainAccessGroup; legacy keychain migration will only try the default access group.")
         return nil
     }()
 }
@@ -200,10 +294,11 @@ final class InMemoryKeychainStore: @unchecked Sendable {
         return values[Self.storageKey(service: service, account: account, accessGroup: accessGroup)]
     }
 
-    func delete(service: String, account: String, accessGroup: String?) {
+    @discardableResult
+    func delete(service: String, account: String, accessGroup: String?) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        values.removeValue(forKey: Self.storageKey(service: service, account: account, accessGroup: accessGroup))
+        return values.removeValue(forKey: Self.storageKey(service: service, account: account, accessGroup: accessGroup)) != nil
     }
 }
 
@@ -214,7 +309,7 @@ final class InMemoryKeychainStore: @unchecked Sendable {
 /// it on the Home Screen (i.e. before any user interaction with the app).
 struct SharedKeychain {
     private static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "com.continuum.app",
+        subsystem: Bundle.main.bundleIdentifier ?? "org.prairieserver.prairie",
         category: "SharedKeychain"
     )
 
@@ -222,19 +317,29 @@ struct SharedKeychain {
     let accessGroup: String?
     let audience: KeychainAudience
     let usesUserIndependentKeychain: Bool
+    let allowsAppLocalFallback: Bool
+    /// Service that held this keychain's items before the continuum → prairie
+    /// rename. Defaults to the legacy service only for the shared service,
+    /// so isolated test keychains never read real legacy items.
+    let legacyService: String?
     /// When non-nil, all reads/writes go through this store instead of `SecItem`.
-    private let memoryStore: InMemoryKeychainStore?
+    let memoryStore: InMemoryKeychainStore?
 
     init(service: String = SharedStorage.keychainService,
          accessGroup: String? = SharedStorage.keychainAccessGroup,
          audience: KeychainAudience = .currentUser,
          usesUserIndependentKeychain: Bool = RuntimeConfiguration.usesUserIndependentKeychain,
+         allowsAppLocalFallback: Bool = RuntimeConfiguration.allowsAppLocalKeychainFallback,
+         legacyService: String? = nil,
          memoryStore: InMemoryKeychainStore? = nil) {
+        self.memoryStore = memoryStore
         self.service = service
         self.accessGroup = accessGroup
         self.audience = audience
         self.usesUserIndependentKeychain = usesUserIndependentKeychain
-        self.memoryStore = memoryStore
+        self.allowsAppLocalFallback = allowsAppLocalFallback
+        self.legacyService = legacyService
+            ?? (service == SharedStorage.keychainService ? SharedStorage.legacyKeychainService : nil)
     }
 
     /// Convenience for unit tests that must not depend on code signing /
@@ -252,6 +357,8 @@ struct SharedKeychain {
             accessGroup: accessGroup,
             audience: audience,
             usesUserIndependentKeychain: usesUserIndependentKeychain,
+            allowsAppLocalFallback: allowsAppLocalFallback,
+            legacyService: legacyService,
             memoryStore: memoryStore
         )
     }
@@ -261,46 +368,105 @@ struct SharedKeychain {
     /// a successful re-save) must gate the delete on this return value.
     @discardableResult
     func set(_ value: String, for account: String) -> Bool {
-        if let memoryStore {
-            memoryStore.set(value, service: service, account: account, accessGroup: accessGroup)
-            return true
-        }
         guard let data = value.data(using: .utf8) else {
             Self.logger.error("Failed to encode keychain value for account \(account, privacy: .public).")
             return false
         }
-        var query = baseQuery(account: account)
-        let attributes: [String: Any] = [
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
-        ]
-        let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
-        if updateStatus == errSecSuccess { return true }
-        if updateStatus != errSecItemNotFound {
-            Self.logger.error("Keychain update failed for account \(account, privacy: .public): status=\(updateStatus, privacy: .public)")
+        let status = write(data, for: account, accessGroup: accessGroup)
+        if status == errSecSuccess {
+            // A value written under the current name supersedes any copy
+            // still held under the pre-rename name.
+            deleteLegacyName(of: account)
+            return true
+        }
+        if shouldUseAppLocalFallback(for: status) {
+            let fallbackStatus = write(data, for: account, accessGroup: nil)
+            if fallbackStatus == errSecSuccess {
+                Self.logger.notice("Shared Keychain entitlement unavailable; wrote app-local value.")
+                deleteLegacyName(of: account)
+                return true
+            }
+            Self.logger.error("App-local Keychain fallback write failed: status=\(fallbackStatus, privacy: .public)")
             return false
         }
-        query.merge(attributes) { _, new in new }
-        let addStatus = SecItemAdd(query as CFDictionary, nil)
-        if addStatus == errSecSuccess { return true }
-        Self.logger.error("Keychain add failed for account \(account, privacy: .public): status=\(addStatus, privacy: .public)")
+        Self.logger.error("Keychain write failed for account \(account, privacy: .public): status=\(status, privacy: .public)")
         return false
     }
 
-    func get(_ account: String) -> String? {
-        if let memoryStore {
-            return memoryStore.get(service: service, account: account, accessGroup: accessGroup)
+    /// A strict read that failed with a Keychain status other than success or
+    /// item-not-found. Carries the `OSStatus` so the cause survives the throw.
+    struct ReadError: Error, CustomStringConvertible {
+        let status: OSStatus
+        var description: String { "keychain_read_failed(status=\(status))" }
+    }
+
+    /// Strict reads for canonical authority. A locked/inaccessible keychain is
+    /// not an absent record and must never authorize a legacy fallback.
+    func getChecked(_ account: String) throws -> String? {
+        if let value = try getCheckedUnderCurrentName(account) { return value }
+        guard let legacy = legacyName(for: account),
+              let value = try legacy.keychain.getCheckedUnderCurrentName(legacy.account) else { return nil }
+        switch move(legacy, to: account) {
+        case .moved:
+            return value
+        case .alreadyPresent, .vanished:
+            // Another process moved, wrote, or deleted the item meanwhile;
+            // the current name is authoritative, even when it is now empty.
+            return try getCheckedUnderCurrentName(account)
+        case .failed:
+            return value
         }
-        if let found = read(account: account, accessGroup: accessGroup) {
+    }
+
+    private func getCheckedUnderCurrentName(_ account: String) throws -> String? {
+        let configured = readResult(account: account, accessGroup: accessGroup)
+        if configured.status == errSecSuccess { return configured.value }
+        if shouldUseAppLocalFallback(for: configured.status) {
+            let fallback = readResult(account: account, accessGroup: nil)
+            guard fallback.status == errSecSuccess || fallback.status == errSecItemNotFound else {
+                Self.logger.error("App-local Keychain fallback checked read failed: status=\(fallback.status, privacy: .public)")
+                throw ReadError(status: fallback.status)
+            }
+            return fallback.value
+        }
+        guard configured.status == errSecItemNotFound else {
+            Self.logger.error("Keychain checked read failed: status=\(configured.status, privacy: .public)")
+            throw ReadError(status: configured.status)
+        }
+        return nil
+    }
+
+    func get(_ account: String) -> String? {
+        let configuredRead = readResult(account: account, accessGroup: accessGroup)
+        if let found = configuredRead.value {
             return found
+        }
+        if shouldUseAppLocalFallback(for: configuredRead.status) {
+            let fallbackRead = readResult(account: account, accessGroup: nil)
+            if fallbackRead.status != errSecSuccess,
+               fallbackRead.status != errSecItemNotFound {
+                Self.logger.error("App-local Keychain fallback read failed: status=\(fallbackRead.status, privacy: .public)")
+            }
+            // The app-local group is the active store for this build. Return
+            // directly instead of passing through legacy migration, which
+            // would otherwise delete the same value it just found.
+            return fallbackRead.value ?? adoptLegacyName(of: account)
+        }
+        // Every item lived under its pre-rename name in this same audience
+        // until the rename, so that copy is authoritative over the older
+        // locations below.
+        if let renamed = adoptLegacyName(of: account) {
+            return renamed
         }
         #if os(tvOS)
         // Account credentials written before Runs-as-Current-User were stored
         // in the ordinary persona Keychain. Copy them into the shared account
         // audience only after a verified write, then retire that one legacy
         // copy. Profile tokens never take this path because their audience is
-        // intentionally current-user scoped.
-        if audience == .userIndependent {
+        // intentionally current-user scoped. Without the user-independent
+        // Keychain both audiences address the same item, so there is nothing
+        // to move — and deleting the "legacy" copy would delete the item.
+        if audience == .userIndependent, usesUserIndependentKeychain {
             let legacyKeychain = withAudience(.currentUser)
             if let legacy = legacyKeychain.get(account) {
                 if set(legacy, for: account) {
@@ -344,32 +510,201 @@ struct SharedKeychain {
         return groups
     }
 
+    /// Removes the item under both its current and its pre-rename name, so a
+    /// signed-out token can't come back through the legacy read path.
+    ///
+    /// The legacy name goes first: another process may be renaming the item
+    /// at the same time (`move`), and a rename either lands before this
+    /// delete reaches the current name or finds nothing left to rename.
     @discardableResult
     func delete(_ account: String) -> Bool {
-        if let memoryStore {
-            memoryStore.delete(service: service, account: account, accessGroup: accessGroup)
-            return true
+        let legacyRemoved = legacyName(for: account).map { $0.keychain.deleteUnderCurrentName($0.account) } ?? true
+        return deleteUnderCurrentName(account) && legacyRemoved
+    }
+
+    @discardableResult
+    private func deleteUnderCurrentName(_ account: String) -> Bool {
+        let status = deleteStatus(account: account, accessGroup: accessGroup)
+        if status == errSecSuccess || status == errSecItemNotFound {
+            guard allowsAppLocalFallback, accessGroup != nil else { return true }
+            let cleanupStatus = deleteStatus(account: account, accessGroup: nil)
+            if cleanupStatus == errSecSuccess || cleanupStatus == errSecItemNotFound {
+                return true
+            }
+            Self.logger.error("App-local Keychain cleanup failed: status=\(cleanupStatus, privacy: .public)")
+            return false
         }
-        let query = baseQuery(account: account)
-        let status = SecItemDelete(query as CFDictionary)
-        if status == errSecSuccess || status == errSecItemNotFound { return true }
+        if shouldUseAppLocalFallback(for: status) {
+            let fallbackStatus = deleteStatus(account: account, accessGroup: nil)
+            if fallbackStatus == errSecSuccess || fallbackStatus == errSecItemNotFound {
+                Self.logger.notice("Shared Keychain entitlement unavailable; deleted app-local value.")
+                return true
+            }
+            Self.logger.error("App-local Keychain fallback delete failed: status=\(fallbackStatus, privacy: .public)")
+            return false
+        }
         Self.logger.error("Keychain delete failed for account \(account, privacy: .public): status=\(status, privacy: .public)")
         return false
+    }
+
+    // MARK: - Pre-rename names
+
+    private enum MoveOutcome { case moved, alreadyPresent, vanished, failed }
+
+    /// The keychain and account that held `account` before the rename.
+    private func legacyName(for account: String) -> (keychain: SharedKeychain, account: String)? {
+        guard let legacyService, legacyService != service else { return nil }
+        let legacyAccount = SharedStorage.legacyKeychainAccount(for: account)
+        let keychain = SharedKeychain(
+            service: legacyService,
+            accessGroup: accessGroup,
+            audience: audience,
+            usesUserIndependentKeychain: usesUserIndependentKeychain,
+            allowsAppLocalFallback: allowsAppLocalFallback,
+            legacyService: legacyService,
+            memoryStore: memoryStore
+        )
+        return (keychain, legacyAccount)
+    }
+
+    /// Moves the item held under the pre-rename name, if any, to the current
+    /// name and returns its value.
+    private func adoptLegacyName(of account: String) -> String? {
+        guard let legacy = legacyName(for: account),
+              let value = legacy.keychain.get(legacy.account) else { return nil }
+        switch move(legacy, to: account) {
+        case .moved:
+            return value
+        case .alreadyPresent, .vanished:
+            // Another process moved, wrote, or deleted the item meanwhile;
+            // the current name is authoritative, even when it is now empty.
+            let current = readResult(account: account, accessGroup: accessGroup)
+            if let found = current.value { return found }
+            guard shouldUseAppLocalFallback(for: current.status) else { return nil }
+            return readResult(account: account, accessGroup: nil).value
+        case .failed:
+            // Keep serving the legacy copy; the next read retries the move.
+            return value
+        }
+    }
+
+    private func deleteLegacyName(of account: String) {
+        guard let legacy = legacyName(for: account) else { return }
+        legacy.keychain.deleteUnderCurrentName(legacy.account)
+    }
+
+    /// Renames the item held under the pre-rename name to `account` in
+    /// place. A rename is atomic, so it can't race a sign-out or another
+    /// process's write into a stale or resurrected value: it either lands
+    /// before them or finds its source already gone. It never overwrites an
+    /// item already under the current name.
+    private func move(_ legacy: (keychain: SharedKeychain, account: String), to account: String) -> MoveOutcome {
+        var status = rename(legacy, to: account, accessGroup: accessGroup)
+        if shouldUseAppLocalFallback(for: status) {
+            status = rename(legacy, to: account, accessGroup: nil)
+        }
+        switch status {
+        case errSecSuccess:
+            return .moved
+        case errSecDuplicateItem:
+            return .alreadyPresent
+        case errSecItemNotFound:
+            return .vanished
+        default:
+            Self.logger.error("Keychain rename migration failed for account \(account, privacy: .public): status=\(status, privacy: .public)")
+            return .failed
+        }
+    }
+
+    private func rename(
+        _ legacy: (keychain: SharedKeychain, account: String),
+        to account: String,
+        accessGroup: String?
+    ) -> OSStatus {
+        if let memoryStore {
+            guard let value = memoryStore.get(service: legacy.keychain.service, account: legacy.account, accessGroup: accessGroup) else {
+                return errSecItemNotFound
+            }
+            if memoryStore.get(service: service, account: account, accessGroup: accessGroup) != nil {
+                return errSecDuplicateItem
+            }
+            memoryStore.set(value, service: service, account: account, accessGroup: accessGroup)
+            memoryStore.delete(service: legacy.keychain.service, account: legacy.account, accessGroup: accessGroup)
+            return errSecSuccess
+        }
+        let query = legacy.keychain.baseQuery(account: legacy.account, accessGroup: accessGroup)
+        let attributes: [String: Any] = [
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+        return SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
     }
 
     // MARK: - Private
 
     private func read(account: String, accessGroup: String?) -> String? {
+        readResult(account: account, accessGroup: accessGroup).value
+    }
+
+    /// `errSecDecode` is reported when the item exists but its payload is not
+    /// UTF-8 text, so a strict reader can tell a corrupt record from an absent
+    /// one. The lenient `get` treats both as "no value", as before.
+    private func readResult(account: String, accessGroup: String?) -> (status: OSStatus, value: String?) {
+        if let memoryStore {
+            let value = memoryStore.get(service: service, account: account, accessGroup: accessGroup)
+            return (value == nil ? errSecItemNotFound : errSecSuccess, value)
+        }
         var query = baseQuery(account: account, accessGroup: accessGroup)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        guard status == errSecSuccess, let data = result as? Data else {
+            return (status, nil)
+        }
+        guard let value = String(data: data, encoding: .utf8) else {
+            return (errSecDecode, nil)
+        }
+        return (status, value)
+    }
+
+    private func write(_ data: Data, for account: String, accessGroup: String?) -> OSStatus {
+        if let memoryStore {
+            guard let value = String(data: data, encoding: .utf8) else { return errSecParam }
+            memoryStore.set(value, service: service, account: account, accessGroup: accessGroup)
+            return errSecSuccess
+        }
+        var query = baseQuery(account: account, accessGroup: accessGroup)
+        let attributes: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+        ]
+        let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        guard updateStatus == errSecItemNotFound else { return updateStatus }
+        query.merge(attributes) { _, new in new }
+        return SecItemAdd(query as CFDictionary, nil)
+    }
+
+    private func deleteStatus(account: String, accessGroup: String?) -> OSStatus {
+        if let memoryStore {
+            return memoryStore.delete(service: service, account: account, accessGroup: accessGroup)
+                ? errSecSuccess : errSecItemNotFound
+        }
+        let query = baseQuery(account: account, accessGroup: accessGroup)
+        return SecItemDelete(query as CFDictionary)
+    }
+
+    private func shouldUseAppLocalFallback(for status: OSStatus) -> Bool {
+        allowsAppLocalFallback
+            && accessGroup != nil
+            && status == errSecMissingEntitlement
     }
 
     private func deleteLegacy(account: String, accessGroup: String?) {
+        if let memoryStore {
+            memoryStore.delete(service: service, account: account, accessGroup: accessGroup)
+            return
+        }
         let query = baseQuery(account: account, accessGroup: accessGroup)
         SecItemDelete(query as CFDictionary)
     }

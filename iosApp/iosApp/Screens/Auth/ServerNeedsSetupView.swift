@@ -1,7 +1,7 @@
 import SwiftUI
 
 #if !os(tvOS)
-/// Shown when the chosen server has no account yet (`/api/v1/auth/setup`
+/// Shown when the chosen server has no account yet (`/api/v2/system/setup`
 /// reports `needsSetup`). Account provisioning is intentionally unavailable
 /// in the Apple clients, so this screen only lets the user re-probe the server
 /// after its administrator finishes setup elsewhere.
@@ -38,11 +38,11 @@ struct ServerNeedsSetupView: View {
 
             VStack(spacing: 12) {
                 Text("This server isn't ready")
-                    .font(.continuumTitle)
+                    .font(.prairieTitle)
                     .foregroundStyle(Color.auroraInk)
                     .multilineTextAlignment(.center)
                 Text("Ask the server administrator to finish setup. When it's ready, return here and check again.")
-                    .font(.continuumBody)
+                    .font(.prairieBody)
                     .foregroundStyle(Color.auroraInkSecondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)

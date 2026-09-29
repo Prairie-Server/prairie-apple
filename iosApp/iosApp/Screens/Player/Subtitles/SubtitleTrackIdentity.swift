@@ -1,6 +1,6 @@
 //
 //  SubtitleTrackIdentity.swift
-//  Continuum (iOS + tvOS)
+//  Prairie (iOS + tvOS)
 //
 //  Product identity shared by Aether-backed subtitle selection and Prairie's
 //  realtime AI cue overlay.

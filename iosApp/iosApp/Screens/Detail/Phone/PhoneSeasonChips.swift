@@ -3,12 +3,13 @@ import SwiftUI
 
 /// Horizontal scroll of season chips for the phone series detail page.
 /// Selected = filled white capsule with dark text; unselected =
-/// outlined transparent capsule. Mirrors `TVSeasonChip` semantics in a
-/// touch-sized form.
+/// outlined transparent capsule.
 struct PhoneSeasonChips: View {
     let seasons: [Season]
     let selected: Season?
     let onSelect: (Season) -> Void
+    var onSetWatched: ((Season, Bool) -> Void)? = nil
+    var isUpdatingWatched = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -21,7 +22,7 @@ struct PhoneSeasonChips: View {
                             .id(season.id)
                     }
                 }
-                .padding(.horizontal, ContinuumTheme.safePadding)
+                .padding(.horizontal, PrairieTheme.safePadding)
                 .padding(.vertical, 4)
             }
             .onAppear {
@@ -40,7 +41,7 @@ struct PhoneSeasonChips: View {
     ) {
         guard let id else { return }
         if animated {
-            withAnimation(.easeOut(duration: ContinuumTheme.fastDuration)) {
+            withAnimation(.easeOut(duration: PrairieTheme.fastDuration)) {
                 proxy.scrollTo(id, anchor: .center)
             }
         } else {
@@ -54,24 +55,41 @@ struct PhoneSeasonChips: View {
             onSelect(season)
         } label: {
             Text(label(for: season))
-                .font(.system(size: 14, weight: isSelected ? .semibold : .medium))
-                .foregroundColor(isSelected ? .black : .white)
+                .font(.subheadline.weight(isSelected ? .semibold : .medium))
                 .padding(.horizontal, 16)
-                .frame(height: 36)
-                .background(
-                    Group {
-                        if isSelected {
-                            Capsule().fill(Color.white)
-                        } else {
-                            Capsule()
-                                .fill(Color.white.opacity(0.06))
-                                .overlay(
-                                    Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1)
-                                )
-                        }
-                    }
-                )
+                .padding(.vertical, 8)
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
         }
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .contextMenu {
+            if let onSetWatched {
+                Button {
+                    onSetWatched(season, !(season.userData?.played ?? false))
+                } label: {
+                    Label(
+                        season.userData?.played == true ? "Mark Season Unwatched" : "Mark Season Watched",
+                        systemImage: season.userData?.played == true ? "circle" : "checkmark.circle"
+                    )
+                }
+                .disabled(isUpdatingWatched || season.episodeCount == 0)
+            }
+        }
+        .foregroundStyle(isSelected ? Color.black : Color.white)
+        .background(
+            Group {
+                if isSelected {
+                    Capsule().fill(Color.white)
+                } else {
+                    Capsule()
+                        .fill(Color.white.opacity(0.06))
+                        .overlay(
+                            Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1)
+                        )
+                }
+            }
+            .padding(.vertical, 4)
+        )
         .buttonStyle(.plain)
     }
 

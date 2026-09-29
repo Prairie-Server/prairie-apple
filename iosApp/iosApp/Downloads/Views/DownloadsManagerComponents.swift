@@ -18,16 +18,16 @@ struct DownloadsStorageHeader: View {
             (
                 Text(DownloadFormatting.bytes(used))
                     .font(.system(size: 26, weight: .bold))
-                    .foregroundColor(.continuumOnSurface)
+                    .foregroundColor(.prairieOnSurface)
                 + Text(contextSuffix)
                     .font(.system(size: 14))
-                    .foregroundColor(.continuumSecondaryText)
+                    .foregroundColor(.prairieSecondaryText)
             )
 
             if activeCount > 0 {
                 Text(inProgressLine)
                     .font(.system(size: 12.5))
-                    .foregroundColor(.continuumSecondaryText)
+                    .foregroundColor(.prairieSecondaryText)
             }
 
             if breakdown.total > 0 {
@@ -39,10 +39,10 @@ struct DownloadsStorageHeader: View {
         .padding(16)
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(Color.continuumSurfaceElevated)
+                .fill(Color.prairieSurfaceElevated)
                 .overlay(
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .stroke(Color.continuumOutline, lineWidth: 1)
+                        .stroke(Color.prairieOutline, lineWidth: 1)
                 )
         )
         .padding(.horizontal, 16)
@@ -81,7 +81,7 @@ struct DownloadsStorageHeader: View {
     }
 
     private func segment(width: CGFloat, opacity: Double) -> some View {
-        Color.continuumOnSurface.opacity(opacity).frame(width: max(0, width))
+        Color.prairieOnSurface.opacity(opacity).frame(width: max(0, width))
     }
 
     @ViewBuilder private var legend: some View {
@@ -97,14 +97,14 @@ struct DownloadsStorageHeader: View {
         if bytes > 0 {
             HStack(spacing: 6) {
                 RoundedRectangle(cornerRadius: 2)
-                    .fill(Color.continuumOnSurface.opacity(opacity))
+                    .fill(Color.prairieOnSurface.opacity(opacity))
                     .frame(width: 9, height: 9)
                 Text(DownloadFormatting.bytes(bytes))
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.continuumOnSurface)
+                    .foregroundColor(.prairieOnSurface)
                 Text(label)
                     .font(.system(size: 12))
-                    .foregroundColor(.continuumSecondaryText)
+                    .foregroundColor(.prairieSecondaryText)
             }
         }
     }
@@ -123,46 +123,46 @@ struct DownloadReclaimBanner: View {
         Button(action: onReview) {
             HStack(spacing: 12) {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.continuumChromeSelectedFill)
+                    .fill(Color.prairieChromeSelectedFill)
                     .overlay(
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(Color.continuumChromeSelectedBorder, lineWidth: 1)
+                            .stroke(Color.prairieChromeSelectedBorder, lineWidth: 1)
                     )
                     .frame(width: 34, height: 34)
                     .overlay(
                         Image(systemName: "sparkles")
                             .font(.system(size: 15, weight: .semibold))
-                            .foregroundColor(.continuumOnSurface)
+                            .foregroundColor(.prairieOnSurface)
                     )
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Free up \(DownloadFormatting.bytes(bytes))")
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.continuumOnSurface)
+                        .foregroundColor(.prairieOnSurface)
                     Text("\(episodeCount) item\(episodeCount == 1 ? "" : "s") you've finished")
                         .font(.system(size: 12.5))
-                        .foregroundColor(.continuumSecondaryText)
+                        .foregroundColor(.prairieSecondaryText)
                 }
 
                 Spacer(minLength: 8)
 
                 Text("Review")
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(.continuumOnSurface)
+                    .foregroundColor(.prairieOnSurface)
                     .padding(.horizontal, 13)
                     .padding(.vertical, 7)
                     .background(
-                        Capsule().fill(Color.continuumChromeSelectedFill)
-                            .overlay(Capsule().stroke(Color.continuumChromeSelectedBorder, lineWidth: 1))
+                        Capsule().fill(Color.prairieChromeSelectedFill)
+                            .overlay(Capsule().stroke(Color.prairieChromeSelectedBorder, lineWidth: 1))
                     )
             }
             .padding(13)
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color.continuumSurfaceVariant)
+                    .fill(Color.prairieSurfaceVariant)
                     .overlay(
                         RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .stroke(Color.continuumChromeSelectedBorder, lineWidth: 1)
+                            .stroke(Color.prairieChromeSelectedBorder, lineWidth: 1)
                     )
             )
             .contentShape(Rectangle())
@@ -194,14 +194,14 @@ struct DownloadSortControl: View {
                     Image(systemName: "chevron.down")
                         .font(.system(size: 11, weight: .semibold))
                 }
-                .foregroundColor(.continuumOnSurface)
+                .foregroundColor(.prairieOnSurface)
             }
 
             Spacer()
 
             Text("\(itemCount) item\(itemCount == 1 ? "" : "s")")
                 .font(.system(size: 12.5))
-                .foregroundColor(.continuumOnSurface.opacity(0.38))
+                .foregroundColor(.prairieOnSurface.opacity(0.38))
         }
         .padding(.horizontal, 22)
         .padding(.top, 8)
@@ -218,10 +218,10 @@ struct DownloadSelectionCircle: View {
     var body: some View {
         ZStack {
             Circle()
-                .fill(selected ? Color.continuumOnSurface : Color.clear)
+                .fill(selected ? Color.prairieOnSurface : Color.clear)
                 .overlay(
                     Circle().stroke(
-                        selected ? Color.continuumOnSurface : Color.continuumOnSurface.opacity(0.35),
+                        selected ? Color.prairieOnSurface : Color.prairieOnSurface.opacity(0.35),
                         lineWidth: 1.5
                     )
                 )
@@ -269,15 +269,15 @@ struct DownloadKindChip: View {
         Text(text.uppercased())
             .font(.system(size: 9.5, weight: .semibold))
             .tracking(0.4)
-            .foregroundColor(.continuumSecondaryText)
+            .foregroundColor(.prairieSecondaryText)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(Color.continuumChromeRestingFill)
+                    .fill(Color.prairieChromeRestingFill)
                     .overlay(
                         RoundedRectangle(cornerRadius: 5, style: .continuous)
-                            .stroke(Color.continuumChromeRestingBorder, lineWidth: 1)
+                            .stroke(Color.prairieChromeRestingBorder, lineWidth: 1)
                     )
             )
     }

@@ -1,4 +1,4 @@
-<title>AetherEngine → silo-apple: Defect Parity Audit</title>
+<title>AetherEngine → prairie-apple: Defect Parity Audit</title>
 <style>
   :root {
     --bg: #f5f7f9;
@@ -173,7 +173,7 @@
   <header class="masthead">
     <div class="eyebrow">Defect parity audit &middot; player pipeline</div>
     <h1>What AetherEngine already fixed <span class="dim">that we haven't.</span></h1>
-    <p class="standfirst">A cluster-by-cluster comparison of every hard-won defect fix in the AetherEngine reference engine against the <code>silo-apple</code> loopback + PlayerCore playback stack. Each gap below is an invariant AE enforces and we don't — audited against our code, then adversarially re-checked. Today's moov-wedge fix (<code>359d20c</code>) and the PR&nbsp;#52/#66/#68 stack are treated as already-landed.</p>
+    <p class="standfirst">A cluster-by-cluster comparison of every hard-won defect fix in the AetherEngine reference engine against the <code>prairie-apple</code> loopback + PlayerCore playback stack. Each gap below is an invariant AE enforces and we don't — audited against our code, then adversarially re-checked. Today's moov-wedge fix (<code>359d20c</code>) and the PR&nbsp;#52/#66/#68 stack are treated as already-landed.</p>
 
     <div class="stats">
       <div class="stat hi"><div class="n">1</div><div class="l">High severity</div></div>
@@ -208,7 +208,7 @@
   </section>
 
   <footer>
-    <span>silo-apple @ 359d20c</span>
+    <span>prairie-apple @ 359d20c</span>
     <span>AetherEngine @ 4.11.0+unreleased</span>
     <span>generated 2026-07-07</span>
   </footer>
@@ -254,7 +254,7 @@ const GAPS = [
     tags: "AE #93 (retest)",
     symptom: "AE keeps an unlanded seek alive as recovery intent so every arm re-anchors at pendingSeekTarget. Our M7 field <code>vodPendingSeekMediaTarget</code> exists but its lifecycle is broken: the completion clears it unconditionally (even finished=false), scrub bursts have no per-seek identity, and the watchdog is hard-gated on !isSeekPending.",
     exposure: "User scrubs (multi-seek burst) into unproduced content and the restart wedges: the older cancelled seek's completion has already wiped the newer seek's target, so recovery re-anchors at the frozen PRE-seek clock — playback \"recovers\" at the old position and the seek is silently lost (AE's literal 341.9s→391.9s bug). A wedged seek whose completion never fires leaves isSeekPending stuck true — frozen picture, no recovery, until manual back-out.",
-    fix: "Port AE's intent lifecycle onto the M7 fields in <span class='path'>AVPlayerBackend.swift</span>: (1) per-seek generation token — only the latest completion clears state, retire target only when finished && landed within epsilon; (2) staleness retirement after ~3s organic progress; (3) soften the !isSeekPending gate to a time-bound (pending >8–10s = wedged → performVODStallRecovery); (4) reset isSeekPending in load(); (5) have attemptSiloRouteCompatibilityFallback prefer the unlanded target over frozen currentTime."
+    fix: "Port AE's intent lifecycle onto the M7 fields in <span class='path'>AVPlayerBackend.swift</span>: (1) per-seek generation token — only the latest completion clears state, retire target only when finished && landed within epprairien; (2) staleness retirement after ~3s organic progress; (3) soften the !isSeekPending gate to a time-bound (pending >8–10s = wedged → performVODStallRecovery); (4) reset isSeekPending in load(); (5) have attemptPrairieRouteCompatibilityFallback prefer the unlanded target over frozen currentTime."
   },
   {
     id: "restart-coalescing-fetch-containment", verdict: "partial", sev: "medium", verified: true,
@@ -326,7 +326,7 @@ const GAPS = [
     tags: "AE #86 · #3.4",
     symptom: "AE binds its loopback server to all interfaces and swaps to a LAN-IP URL on isExternalPlaybackActive. Our LoopbackSegmentServer binds 127.0.0.1 only, allowsExternalPlayback is left default (true), and there's no isExternalPlaybackActive observer — so AirPlay engages and sends the receiver a localhost URL. Secondary: re-selecting the already-active audio track rebuilds the whole pipeline (no no-op guard).",
     exposure: "User on the primary loopback route on iPhone/iPad picks an AirPlay target: AVPlayer switches to external playback and sends http://127.0.0.1:PORT/master.m3u8 to the Apple TV, which can't connect — black screen/spinner on the TV while the phone says it's playing there, no recovery short of deselecting. Separately, tapping the already-checked audio track triggers a full pipeline respin (seconds of black for a no-op).",
-    fix: "Short-term: set <code>avPlayer.allowsExternalPlayback = false</code> for .siloLoopback in <span class='path'>prepareAssetPlayback</span> so AirPlay degrades to screen mirroring. Full parity: bind LoopbackSegmentServer to 0.0.0.0 (guarded by random port + session token), observe isExternalPlaybackActive, swap the URL host to the LAN IPv4 on activation. Add an early return in <code>PlayerViewModel.selectAudio</code> when selectedAudioId==track.trackId."
+    fix: "Short-term: set <code>avPlayer.allowsExternalPlayback = false</code> for .prairieLoopback in <span class='path'>prepareAssetPlayback</span> so AirPlay degrades to screen mirroring. Full parity: bind LoopbackSegmentServer to 0.0.0.0 (guarded by random port + session token), observe isExternalPlaybackActive, swap the URL host to the LAN IPv4 on activation. Add an early return in <code>PlayerViewModel.selectAudio</code> when selectedAudioId==track.trackId."
   },
   {
     id: "subtitle-side-demuxer-taps-cc", verdict: "partial", sev: "medium", verified: false,
@@ -366,7 +366,7 @@ const COVERED = [
   { v: "covered", title: "Teardown & generation races", body: "Detached cleanup + waiter cancellation, no main-actor FFmpeg probe, stop() doesn't queue behind restart waits, session identity survives stop — all enforced via LoopbackInterruptToken + the restart coalescer." },
   { v: "na", title: "Live / DVR streaming", body: "Dead-source retune, live-edge rejoin, SSAI timestamp handling — the loopback route is VOD-only; no live playback surface exists." },
   { v: "na", title: "Thumbnails / frame extractor", body: "AE's session-coupled yield for elective still decodes — our scrub-preview extraction doesn't share the producer's link the same way; the startup-contention failure mode doesn't arise." },
-  { v: "na", title: "Disc (ISO / UDF)", body: "AE's remote-.iso byte-range filesystem reader and UDF 2.50 correctness — no disc-image playback in silo-apple." }
+  { v: "na", title: "Disc (ISO / UDF)", body: "AE's remote-.iso byte-range filesystem reader and UDF 2.50 correctness — no disc-image playback in prairie-apple." }
 ];
 
 // ---- render ranking ----

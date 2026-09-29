@@ -8,7 +8,7 @@ struct SettingsOverviewRow: View {
     let title: String
     let subtitle: String
     let systemImage: String
-    var tint: Color = .continuumAccent
+    var tint: Color = .prairieAccent
     var value: String? = nil
     var showsChevron = true
 
@@ -28,11 +28,11 @@ struct SettingsOverviewRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.headline)
-                    .foregroundStyle(Color.continuumOnSurface)
+                    .foregroundStyle(Color.prairieOnSurface)
 
                 Text(subtitle)
                     .font(.footnote)
-                    .foregroundStyle(Color.continuumSecondaryText)
+                    .foregroundStyle(Color.prairieSecondaryText)
                     .lineLimit(2)
             }
 
@@ -41,7 +41,7 @@ struct SettingsOverviewRow: View {
             if let value {
                 Text(value)
                     .font(.subheadline)
-                    .foregroundStyle(Color.continuumSecondaryText)
+                    .foregroundStyle(Color.prairieSecondaryText)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
@@ -50,7 +50,7 @@ struct SettingsOverviewRow: View {
                 Image(systemName: "chevron.right")
                     .font(.footnote)
                     .bold()
-                    .foregroundStyle(Color.continuumSecondaryText)
+                    .foregroundStyle(Color.prairieSecondaryText)
                     .accessibilityHidden(true)
             }
         }

@@ -27,9 +27,9 @@ struct HistoryView: View {
                 )
             }
         }
-        .continuumBackground()
+        .prairiePageBackground()
         .navigationTitle("History")
-        .continuumNavigationTitleDisplayMode(.large)
+        .prairieNavigationTitleDisplayMode(.large)
         .task {
             await viewModel.load(reset: true)
         }
@@ -40,26 +40,26 @@ struct HistoryView: View {
 
     private var gridContent: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: ContinuumTheme.padding) {
+            VStack(alignment: .leading, spacing: PrairieTheme.padding) {
                 Text(viewModel.countLabel)
-                    .font(.continuumCaption)
-                    .foregroundColor(.continuumSecondaryText)
+                    .font(.prairieCaption)
+                    .foregroundColor(.prairieSecondaryText)
 
                 CatalogGrid(
                     items: viewModel.items,
                     isLoading: viewModel.isLoading,
                     hasMore: viewModel.hasMore,
-                    onItemTap: { contentId in
-                        router.navigate(to: .itemDetail(contentId: contentId))
+                    onItemTap: { item in
+                        router.navigate(to: .itemDetail(browseItem: item))
                     },
                     onLoadMore: {
                         Task { await viewModel.load(reset: false) }
                     }
                 )
             }
-            .padding(.horizontal, ContinuumTheme.padding)
-            .padding(.top, ContinuumTheme.smallPadding)
-            .padding(.bottom, ContinuumTheme.largePadding)
+            .padding(.horizontal, PrairieTheme.padding)
+            .padding(.top, PrairieTheme.smallPadding)
+            .padding(.bottom, PrairieTheme.largePadding)
         }
     }
 }

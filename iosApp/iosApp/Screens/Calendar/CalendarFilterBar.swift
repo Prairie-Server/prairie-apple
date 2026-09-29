@@ -51,7 +51,7 @@ struct CalendarFilterBar: View {
         .overlay(
             Capsule(style: .continuous).strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
         )
-        .animation(ContinuumTheme.springAnimation, value: selected)
+        .animation(PrairieTheme.springAnimation, value: selected)
         .accessibilityElement(children: .contain)
     }
 
@@ -63,19 +63,19 @@ struct CalendarFilterBar: View {
             Text(filter.displayLabel)
                 .font(segmentFont)
                 .lineLimit(1)
-                .foregroundColor(isSelected ? Color.continuumBackground : Color.continuumOnSurface.opacity(0.6))
+                .foregroundColor(isSelected ? Color.prairieBackground : Color.prairieOnSurface.opacity(0.6))
                 .padding(.horizontal, segmentHorizontalPadding)
                 .frame(height: segmentHeight)
                 .background {
                     if isSelected {
                         Capsule(style: .continuous)
-                            .fill(Color.continuumOnSurface)
+                            .fill(Color.prairieOnSurface)
                             .matchedGeometryEffect(id: "calendarFilterPill", in: pillNamespace)
                     }
                 }
                 .contentShape(Capsule(style: .continuous))
         }
-        .buttonStyle(.continuumFlat)
+        .buttonStyle(.prairieFlat)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
     #endif
@@ -125,21 +125,21 @@ struct CalendarFilterBar: View {
                 )
                 .scaleEffect(isFocused ? 1.05 : 1.0)
         }
-        .buttonStyle(.continuumFlat)
+        .buttonStyle(.prairieFlat)
         .focused($focusedFilter, equals: filter)
-        .animation(ContinuumTheme.springAnimation, value: isFocused)
+        .animation(PrairieTheme.springAnimation, value: isFocused)
         .animation(.easeInOut(duration: 0.15), value: isSelected)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private func foreground(isSelected: Bool, isFocused: Bool) -> Color {
-        if isFocused || isSelected { return .continuumBackground }
-        return .continuumOnSurface.opacity(0.7)
+        if isFocused || isSelected { return .prairieBackground }
+        return .prairieOnSurface.opacity(0.7)
     }
 
     private func fill(isSelected: Bool, isFocused: Bool) -> Color {
-        if isFocused { return Color.continuumOnSurface.opacity(0.96) }
-        if isSelected { return Color.continuumOnSurface.opacity(0.88) }
+        if isFocused { return Color.prairieOnSurface.opacity(0.96) }
+        if isSelected { return Color.prairieOnSurface.opacity(0.88) }
         return .clear
     }
     #endif

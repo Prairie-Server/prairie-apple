@@ -10,47 +10,48 @@ struct ErrorView: View {
     var onRetry: (() -> Void)? = nil
     var onGoBack: (() -> Void)? = nil
     var onSignOut: (() -> Void)? = nil
+    var onManageServers: (() -> Void)? = nil
 
     @Environment(AppRouter.self) private var router
 
     var body: some View {
-        VStack(spacing: ContinuumTheme.padding) {
+        VStack(spacing: PrairieTheme.padding) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 48))
-                .foregroundColor(.continuumError)
+                .foregroundColor(.prairieError)
 
             Text(headline)
-                .font(.continuumHeadline)
-                .foregroundColor(.continuumOnSurface)
+                .font(.prairieHeadline)
+                .foregroundColor(.prairieOnSurface)
                 .multilineTextAlignment(.center)
 
             Text(state.message)
-                .font(.continuumBody)
-                .foregroundColor(.continuumSecondaryText)
+                .font(.prairieBody)
+                .foregroundColor(.prairieSecondaryText)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, ContinuumTheme.largePadding)
+                .padding(.horizontal, PrairieTheme.largePadding)
 
-            VStack(spacing: ContinuumTheme.smallPadding) {
+            VStack(spacing: PrairieTheme.smallPadding) {
                 if let primary = primaryAction {
                     Button(primary.title, action: primary.run)
                         .prairiePrimaryButton()
                         .frame(width: 200)
                 }
-                if let secondary = secondaryAction {
-                    Button(secondary.title, action: secondary.run)
+                ForEach(Array(secondaryActions.enumerated()), id: \.offset) { _, action in
+                    Button(action.title, action: action.run)
                         .buttonStyle(.plain)
-                        .foregroundColor(.continuumSecondaryText)
-                        .font(.continuumBody)
+                        .foregroundColor(.prairieSecondaryText)
+                        .font(.prairieBody)
                         .padding(.top, 4)
                 }
             }
-            .padding(.top, ContinuumTheme.smallPadding)
+            .padding(.top, PrairieTheme.smallPadding)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .continuumBackground()
     }
 
     private var headline: String {
+        if state.updateRequirement != nil { return "Update required" }
         if state.isAuthFailure { return "Session expired" }
         if state.isNotFound { return "Not found" }
         return "Something went wrong"
@@ -88,14 +89,22 @@ struct ErrorView: View {
         return nil
     }
 
-    private var secondaryAction: Action? {
+    private var secondaryActions: [Action] {
+        var actions: [Action] = []
+        if let onManageServers {
+            actions.append(Action(title: "Manage Servers", run: onManageServers))
+        }
         if state.isAuthFailure {
-            return onRetry.map { Action(title: "Try Again", run: $0) }
+            if let onRetry {
+                actions.append(Action(title: "Try Again", run: onRetry))
+            }
+            return actions
         }
         if state.isNotFound, resolvedOnGoBack != nil {
-            if let onRetry { return Action(title: "Try Again", run: onRetry) }
-            return nil
+            if let onRetry {
+                actions.append(Action(title: "Try Again", run: onRetry))
+            }
         }
-        return nil
+        return actions
     }
 }

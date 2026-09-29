@@ -19,8 +19,8 @@ struct AppleVideoDecodeCapability: Equatable, Sendable {
 ///
 /// Online playback and persistent downloads deliberately use different
 /// policies. Aether probes each online source and chooses its native or
-/// libavcodec path at load time, so supported Apple TV 4K hardware reports the
-/// pinned engine/build manifest without predicting profiles, bit depths, or
+/// libavcodec path at load time, so physical iOS devices and Apple TV 4K report
+/// the pinned engine/build manifest without predicting profiles, bit depths, or
 /// performance in app code. Downloads have no server replan available when
 /// they are played offline, so they retain the bounded platform attestation.
 ///
@@ -47,6 +47,7 @@ enum AppleDecodeCapabilities {
         }
     }()
 
+    /// iPhone, iPad, and Apple TV 4K use Aether's original-file executor.
     /// Keep the optimistic engine declaration off Apple TV HD. It has much
     /// less software-decode headroom than every Apple TV 4K generation and no
     /// online performance signal exists yet that can trigger a typed replan.
@@ -55,13 +56,13 @@ enum AppleDecodeCapabilities {
         isSimulator: Bool,
         machineIdentifier: String
     ) -> StreamingVideoCapabilityMode {
-        guard isTVOS,
-              !isSimulator,
-              machineIdentifier.hasPrefix("AppleTV"),
-              machineIdentifier != "AppleTV5,3" else {
-            return .platformAttested
+        guard !isSimulator else { return .platformAttested }
+        if isTVOS {
+            return machineIdentifier.hasPrefix("AppleTV") && machineIdentifier != "AppleTV5,3"
+                ? .aetherDeclared : .platformAttested
         }
-        return .aetherDeclared
+        return machineIdentifier.hasPrefix("iPhone") || machineIdentifier.hasPrefix("iPad")
+            ? .aetherDeclared : .platformAttested
     }
 
     static var streamingVideoCapabilityMode: StreamingVideoCapabilityMode {
@@ -86,8 +87,9 @@ enum AppleDecodeCapabilities {
     /// detailed entry below because ordinary H.264 is also hardware-backed.
     static let softwareVideoCodecs = ["av1", "vp9", "mpeg2video", "vc1"]
 
-    /// The complete online video manifest of AetherEngine 6.34.0 at
-    /// 0ae80496 with FFmpegBuild 2.4.3. Aether routes H.264, HEVC, and
+    /// Prairie's declared online video set for AetherEngine 7.1.0 with
+    /// FFmpegBuild 3.3.0. Newly bundled formats await capability and playback
+    /// validation in prairie-apple#299. Aether routes H.264, HEVC, and
     /// hardware-decodable AV1 natively when the exact probed stream permits;
     /// every other decoder present in the build goes through libavcodec.
     static let aetherOriginalHTTPVideoCodecs = [
@@ -110,8 +112,9 @@ enum AppleDecodeCapabilities {
             "opus", "vorbis", "pcm", "pcm_s16le", "pcm_s24le"
         ]
 
-    /// Audio decoders present in the same Aether/FFmpeg build. Aliases are
-    /// intentional because scanners do not all spell DTS-HD or PCM alike.
+    /// Prairie's declared online audio set from the same Aether/FFmpeg build.
+    /// Newly bundled WMA and legacy Flash audio are tracked in prairie-apple#299.
+    /// Aliases are intentional because scanners do not all spell DTS-HD or PCM alike.
     /// `pcm_bluray` is the Blu-ray LPCM decoder FFmpegBuild ships for M2TS;
     /// `pcm_dvd` stays absent because the build does not enable it.
     static let aetherOriginalHTTPAudioCodecs = [
@@ -133,15 +136,15 @@ enum AppleDecodeCapabilities {
     /// aliases remain honest for legacy metadata and future scanner changes.
     ///
     /// Aether supports additional containers, including Ogg. They stay out of
-    /// the conservative/download vocabulary; online Apple TV 4K playback uses
-    /// the engine manifest below and relies on its per-source probe.
+    /// the conservative/download vocabulary; online iOS and Apple TV 4K
+    /// playback use the engine manifest below and its per-source probe.
     static let audioContainers = ["mp3", "m4a", "m4b", "aac", "flac", "wav"]
 
-    /// Demuxers used by the pinned Aether build for online original HTTP.
+    /// Prairie's declared containers for online original HTTP.
     /// Prairie's scanner records MPEG program streams (`.mpg`/`.vob`) as `mpeg`,
     /// so that token is what carries FFmpegBuild's `mpegps` demuxer claim.
-    /// ASF/WMV stays absent even though WMV elementary streams in Matroska are
-    /// supported; FFmpegBuild does not ship the corresponding container path.
+    /// FFmpegBuild 3.3.0 includes ASF/WMV support. Advertising it together with
+    /// the matching audio codecs awaits playback validation in prairie-apple#299.
     private static let aetherVideoContainers = [
         "mp4", "m4v", "mov", "mkv", "matroska", "avi", "mpegts", "ts", "m2ts",
         "mts", "3gp", "3g2", "mpeg", "vob", "ogg", "webm", "flv"
@@ -220,8 +223,8 @@ enum AppleDecodeCapabilities {
     /// The hardware attestations VideoToolbox supplies, followed by the
     /// narrower software envelopes proven with Aether fixtures. This is the
     /// persistent-download safety contract and the fallback for Apple TV HD,
-    /// simulators, iOS, and macOS; online Apple TV 4K playback does not send
-    /// these predictions.
+    /// simulators, and macOS. Online iOS and Apple TV 4K playback delegate
+    /// these decisions to Aether's source probe.
     static func videoDecodeAttestation() -> [AppleVideoDecodeCapability] {
         videoDecodeAttestationValue
     }

@@ -16,7 +16,7 @@ struct PhoneCastRail: View {
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            LazyHStack(spacing: cardSpacing) {
+            LazyHStack(alignment: HorizontalMediaRailLayout.cardAlignment, spacing: cardSpacing) {
                 ForEach(cast.prefix(maxEntries)) { member in
                     Button {
                         if let personId = member.personId { onTap(personId) }
@@ -26,13 +26,13 @@ struct PhoneCastRail: View {
                             VStack(spacing: 2) {
                                 Text(member.name)
                                     .font(.system(size: 12, weight: .semibold))
-                                    .foregroundColor(.continuumOnSurface)
+                                    .foregroundColor(.prairieOnSurface)
                                     .lineLimit(2, reservesSpace: true)
                                     .multilineTextAlignment(.center)
                                 if let character = member.character, !character.isEmpty {
                                     Text(character)
                                         .font(.system(size: 11, weight: .regular))
-                                        .foregroundColor(.continuumSecondaryText)
+                                        .foregroundColor(.prairieSecondaryText)
                                         .lineLimit(1)
                                         .multilineTextAlignment(.center)
                                 }
@@ -44,21 +44,22 @@ struct PhoneCastRail: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, ContinuumTheme.safePadding)
+            .padding(.horizontal, PrairieTheme.safePadding)
             .padding(.vertical, 4)
+            .phoneMediaRailBounds()
         }
     }
 
     @ViewBuilder
     private func photo(for member: CastMember) -> some View {
         ZStack {
-            Color.continuumSurfaceElevated
+            Color.prairieSurfaceElevated
             if let url = member.photoUrl, !url.isEmpty {
                 AsyncImageView(url: url, contentMode: .fill)
             } else {
                 Image(systemName: "person.fill")
                     .font(.system(size: photoSize * 0.4))
-                    .foregroundColor(.continuumSecondaryText)
+                    .foregroundColor(.prairieSecondaryText)
             }
         }
         .frame(width: photoSize, height: photoSize)

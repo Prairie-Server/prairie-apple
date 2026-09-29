@@ -39,10 +39,10 @@ struct TVServerNeedsSetupView: View {
                     VStack(spacing: 14) {
                         AuroraEyebrow(text: "Server setup", centered: true)
                         Text("Server setup required")
-                            .font(.continuumTitle)
+                            .font(.prairieTitle)
                             .foregroundStyle(Color.auroraInk)
                         Text("Ask the server administrator to finish setup. When it is ready, check again.")
-                            .font(.continuumBody)
+                            .font(.prairieBody)
                             .foregroundStyle(Color.auroraInkSecondary)
                             .multilineTextAlignment(.center)
                             .fixedSize(horizontal: false, vertical: true)
@@ -50,7 +50,7 @@ struct TVServerNeedsSetupView: View {
 
                     if let error {
                         Label(error, systemImage: "exclamationmark.circle.fill")
-                            .font(.continuumCaption)
+                            .font(.prairieCaption)
                             .foregroundStyle(Color.requestRose)
                             .multilineTextAlignment(.center)
                             .fixedSize(horizontal: false, vertical: true)

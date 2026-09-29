@@ -34,17 +34,24 @@ struct CollectionsView: View {
                 )
             }
         }
-        .continuumBackground()
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if case .unknown(let message) = viewModel.groupSupport {
+                groupSupportNotice(message)
+            }
+        }
+        .prairiePageBackground()
         .navigationTitle("Collections")
-        .continuumNavigationTitleDisplayMode(.large)
+        .prairieNavigationTitleDisplayMode(.large)
         .toolbar {
             #if os(macOS)
-            ToolbarItem {
-                Button {
-                    viewModel.pendingGroupAction = .create
-                } label: {
-                    Image(systemName: "folder.badge.plus")
-                        .foregroundColor(.continuumPrimary)
+            if viewModel.canManageGroups {
+                ToolbarItem {
+                    Button {
+                        viewModel.pendingGroupAction = .create
+                    } label: {
+                        Image(systemName: "folder.badge.plus")
+                            .foregroundColor(.prairiePrimary)
+                    }
                 }
             }
             ToolbarItem {
@@ -52,16 +59,18 @@ struct CollectionsView: View {
                     viewModel.showCreateSheet = true
                 } label: {
                     Image(systemName: "plus")
-                        .foregroundColor(.continuumPrimary)
+                        .foregroundColor(.prairiePrimary)
                 }
             }
             #else
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    viewModel.pendingGroupAction = .create
-                } label: {
-                    Image(systemName: "folder.badge.plus")
-                        .foregroundColor(.continuumPrimary)
+            if viewModel.canManageGroups {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        viewModel.pendingGroupAction = .create
+                    } label: {
+                        Image(systemName: "folder.badge.plus")
+                            .foregroundColor(.prairiePrimary)
+                    }
                 }
             }
             ToolbarItem(placement: .topBarTrailing) {
@@ -69,7 +78,7 @@ struct CollectionsView: View {
                     viewModel.showCreateSheet = true
                 } label: {
                     Image(systemName: "plus")
-                        .foregroundColor(.continuumPrimary)
+                        .foregroundColor(.prairiePrimary)
                 }
             }
             #endif
@@ -96,26 +105,28 @@ struct CollectionsView: View {
                 Section {
                     if section.collections.isEmpty {
                         Text("Drop collections here to add them to this group.")
-                            .font(.continuumSmall)
-                            .foregroundColor(.continuumSecondaryText)
-                            .listRowBackground(Color.continuumSurface)
+                            .font(.prairieSmall)
+                            .foregroundColor(.prairieSecondaryText)
+                            .listRowBackground(Color.prairieSurface)
                     } else {
                         ForEach(section.collections) { collection in
                             collectionRow(collection)
-                                .listRowBackground(Color.continuumSurface)
+                                .listRowBackground(Color.prairieSurface)
                                 #if !os(tvOS)
                                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                     Button(role: .destructive) {
-                                        Task { await viewModel.deleteCollection(id: collection.id) }
+                                        viewModel.pendingGroupAction = .deleteCollection(collection)
                                     } label: {
                                         Label("Delete", systemImage: "trash")
                                     }
-                                    Button {
-                                        viewModel.pendingGroupAction = .move(collection)
-                                    } label: {
-                                        Label("Move", systemImage: "folder")
+                                    if viewModel.canManageGroups {
+                                        Button {
+                                            viewModel.pendingGroupAction = .move(collection)
+                                        } label: {
+                                            Label("Move", systemImage: "folder")
+                                        }
+                                        .tint(.prairiePrimary)
                                     }
-                                    .tint(.continuumPrimary)
                                 }
                                 #endif
                         }
@@ -130,17 +141,17 @@ struct CollectionsView: View {
         #else
         .listStyle(.insetGrouped)
         #endif
-        .continuumScrollContentBackgroundHidden()
+        .prairieScrollContentBackgroundHidden()
     }
 
     @ViewBuilder
     private func sectionHeader(_ section: UserCollectionSection) -> some View {
         HStack {
             Text(section.name)
-                .font(.continuumCaption)
-                .foregroundColor(.continuumSecondaryText)
+                .font(.prairieCaption)
+                .foregroundColor(.prairieSecondaryText)
             Spacer()
-            if let groupId = section.groupId,
+            if viewModel.canManageGroups, let groupId = section.groupId,
                let group = viewModel.groups.first(where: { $0.id == groupId }) {
                 Menu {
                     Button {
@@ -155,10 +166,28 @@ struct CollectionsView: View {
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
-                        .foregroundColor(.continuumSecondaryText)
+                        .foregroundColor(.prairieSecondaryText)
                 }
             }
         }
+    }
+
+    /// The capability read failed: groups can't be managed until it is
+    /// retried, but nothing concludes they are unsupported.
+    private func groupSupportNotice(_ message: String) -> some View {
+        HStack(spacing: PrairieTheme.padding) {
+            Text(message)
+                .font(.prairieCaption)
+                .foregroundColor(.prairieSecondaryText)
+            Spacer()
+            Button("Retry") {
+                Task { await viewModel.retryGroupSupport() }
+            }
+            .foregroundColor(.prairiePrimary)
+        }
+        .padding(.horizontal, PrairieTheme.padding)
+        .padding(.vertical, 8)
+        .background(Color.prairieSurface)
     }
 
     private func collectionRow(_ collection: UserCollection) -> some View {
@@ -168,19 +197,19 @@ struct CollectionsView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(collection.name)
-                        .font(.continuumBody)
-                        .foregroundColor(.continuumOnSurface)
+                        .font(.prairieBody)
+                        .foregroundColor(.prairieOnSurface)
 
                     Text(rowSubtitle(for: collection))
-                        .font(.continuumCaption)
-                        .foregroundColor(.continuumSecondaryText)
+                        .font(.prairieCaption)
+                        .foregroundColor(.prairieSecondaryText)
                 }
 
                 Spacer()
 
                 Image(systemName: "chevron.right")
-                    .font(.continuumCaption)
-                    .foregroundColor(.continuumSecondaryText)
+                    .font(.prairieCaption)
+                    .foregroundColor(.prairieSecondaryText)
             }
             .padding(.vertical, 4)
         }
@@ -198,37 +227,48 @@ struct CollectionsView: View {
 
     private var createSheet: some View {
         NavigationStack {
-            VStack(spacing: ContinuumTheme.largePadding) {
+            VStack(spacing: PrairieTheme.largePadding) {
                 TextField("Collection name", text: $viewModel.newCollectionName)
-                    .textFieldStyle(ContinuumTextFieldStyle())
+                    .textFieldStyle(PrairieTextFieldStyle())
+
+                if let message = viewModel.createError {
+                    Text(message)
+                        .font(.prairieCaption)
+                        .foregroundColor(.prairieError)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
 
                 Button("Create Collection", systemImage: "plus") {
                     Task { await viewModel.createCollection() }
                 }
                 .prairiePrimaryButton()
-                .disabled(viewModel.newCollectionName.trimmingCharacters(in: .whitespaces).isEmpty)
+                .disabled(viewModel.isSaving
+                    || viewModel.newCollectionName.trimmingCharacters(in: .whitespaces).isEmpty)
 
                 Spacer()
             }
-            .padding(ContinuumTheme.padding)
-            .continuumBackground()
+            .padding(PrairieTheme.padding)
+            .prairieSheetBackground()
             .navigationTitle("New Collection")
-            .continuumNavigationTitleDisplayMode(.inline)
+            .prairieNavigationTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", systemImage: "xmark") {
                         viewModel.showCreateSheet = false
                     }
-                    .foregroundColor(.continuumSecondaryText)
+                    .foregroundColor(.prairieSecondaryText)
                 }
             }
-            .continuumNavigationBarSurfaceBackground()
+            .prairieNavigationBarSurfaceBackground()
         }
         .presentationDetents([.medium])
     }
 }
 
-/// Modal for create-group / rename-group / delete-group / move-collection.
+/// Modal for create-group / rename-group / delete-group / move-collection /
+/// delete-collection. Edits of an existing item read its current version when
+/// the sheet opens and send that version; after a conflict or an unknown
+/// outcome the sheet offers Reload instead of resending.
 private struct GroupActionSheet: View {
     let action: CollectionsViewModel.GroupAction
     let viewModel: CollectionsViewModel
@@ -240,22 +280,25 @@ private struct GroupActionSheet: View {
     var body: some View {
         NavigationStack {
             content
-                .continuumBackground()
-                .continuumNavigationTitleDisplayMode(.inline)
+                .prairieSheetBackground()
+                .prairieNavigationTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Cancel", systemImage: "xmark") { dismiss() }
-                            .foregroundColor(.continuumSecondaryText)
+                            .foregroundColor(.prairieSecondaryText)
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         Button(confirmLabel, systemImage: confirmSystemImage) { Task { await confirm() } }
-                            .foregroundColor(.continuumPrimary)
+                            .foregroundColor(.prairiePrimary)
                             .disabled(!canConfirm)
                     }
                 }
-                .continuumNavigationBarSurfaceBackground()
+                .prairieNavigationBarSurfaceBackground()
         }
         .presentationDetents([.medium])
+        .task {
+            await viewModel.loadEditor()
+        }
         .onAppear {
             switch action {
             case .rename(let g): name = g.name
@@ -273,19 +316,33 @@ private struct GroupActionSheet: View {
         case .rename(let group):
             nameForm(title: "Rename “\(group.name)”", prompt: "Group name")
         case .delete(let group):
-            VStack(spacing: ContinuumTheme.padding) {
+            VStack(spacing: PrairieTheme.padding) {
                 Text("Delete “\(group.name)”?")
-                    .font(.continuumTitle)
-                    .foregroundStyle(Color.continuumOnSurface)
+                    .font(.prairieTitle)
+                    .foregroundStyle(Color.prairieOnSurface)
                 Text("Collections in this group will move to Ungrouped. This cannot be undone.")
-                    .font(.continuumBody)
-                    .foregroundStyle(Color.continuumSecondaryText)
+                    .font(.prairieBody)
+                    .foregroundStyle(Color.prairieSecondaryText)
                     .multilineTextAlignment(.center)
                 errorBanner
                 Spacer()
             }
-            .padding(ContinuumTheme.padding)
+            .padding(PrairieTheme.padding)
             .navigationTitle("Delete group")
+        case .deleteCollection(let collection):
+            VStack(spacing: PrairieTheme.padding) {
+                Text("Delete “\(collection.name)”?")
+                    .font(.prairieTitle)
+                    .foregroundStyle(Color.prairieOnSurface)
+                Text("This cannot be undone.")
+                    .font(.prairieBody)
+                    .foregroundStyle(Color.prairieSecondaryText)
+                    .multilineTextAlignment(.center)
+                errorBanner
+                Spacer()
+            }
+            .padding(PrairieTheme.padding)
+            .navigationTitle("Delete collection")
         case .move(let collection):
             VStack(spacing: 0) {
                 List {
@@ -295,14 +352,14 @@ private struct GroupActionSheet: View {
                         } label: {
                             moveOptionRow(label: "Ungrouped", selected: pendingMoveTarget == nil)
                         }
-                        .listRowBackground(Color.continuumSurface)
+                        .listRowBackground(Color.prairieSurface)
                         ForEach(viewModel.groups) { group in
                             Button {
                                 pendingMoveTarget = group.id
                             } label: {
                                 moveOptionRow(label: group.name, selected: pendingMoveTarget == group.id)
                             }
-                            .listRowBackground(Color.continuumSurface)
+                            .listRowBackground(Color.prairieSurface)
                         }
                     }
                 }
@@ -311,23 +368,23 @@ private struct GroupActionSheet: View {
                 #else
                 .listStyle(.insetGrouped)
                 #endif
-                .continuumScrollContentBackgroundHidden()
+                .prairieScrollContentBackgroundHidden()
                 errorBanner
-                    .padding(.horizontal, ContinuumTheme.padding)
-                    .padding(.bottom, ContinuumTheme.padding)
+                    .padding(.horizontal, PrairieTheme.padding)
+                    .padding(.bottom, PrairieTheme.padding)
             }
             .navigationTitle("Move collection")
         }
     }
 
     private func nameForm(title: String, prompt: String) -> some View {
-        VStack(spacing: ContinuumTheme.largePadding) {
+        VStack(spacing: PrairieTheme.largePadding) {
             TextField(prompt, text: $name)
-                .textFieldStyle(ContinuumTextFieldStyle())
+                .textFieldStyle(PrairieTextFieldStyle())
             errorBanner
             Spacer()
         }
-        .padding(ContinuumTheme.padding)
+        .padding(PrairieTheme.padding)
         .navigationTitle(title)
     }
 
@@ -335,21 +392,29 @@ private struct GroupActionSheet: View {
     private var errorBanner: some View {
         if let message = viewModel.groupError {
             Text(message)
-                .font(.continuumCaption)
-                .foregroundColor(.continuumError)
+                .font(.prairieCaption)
+                .foregroundColor(.prairieError)
                 .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        if viewModel.editorNeedsReload {
+            Button("Reload") {
+                Task { await viewModel.loadEditor() }
+            }
+            .foregroundColor(.prairiePrimary)
+            .disabled(viewModel.isLoadingEditor)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     private func moveOptionRow(label: String, selected: Bool) -> some View {
         HStack {
             Text(label)
-                .font(.continuumBody)
-                .foregroundColor(.continuumOnSurface)
+                .font(.prairieBody)
+                .foregroundColor(.prairieOnSurface)
             Spacer()
             if selected {
                 Image(systemName: "checkmark")
-                    .foregroundColor(.continuumPrimary)
+                    .foregroundColor(.prairiePrimary)
             }
         }
     }
@@ -358,7 +423,7 @@ private struct GroupActionSheet: View {
         switch action {
         case .create: return "Create"
         case .rename: return "Save"
-        case .delete: return "Delete"
+        case .delete, .deleteCollection: return "Delete"
         case .move: return "Move"
         }
     }
@@ -367,16 +432,17 @@ private struct GroupActionSheet: View {
         switch action {
         case .create: return "plus"
         case .rename: return "square.and.arrow.down"
-        case .delete: return "trash"
+        case .delete, .deleteCollection: return "trash"
         case .move: return "folder"
         }
     }
 
     private var canConfirm: Bool {
+        guard viewModel.canSubmitGroupAction else { return false }
         switch action {
         case .create, .rename:
             return !name.trimmingCharacters(in: .whitespaces).isEmpty
-        case .delete, .move:
+        case .delete, .move, .deleteCollection:
             return true
         }
     }
@@ -391,10 +457,12 @@ private struct GroupActionSheet: View {
             await viewModel.deleteGroup(id: group.id)
         case .move(let collection):
             await viewModel.moveCollection(id: collection.id, toGroupId: pendingMoveTarget)
+        case .deleteCollection(let collection):
+            await viewModel.deleteCollection(id: collection.id)
         }
         // The view model clears `pendingGroupAction` only on success;
-        // keep the sheet open on error so the user sees the failure
-        // surfaced on the main view.
+        // keep the sheet open on error so the failure and any Reload
+        // action show in the sheet, with the draft intact.
         if viewModel.pendingGroupAction == nil {
             dismiss()
         }
@@ -427,7 +495,7 @@ private class LibraryCollectionsViewModel {
         error = nil
 
         do {
-            let response = try await ContinuumAPI.shared.libraryCollections(libraryId: libraryId)
+            let response = try await PrairieAPI.shared.libraryCollections(libraryId: libraryId)
             let resolved = response.resolvedSections
             ResponseCache.shared.set(resolved, for: key)
             sections = resolved
@@ -447,10 +515,17 @@ struct LibraryCollectionsView: View {
 
     @State private var viewModel = LibraryCollectionsViewModel()
     @State private var uiCustomization = UICustomizationPreferences.shared
+    @State private var gridWidth: CGFloat = 0
     @Environment(\.horizontalSizeClass) private var hSize
 
     private var columns: [GridItem] {
-        AdaptiveColumns.posters(
+        if usesThreeColumnPhoneLayout {
+            return Array(
+                repeating: GridItem(.flexible(), spacing: 12),
+                count: 3
+            )
+        }
+        return AdaptiveColumns.posters(
             for: hSize,
             posterSize: uiCustomization.cardPresentation.posterSize
         )
@@ -460,14 +535,15 @@ struct LibraryCollectionsView: View {
         Group {
             if !viewModel.isEmpty {
                 ScrollView(.vertical, showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: ContinuumTheme.padding) {
+                    VStack(alignment: .leading, spacing: PrairieTheme.padding) {
                         ForEach(viewModel.sections) { section in
                             sectionView(section)
                         }
                     }
-                    .padding(ContinuumTheme.padding)
-                    .padding(.bottom, ContinuumTheme.largePadding)
+                    .padding(PrairieTheme.padding)
+                    .padding(.bottom, PrairieTheme.largePadding)
                 }
+                .reportsPageChromeScroll()
             } else if let error = viewModel.error {
                 ErrorView(state: error, onRetry: { Task { await viewModel.loadCollections(libraryId: libraryId) } })
             } else if viewModel.isLoading {
@@ -480,7 +556,7 @@ struct LibraryCollectionsView: View {
                 )
             }
         }
-        .continuumBackground()
+        .prairiePageBackground()
         .task(id: libraryId) {
             await viewModel.loadCollections(libraryId: libraryId)
         }
@@ -494,8 +570,8 @@ struct LibraryCollectionsView: View {
         VStack(alignment: .leading, spacing: 12) {
             if !section.name.isEmpty {
                 Text(section.name)
-                    .font(.continuumTitle)
-                    .foregroundColor(.continuumOnSurface)
+                    .font(.prairieTitle)
+                    .foregroundColor(.prairieOnSurface)
             }
             LazyVGrid(columns: columns, spacing: 16) {
                 ForEach(section.collections) { collection in
@@ -507,7 +583,10 @@ struct LibraryCollectionsView: View {
                             kind: collection.kind
                         )
                     ) {
-                        LibraryCollectionCard(collection: collection)
+                        LibraryCollectionCard(
+                            collection: collection,
+                            cardWidthOverride: libraryCollectionCardWidthOverride
+                        )
                     }
                     .buttonStyle(.plain)
                     .frame(maxWidth: .infinity)
@@ -515,19 +594,46 @@ struct LibraryCollectionsView: View {
                     .accessibilityLabel(libraryCollectionAccessibilityLabel(collection))
                 }
             }
+            #if os(iOS)
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.size.width
+            } action: { width in
+                guard abs(width - gridWidth) >= 0.5 else { return }
+                gridWidth = width
+            }
+            #endif
         }
+    }
+
+    private var usesThreeColumnPhoneLayout: Bool {
+        #if os(iOS)
+        UIDevice.current.userInterfaceIdiom == .phone
+        #else
+        false
+        #endif
+    }
+
+    private var libraryCollectionCardWidthOverride: CGFloat? {
+        guard usesThreeColumnPhoneLayout else { return nil }
+        return AdaptiveColumns.fittedPosterWidth(
+            containerWidth: gridWidth,
+            columnCount: 3,
+            spacing: 12
+        )
     }
 }
 
 private struct LibraryCollectionCard: View {
     let collection: LibraryCollection
+    let cardWidthOverride: CGFloat?
     @State private var uiCustomization = UICustomizationPreferences.shared
 
     private var cardWidth: CGFloat {
-        ContinuumTheme.posterCardWidth * uiCustomization.cardPresentation.posterSize.scale
+        cardWidthOverride
+            ?? (PrairieTheme.posterCardWidth * uiCustomization.cardPresentation.posterSize.scale)
     }
     private var cardHeight: CGFloat {
-        cardWidth * (ContinuumTheme.posterCardHeight / ContinuumTheme.posterCardWidth)
+        cardWidth * (PrairieTheme.posterCardHeight / PrairieTheme.posterCardWidth)
     }
 
     var body: some View {
@@ -536,7 +642,7 @@ private struct LibraryCollectionCard: View {
                 poster
 
                 Text(countLabel)
-                    .font(.continuumSmall)
+                    .font(.prairieSmall)
                     .foregroundColor(.white)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 5)
@@ -545,19 +651,19 @@ private struct LibraryCollectionCard: View {
                     .padding(8)
             }
             .frame(width: cardWidth, height: cardHeight)
-            .clipShape(RoundedRectangle(cornerRadius: ContinuumTheme.smallCornerRadius))
+            .clipShape(RoundedRectangle(cornerRadius: PrairieTheme.smallCornerRadius))
 
             if uiCustomization.cardPresentation.caption.showsTitle {
                 Text(collection.name)
-                    .font(.continuumCaption)
-                    .foregroundStyle(Color.continuumOnSurface)
+                    .font(.prairieCaption)
+                    .foregroundStyle(Color.prairieOnSurface)
                     .lineLimit(2, reservesSpace: true)
             }
 
             if uiCustomization.cardPresentation.caption.showsMetadata {
                 Text(typeLabel)
-                    .font(.continuumSmall)
-                    .foregroundStyle(Color.continuumSecondaryText)
+                    .font(.prairieSmall)
+                    .foregroundStyle(Color.prairieSecondaryText)
                     .lineLimit(1)
             }
         }
@@ -577,10 +683,10 @@ private struct LibraryCollectionCard: View {
             .clipped()
         } else {
             ZStack {
-                Color.continuumSurfaceVariant
+                Color.prairieSurfaceVariant
                 Image(systemName: "square.stack.3d.up.fill")
                     .font(.system(size: 28, weight: .semibold))
-                    .foregroundColor(.continuumSecondaryText)
+                    .foregroundColor(.prairieSecondaryText)
             }
             .frame(width: cardWidth, height: cardHeight)
         }
@@ -612,8 +718,9 @@ struct LibraryCollectionDetailView: View {
     @State private var error: ErrorState?
     @State private var hasMore = true
     @State private var totalItems: Int?
-    @State private var nextOffset = 0
-    @State private var snapshot: String?
+    /// Where the next page starts; `nil` before the live first page and
+    /// after the last one. A cached first page has no continuation.
+    @State private var continuation: APIv2CatalogContinuation?
 
     @Environment(AppRouter.self) private var router
 
@@ -635,9 +742,10 @@ struct LibraryCollectionDetailView: View {
                 )
             }
         }
-        .continuumBackground()
+        .prairiePageBackground()
+        .environment(\.browseLibraryId, libraryId)
         .navigationTitle(title ?? "Collection")
-        .continuumNavigationTitleDisplayMode(.large)
+        .prairieNavigationTitleDisplayMode(.large)
         .task(id: "\(libraryId)-\(collectionId)") {
             await loadItems(reset: true)
         }
@@ -648,26 +756,27 @@ struct LibraryCollectionDetailView: View {
 
     private var content: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: ContinuumTheme.padding) {
+            VStack(alignment: .leading, spacing: PrairieTheme.padding) {
                 Text(countLabel)
-                    .font(.continuumCaption)
-                    .foregroundColor(.continuumSecondaryText)
+                    .font(.prairieCaption)
+                    .foregroundColor(.prairieSecondaryText)
 
                 CatalogGrid(
                     items: items,
                     isLoading: isLoading,
                     hasMore: hasMore,
-                    onItemTap: { contentId in
-                        router.navigate(to: .itemDetail(contentId: contentId))
+                    forcesThreeColumnsOnPhone: true,
+                    onItemTap: { item in
+                        router.navigate(to: .itemDetail(browseItem: item, libraryId: libraryId))
                     },
                     onLoadMore: {
                         Task { await loadMoreIfNeeded() }
                     }
                 )
             }
-            .padding(.horizontal, ContinuumTheme.padding)
-            .padding(.top, ContinuumTheme.smallPadding)
-            .padding(.bottom, ContinuumTheme.largePadding)
+            .padding(.horizontal, PrairieTheme.padding)
+            .padding(.top, PrairieTheme.smallPadding)
+            .padding(.bottom, PrairieTheme.largePadding)
         }
     }
 
@@ -686,61 +795,47 @@ struct LibraryCollectionDetailView: View {
 
     private func loadItems(reset: Bool) async {
         guard !isLoading else { return }
+        let cacheKey = CacheKey.catalogCollectionItems(collectionId)
         if reset {
-            // Surface the cached page-1 snapshot instantly so the grid
-            // doesn't blank out while the network call runs.
+            // Surface the cached first page instantly so the grid doesn't
+            // blank out while the network call runs.
             if items.isEmpty,
-               let cached: CatalogResponse = ResponseCache.shared.get(
-                   CacheKey.collectionItems(collectionId)
-               ) {
+               let cached: CatalogResponse = ResponseCache.shared.get(cacheKey) {
                 items = cached.items
                 hasMore = cached.hasMore ?? false
                 totalItems = cached.totalExact == false ? nil : cached.total
-                nextOffset = cached.items.count
-                snapshot = cached.snapshot
-            } else {
-                items = []
+            } else if items.isEmpty {
                 hasMore = true
                 totalItems = nil
-                nextOffset = 0
-                snapshot = nil
             }
         }
-        guard hasMore else { return }
+        guard reset || hasMore else { return }
 
         isLoading = true
         error = nil
 
+        // A reset, or a load-more over a cached first page, starts over from
+        // the first page and replaces the grid instead of appending to it.
+        let nextPage = reset ? nil : continuation
+
         do {
-            let response: CatalogResponse
-            if kind == .userCollections {
-                response = try await ContinuumAPI.shared.userCollectionItems(
-                    collectionId: collectionId,
-                    offset: nextOffset,
-                    limit: pageSize,
-                    snapshot: snapshot
-                )
+            let page: CatalogListPage
+            if let nextPage {
+                page = try await PrairieAPI.shared.nextCatalogPage(nextPage)
             } else {
-                response = try await ContinuumAPI.shared.libraryCollectionItems(
-                    libraryId: libraryId,
-                    collectionId: collectionId,
-                    offset: nextOffset,
-                    limit: pageSize,
-                    snapshot: snapshot
-                )
+                page = try await PrairieAPI.shared.catalogPage(.collectionItems(
+                    kind: kind ?? .regular, collectionId: collectionId, limit: pageSize
+                ))
             }
-            if reset {
-                items = response.items
-                ResponseCache.shared.set(response, for: CacheKey.collectionItems(collectionId))
+            if nextPage != nil, !page.startsOver {
+                items.append(contentsOf: page.response.items)
             } else {
-                items.append(contentsOf: response.items)
+                items = page.response.items
+                ResponseCache.shared.set(page.response, for: cacheKey)
             }
-            totalItems = response.totalExact == false ? nil : response.total
-            hasMore = response.hasMore ?? false
-            nextOffset += response.items.count
-            if snapshot == nil {
-                snapshot = response.snapshot
-            }
+            totalItems = page.response.totalExact == false ? nil : page.response.total
+            continuation = page.continuation
+            hasMore = page.continuation != nil
         } catch let err {
             if items.isEmpty {
                 error = ErrorState(err)

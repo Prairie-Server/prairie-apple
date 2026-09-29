@@ -22,10 +22,16 @@ enum DownloadSessionEvent: Sendable {
 /// resumes via HTTP Range, so this is an `NSObject` delegate (background
 /// sessions cannot use the async `URLSession` data API).
 final class DownloadSessionDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
-    static let sessionIdentifier = "com.continuum.play.downloads"
+    static let sessionIdentifier = "org.prairieserver.prairie.downloads"
+
+    /// Builds before the continuum → prairie rename ran their transfers in a
+    /// session with this identifier. The system keeps that session's tasks
+    /// across an update, but nothing would ever collect their results.
+    static let legacySessionIdentifier = "com.continuum.play.downloads"
+    private static let legacySessionDrainedKey = "downloads.legacySessionDrained.v1"
 
     private static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "com.continuum.app",
+        subsystem: Bundle.main.bundleIdentifier ?? "org.prairieserver.prairie",
         category: "Downloads"
     )
 
@@ -64,15 +70,43 @@ final class DownloadSessionDelegate: NSObject, URLSessionDownloadDelegate, @unch
     }
 
     /// Resume a previously-interrupted download from its `resumeData`.
-    func resume(data: Data) -> Int {
+    /// Returns nil, without sending anything, when the data resumes a
+    /// request other than a v2 download file route (for example one saved
+    /// before the file route moved); the caller restarts from the manifest.
+    func resume(data: Data) -> Int? {
         let task = session.downloadTask(withResumeData: data)
+        guard !Self.isRetired(task) else {
+            Self.logger.notice("Discarding resume data for a retired download URL")
+            task.cancel()
+            return nil
+        }
         task.resume()
         return task.taskIdentifier
+    }
+
+    /// Whether a task requests a URL that is not a v2 download file route.
+    /// A task whose request is unknown is kept; a stale one still ends in a
+    /// 410, which restarts its download.
+    private static func isRetired(_ task: URLSessionTask) -> Bool {
+        guard let url = task.originalRequest?.url ?? task.currentRequest?.url else { return false }
+        return !APIv2Client.isDownloadFileURL(url)
     }
 
     func cancel(taskId: Int) {
         session.getAllTasks { tasks in
             tasks.first(where: { $0.taskIdentifier == taskId })?.cancel()
+        }
+    }
+
+    /// Cancel every task in the session, including ones an earlier app
+    /// version started that the system reattached on launch. Returns once
+    /// the cancels are issued; their final events still arrive later.
+    func cancelAllTasks() async {
+        await withCheckedContinuation { cont in
+            session.getAllTasks { tasks in
+                for task in tasks { task.cancel() }
+                cont.resume()
+            }
         }
     }
 
@@ -95,12 +129,66 @@ final class DownloadSessionDelegate: NSObject, URLSessionDownloadDelegate, @unch
     }
 
     /// Identifiers of tasks still live in the (possibly relaunched) session.
-    func activeTaskIdentifiers() async -> Set<Int> {
+    /// `retired` holds the live tasks that request anything other than a v2
+    /// download file route; the caller cancels them and restarts their
+    /// downloads.
+    func liveTasks() async -> (current: Set<Int>, retired: Set<Int>) {
         await withCheckedContinuation { cont in
             session.getAllTasks { tasks in
-                cont.resume(returning: Set(tasks.map { $0.taskIdentifier }))
+                var current: Set<Int> = []
+                var retired: Set<Int> = []
+                for task in tasks {
+                    if Self.isRetired(task) {
+                        retired.insert(task.taskIdentifier)
+                    } else {
+                        current.insert(task.taskIdentifier)
+                    }
+                }
+                cont.resume(returning: (current, retired))
             }
         }
+    }
+
+    /// Stops every transfer still running in the pre-rename session and
+    /// returns the resume data of those that can continue, keyed by
+    /// `legacyTransferKey` of the file they request. Task identifiers aren't
+    /// used: they repeat across sessions and scopes. Runs until one drain completes;
+    /// later calls return an empty map without touching the old session.
+    static func drainLegacySession(defaults: UserDefaults = .standard) async -> [String: Data] {
+        guard !defaults.bool(forKey: legacySessionDrainedKey) else { return [:] }
+        let config = URLSessionConfiguration.background(withIdentifier: legacySessionIdentifier)
+        let session = URLSession(configuration: config, delegate: LegacySessionDrain(), delegateQueue: nil)
+        var resumeData: [String: Data] = [:]
+        for task in await session.allTasks {
+            if let download = task as? URLSessionDownloadTask,
+               let key = legacyTransferKey(task.originalRequest?.url ?? task.currentRequest?.url),
+               let data = await download.cancelByProducingResumeData() {
+                resumeData[key] = data
+            } else {
+                task.cancel()
+            }
+        }
+        session.invalidateAndCancel()
+        // Marked only once the session is fully drained: a process killed
+        // mid-drain retries on its next launch instead of leaving the old
+        // transfers running unobserved. `DownloadManager` shares one drain
+        // per process, so the session is never opened twice at once.
+        defaults.set(true, forKey: legacySessionDrainedKey)
+        if !resumeData.isEmpty {
+            logger.notice("Moved \(resumeData.count, privacy: .public) transfers out of the pre-rename download session")
+        }
+        return resumeData
+    }
+
+    /// Identifies a download file request by server and download id, so a
+    /// drained transfer can only be matched to the record on the server it
+    /// came from. Nil for anything but a v2 download file URL.
+    static func legacyTransferKey(_ url: URL?) -> String? {
+        guard APIv2Client.isDownloadFileURL(url), let url,
+              let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let scheme = parts.scheme?.lowercased(), let host = parts.host?.lowercased() else { return nil }
+        let port = parts.port ?? (scheme == "https" ? 443 : 80)
+        return "\(scheme)://\(host):\(port)\(parts.percentEncodedPath)"
     }
 
     // MARK: - URLSessionDownloadDelegate
@@ -184,24 +272,33 @@ final class DownloadSessionDelegate: NSObject, URLSessionDownloadDelegate, @unch
 }
 
 /// Builds an authenticated `URLRequest` for the background download
-/// session, replicating the header set `HTTPClient.attachAuthHeaders`
-/// applies (the background session can't share that actor's `URLSession`).
+/// session, replicating the header set `HTTPClient` applies (the background
+/// session can't share that actor's `URLSession`). The headers come from one
+/// captured owner, so a request never mixes one owner's token with another's
+/// profile.
 enum DownloadAuthHeaders {
-    static func authorizedRequest(url: URL, allowsCellular: Bool) async -> URLRequest {
+    static func authorizedRequest(url: URL, auth: CapturedOrdinaryRequestAuth, allowsCellular: Bool) -> URLRequest {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.allowsCellularAccess = allowsCellular
 
-        if let token = await TokenStore.shared.getAccessToken() {
+        if let token = auth.accessToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
-        if let profileId = await TokenStore.shared.getProfileId() {
+        if let profileId = auth.profileId {
             request.setValue(profileId, forHTTPHeaderField: "X-Profile-Id")
         }
-        if let profileToken = await TokenStore.shared.getProfileToken() {
+        if let profileToken = auth.profileToken {
             request.setValue(profileToken, forHTTPHeaderField: "X-Profile-Token")
         }
         AppleDeviceIdentity.current.applyHeaders(to: &request)
         return request
     }
+}
+
+/// Delegate for the pre-rename session while it is drained. A transfer that
+/// finished while the app wasn't running delivers its file here; that file
+/// has no record to land in, so it is dropped and the download restarts.
+private final class LegacySessionDrain: NSObject, URLSessionDownloadDelegate {
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {}
 }

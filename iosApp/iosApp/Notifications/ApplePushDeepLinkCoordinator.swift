@@ -5,28 +5,11 @@ import Foundation
 final class ApplePushDeepLinkCoordinator {
     static let shared = ApplePushDeepLinkCoordinator()
 
-    private var pendingDeepLink: URL?
-
     private init() {}
 
     func postDeepLink(from userInfo: [AnyHashable: Any]) {
         guard let url = Self.deepLinkURL(from: userInfo) else { return }
-        pendingDeepLink = url
-        NotificationCenter.default.post(
-            name: .continuumDeepLink,
-            object: nil,
-            userInfo: ["url": url]
-        )
-    }
-
-    func consumePendingDeepLink() -> URL? {
-        defer { pendingDeepLink = nil }
-        return pendingDeepLink
-    }
-
-    func clearPendingDeepLink(matching url: URL) {
-        guard pendingDeepLink?.absoluteString == url.absoluteString else { return }
-        pendingDeepLink = nil
+        PrairieDeepLinkCoordinator.shared.receive(url)
     }
 
     nonisolated static func deepLinkURL(from userInfo: [AnyHashable: Any]) -> URL? {
@@ -38,9 +21,7 @@ final class ApplePushDeepLinkCoordinator {
         let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
-        // Accept prairie:// (current) and continuum:// (legacy rebrand) deep links.
-        if let url = URL(string: trimmed),
-           url.scheme == "prairie" || url.scheme == "continuum" {
+        if let url = URL(string: trimmed), PrairieURLScheme.isAppURL(url) {
             return url
         }
 
@@ -59,7 +40,7 @@ final class ApplePushDeepLinkCoordinator {
         guard !contentID.isEmpty else { return nil }
 
         var deepLink = URLComponents()
-        deepLink.scheme = "prairie"
+        deepLink.scheme = PrairieURLScheme.current
         deepLink.host = route
         deepLink.path = "/" + contentID
         return deepLink.url

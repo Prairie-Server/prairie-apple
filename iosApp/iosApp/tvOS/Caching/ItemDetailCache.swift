@@ -1,7 +1,7 @@
 #if os(tvOS)
 import Foundation
 
-/// Shared cache of `ItemDetailViewModel` instances keyed by contentId.
+/// Shared cache of `ItemDetailViewModel` instances keyed by content ID and browsing library.
 ///
 /// Navigating between series → season → episode pages used to push a
 /// fresh view each time, each with a brand-new view model that showed
@@ -22,10 +22,15 @@ import Foundation
 final class ItemDetailCache {
     static let shared = ItemDetailCache()
 
-    private var entries: [String: ItemDetailViewModel] = [:]
+    private struct Key: Hashable {
+        let contentId: String
+        let libraryId: Int?
+    }
+
+    private var entries: [Key: ItemDetailViewModel] = [:]
     /// Access order, oldest first. `contentId` at `order.last` is the
     /// most-recently touched entry.
-    private var order: [String] = []
+    private var order: [Key] = []
     private let capacity = 20
 
     private init() {}
@@ -34,22 +39,32 @@ final class ItemDetailCache {
     /// first visit. Touches the LRU order. Callers should trigger a
     /// `loadDetail` refresh themselves after binding the result —
     /// the cache deliberately doesn't kick off network work.
-    func viewModel(for contentId: String) -> ItemDetailViewModel {
-        if let existing = entries[contentId] {
-            touch(contentId)
+    func viewModel(for contentId: String, libraryId: Int? = nil) -> ItemDetailViewModel {
+        let key = Key(contentId: contentId, libraryId: libraryId)
+        if let existing = entries[key] {
+            // A source-card preload may have completed after this model was
+            // first created. Re-adopt the response before the destination's
+            // first body evaluation instead of returning an older empty shell.
+            existing.hydrateFromCache(contentId: contentId)
+            touch(key)
             return existing
         }
-        let vm = ItemDetailViewModel()
-        entries[contentId] = vm
-        order.append(contentId)
+        let vm = ItemDetailViewModel(libraryId: libraryId)
+        // Home/library focus enrichment may already have fetched the full
+        // catalog payload before the user presses Select. Hydrate it here so
+        // TVItemDetailView's very first body evaluation can paint that cached
+        // hero instead of waiting for its `.task` to begin.
+        vm.hydrateFromCache(contentId: contentId)
+        entries[key] = vm
+        order.append(key)
         evictIfNeeded()
         return vm
     }
 
     /// Peek without creating or touching. Used by invalidation helpers
     /// that need to walk the parent chain from an existing entry.
-    func peek(_ contentId: String) -> ItemDetailViewModel? {
-        entries[contentId]
+    func peek(_ contentId: String, libraryId: Int? = nil) -> ItemDetailViewModel? {
+        entries[Key(contentId: contentId, libraryId: libraryId)]
     }
 
     /// Invalidate the cached entry and any parent series/season entries
@@ -59,21 +74,52 @@ final class ItemDetailCache {
     /// entry is still resident — the cached data keeps painting so the
     /// user never sees a spinner.
     func markStaleFamily(contentId: String) {
-        refresh(contentId)
-
-        guard let vm = entries[contentId], let detail = vm.detail else { return }
-
-        if let seriesId = detail.seriesId {
-            refresh(seriesId)
-            if let seasonNumber = detail.seasonNumber, seasonNumber > 0 {
-                refresh("\(seriesId)-S\(seasonNumber)")
+        var targets: Set<String> = [contentId]
+        for (key, vm) in entries where key.contentId == contentId {
+            guard let detail = vm.detail, let seriesId = detail.seriesId else { continue }
+            targets.insert(seriesId)
+            if let seasonNumber = detail.seasonNumber {
+                targets.insert("\(seriesId)-S\(seasonNumber)")
             }
         }
+        for target in targets { refresh(target) }
     }
 
-    /// Refresh a single entry. No-op if we don't hold one.
-    func markStale(contentId: String) {
-        refresh(contentId)
+    /// Refresh resident detail models only after the player's final progress
+    /// write has completed. Unlike `markStaleFamily`, this is awaited by the
+    /// player teardown path so a catalog read can never overtake the watched
+    /// mutation and permanently repaint the pre-play state.
+    @discardableResult
+    func refreshAfterPlayback(contentIds: Set<String>) async -> Set<String> {
+        var targets = contentIds
+        for (key, vm) in entries where contentIds.contains(key.contentId) {
+            guard let detail = vm.detail,
+                  let rawSeriesId = detail.seriesId else { continue }
+            let seriesId = rawSeriesId.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !seriesId.isEmpty else { continue }
+            targets.insert(seriesId)
+            if let seasonNumber = detail.seasonNumber {
+                targets.insert("\(seriesId)-S\(seasonNumber)")
+            }
+        }
+
+        // Most-recently visited first: in the normal Series -> player return,
+        // the visible combined Series page updates before any older cached
+        // episode/season page. Each model keeps painting its cached payload
+        // while this non-coalesced authoritative refresh runs.
+        let residentTargets = order.reversed().filter { targets.contains($0.contentId) }
+        for key in residentTargets {
+            guard let viewModel = entries[key] else { continue }
+            // Refresh the season the page shows rather than re-running the
+            // initial pick, which could move it to an earlier season.
+            viewModel.initialResumeSeasonNumber = viewModel.selectedSeason?.seasonNumber
+                ?? viewModel.initialResumeSeasonNumber
+            await viewModel.loadDetail(
+                contentId: key.contentId,
+                coalescesMetadataRequests: false
+            )
+        }
+        return Set(residentTargets.map(\.contentId))
     }
 
     /// Drop every cached entry. Called from `AuthService.signOut` and
@@ -87,15 +133,19 @@ final class ItemDetailCache {
     // MARK: - Internals
 
     private func refresh(_ contentId: String) {
-        guard let vm = entries[contentId] else { return }
-        Task { await vm.loadDetail(contentId: contentId) }
+        for (key, vm) in entries where key.contentId == contentId {
+            // A mutation refresh must not join a read dispatched before the write.
+            Task {
+                await vm.loadDetail(contentId: key.contentId, coalescesMetadataRequests: false)
+            }
+        }
     }
 
-    private func touch(_ contentId: String) {
-        if let idx = order.firstIndex(of: contentId) {
+    private func touch(_ key: Key) {
+        if let idx = order.firstIndex(of: key) {
             order.remove(at: idx)
         }
-        order.append(contentId)
+        order.append(key)
     }
 
     private func evictIfNeeded() {

@@ -19,6 +19,7 @@ private struct PersistedControlTarget: Codable {
     let name: String
     let serverId: String
     let serverName: String?
+    var serverIdentity: String? = nil
 }
 
 private enum PrairieControlHandoffError: LocalizedError {
@@ -57,6 +58,13 @@ final class PrairieControlClient {
 
     let clock = RemotePlaybackClock()
 
+    /// Skip intervals for the remote's buttons and this phone's system media
+    /// controls while it drives another device.
+    var skipIntervals: SeekIntervalPair {
+        SeekIntervalPreferences.shared.pair(for: .videoRemoteControl)
+    }
+    @ObservationIgnored private var isObservingSeekIntervals = false
+
     private var volumeReconciler = RemoteVolumeReconciler()
 
     private let nowPlaying = NowPlayingController()
@@ -65,6 +73,13 @@ final class PrairieControlClient {
     private var session: PrairieControlSession?
     private var readTask: Task<Void, Never>?
     private var connectionId: UUID?
+    /// Set once the hello frame for `connectionId` is on the wire. A drop
+    /// before that is a failed connect (reported by `connect`'s catch), not a
+    /// lost session, so the read loop and heartbeat must not start a
+    /// reconnect for it — closing a timed-out pre-hello connection would
+    /// otherwise race `fail` and flip a user-visible error into silent
+    /// reconnecting.
+    private var isHandshakeComplete = false
 
     private(set) var isReconnecting = false
     /// True while a silent foreground auto-resume probe is connected but
@@ -99,14 +114,58 @@ final class PrairieControlClient {
     private static let heartbeatInterval: Duration = .seconds(3)
     private static let maxMissedHeartbeats = 3
     private static let maxReconnectAttempts = 5
+    /// How long a single connect (TCP + TLS + hello) may take before it counts
+    /// as failed. An outbound `NWConnection` to a TV that's been switched off
+    /// parks in `.waiting` indefinitely, so without a deadline a reconnect
+    /// attempt — and the "Reconnecting…" bar — would never finish.
+    private static let connectTimeout: Duration = .seconds(6)
     private static let persistedTargetKey = "silocontrol.lastTarget"
     private static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "com.continuum.app",
+        subsystem: Bundle.main.bundleIdentifier ?? "org.prairieserver.prairie",
         category: "control.client"
     )
 
     var hasActiveSession: Bool {
         session != nil && activeTarget != nil
+    }
+
+    /// The one predicate for "the user has a TV engaged", read by the mode
+    /// button, the mini-bar, and playback routing alike so they never
+    /// disagree. True through an in-flight reconnect (the user still
+    /// considers the TV theirs; a Play then waits for the link instead of
+    /// starting on the phone) and false during a silent, still-unconfirmed
+    /// auto-resume probe (no UI is showing, so nothing may silently cast).
+    var remotePlaybackEngaged: Bool {
+        (hasActiveSession && !isAutoResuming) || isReconnecting
+    }
+
+    /// How long a Play tapped during a reconnect waits for the link before
+    /// giving up and reporting the failure in the remote cover.
+    private static let launchReconnectWait: Duration = .seconds(45)
+
+    /// Launches on the engaged TV, waiting out an in-flight reconnect first.
+    /// Returns false when no TV is engaged, so the caller may play locally.
+    /// Never falls through to local playback on its own: once the user has a
+    /// TV engaged, a failed launch is reported on the remote cover instead.
+    @discardableResult
+    func launchOnEngagedTV(_ request: PrairieControlPlaybackRequest) async -> Bool {
+        guard remotePlaybackEngaged else { return false }
+        if isReconnecting {
+            isShowingRemoteControl = true
+            let deadline = ContinuousClock.now + Self.launchReconnectWait
+            while isReconnecting, ContinuousClock.now < deadline {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            guard hasActiveSession else {
+                if errorMessage == nil {
+                    errorMessage = "Couldn't reconnect to \(lastTarget?.name ?? "the TV"). Choose a TV to keep playing there, or turn off control mode to play here."
+                }
+                isShowingRemoteControl = true
+                return true
+            }
+        }
+        await launch(request)
+        return true
     }
 
     @discardableResult
@@ -115,11 +174,11 @@ final class PrairieControlClient {
         origin: PrairieControlConnectOrigin = .user,
         allowCrossServer: Bool = false
     ) async -> Bool {
-        guard let activeServerId = ServerRegistry.shared.activeServerId else {
+        guard ServerRegistry.shared.activeServer != nil else {
             errorMessage = "Choose a server before controlling a TV."
             return false
         }
-        let targetsActiveServer = ServerRegistry.serverIdsMatch(target.serverId, activeServerId)
+        let targetsActiveServer = target.targetsActiveServer
         guard targetsActiveServer || (allowCrossServer && target.protocolVersion >= 2) else {
             errorMessage = "That TV is connected to a different server."
             return false
@@ -163,16 +222,28 @@ final class PrairieControlClient {
         let connectionId = UUID()
         self.session = session
         self.connectionId = connectionId
+        isHandshakeComplete = false
         let stream = await session.open()
         startReadLoop(stream: stream, connectionId: connectionId)
         startHeartbeat(connectionId: connectionId)
 
+        let hello = makeHello()
         do {
-            try await session.send(makeHello())
+            try await Self.withDeadline(
+                Self.connectTimeout,
+                onTimeout: { await session.close() }
+            ) {
+                try await session.send(hello)
+            }
         } catch {
-            fail(error.localizedDescription, connectionId: connectionId, quiet: origin != .user)
+            let message = error is PrairieControlConnectTimeout
+                ? "Couldn't reach \(target.name)."
+                : error.localizedDescription
+            fail(message, connectionId: connectionId, quiet: origin != .user)
+            await session.close()
             return false
         }
+        if self.connectionId == connectionId { isHandshakeComplete = true }
         isConnecting = false
         let connected = self.connectionId == connectionId && self.session != nil
         if connected, targetsActiveServer {
@@ -242,9 +313,16 @@ final class PrairieControlClient {
         guard await waitForVersionNegotiation() == 2 else {
             throw PrairieControlHandoffError.updateRequired
         }
-        guard await TokenStore.shared.getAccessToken() != nil else {
+        // The server-side approval runs under the owner captured here: the
+        // same account, credential and profile the offer names.
+        guard let auth = await TokenStore.shared.captureOrdinaryRequestAuth(), auth.accessToken != nil,
+              ServerRegistry.serverIdsMatch(auth.account.serverId, server.id),
+              auth.profileId == profileId else {
             throw PrairieControlHandoffError.identityChanged
         }
+        let identity = HTTPRequestIdentity(serverId: auth.account.serverId, serverURL: auth.account.serverURL,
+            profileId: profileId, clientFamily: AppleDeviceIdentity.current.clientFamily)
+        let api = PrairieAPI.shared.apiV2Client
 
         let requestId = UUID().uuidString
         pendingHandoffRequestId = requestId
@@ -252,47 +330,72 @@ final class PrairieControlClient {
         handoffReady = nil
         handoffCancellation = nil
 
+        // The deployment's other addresses let a TV that cannot reach the
+        // phone's URL (a network-plugin origin, say) still prepare the
+        // profile at the address it can reach. Best effort: without them the
+        // TV falls back to `serverURL` exactly, as before.
+        let endpoints = await Self.offeredEndpoints(for: server)
+        try ensureActiveIdentity(serverId: server.id, profileId: profileId)
         try await session.send(.handoffOffer(PrairieControlHandoffOffer(
             requestId: requestId,
             serverId: server.id,
             serverURL: server.url,
             serverName: server.displayName,
             profileId: profileId,
-            profileName: profileName
+            profileName: profileName,
+            serverIdentity: server.verifiedServerId,
+            serverEndpoints: endpoints
         )))
 
-        let challenge = try await waitForHandoffChallenge(requestId: requestId)
+        // A TV that still holds this phone's profile answers `handoff_ready`
+        // (reused) with no challenge at all. Waiting for a challenge there
+        // timed the launch out, so every second title sent to a TV failed.
+        let challenge: PrairieControlHandoffChallenge
+        switch try await waitForHandoffChallengeOrReady(requestId: requestId) {
+        case .ready(let ready):
+            try ensureActiveIdentity(serverId: server.id, profileId: profileId)
+            resetPendingHandoff()
+            return ready
+        case .challenge(let issued):
+            challenge = issued
+        }
         do {
             try ensureActiveIdentity(serverId: server.id, profileId: profileId)
 
-            let lookup: DeviceLookupResponse = try await HTTPClient.shared.get(
-                "/api/v1/auth/device",
-                query: ["code": challenge.userCode]
-            )
-            guard lookup.matchCode == challenge.matchCode,
-                  lookup.clientPurpose == "remote_playback",
-                  lookup.temporary == true else {
+            let lookup = try await api.deviceLookup(code: challenge.userCode, identity: identity,
+                expectedAccount: auth.account, expectedAuth: auth)
+            guard Self.isRemotePlaybackHandoff(lookup, answering: challenge) else {
                 throw PrairieControlHandoffError.invalidResponse
             }
 
             try ensureActiveIdentity(serverId: server.id, profileId: profileId)
-            try await HTTPClient.shared.postVoid(
-                "/api/v1/auth/device/approve-handoff",
-                body: DeviceApproveRequest(code: challenge.userCode)
-            )
+            try await api.decideDeviceLogin(code: challenge.userCode, approveHandoff: true, identity: identity,
+                expectedAccount: auth.account, expectedAuth: auth)
 
             let ready = try await waitForHandoffReady(requestId: requestId)
+            guard await TokenStore.shared.currentOrdinaryRequestAuth(matchingIdentityOf: auth) != nil else {
+                throw PrairieControlHandoffError.identityChanged
+            }
             try ensureActiveIdentity(serverId: server.id, profileId: profileId)
             resetPendingHandoff()
             return ready
         } catch {
-            try? await HTTPClient.shared.postVoid(
-                "/api/v1/auth/device/deny",
-                body: DeviceApproveRequest(code: challenge.userCode)
-            )
+            // Best effort: a deny that fails (or is refused because the owner
+            // changed) leaves the request to expire on the server.
+            try? await api.decideDeviceLogin(code: challenge.userCode, approveHandoff: false, identity: identity,
+                expectedAccount: auth.account, expectedAuth: auth)
             resetPendingHandoff()
             throw error
         }
+    }
+
+    /// The TV's challenge is only approvable when the server describes the
+    /// same request: its match code, opened for remote playback, and ending
+    /// in a temporary session rather than a full sign-in.
+    static func isRemotePlaybackHandoff(_ lookup: DeviceLookupResponse, answering challenge: PrairieControlHandoffChallenge) -> Bool {
+        lookup.matchCode == challenge.matchCode
+            && lookup.clientPurpose == "remote_playback"
+            && lookup.temporary == true
     }
 
     private func waitForVersionNegotiation() async -> Int? {
@@ -304,13 +407,25 @@ final class PrairieControlClient {
         return nil
     }
 
-    private func waitForHandoffChallenge(requestId: String) async throws -> PrairieControlHandoffChallenge {
-        for _ in 0..<200 {
+    private enum HandoffFirstReply {
+        case challenge(PrairieControlHandoffChallenge)
+        case ready(PrairieControlHandoffReady)
+    }
+
+    /// The TV's first reply to an offer: a challenge to approve, or, when it
+    /// already holds this phone's profile, a ready frame straight away.
+    /// Identity probing on the TV can precede the challenge, so this waits
+    /// longer than the old challenge-only wait did.
+    private func waitForHandoffChallengeOrReady(requestId: String) async throws -> HandoffFirstReply {
+        for _ in 0..<600 {
             if let cancellation = handoffCancellation, cancellation.requestId == requestId {
                 throw PrairieControlHandoffError.cancelled(cancellation.message ?? "The TV cancelled profile setup.")
             }
+            if let ready = handoffReady, ready.requestId == requestId {
+                return .ready(ready)
+            }
             if let challenge = handoffChallenge, challenge.requestId == requestId {
-                return challenge
+                return .challenge(challenge)
             }
             try await Task.sleep(for: .milliseconds(50))
         }
@@ -330,6 +445,22 @@ final class PrairieControlClient {
         throw PrairieControlHandoffError.timedOut
     }
 
+    /// The addresses the server offers besides the phone's own, from its
+    /// connections document. Empty (nil) when the server predates the
+    /// contract, the phone has no identity for it, or the read fails.
+    private static func offeredEndpoints(for server: ServerEntry) async -> [ServerEndpoint]? {
+        guard server.verifiedServerId != nil,
+              let token = await TokenStore.shared.getAccessToken(for: server.id), !token.isEmpty,
+              let document = await ServerIdentityResolver().fetchConnections(
+                  serverURL: server.url, bearer: token
+              ),
+              document.serverId == server.verifiedServerId else {
+            return nil
+        }
+        let endpoints = document.usableEndpoints
+        return endpoints.isEmpty ? nil : endpoints
+    }
+
     private func ensureActiveIdentity(serverId: String, profileId: String) throws {
         guard ServerRegistry.shared.activeServerId == serverId,
               ServerRegistry.shared.activeProfileId == profileId else {
@@ -346,7 +477,8 @@ final class PrairieControlClient {
             serverId: server.id,
             serverName: server.displayName,
             protocolVersion: target.protocolVersion,
-            isPlaying: true
+            isPlaying: true,
+            serverIdentity: server.verifiedServerId
         )
         activeTarget = effective
         lastTarget = effective
@@ -437,6 +569,15 @@ final class PrairieControlClient {
         quietDisconnect()
     }
 
+    /// User gave up on an in-flight reconnect: stop trying and forget the
+    /// target so no later foreground probe silently reattaches to it.
+    func cancelReconnect() {
+        guard isReconnecting else { return }
+        Self.logger.info("control: reconnect cancelled by user")
+        forgetPersistedTarget()
+        clearSession()
+    }
+
     /// Tears the session down without touching the persisted target — used
     /// when *we* let go (idle auto-resumed session, failed probe), where a
     /// later foreground should still be allowed to resume.
@@ -504,9 +645,11 @@ final class PrairieControlClient {
               !isReconnecting,
               autoResumeTask == nil,
               let persisted = Self.loadPersistedTarget(),
-              ServerRegistry.serverIdsMatch(
-                  persisted.serverId,
-                  ServerRegistry.shared.activeServerId
+              ServerRegistry.serversMatch(
+                  serverId: persisted.serverId,
+                  verifiedServerId: persisted.serverIdentity,
+                  serverId: ServerRegistry.shared.activeServerId,
+                  verifiedServerId: ServerRegistry.shared.activeServer?.verifiedServerId
               )
         else { return }
 
@@ -565,13 +708,13 @@ final class PrairieControlClient {
                     await MainActor.run { self?.handle(message, connectionId: connectionId) }
                 }
                 await MainActor.run {
-                    guard self?.connectionId == connectionId else { return }
-                    self?.beginReconnect(reason: "Lost connection to the TV.")
+                    guard let self, self.isLiveConnection(connectionId) else { return }
+                    self.beginReconnect(reason: "Lost connection to the TV.")
                 }
             } catch {
                 await MainActor.run {
-                    guard self?.connectionId == connectionId else { return }
-                    self?.beginReconnect(reason: error.localizedDescription)
+                    guard let self, self.isLiveConnection(connectionId) else { return }
+                    self.beginReconnect(reason: error.localizedDescription)
                 }
             }
         }
@@ -643,7 +786,7 @@ final class PrairieControlClient {
         heartbeatTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: Self.heartbeatInterval)
-                guard let self, self.connectionId == connectionId else { return }
+                guard let self, self.isLiveConnection(connectionId) else { return }
                 self.missedHeartbeats += 1
                 if self.missedHeartbeats > Self.maxMissedHeartbeats {
                     self.beginReconnect(reason: "Lost connection to the TV.")
@@ -654,8 +797,25 @@ final class PrairieControlClient {
         }
     }
 
+    /// True while `id` is the current connection and its hello has been sent,
+    /// i.e. a drop now is a lost session rather than a failed connect.
+    private func isLiveConnection(_ id: UUID) -> Bool {
+        connectionId == id && isHandshakeComplete
+    }
+
     private func beginReconnect(reason: String) {
         guard let target = lastTarget else { clearSession(); return }
+        // A reconnect attempt's own read loop / heartbeat reports the failed
+        // connection through here too. Restarting would cancel the running
+        // loop and hand it a fresh attempt budget — an endless
+        // "Reconnecting…" while the TV is off. Let the loop see the failure.
+        // `reconnectTask` is cleared when the loop finishes, so a stale
+        // handle can't block a later drop (e.g. one deferred from the
+        // background and resumed by `appDidBecomeActive`).
+        if isReconnecting, reconnectTask != nil || pendingReconnectReason != nil {
+            Self.logger.debug("control: reconnect already in progress; ignoring \(reason, privacy: .public)")
+            return
+        }
         Self.logger.info("control: beginReconnect reason=\(reason, privacy: .public) appState=\(UIApplication.shared.applicationState.rawValue, privacy: .public)")
         heartbeatTask?.cancel(); heartbeatTask = nil
         readTask?.cancel(); readTask = nil
@@ -683,12 +843,15 @@ final class PrairieControlClient {
                     try? await Task.sleep(for: .seconds(Double(attempt - 1)))   // backoff 1,2,3,4s
                 }
                 if Task.isCancelled { return }
-                if await self.connect(to: target, origin: .reconnect) {
+                if await self.connect(to: target, origin: .reconnect), self.session != nil {
                     self.isReconnecting = false
+                    self.reconnectTask = nil
                     return
                 }
+                if Task.isCancelled { return }
             }
             self.isReconnecting = false
+            self.reconnectTask = nil
             Self.logger.info("control: reconnect gave up after \(Self.maxReconnectAttempts, privacy: .public) attempts")
             // Give up — but if the remote cover is open, keep it up showing
             // why (with "Choose a Different TV" as the recovery path) instead
@@ -803,7 +966,8 @@ final class PrairieControlClient {
             id: target.id,
             name: target.name,
             serverId: target.serverId,
-            serverName: target.serverName
+            serverName: target.serverName,
+            serverIdentity: target.serverIdentity
         )
         guard let data = try? JSONEncoder().encode(value) else { return }
         UserDefaults.standard.set(data, forKey: Self.persistedTargetKey)
@@ -827,7 +991,8 @@ final class PrairieControlClient {
             deviceId: device.id,
             serverId: server?.id,
             serverName: server?.displayName,
-            supportedVersions: PrairieControlProtocol.supportedVersions
+            supportedVersions: PrairieControlProtocol.supportedVersions,
+            serverIdentity: server?.verifiedServerId
         ))
     }
 
@@ -869,7 +1034,21 @@ final class PrairieControlClient {
             next: { [weak self] in self?.playNext() },
             isNextEnabled: { [weak self] in self?.state?.hasNextEpisode == true }
         ))
-        nowPlaying.setPreferredSkipIntervals(backward: 10, forward: 30)
+        if !isObservingSeekIntervals {
+            isObservingSeekIntervals = true
+            SeekIntervalPreferences.shared.observe(self) { [weak self] in
+                self?.syncNowPlayingSkipIntervals()
+            }
+        }
+        syncNowPlayingSkipIntervals()
+    }
+
+    private func syncNowPlayingSkipIntervals() {
+        let pair = skipIntervals
+        nowPlaying.setPreferredSkipIntervals(
+            backward: Double(pair.backward),
+            forward: Double(pair.forward)
+        )
     }
 
     private func updateNowPlayingArtwork(contentId: String) {
@@ -884,7 +1063,7 @@ final class PrairieControlClient {
 
         nowPlayingArtworkTask = Task { [weak self] in
             do {
-                let detail = try await ContinuumAPI.shared.itemDetail(contentId: contentId)
+                let detail = try await PrairieAPI.shared.itemDetail(contentId: contentId)
                 try Task.checkCancellation()
                 self?.applyNowPlayingArtwork(from: detail)
             } catch is CancellationError {
@@ -910,6 +1089,34 @@ final class PrairieControlClient {
         nowPlayingArtworkTask = nil
         nowPlayingArtworkContentId = nil
         nowPlaying.detach()
+    }
+}
+
+/// Thrown by `PrairieControlClient.withDeadline` when the operation outlives it.
+struct PrairieControlConnectTimeout: Error {}
+
+extension PrairieControlClient {
+    /// Runs `operation` and throws `PrairieControlConnectTimeout` if it hasn't
+    /// finished within `deadline`. `onTimeout` runs before the throw and must
+    /// unblock `operation` (e.g. close the connection it is waiting on): the
+    /// group cannot return until both children finish, and a send parked in
+    /// `NWConnection` doesn't observe task cancellation.
+    static func withDeadline<T: Sendable>(
+        _ deadline: Duration,
+        onTimeout: @escaping @Sendable () async -> Void,
+        _ operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                try await Task.sleep(for: deadline)
+                await onTimeout()
+                throw PrairieControlConnectTimeout()
+            }
+            let result = try await group.next()!
+            group.cancelAll()
+            return result
+        }
     }
 }
 #endif

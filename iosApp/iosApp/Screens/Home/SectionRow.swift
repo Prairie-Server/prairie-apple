@@ -1,12 +1,22 @@
 import SwiftUI
 
+extension ResolvedSection {
+    var isContinueWatchingSection: Bool {
+        let type = sectionType.lowercased()
+        return type == "continue_watching" || type == "in_progress"
+    }
+}
+
 /// A single section row on the home screen.
 /// Wraps MediaRow and handles "continue watching" progress display.
 /// Picks the thumbnail layout for episode-centric sections (Next Up,
 /// and Continue Watching resume rows).
 struct SectionRow: View {
     let section: ResolvedSection
-    let onItemTap: (String) -> Void
+    /// Destination ID plus the card that initiated navigation. Continue
+    /// Watching may substitute a parent Series ID while retaining the episode
+    /// card as context for the detail route seed.
+    let onItemTap: (_ destinationContentId: String, _ item: SectionItem) -> Void
     var onSeeAll: (() -> Void)? = nil
     var onRemoveFromContinueWatching: ((SectionItem) -> Void)? = nil
     var onSetWatched: ((SectionItem, Bool) async -> Bool)? = nil
@@ -17,6 +27,11 @@ struct SectionRow: View {
     /// when an unrelated view (e.g. the tvOS top menu) hands focus down into
     /// this row rather than the user d-padding into it.
     var focusRequest: Int = 0
+    /// Optional exact item target for the programmatic focus kick.
+    var focusRequestItemId: String? = nil
+    /// tvOS detail-pop token forwarded to `MediaRow`; the row's ownership gate
+    /// ensures only the launch row restores its exact previously focused card.
+    var detailReturnFocusRequest: Int = 0
     var onMoveUp: (() -> Void)? = nil
     /// tvOS-only: card-focus reports forwarded from `MediaRow` so hosts
     /// can drive the Skyline focus marquee with `(item, row title)`.
@@ -31,13 +46,20 @@ struct SectionRow: View {
     var onMoveDown: (() -> Void)? = nil
     /// Live tvOS ownership gate for context-menu focus restoration.
     var focusRestorationOwner: Binding<Bool>? = nil
+    #if !os(tvOS)
+    @State private var detailBrowseOriginID = UUID().uuidString
+    #endif
+    /// Reports watched changes for rows without an owning model's handler.
+    @State private var watchedFeedback = MediaActionFeedback()
 
     #if os(tvOS)
+    @Environment(\.browseLibraryId) private var playbackLibraryId
     @Environment(AppRouter.self) private var router
     #endif
+    @Environment(\.allowsDirectPlayback) private var allowsDirectPlayback
 
     private var isContinueWatching: Bool {
-        section.sectionType == "continue_watching" || section.sectionType == "in_progress"
+        section.isContinueWatchingSection
     }
 
     private var hasEpisodeItems: Bool {
@@ -87,8 +109,8 @@ struct SectionRow: View {
         MediaRow(
             title: section.title,
             items: section.items,
-            onItemTap: onItemTap,
-            onItemPlay: playItem,
+            onItemTap: selectItem,
+            onItemPlay: allowsDirectPlayback ? playItem : nil,
             onSeeAll: onSeeAll,
             showProgress: showProgress,
             icon: isContinueWatching ? "play.circle.fill" : nil,
@@ -96,7 +118,11 @@ struct SectionRow: View {
             prefersDefaultFocusOnFirstItem: prefersDefaultFocusOnFirstItem,
             defaultFocusPriority: defaultFocusPriority,
             focusRequest: focusRequest,
+            focusRequestItemId: focusRequestItemId,
+            detailReturnFocusRequest: detailReturnFocusRequest,
             onRemoveFromContinueWatching: isContinueWatching ? onRemoveFromContinueWatching : nil,
+            onOpenContextDetail: nil,
+            showsPlayInContextMenu: isContinueWatching,
             onSetWatched: { item, played in
                 await setWatched(item, played: played)
             },
@@ -107,38 +133,59 @@ struct SectionRow: View {
             onMoveDown: onMoveDown,
             focusRestorationOwner: focusRestorationOwner
         )
+        .mediaActionFeedback(watchedFeedback)
+        #if !os(tvOS)
+        .environment(
+            \.itemDetailBrowseSource,
+            ItemDetailBrowseSource(
+                originID: detailBrowseOriginID,
+                contentIDs: section.items.map(\.contentId)
+            )
+        )
+        #endif
     }
 
     private func playItem(_ item: SectionItem) {
         #if os(tvOS)
         router.presentPlayer(
             contentId: item.contentId,
+            libraryId: playbackLibraryId,
             resumePosition: item.positionSeconds,
+            prefersLastUsedVersion: isContinueWatching,
             posterURL: item.posterUrl,
             backdropURL: item.backdropUrl
         )
         #endif
     }
 
+    /// Continue Watching Select opens context instead of immediately playing:
+    /// episodes land on their parent Series with the exact season and episode
+    /// active, while movies retain their own detail page. Direct Resume/Play
+    /// remains available from the remote Play/Pause command and long press.
+    private func selectItem(_ contentId: String) {
+        guard let item = section.items.first(where: { $0.contentId == contentId }) else {
+            return
+        }
+
+        onItemTap(contentId, item)
+    }
+
     /// Home injects a model-owned mutation so its membership-driven rows and
-    /// cache update immediately. Shared SectionRow callers retain the original
-    /// direct API behavior when no owning model provides an action.
+    /// cache update immediately. Shared SectionRow callers use the card
+    /// dispatcher and report its outcome here, because the card leaves
+    /// reporting to whoever supplies its watched action.
     private func setWatched(_ item: SectionItem, played: Bool) async -> Bool {
         if let onSetWatched {
             return await onSetWatched(item, played)
         }
 
-        do {
-            try await ContinuumAPI.shared.setWatched(
-                contentId: item.contentId,
-                played: played
-            )
-            NotificationCenter.default.post(name: .homeSectionsShouldRefresh, object: nil)
-            return true
-        } catch {
-            print("[SectionRow] Failed to update watched state for \(item.contentId): \(error)")
-            return false
-        }
+        let outcome = await MediaCardWatchedSync.setWatched(
+            contentId: item.contentId, played: played, seriesId: item.seriesId
+        )
+        watchedFeedback.report(outcome)
+        guard outcome == .applied else { return false }
+        NotificationCenter.default.post(name: .homeSectionsShouldRefresh, object: nil)
+        return true
     }
 
 }

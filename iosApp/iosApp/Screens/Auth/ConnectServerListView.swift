@@ -40,11 +40,11 @@ struct ConnectServerListView: View {
             VStack(spacing: 10) {
                 AuroraEyebrow(text: "Connect", centered: true)
                 Text("Choose a server")
-                    .font(.continuumTitle)
+                    .font(.prairieTitle)
                     .foregroundStyle(Color.auroraInk)
                     .multilineTextAlignment(.center)
                 Text("Choose a saved server or one found on your LAN. Sign-in comes next.")
-                    .font(.continuumBody)
+                    .font(.prairieBody)
                     .foregroundStyle(Color.auroraInkSecondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
@@ -57,7 +57,7 @@ struct ConnectServerListView: View {
 
             if let status = viewModel.statusText, !status.isEmpty {
                 Text(status)
-                    .font(.continuumCaption)
+                    .font(.prairieCaption)
                     .foregroundStyle(Color.auroraInkSecondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.bottom, 8)
@@ -144,7 +144,7 @@ struct ConnectServerListView: View {
                 }
                 if viewModel.isScanning && freshHits.isEmpty {
                     Text("Scanning your network for Prairie…")
-                        .font(.continuumCaption)
+                        .font(.prairieCaption)
                         .foregroundStyle(Color.auroraInkSecondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.vertical, 8)
@@ -155,7 +155,7 @@ struct ConnectServerListView: View {
 
         if !viewModel.isScanning && saved.isEmpty && freshHits.isEmpty {
             Text("No servers yet — wait for the scan, or add a URL manually.")
-                .font(.continuumCaption)
+                .font(.prairieCaption)
                 .foregroundStyle(Color.auroraInkSecondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, 4)
@@ -179,11 +179,11 @@ struct ConnectServerListView: View {
                 .frame(width: 28)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.continuumSubheadline)
+                    .font(.prairieSubheadline)
                     .foregroundStyle(Color.auroraInk)
                     .lineLimit(1)
                 Text(subtitle)
-                    .font(.continuumCaption)
+                    .font(.prairieCaption)
                     .foregroundStyle(Color.auroraInkSecondary)
                     .lineLimit(2)
             }
@@ -223,7 +223,7 @@ struct ConnectServerListView: View {
                     if let error = viewModel.errorText {
                         Text(error)
                             .font(.system(size: 20))
-                            .foregroundStyle(Color.continuumError)
+                            .foregroundStyle(Color.prairieError)
                             .padding(.horizontal, 24)
                             .padding(.top, 4)
                     }
@@ -233,7 +233,7 @@ struct ConnectServerListView: View {
                 .padding(.bottom, 64)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .safeAreaPadding(.horizontal, ContinuumTheme.Skyline.safeAreaX)
+            .safeAreaPadding(.horizontal, PrairieTheme.Skyline.safeAreaX)
             .safeAreaPadding(.top, 48)
             .defaultFocus($focusedRow, defaultFocusRow)
         }

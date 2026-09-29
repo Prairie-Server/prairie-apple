@@ -28,8 +28,34 @@ final class CompanionPairingCoordinator {
         case confirmMatch(tvName: String, serverName: String, matchCode: String)
         /// Pushing/approving the remaining servers after confirmation.
         case working(progress: String)
-        case finished(signedIn: [String], failed: [String])
+        /// `failed` pairs each server that did not sign in with the reason
+        /// the TV reported, already phrased for the user.
+        case finished(signedIn: [String], failed: [FailedServer])
         case error(String)
+    }
+
+    struct FailedServer: Equatable, Sendable {
+        let name: String
+        let code: PairingFailureCode
+
+        /// What to tell the phone user. The TV shows the detailed recovery
+        /// (provider setup, alternate address); the phone summarises it.
+        var summary: String {
+            switch code {
+            case .unreachable:
+                return "\(name): the TV couldn't reach this address. Follow the steps on the TV, or set the TV up with the server's public address."
+            case .identityMismatch:
+                return "\(name): the address answered as a different server."
+            case .denied:
+                return "\(name): the sign-in was declined."
+            case .expired:
+                return "\(name): the code expired before it was approved."
+            case .updateRequired:
+                return "\(name): the server or Prairie needs to be updated first."
+            case .authFailed:
+                return "\(name): the TV couldn't finish signing in."
+            }
+        }
     }
 
     enum Timeouts {
@@ -40,6 +66,13 @@ final class CompanionPairingCoordinator {
         /// request on their screen — leave time to find the remote.
         static let firstDeviceStarted: Duration = .seconds(90)
         static let deviceStarted: Duration = .seconds(30)
+        /// When the push offered alternate addresses, a newer TV may probe
+        /// each one and then ask its user whether to use the one that
+        /// answered, so `deviceStarted` can legitimately take longer. The
+        /// protocol has no progress frame an older TV would tolerate, so the
+        /// phone waits longer instead.
+        static let firstDeviceStartedWithEndpoints: Duration = .seconds(240)
+        static let deviceStartedWithEndpoints: Duration = .seconds(180)
         static let serverResult: Duration = .seconds(30)
     }
 
@@ -52,6 +85,10 @@ final class CompanionPairingCoordinator {
     private let deviceModel: String
     private let availableServers: @MainActor () async -> [ServerEntry]
     private let accessToken: @MainActor (String) async -> String?
+    /// The addresses a server offers besides the phone's own, or nil when the
+    /// server predates the contract or the read fails. Best effort: the push
+    /// then carries the phone's address alone, as before.
+    private let serverEndpoints: @MainActor (ServerEntry, _ bearer: String) async -> [ServerEndpoint]?
 
     private var tvName: String
     private var queue: [ServerEntry] = []
@@ -59,14 +96,14 @@ final class CompanionPairingCoordinator {
     private var isFirstPush = true
     private var pendingUserCode: String?
     private var signedIn: [String] = []
-    private var failed: [String] = []
+    private var failed: [FailedServer] = []
     private var runTask: Task<Void, Never>?
     private var watchdog: Task<Void, Never>?
     /// Set once the flow reaches a deliberate end (summary, error, or a
     /// user-initiated cancel), so a trailing stream close can't repaint the
     /// terminal state and late messages are ignored.
     private var concluded = false
-    private static let logger = Logger(subsystem: "com.continuum.app", category: "pairing.companion")
+    private static let logger = Logger(subsystem: "org.prairieserver.prairie", category: "pairing.companion")
 
     init(
         channel: any PairingChannel,
@@ -75,7 +112,8 @@ final class CompanionPairingCoordinator {
         api: any PairingDeviceAuthorizing = PairingDeviceAPI(),
         deviceModel: String = UIDevice.current.model,
         availableServers: @escaping @MainActor () async -> [ServerEntry] = CompanionPairingCoordinator.serversWithTokens,
-        accessToken: @escaping @MainActor (String) async -> String? = { await TokenStore.shared.getAccessToken(for: $0) }
+        accessToken: @escaping @MainActor (String) async -> String? = { await TokenStore.shared.getAccessToken(for: $0) },
+        serverEndpoints: @escaping @MainActor (ServerEntry, String) async -> [ServerEndpoint]? = CompanionPairingCoordinator.offeredEndpoints
     ) {
         self.channel = channel
         self.stream = stream
@@ -84,6 +122,7 @@ final class CompanionPairingCoordinator {
         self.deviceModel = deviceModel
         self.availableServers = availableServers
         self.accessToken = accessToken
+        self.serverEndpoints = serverEndpoints
     }
 
     /// Open the transport for a discovered TV and start its coordinator.
@@ -147,9 +186,9 @@ final class CompanionPairingCoordinator {
         case let .deviceStarted(_, userCode, matchCode):
             disarmWatchdog()
             await handleDeviceStarted(userCode: userCode, channelCode: matchCode)
-        case let .serverResult(_, status, _):
+        case let .serverResult(_, status, error):
             disarmWatchdog()
-            recordResult(signedInOK: status == .signedIn)
+            recordResult(signedInOK: status == .signedIn, code: PairingFailureCode(wire: error))
             await pushNext()
         case .cancel:
             await conclude(.error("Setup was cancelled on \(tvName)."), goodbye: nil)
@@ -193,7 +232,7 @@ final class CompanionPairingCoordinator {
                 state = .confirmMatch(tvName: tvName, serverName: server.displayName, matchCode: serverCode)
             }
         } catch {
-            await failCurrentAndAdvance(server)
+            await failCurrentAndAdvance(server, code: UpdateRequirement(error) == nil ? .authFailed : .updateRequired)
         }
     }
 
@@ -242,18 +281,32 @@ final class CompanionPairingCoordinator {
         } else {
             state = .working(progress: "Setting up \(server.displayName)…")
         }
+        var endpoints: [ServerEndpoint]?
+        if server.verifiedServerId != nil,
+           let token = await accessToken(server.id), !token.isEmpty {
+            endpoints = await serverEndpoints(server, token)
+        }
+        guard !concluded, queue.first?.id == server.id else { return }
         // Arm BEFORE the suspending send: the stream reader keeps running
         // while `send` is suspended, so a fast TV's `deviceStarted` could
         // otherwise land (and disarm nothing) before this task resumed and
         // armed a stale watchdog over the confirm screen.
+        let offersAlternates = !(endpoints ?? []).isEmpty
         armWatchdog(
-            firstPush ? Timeouts.firstDeviceStarted : Timeouts.deviceStarted,
+            firstPush
+                ? (offersAlternates ? Timeouts.firstDeviceStartedWithEndpoints : Timeouts.firstDeviceStarted)
+                : (offersAlternates ? Timeouts.deviceStartedWithEndpoints : Timeouts.deviceStarted),
             firstPush
                 ? "\(tvName) didn’t respond. Make sure you allowed the request on the TV, then try again."
                 : "\(tvName) stopped responding."
         )
         do {
-            try await channel.send(.pushServer(serverURL: server.url, serverName: server.displayName))
+            try await channel.send(.pushServer(
+                serverURL: server.url,
+                serverName: server.displayName,
+                serverIdentity: server.verifiedServerId,
+                endpoints: endpoints
+            ))
         } catch {
             await conclude(.error("Connection to \(tvName) was lost."), goodbye: nil)
         }
@@ -272,19 +325,36 @@ final class CompanionPairingCoordinator {
             // The TV is still polling this server; without the approval it can
             // only wait out its device code. Ending the session keeps both
             // screens honest instead of leaving the TV stuck on a dead code.
+            // The approval is never re-sent, even when its answer was lost.
             await conclude(
-                .error("Couldn’t reach \(server.displayName) to approve the sign-in. Check this \(deviceModel)’s connection and try again."),
+                .error(approveFailureMessage(for: error, server: server)),
                 goodbye: .cancel(reason: "approve_failed")
             )
         }
     }
 
-    private func recordResult(signedInOK: Bool) {
+    /// What to tell the user when the approval failed. A 409 means the
+    /// request was already approved or declined, and a 410 means it expired.
+    private func approveFailureMessage(for error: Error, server: ServerEntry) -> String {
+        if let requirement = UpdateRequirement(error) { return requirement.message }
+        switch error {
+        case APIv2Error.problem(let problem) where problem.status == 409:
+            return "This sign-in request was already approved or declined. Start again on \(tvName)."
+        case APIv2Error.problem(let problem) where problem.status == 410 || problem.status == 404:
+            return "The code expired before it was approved. Start again on \(tvName)."
+        case is URLError:
+            return "Couldn’t reach \(server.displayName) to approve the sign-in. Check this \(deviceModel)’s connection and try again."
+        default:
+            return "\(server.displayName) couldn’t approve the sign-in. Try again."
+        }
+    }
+
+    private func recordResult(signedInOK: Bool, code: PairingFailureCode = .authFailed) {
         guard let server = queue.first else { return }
         if signedInOK {
             signedIn.append(server.displayName)
         } else {
-            failed.append(server.displayName)
+            failed.append(FailedServer(name: server.displayName, code: code))
         }
         queue.removeFirst()
     }
@@ -292,8 +362,8 @@ final class CompanionPairingCoordinator {
     /// A server failed before approval (token missing, lookup failed, or the
     /// codes couldn't be bound). Move on; the TV abandons its in-flight
     /// attempt as soon as the next `pushServer` arrives.
-    private func failCurrentAndAdvance(_ server: ServerEntry) async {
-        failed.append(server.displayName)
+    private func failCurrentAndAdvance(_ server: ServerEntry, code: PairingFailureCode = .authFailed) async {
+        failed.append(FailedServer(name: server.displayName, code: code))
         if !queue.isEmpty { queue.removeFirst() }
         await pushNext()
     }
@@ -343,6 +413,19 @@ final class CompanionPairingCoordinator {
             }
         }
         return result
+    }
+
+    /// The other addresses `server` offers, from its connections document,
+    /// read with that server's own token. Only used when the document
+    /// confirms the identity the phone already verified for the server.
+    static func offeredEndpoints(for server: ServerEntry, bearer: String) async -> [ServerEndpoint]? {
+        guard let document = await ServerIdentityResolver().fetchConnections(
+            serverURL: server.url, bearer: bearer
+        ), document.serverId == server.verifiedServerId else {
+            return nil
+        }
+        let endpoints = document.usableEndpoints
+        return endpoints.isEmpty ? nil : endpoints
     }
 
     /// Whether this device has anything to hand off — gates the discovery

@@ -1,29 +1,34 @@
-Silo Open-Source Acknowledgements
+Prairie Open-Source Acknowledgements
 ================================
 
-This Silo build includes the components listed below. Their complete license
+This Prairie build includes the components listed below. Their complete license
 texts are bundled beside this file and are available from Settings > About >
 Open Source Licenses.
 
 AetherEngine
-  Revision: 0ae80496ab6f3fda135f43ef195ff10961c0e625 (release 6.34.0)
+  Revision: a02975eda62a13c7c24a2f1ac57840a12975c0b5 (upstream release
+  7.13.0 plus Silo patches for subtitle renditions,
+  source timing, primary ASS routing with normalized secondary/PiP text,
+  refreshable authorization for native HLS, sidecar subtitles and fonts,
+  and TrueHD Atmos object rendering to Apple Positional Audio)
   License: GNU LGPL version 3 with the upstream Apple Store / DRM exception
-  Source: https://github.com/superuser404notfound/AetherEngine/tree/0ae80496ab6f3fda135f43ef195ff10961c0e625
+  Source (modified, as built): https://github.com/Silo-Server/AetherEngine/tree/a02975eda62a13c7c24a2f1ac57840a12975c0b5
+  Upstream base: https://github.com/superuser404notfound/AetherEngine/tree/7.13.0
   Rebuild: the Package.swift and source tree at that revision
 
 FFmpegBuild and embedded media frameworks
-  Revision: b2185fa842b829cd53d182a5e9a53182c1d9c84c (release 2.4.3)
-  Source and rebuild script: https://github.com/superuser404notfound/FFmpegBuild/tree/b2185fa842b829cd53d182a5e9a53182c1d9c84c
+  Revision: 9ee46ba4fb533e35efa6492eb1a903ca4f8058fc (release 3.4.0)
+  Source and rebuild script: https://github.com/superuser404notfound/FFmpegBuild/tree/9ee46ba4fb533e35efa6492eb1a903ca4f8058fc
 
   Components built by that revision:
   - FFmpeg n8.1.2, currently 38b88335f99e76ed89ff3c93f877fdefce736c13:
     LGPL-2.1-or-later
-  - dav1d 1.5.1, currently 42b2b24fb8819f1ed3643aa9cf2a62f03868e3aa:
+  - dav1d 1.5.4, currently 54706fc6bc0cdecab7e9593974a4039cc038fca7:
     BSD-2-Clause
-  - zimg release-3.0.5, currently
-    e5b0de6bebbcbc66732ed5afaafef6b2c7dfef87: WTFPL-2.0
-  - libzvbi v0.2.44, currently
-    5169a428d51c3ae8ff7b0897e8a687d8e05e37b5: LGPL-2.0-or-later,
+  - zimg release-3.0.6, currently
+    f819b14e8f39d1282400b0d9543e8ef73c1b2bbd: WTFPL-2.0
+  - libzvbi v0.2.45, currently
+    d3a5ee9f2b047bf16cd1ee5ccf6ec05ee75409d0: LGPL-2.0-or-later,
     conveyed under LGPL-2.1;
     src/ure.c retains its MIT notice
 
@@ -31,35 +36,52 @@ FFmpegBuild and embedded media frameworks
   nonfree components. FFmpegBuild removes the three GPL libzvbi source files
   before compilation and publishes the replacement stubs and patches in its
   build.sh. The app embeds these nine libraries as separate dynamic
-  frameworks: Libavcodec, Libavformat, Libavutil, Libswresample, Libswscale,
-  Libavfilter, Libdav1d, Libzimg, and Libzvbi.
+  frameworks: AetherLibavcodec, AetherLibavformat, AetherLibavutil,
+  AetherLibswresample, AetherLibswscale, AetherLibavfilter, AetherLibdav1d,
+  AetherLibzimg, and AetherLibzvbi.
 
-  "Currently" records the tags' dereferenced values observed on 2026-08-22.
+  "Currently" records the tags' dereferenced values observed on 2026-09-04.
   FFmpegBuild's script records tag names rather than immutable upstream
   commit IDs; the dereferenced commits recorded here pin the exact sources if
   those tags ever move.
 
+SiloObjectAudio / truehd
+  Revision: 645b91c072fafb60146151fd5127f8ff0ca38b6f (release 1.0.0)
+  License: Apache License 2.0 (SiloObjectAudio-Apache-2.0.txt, with its NOTICE)
+  Source and rebuild script: https://github.com/Silo-Server/SiloObjectAudio/tree/645b91c072fafb60146151fd5127f8ff0ca38b6f
+  Embeds the truehd crate from https://github.com/truehdd/truehdd
+  (Apache-2.0), commit 45eff984e3e5ab0cf36a47d12148b1628c38bda4, the oamd crate
+  0.1.0 from crates.io (https://github.com/truehdd/oamd, Apache-2.0), and the
+  Rust standard library and crates listed in its NOTICE (MIT or Apache-2.0).
+
 LibDovi / libdovi
-  Packaging revision: 89be93431c2a5f2e54fb77e93059071b8d2ddb3a
-  (release 2.0.0)
+  Packaging revision: 0d7cce1d6836a30d13a3a2326e50a153af53f014
+  (release 2.1.0)
   Packaging license: MIT
-  Packaging source and rebuild script: https://github.com/superuser404notfound/LibDovi/tree/89be93431c2a5f2e54fb77e93059071b8d2ddb3a
-  Embedded crate: dolby_vision 3.3.2 from dovi_tool tag libdovi-3.3.2,
-  revision 4fd2b2235c9f93582dd4a00e65ee34a07800afd7, under MIT
-  Crate source: https://github.com/quietvoid/dovi_tool/tree/4fd2b2235c9f93582dd4a00e65ee34a07800afd7/dolby_vision
+  Packaging source and rebuild script: https://github.com/superuser404notfound/LibDovi/tree/0d7cce1d6836a30d13a3a2326e50a153af53f014
+  Embedded crate: dolby_vision 3.4.0 from dovi_tool tag libdovi-3.4.0,
+  revision d1abe0e27ff2c7ab3339614d06db9f8a058af6b2, under MIT
+  Crate source: https://github.com/quietvoid/dovi_tool/tree/d1abe0e27ff2c7ab3339614d06db9f8a058af6b2/dolby_vision
   The build script records the tag name, and the commit above is the tag value
-  observed on 2026-08-22; preserve the actual release source with the binary.
+  observed on 2026-09-04; preserve the actual release source with the binary.
   The packaging license calls the crate dual MIT/Apache, while this exact
   crate tag declares MIT in its LICENSE and Cargo manifest. Both the unchanged
   packaging license and quietvoid's controlling MIT text are included here.
 
 Nuke and NukeUI
-  Revision: 83e19143355b02e9261edb2323b3e1e93287ebb9 (release 12.9.0)
+  Revision: 30f7a7e72e0607d304fbf69c799474bd5fb6d1ce (release 13.2.0)
   License: MIT
-  Source: https://github.com/kean/Nuke/tree/83e19143355b02e9261edb2323b3e1e93287ebb9
+  Source: https://github.com/kean/Nuke/tree/30f7a7e72e0607d304fbf69c799474bd5fb6d1ce
+
+ThumbHash decoder
+  Revision: a652ce6ed691242f459f468f0a8756cda3b90a82
+  License: MIT
+  Source: https://github.com/evanw/thumbhash/tree/a652ce6ed691242f459f468f0a8756cda3b90a82
+  Prairie includes an adapted copy of the reference Swift decode path with input
+  validation, cross-platform image creation, and a bounded asynchronous cache.
 
 SMBClient 0.3.1 is present in SwiftPM's resolution graph only because
-AetherEngine publishes a separate optional AetherEngineSMB product. Silo links
+AetherEngine publishes a separate optional AetherEngineSMB product. Prairie links
 the AetherEngine product, not AetherEngineSMB, so SMBClient is not included in
 these shipped-component notices.
 
@@ -70,3 +92,35 @@ The links above identify the exact source and rebuild inputs for this build,
 including each component's rebuild script and patches at the pinned revision.
 They are this build's corresponding-source pointer; keep them matched to the
 revisions each release actually resolves.
+
+SwiftAssRenderer, SwiftLibass, and local ASS rendering
+  SwiftAssRenderer 1.3.1 (MIT)
+  Source: https://github.com/mihai8804858/swift-ass-renderer/tree/28919f6b5ddd896d327b0283f8d97624902236e6
+  SwiftLibass 1.4.0 (MIT)
+  Source and rebuild script: https://github.com/mihai8804858/swift-libass/tree/6513c488e377a26c06db327fb2acfc2653a041d5
+  Transitive Swift packages: Combine Schedulers 1.2.2, Concurrency Extras
+  1.4.1, and IssueReporting from xctest-dynamic-overlay 1.13.1, all MIT;
+  their notices are included.
+  libass 0.17.3: ISC
+  Fontconfig 2.15.0: permissive notices in Fontconfig.txt
+  FreeType 2.13.2: FreeType License; this product uses the FreeType project
+  FriBidi 1.0.14: LGPL-2.1-or-later
+  HarfBuzz 8.5.0: notices in HarfBuzz.txt
+  libpng 1.6.43: PNG Reference Library License
+  Complete license texts are bundled alongside this overview.
+
+  SwiftLibass ships these as static libraries and headers in XCFrameworks.
+  It does not embed separate subtitle framework bundles in the application.
+  Its upstream builder uses an unpinned ffmpeg-kit checkout. Our source archive
+  records a builder revision and native source tags matching its documented
+  versions; upstream does not publish byte-for-byte binary build provenance.
+
+  FriBidi is statically linked. App and library source, a revision
+  manifest, and instructions for rebuilding with a modified library are
+  published as Prairie-source-<app-commit>.tar.gz at:
+  https://github.com/Prairie-Server/prairie-apple/releases
+  Tagged builds place the archive on their release; manually dispatched
+  TestFlight builds use a source-<app-commit> release. The TestFlight build's
+  What to Test notes include the exact archive URL. No original release
+  signing keys are needed to rebuild for a simulator; physical-device builds
+  use the recipient's signing identity.

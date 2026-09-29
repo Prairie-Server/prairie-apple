@@ -46,8 +46,8 @@ private struct TVCardFocusButtonStyleBody: View {
                 y: isFocused ? focusedShadowY : unfocusedShadowY
             )
             .focusEffectDisabled()
-            .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
-            .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: configuration.isPressed)
+            .animation(.easeOut(duration: PrairieTheme.fastDuration), value: isFocused)
+            .animation(.easeOut(duration: PrairieTheme.fastDuration), value: configuration.isPressed)
     }
 
     private var currentScale: CGFloat {
@@ -70,7 +70,7 @@ extension View {
                     lineWidth: isFocused ? lineWidth : 0
                 )
         )
-        .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
+        .animation(.easeOut(duration: PrairieTheme.fastDuration), value: isFocused)
     }
 }
 #endif

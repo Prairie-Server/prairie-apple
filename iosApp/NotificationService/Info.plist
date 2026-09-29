@@ -20,9 +20,9 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
-	<key>ContinuumKeychainAccessGroup</key>
+	<key>PrairieKeychainAccessGroup</key>
 	<string>$(AppIdentifierPrefix)$(PRAIRIE_KEYCHAIN_ACCESS_GROUP_ID)</string>
-	<key>ContinuumKeychainAccessGroupID</key>
+	<key>PrairieKeychainAccessGroupID</key>
 	<string>$(PRAIRIE_KEYCHAIN_ACCESS_GROUP_ID)</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>

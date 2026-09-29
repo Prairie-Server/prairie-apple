@@ -329,8 +329,8 @@ actor LanDiscoveryScanner {
                 extraCidrs: options.extraCidrs,
                 deepScan: options.deepScan,
                 maxHostsPerCidr: options.maxHostsPerCidr,
-                localIps: localIps,
-                baseHosts: options.baseHosts
+                baseHosts: options.baseHosts,
+                localIps: localIps
             )
         )
 

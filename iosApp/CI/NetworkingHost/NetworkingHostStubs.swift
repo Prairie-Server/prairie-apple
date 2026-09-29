@@ -1,12 +1,12 @@
 import Foundation
 
 extension Notification.Name {
-    static let continuumSessionExpired = Notification.Name("continuumSessionExpired")
+    static let prairieSessionExpired = Notification.Name("prairieSessionExpired")
     static let temporaryRemoteAuthExpired = Notification.Name("temporaryRemoteAuthExpired")
 }
 
 /// Minimal stand-ins for app types that gated Networking code references but
-/// that would otherwise pull ContinuumAPI / Diagnostics / player UI into the
+/// that would otherwise pull PrairieAPI / Diagnostics / player UI into the
 /// FFmpeg-free CI host. Full Prairie.app keeps the real implementations.
 
 final class AuthService: @unchecked Sendable {
@@ -68,23 +68,20 @@ final class AICapabilities {
     func reset() {}
 }
 
-/// ContinuumAPI-backed probe; real type is excluded from the FFmpeg-free host
-/// the same way ``AICapabilities`` is. ServerRegistry / ContinuumAPI only need
+/// PrairieAPI-backed probe; real type is excluded from the FFmpeg-free host
+/// the same way ``AICapabilities`` is. ServerRegistry / PrairieAPI only need
 /// reset/refresh/requestQuery.
 final class ImageSizeCapability: @unchecked Sendable {
     static let shared = ImageSizeCapability()
     var requestQuery: [String: String] { [:] }
     func reset() {}
-    func refresh() async {}
+    func refresh(retryFailed: Bool = true) async {}
 }
 
-actor ContinuumAI {
-    static let shared = ContinuumAI()
-
-    func subtitleProvidersStatus() async throws -> SubtitleProvidersStatus {
-        let data = Data("{\"enabled\":true}".utf8)
-        return try JSONDecoder().decode(SubtitleProvidersStatus.self, from: data)
-    }
+/// The API v2 sync removed SubtitleProvidersStatus; nothing in the host calls
+/// PrairieAI any more, so the stand-in only has to exist.
+actor PrairieAI {
+    static let shared = PrairieAI()
 }
 
 /// Feature-store refresher; excluded from the host like ``RequestsFeatureStore``.
@@ -145,6 +142,14 @@ final class ConnectionMonitor {
     func noteServerUnreachable() {
         serverStatus = .unreachable
     }
+
+    /// Same route as the real monitor; HTTPClient treats it as unauthenticated.
+    nonisolated static let healthPath = "/api/v1/health"
+
+    /// API v2 contract gate. The host never probes, so no server is flagged.
+    var isServerUpdateRequired: Bool { false }
+
+    func noteContractProbe(_ result: APIv2ProbeResult, serverId: String) {}
 }
 
 /// Referenced by AIModels helpers; real type lives under player subtitles.
@@ -201,3 +206,28 @@ enum LiveTVChannelListViewModel {
     }
 }
 
+
+/// ServerRegistry leaves the active watch party on a server switch; the real
+/// session pulls sockets and the player adapter.
+@MainActor
+final class WatchPartySession {
+    static let shared = WatchPartySession()
+    func leave(forgetRecent: Bool) {}
+    func refreshCapabilities() async {}
+}
+
+/// Mirrors the real type in PlaybackSessionBridge.swift, which pulls the
+/// player stack. APIv2PlaybackModels maps terminal server failures onto it.
+struct PlaybackV3TerminalFailure: LocalizedError, Equatable {
+    let reason: String
+    let message: String
+    let retryable: Bool
+
+    var errorDescription: String? { message }
+}
+
+/// Only the destination CalendarModels builds; the full Route enum pulls
+/// browse filters and player seeds into the host.
+enum Route: Hashable {
+    case itemDetail(contentId: String, seriesContext: SeriesDetailContext? = nil)
+}

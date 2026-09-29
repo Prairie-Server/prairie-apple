@@ -14,12 +14,12 @@ final class MediaLogRedactorTests: XCTestCase {
         "Authorization: Bearer abc",
         "token=short",
         "headers X-Emby-Token 9f83ba21c0de44aa77b1 device=tvos",
-        "origin silo.example.com:8096/Videos/abc/Movie.Name.2019.mkv?k=1",
+        "origin prairie.example.com:8096/Videos/abc/Movie.Name.2019.mkv?k=1",
         "origin 192.168.1.42:8096/Videos/abc/Movie.mkv",
         "origin [2001:db8::1]:8096/Videos/abc/Movie.mkv",
         #"path=\\media-nas\Movies\Show Name S01E01.mkv"#,
         "cache ~/Documents/Prairie/Show Name S02E03.mkv loaded",
-        "cache /Library/Caches/com.silo/Downloads/title.mkv loaded",
+        "cache /Library/Caches/com.prairie/Downloads/title.mkv loaded",
         "playing [redacted-url] Movie.mkv",
         "hls ready url=master.m3u8 seq=4",
         "session started successfully after 3 retries",
@@ -89,8 +89,8 @@ final class MediaLogRedactorTests: XCTestCase {
     }
 
     func testRedactsSchemeLessOriginsWithPaths() {
-        let host = MediaLogRedactor.sanitize("origin silo.example.com:8096/Videos/abc/Movie.Name.2019.mkv?k=1")
-        XCTAssertFalse(host.contains("silo.example.com"))
+        let host = MediaLogRedactor.sanitize("origin prairie.example.com:8096/Videos/abc/Movie.Name.2019.mkv?k=1")
+        XCTAssertFalse(host.contains("prairie.example.com"))
         XCTAssertFalse(host.contains("Movie.Name.2019"))
 
         let ipv4 = MediaLogRedactor.sanitize("origin 192.168.1.42:8096/Videos/abc/Movie.mkv")
@@ -110,7 +110,7 @@ final class MediaLogRedactorTests: XCTestCase {
     }
 
     func testRedactsCachesAndTildeHomePaths() {
-        let caches = MediaLogRedactor.sanitize("cache /Library/Caches/com.silo/Downloads/title.mkv loaded")
+        let caches = MediaLogRedactor.sanitize("cache /Library/Caches/com.prairie/Downloads/title.mkv loaded")
         XCTAssertFalse(caches.contains("title.mkv"))
         XCTAssertFalse(caches.contains("/Library/Caches"))
         XCTAssertTrue(caches.contains("loaded"))

@@ -7,19 +7,17 @@ struct PrairieControlMiniBar: View {
     @Bindable var controller: PrairieControlClient
     var style: NowPlayingBarStyle = .card
     @State private var artwork = PrairieControlArtworkResolver()
-    @Environment(\.tabViewBottomAccessoryPlacement) private var placement
+    @Environment(\.nowPlayingAccessoryIsInline) private var isInline
 
     /// `.inline` is the minimized-tab-bar slot — collapse to a single line so the
     /// bar fits the compact pill without truncating.
-    private var isInline: Bool { placement == .inline }
-
     /// Whether the bar has anything to show: a live session (that isn't a
     /// still-unconfirmed auto-resume probe) or an in-flight reconnect. Keeping
     /// the bar up through a reconnect (with a spinner) beats having it vanish
     /// and pop back. Stays visible under the full remote sheet so dismissing
     /// the sheet doesn't re-insert the accessory with a second animation.
     private var isVisible: Bool {
-        (controller.hasActiveSession && !controller.isAutoResuming) || controller.isReconnecting
+        controller.remotePlaybackEngaged
     }
 
     private var targetName: String {
@@ -42,14 +40,23 @@ struct PrairieControlMiniBar: View {
                                  ? "to \(targetName)"
                                  : "Playing on \(targetName)")
                                 .font(.caption)
-                                .foregroundStyle(Color.continuumSecondaryText)
+                                .foregroundStyle(Color.prairieSecondaryText)
                                 .lineLimit(1)
                         }
                     }
                     Spacer(minLength: 8)
                     if controller.isReconnecting {
                         ProgressView()
-                            .frame(width: 32, height: 32)
+                            .frame(width: 24, height: 24)
+                        Button {
+                            controller.cancelReconnect()
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 15, weight: .semibold))
+                                .frame(width: 32, height: 32)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Stop reconnecting")
                     } else {
                         Button {
                             controller.togglePlayPauseOptimistic()
@@ -65,7 +72,7 @@ struct PrairieControlMiniBar: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, isInline ? 4 : 8)
                 .modifier(NowPlayingBarChrome(style: style))
-                .foregroundStyle(Color.continuumOnSurface)
+                .foregroundStyle(Color.prairieOnSurface)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -85,9 +92,9 @@ struct PrairieControlMiniBar: View {
                 .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         } else {
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Color.continuumSurfaceElevated)
+                .fill(Color.prairieSurfaceElevated)
                 .frame(width: 34, height: 50)
-                .overlay { Image(systemName: "tv").foregroundStyle(Color.continuumSecondaryText) }
+                .overlay { Image(systemName: "tv").foregroundStyle(Color.prairieSecondaryText) }
         }
     }
 }

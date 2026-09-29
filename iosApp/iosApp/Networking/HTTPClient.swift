@@ -26,6 +26,18 @@ struct CapturedHTTPRequestAuth: Sendable {
     let profileToken: String?
     let credentialOwner: CapturedHTTPRequestCredentialOwner
 
+    /// The same snapshot in the shape the one ownership comparator takes, so an
+    /// `expectedAuth` guard never hand-compares a subset of the identity fields.
+    var ordinaryIdentity: CapturedOrdinaryRequestAuth {
+        CapturedOrdinaryRequestAuth(
+            account: account,
+            credentialOwner: credentialOwner,
+            accessToken: accessToken,
+            profileId: profileId,
+            profileToken: profileToken
+        )
+    }
+
     init(
         account: RefreshAccountIdentity,
         serverURL: String,
@@ -64,23 +76,24 @@ struct HTTPIdentityTransitionLease: Hashable, Sendable {
 /// Responsibilities:
 /// - Resolve relative paths against the configured server URL from ``TokenStore``.
 /// - Attach `Authorization: Bearer <token>`, `X-Profile-Id`, and
-///   `X-Profile-Token` headers on every request except `/auth/refresh`.
+///   `X-Profile-Token` headers on every request except token refresh and the
+///   `getUnauthenticated…` reads of public endpoints.
 /// - On `401`, collapse concurrent failures into a single refresh using an
 ///   in-flight `Task`; retry the original request once with the refreshed
 ///   token. Semantics mirror `AuthInterceptorImpl.kt` in the shared Kotlin
 ///   module, which used a `Mutex` + double-check for the same purpose.
-/// - Serialize bodies and decode responses via snake_case-aware JSON
-///   coders. The decoder uses `.convertFromSnakeCase` and the encoder uses
-///   `.convertToSnakeCase`, so Swift models can use plain camelCase
-///   properties without any `CodingKeys` boilerplate. Only add an explicit
-///   `CodingKeys` entry when the wire field name is NOT a clean snake_case
-///   of the Swift property (e.g. server sends `title` where Swift has
-///   `name`). Explicit `CodingKeys` override the strategy per-field.
+/// - Decode responses with `.convertFromSnakeCase`, so Swift models can use
+///   plain camelCase properties without any `CodingKeys` boilerplate. The
+///   `.convertToSnakeCase` encoder is used only for the token-refresh request
+///   body. Only add an explicit `CodingKeys` entry when the wire field name
+///   is NOT a clean snake_case of the Swift property (e.g. server sends
+///   `title` where Swift has `name`). Explicit `CodingKeys` override the
+///   strategy per-field.
 actor HTTPClient {
     static let shared = HTTPClient()
 
     private static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "com.continuum.app",
+        subsystem: Bundle.main.bundleIdentifier ?? "org.prairieserver.prairie",
         category: "HTTPClient"
     )
 
@@ -112,10 +125,15 @@ actor HTTPClient {
     /// flight registry; neither path may submit the same credential while the
     /// other owns its rotation.
     private var inFlightRefreshes: [RefreshAccountIdentity: RefreshFlight] = [:]
+    private var mediaRefreshBackoff: (auth: CapturedOrdinaryRequestAuth, until: ContinuousClock.Instant)?
+    private var proactiveMediaRefreshes: [RefreshAccountIdentity: (id: UUID, task: Task<Void, Never>)] = [:]
 
+    /// A flight's value is the update requirement its refresh answer proved,
+    /// if any. Success and every other failure are read back from
+    /// `TokenStore`; only a version mismatch travels to the waiting requests.
     private struct RefreshFlight {
         let id: UUID
-        let task: Task<Bool, Never>
+        let task: Task<UpdateRequirement?, Never>
     }
 
     /// Global URLSession enumeration is asynchronous. Queue cancellation
@@ -176,8 +194,9 @@ actor HTTPClient {
         self.encoder = encoder
     }
 
-    static func makeJSONDecoder() -> JSONDecoder {
+    static func makeJSONDecoder(artworkServerURL: URL? = nil) -> JSONDecoder {
         let decoder = JSONDecoder()
+        decoder.userInfo[ArtworkURLResolver.serverURLKey] = artworkServerURL
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         decoder.dateDecodingStrategy = .custom { decoder in
             let container = try decoder.singleValueContainer()
@@ -211,7 +230,7 @@ actor HTTPClient {
         return URLSession(configuration: config)
     }
 
-    /// Parser for the fractional-second ISO-8601 timestamps the Continuum
+    /// Parser for the fractional-second ISO-8601 timestamps the Prairie
     /// server emits (e.g. `2026-04-13T04:46:42.211273Z`). The default
     /// `.iso8601` decoder strategy rejects fractional seconds outright.
     private static let isoFractional: ISO8601DateFormatter = {
@@ -228,11 +247,18 @@ actor HTTPClient {
 
     // MARK: - Public API
 
-    func get<T: Decodable>(
-        _ path: String,
-        query: [String: String] = [:]
-    ) async throws -> T {
-        try await send(method: "GET", path: path, query: query, body: Optional<String>.none)
+    /// Authenticated JSON GET against the active server, with the ordinary
+    /// 401 refresh-and-retry.
+    func get<T: Decodable>(_ path: String) async throws -> T {
+        let (data, response) = try await performWithAuthRetry(method: "GET", path: path, timeout: .standard) { serverURL in
+            try self.buildRequest(serverUrl: serverURL, method: "GET", path: path, query: [:])
+        }
+        do {
+            return try Self.makeJSONDecoder(artworkServerURL: response.url).decode(T.self, from: data)
+        } catch {
+            Self.logDecodingFailure(type: String(describing: T.self), path: path, error: error, data: data)
+            throw HTTPError.decodingFailed(type: String(describing: T.self), underlying: error)
+        }
     }
 
     /// Probe a candidate server without mutating global routing state or
@@ -241,20 +267,93 @@ actor HTTPClient {
         serverURL: String,
         path: String,
         quietStatuses: Set<Int> = [],
-        diagnosticPath: String? = nil
+        diagnosticPath: String? = nil,
+        timeout: TimeInterval? = nil
     ) async throws -> T {
+        try await getByExplicitURL(
+            serverURL: serverURL,
+            path: path,
+            bearer: nil,
+            quietStatuses: quietStatuses,
+            diagnosticPath: diagnosticPath,
+            timeout: timeout
+        )
+    }
+
+    /// Read a public endpoint of the active server with no bearer or profile
+    /// headers. A 401 never starts a refresh, so an expired or revoked session
+    /// cannot fail the read. Unlike ``getUnauthenticated(serverURL:path:quietStatuses:diagnosticPath:timeout:)``,
+    /// the outcome feeds `ConnectionMonitor`: the response comes from the
+    /// server every other request goes to.
+    func getUnauthenticatedFromActiveServer<T: Decodable>(_ path: String) async throws -> T {
+        // Capture the dispatch revision before the URL, as ordinary requests
+        // do, so a server switch in between rejects this read instead of
+        // reporting the old server's reachability as the new one's.
         let dispatchRevision = try captureRequestDispatchRevision()
-        let request = try buildRequest(
+        let serverURL = await tokenStore.getServerUrl()
+        guard !serverURL.isEmpty else {
+            throw HTTPError.serverUrlNotConfigured
+        }
+        return try await getByExplicitURL(
+            serverURL: serverURL,
+            path: path,
+            bearer: nil,
+            quietStatuses: [],
+            diagnosticPath: nil,
+            timeout: nil,
+            dispatchRevision: dispatchRevision,
+            reportReachability: true
+        )
+    }
+
+    /// Read from an explicit server URL with an explicit bearer, outside the
+    /// active credential slot. No refresh, no retry, no routing change: used
+    /// for reading another saved server's documents (for example its
+    /// connection list) while a different server stays active.
+    func getWithBearer<T: Decodable>(
+        serverURL: String,
+        path: String,
+        bearer: String,
+        quietStatuses: Set<Int> = [],
+        timeout: TimeInterval? = nil
+    ) async throws -> T {
+        try await getByExplicitURL(
+            serverURL: serverURL,
+            path: path,
+            bearer: bearer,
+            quietStatuses: quietStatuses,
+            diagnosticPath: nil,
+            timeout: timeout
+        )
+    }
+
+    private func getByExplicitURL<T: Decodable>(
+        serverURL: String,
+        path: String,
+        bearer: String?,
+        quietStatuses: Set<Int>,
+        diagnosticPath: String?,
+        timeout: TimeInterval?,
+        dispatchRevision capturedRevision: UInt64? = nil,
+        reportReachability: Bool = false
+    ) async throws -> T {
+        let dispatchRevision = try capturedRevision ?? captureRequestDispatchRevision()
+        var request = try buildRequest(
             serverUrl: ServerRegistry.normalize(url: serverURL),
             method: "GET",
             path: path,
-            query: [:],
-            body: Optional<String>.none
+            query: [:]
         )
+        if let bearer {
+            request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
+        }
+        if let timeout {
+            request.timeoutInterval = timeout
+        }
         let (data, response) = try await perform(
             request: request,
             dispatchRevision: dispatchRevision,
-            reportReachability: false
+            reportReachability: reportReachability
         )
         try ensureSuccess(data, response, method: "GET", quietStatuses: quietStatuses)
         do {
@@ -270,118 +369,25 @@ actor HTTPClient {
         }
     }
 
-    func post<T: Decodable>(
-        _ path: String,
-        body: (any Encodable)? = nil,
-        query: [String: String] = [:],
-        timeout: HTTPTimeout = .standard
-    ) async throws -> T {
-        try await send(method: "POST", path: path, query: query, body: body, timeout: timeout)
-    }
-
-    func postVoid(
-        _ path: String,
-        body: (any Encodable)? = nil,
-        query: [String: String] = [:],
-        expectedAccount: RefreshAccountIdentity? = nil
-    ) async throws {
-        _ = try await performWithAuthRetry(
-            method: "POST",
-            path: path,
-            quietStatuses: [],
-            timeout: .standard,
-            expectedAccount: expectedAccount
-        ) { serverUrl in
-            try self.buildRequest(
-                serverUrl: serverUrl,
-                method: "POST",
-                path: path,
-                query: query,
-                body: body
-            )
+    /// Best-effort revocation after local sign-out (`POST /api/v2/auth/logout`).
+    /// The captured bearer belongs to the outgoing session; never refresh it or
+    /// read the replacement account. The request carries only that bearer: v2
+    /// logout does not accept the profile header.
+    func revokeSession(_ auth: CapturedOrdinaryRequestAuth) async {
+        guard let token = auth.accessToken, !token.isEmpty else { return }
+        do {
+            var request = try buildRequest(serverUrl: auth.account.serverURL,
+                method: "POST", path: "/api/v2/auth/logout", query: [:])
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.timeoutInterval = 5
+            // Removing the server or signing in again cancels ordinary traffic.
+            // Let this one captured revocation finish independently.
+            let revocationSession = URLSession(configuration: session.configuration)
+            defer { revocationSession.invalidateAndCancel() }
+            _ = try await revocationSession.data(for: request)
+        } catch {
+            // Local sign-out is complete even when the server is unavailable.
         }
-    }
-
-    func postMultipart<T: Decodable>(
-        _ path: String,
-        parts: [HTTPMultipartPart],
-        timeout: HTTPTimeout = .extended
-    ) async throws -> T {
-        let boundary = "PrairieDiagnostics-\(UUID().uuidString)"
-        return try await sendRawBody(
-            method: "POST",
-            path: path,
-            body: Self.multipartBody(parts: parts, boundary: boundary),
-            contentType: "multipart/form-data; boundary=\(boundary)",
-            timeout: timeout
-        )
-    }
-
-    /// POST a pre-encoded body verbatim. Exists for callers whose payload
-    /// cannot go through `JSONEncoder` — e.g. diagnostics chunked-upload init,
-    /// which embeds an already-serialized manifest byte-for-byte (re-encoding
-    /// could reorder keys and break the server's manifest equality check).
-    func postRaw<T: Decodable>(
-        _ path: String,
-        body: Data,
-        contentType: String,
-        timeout: HTTPTimeout = .standard
-    ) async throws -> T {
-        try await sendRawBody(method: "POST", path: path, body: body, contentType: contentType, timeout: timeout)
-    }
-
-    /// PUT a raw binary body (e.g. one diagnostics bundle chunk).
-    func putRaw<T: Decodable>(
-        _ path: String,
-        body: Data,
-        contentType: String,
-        timeout: HTTPTimeout = .extended
-    ) async throws -> T {
-        try await sendRawBody(method: "PUT", path: path, body: body, contentType: contentType, timeout: timeout)
-    }
-
-    func put<T: Decodable>(
-        _ path: String,
-        body: (any Encodable)? = nil,
-        query: [String: String] = [:]
-    ) async throws -> T {
-        try await send(method: "PUT", path: path, query: query, body: body)
-    }
-
-    func putVoid(
-        _ path: String,
-        body: (any Encodable)? = nil,
-        query: [String: String] = [:]
-    ) async throws {
-        _ = try await sendRaw(method: "PUT", path: path, query: query, body: body)
-    }
-
-    func delete(_ path: String, query: [String: String] = [:]) async throws {
-        _ = try await sendRaw(method: "DELETE", path: path, query: query, body: Optional<String>.none)
-    }
-
-    func patch<T: Decodable>(
-        _ path: String,
-        body: (any Encodable)? = nil,
-        query: [String: String] = [:]
-    ) async throws -> T {
-        try await send(method: "PATCH", path: path, query: query, body: body)
-    }
-
-    func patchVoid(
-        _ path: String,
-        body: (any Encodable)? = nil,
-        query: [String: String] = [:]
-    ) async throws {
-        _ = try await sendRaw(method: "PATCH", path: path, query: query, body: body)
-    }
-
-    /// GET an endpoint that returns raw bytes (not JSON) — e.g. the
-    /// download artwork/subtitle proxies. Goes through the same auth +
-    /// 401-refresh path as the decoding `get`, but hands the caller the
-    /// undecoded body.
-    func getData(_ path: String, query: [String: String] = [:]) async throws -> Data {
-        try await sendRaw(method: "GET", path: path, query: query, body: Optional<String>.none)
     }
 
     /// Send a request with a caller-supplied body and extra headers, doing no
@@ -391,24 +397,46 @@ actor HTTPClient {
     /// Exists for endpoints the shared coders cannot serve. The canonical
     /// settings API is the motivating case: its values are opaque JSON whose
     /// object keys must survive verbatim, so it codes with its own
-    /// strategy-free coders; it also sends a per-request header
-    /// (`X-Prairie-Mutation-Id`) and reads a response header
-    /// (`X-Prairie-Idempotent-Replay`) that a decoded body cannot carry.
+    /// strategy-free coders. Other callers need a per-request header or a
+    /// response header that a decoded body cannot carry.
     ///
     /// `headers` are applied after the auth/profile/device headers, so a
     /// caller can address a profile other than the session default. Everything
     /// else — server URL resolution, 401 refresh, non-2xx translation — is the
     /// path every other request takes.
+    ///
+    /// `expectedAccount` and `expectedAuth` are the v2 pre-dispatch owner
+    /// guards: the request is refused before it leaves the device when the
+    /// credentials captured now do not belong to the owner the caller captured
+    /// earlier. `expectedAuth` compares through
+    /// `CapturedOrdinaryRequestAuth.sameCredentialIdentity(as:)`, the one
+    /// comparator, so the credential owner and the profile proof are covered.
+    /// `acceptedStatuses` only applies with `requestIdentity`; it exposes
+    /// selected non-2xx responses after normal scoped auth handling, without
+    /// adding retries. `repeatedQuery` carries query items that repeat a name.
+    /// `sendsProfile: false` sends the account credential without
+    /// `X-Profile-Id`/`X-Profile-Token`, for operations whose contract forbids
+    /// the profile header (v2 logout). It applies only without
+    /// `requestIdentity`, whose scoped requests always name a profile.
+    /// `dispatchRecord` is marked when the request is handed to the URL
+    /// session, so the caller can tell a pre-dispatch refusal from a failure
+    /// after sending.
     func requestData(
         method: String,
         path: String,
         query: [String: String] = [:],
+        repeatedQuery: [URLQueryItem] = [],
         body: Data? = nil,
         contentType: String = "application/json",
         headers: [String: String] = [:],
         quietStatuses: Set<Int> = [],
         timeout: HTTPTimeout = .standard,
-        requestIdentity: HTTPRequestIdentity? = nil
+        requestIdentity: HTTPRequestIdentity? = nil,
+        acceptedStatuses: Set<Int> = [],
+        expectedAccount: RefreshAccountIdentity? = nil,
+        expectedAuth: CapturedOrdinaryRequestAuth? = nil,
+        sendsProfile: Bool = true,
+        dispatchRecord: HTTPDispatchRecord? = nil
     ) async throws -> HTTPRawResponse {
         if let requestIdentity {
             let dispatchRevision = try captureRequestDispatchRevision()
@@ -416,10 +444,29 @@ actor HTTPClient {
                 await requestCaptureBarrier()
             }
             var auth = try await tokenStore.captureRequestAuth(expected: requestIdentity)
+            if let expectedAccount, auth.account != expectedAccount {
+                throw HTTPError.requestIdentityChanged
+            }
+            if let expectedAuth, !auth.ordinaryIdentity.sameCredentialIdentity(as: expectedAuth) {
+                throw HTTPError.requestIdentityChanged
+            }
+            if !Self.isPublicAuthPath(path), let accessToken = auth.accessToken,
+               MediaAccessTokenExpiry.shouldRefresh(accessToken, now: Date()) {
+                auth = try await scopedAuthRefreshedBeforeDispatch(
+                    auth,
+                    expected: requestIdentity,
+                    expectedAccount: expectedAccount,
+                    expectedAuth: expectedAuth,
+                    dispatchRevision: dispatchRevision,
+                    method: method,
+                    path: path
+                )
+            }
             var request = try scopedRequest(
                 method: method,
                 path: path,
                 query: query,
+                repeatedQuery: repeatedQuery,
                 body: body,
                 contentType: contentType,
                 headers: headers,
@@ -428,12 +475,13 @@ actor HTTPClient {
             var (data, response) = try await perform(
                 request: request,
                 timeout: timeout,
-                dispatchRevision: dispatchRevision
+                dispatchRevision: dispatchRevision,
+                dispatchRecord: dispatchRecord
             )
 
             if response.statusCode == 401,
-               shouldAttemptRefresh(path: path),
-               await refreshScopedTokens(
+               shouldAttemptRefresh(path: path, method: method),
+               try await refreshScopedTokens(
                    auth: auth,
                    expected: requestIdentity,
                    dispatchRevision: dispatchRevision
@@ -449,6 +497,7 @@ actor HTTPClient {
                 if let refreshedAuth = try? await tokenStore.captureRequestAuth(
                     expected: requestIdentity
                 ),
+                   expectedAuth.map({ refreshedAuth.ordinaryIdentity.sameCredentialIdentity(as: $0) }) ?? true,
                    refreshedAuth.account == originalAuth.account,
                    refreshedAuth.credentialOwner == originalAuth.credentialOwner,
                    refreshedAuth.accessToken != nil,
@@ -459,6 +508,7 @@ actor HTTPClient {
                         method: method,
                         path: path,
                         query: query,
+                        repeatedQuery: repeatedQuery,
                         body: body,
                         contentType: contentType,
                         headers: headers,
@@ -474,7 +524,8 @@ actor HTTPClient {
                     (data, response) = try await perform(
                         request: request,
                         timeout: timeout,
-                        dispatchRevision: dispatchRevision
+                        dispatchRevision: dispatchRevision,
+                        dispatchRecord: dispatchRecord
                     )
                 } else {
                     #if os(iOS) || os(tvOS)
@@ -489,7 +540,7 @@ actor HTTPClient {
                     )
                     #endif
                 }
-            } else if response.statusCode == 401, shouldAttemptRefresh(path: path) {
+            } else if response.statusCode == 401, shouldAttemptRefresh(path: path, method: method) {
                 // Refresh was eligible but declined (wrong credential owner,
                 // no refresh token, dispatch blocked). `shouldAttemptRefresh`
                 // is re-checked so a 401 from `/auth/login` — an ordinary wrong
@@ -502,11 +553,16 @@ actor HTTPClient {
                 )
                 #endif
             }
-            try ensureSuccess(data, response, method: method, quietStatuses: quietStatuses)
+            // Scoped adapters may inspect documented error headers (for example
+            // Retry-After). All other callers retain the standard non-2xx error
+            // translation.
+            if !acceptedStatuses.contains(response.statusCode) {
+                try ensureSuccess(data, response, method: method, quietStatuses: quietStatuses)
+            }
             return HTTPRawResponse(
                 data: data,
                 statusCode: response.statusCode,
-                headers: response.allHeaderFields
+                headers: response.allHeaderFields, url: response.url
             )
         }
 
@@ -515,28 +571,74 @@ actor HTTPClient {
             path: path,
             additionalHeaders: headers,
             quietStatuses: quietStatuses,
-            timeout: timeout
+            timeout: timeout,
+            expectedAccount: expectedAccount,
+            expectedAuth: expectedAuth,
+            sendsProfile: sendsProfile,
+            dispatchRecord: dispatchRecord
         ) { serverUrl in
             var request = try self.buildRequest(
                 serverUrl: serverUrl,
                 method: method,
                 path: path,
-                query: query,
-                body: Optional<String>.none
+                query: query
             )
+            try Self.appendQuery(repeatedQuery, to: &request)
             if let body {
                 request.httpBody = body
                 request.setValue(contentType, forHTTPHeaderField: "Content-Type")
             }
             return request
         }
-        return HTTPRawResponse(data: data, statusCode: response.statusCode, headers: response.allHeaderFields)
+        return HTTPRawResponse(data: data, statusCode: response.statusCode, headers: response.allHeaderFields, url: response.url)
+    }
+
+    /// Refreshes a bearer that has expired or is about to, before a request
+    /// is sent with it. Nothing has left the device yet, so this is safe for
+    /// single-dispatch operations too, which never refresh on a 401: without
+    /// it their first request after the token expired would fail every time.
+    /// The fresh credentials must belong to the same owner the request was
+    /// captured for. When no fresh bearer comes back and the old one has
+    /// already expired, the request is not sent and fails the way the 401
+    /// path does.
+    private func scopedAuthRefreshedBeforeDispatch(
+        _ auth: CapturedHTTPRequestAuth,
+        expected requestIdentity: HTTPRequestIdentity,
+        expectedAccount: RefreshAccountIdentity?,
+        expectedAuth: CapturedOrdinaryRequestAuth?,
+        dispatchRevision: UInt64,
+        method: String,
+        path: String
+    ) async throws -> CapturedHTTPRequestAuth {
+        if try await refreshScopedTokens(auth: auth, expected: requestIdentity, dispatchRevision: dispatchRevision) {
+            guard let refreshed = try? await tokenStore.captureRequestAuth(expected: requestIdentity),
+                  expectedAccount.map({ refreshed.account == $0 }) ?? true,
+                  expectedAuth.map({ refreshed.ordinaryIdentity.sameCredentialIdentity(as: $0) }) ?? true,
+                  refreshed.account == auth.account,
+                  refreshed.credentialOwner == auth.credentialOwner,
+                  refreshed.accessToken != nil else {
+                throw HTTPError.requestIdentityChanged
+            }
+            return refreshed
+        }
+        return try Self.keepingUnexpiredBearer(auth, token: auth.accessToken, method: method, path: path)
+    }
+
+    /// The captured credentials when their bearer is still usable, or the
+    /// 401 the server would answer with an expired one.
+    private static func keepingUnexpiredBearer<Auth>(
+        _ auth: Auth, token: String?, method: String, path: String
+    ) throws -> Auth {
+        guard let token, MediaAccessTokenExpiry.isExpired(token, now: Date()) else { return auth }
+        logger.error("Not sending \(method, privacy: .public) with an expired bearer: the refresh did not renew it")
+        throw HTTPError.http(statusCode: 401, body: nil)
     }
 
     private func scopedRequest(
         method: String,
         path: String,
         query: [String: String],
+        repeatedQuery: [URLQueryItem] = [],
         body: Data?,
         contentType: String,
         headers: [String: String],
@@ -546,16 +648,29 @@ actor HTTPClient {
             serverUrl: auth.serverURL,
             method: method,
             path: path,
-            query: query,
-            body: Optional<String>.none
+            query: query
         )
         if let body {
             request.httpBody = body
             request.setValue(contentType, forHTTPHeaderField: "Content-Type")
         }
+        try Self.appendQuery(repeatedQuery, to: &request)
         attachCapturedAuthHeaders(&request, auth: auth)
         Self.apply(headers, to: &request)
         return request
+    }
+
+    /// Appends query items that may repeat a name (`?key=a&key=b`), which the
+    /// `[String: String]` form cannot express. A URL that cannot take them is
+    /// a malformed request, not an ownership change.
+    private static func appendQuery(_ items: [URLQueryItem], to request: inout URLRequest) throws {
+        guard !items.isEmpty else { return }
+        guard let url = request.url, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            throw HTTPError.invalidURL(request.url?.absoluteString ?? "")
+        }
+        components.queryItems = (components.queryItems ?? []) + items
+        guard let updated = components.url else { throw HTTPError.invalidURL(url.absoluteString) }
+        request.url = updated
     }
 
     /// Cancel all in-flight tasks on the shared session and drop any
@@ -712,6 +827,9 @@ actor HTTPClient {
         }
         inFlightRefreshes.values.forEach { $0.task.cancel() }
         inFlightRefreshes.removeAll()
+        proactiveMediaRefreshes.values.forEach { $0.task.cancel() }
+        proactiveMediaRefreshes.removeAll()
+        mediaRefreshBackoff = nil
         for (index, session) in [session, longWaitSession].enumerated() {
             await withCheckedContinuation { continuation in
                 session.getAllTasks { tasks in
@@ -725,47 +843,7 @@ actor HTTPClient {
         }
     }
 
-    /// GET an endpoint that signals existence via HTTP status only (e.g.
-    /// `/favorites/{id}` — 204 = yes, 404 = no). Returns `true` for any 2xx,
-    /// `false` for 404, and rethrows for anything else. Bypasses body
-    /// decoding, which would otherwise throw on an empty 204 response.
-    func exists(_ path: String, query: [String: String] = [:]) async throws -> Bool {
-        do {
-            // A 404 here is the documented "not found" signal, not a failure,
-            // so mark it quiet to keep it out of the error log.
-            _ = try await sendRaw(
-                method: "GET",
-                path: path,
-                query: query,
-                body: Optional<String>.none,
-                quietStatuses: [404]
-            )
-            return true
-        } catch HTTPError.http(let code, _) where code == 404 {
-            return false
-        }
-    }
-
-    // MARK: - Core send
-
-    private func send<T: Decodable>(
-        method: String,
-        path: String,
-        query: [String: String],
-        body: (any Encodable)?,
-        timeout: HTTPTimeout = .standard
-    ) async throws -> T {
-        let data = try await sendRaw(method: method, path: path, query: query, body: body, timeout: timeout)
-        if data.isEmpty, let empty = EmptyResponse.empty as? T {
-            return empty
-        }
-        do {
-            return try decoder.decode(T.self, from: data)
-        } catch {
-            Self.logDecodingFailure(type: String(describing: T.self), path: path, error: error, data: data)
-            throw HTTPError.decodingFailed(type: String(describing: T.self), underlying: error)
-        }
-    }
+    // MARK: - Decoding diagnostics
 
     /// Diagnostic log for decoding failures. Emits the endpoint, the specific
     /// DecodingError case (keyNotFound / typeMismatch / valueNotFound /
@@ -882,32 +960,6 @@ actor HTTPClient {
         path.map { $0.intValue.map(String.init) ?? $0.stringValue }.joined(separator: ".")
     }
 
-    /// Returns raw response body bytes. Handles auth injection, 401 retry,
-    /// and non-2xx status translation.
-    private func sendRaw(
-        method: String,
-        path: String,
-        query: [String: String],
-        body: (any Encodable)?,
-        quietStatuses: Set<Int> = [],
-        timeout: HTTPTimeout = .standard
-    ) async throws -> Data {
-        try await performWithAuthRetry(
-            method: method,
-            path: path,
-            quietStatuses: quietStatuses,
-            timeout: timeout
-        ) { serverUrl in
-            try self.buildRequest(
-                serverUrl: serverUrl,
-                method: method,
-                path: path,
-                query: query,
-                body: body
-            )
-        }.0
-    }
-
     /// Shared server-URL/auth/401-refresh/success skeleton for every request
     /// shape. `makeRequest` builds a fresh, unauthenticated request per
     /// attempt; auth headers are attached here so the retry after a token
@@ -924,16 +976,39 @@ actor HTTPClient {
         quietStatuses: Set<Int> = [],
         timeout: HTTPTimeout,
         expectedAccount: RefreshAccountIdentity? = nil,
+        expectedAuth: CapturedOrdinaryRequestAuth? = nil,
+        sendsProfile: Bool = true,
+        dispatchRecord: HTTPDispatchRecord? = nil,
         makeRequest: (String) throws -> URLRequest
     ) async throws -> (Data, HTTPURLResponse) {
         let dispatchRevision = try captureRequestDispatchRevision()
         if let requestCaptureBarrier {
             await requestCaptureBarrier()
         }
-        let capturedAuth = await tokenStore.captureOrdinaryRequestAuth()
+        var capturedAuth = await tokenStore.captureOrdinaryRequestAuth()
         if let expectedAccount,
            capturedAuth?.account != expectedAccount {
             throw HTTPError.requestIdentityChanged
+        }
+        if let expectedAuth {
+            guard let capturedAuth, capturedAuth.sameCredentialIdentity(as: expectedAuth) else {
+                throw HTTPError.requestIdentityChanged
+            }
+        }
+        // As on the scoped path: renew a bearer that has expired or is about
+        // to before anything is sent (see `scopedAuthRefreshedBeforeDispatch`).
+        if let current = capturedAuth, !Self.isPublicAuthPath(path), let accessToken = current.accessToken,
+           MediaAccessTokenExpiry.shouldRefresh(accessToken, now: Date()) {
+            if let refreshed = try await refreshTokens(expected: current, dispatchRevision: dispatchRevision) {
+                guard expectedAuth.map({ refreshed.sameCredentialIdentity(as: $0) }) ?? true,
+                      refreshed.accessToken != nil,
+                      await tokenStore.currentOrdinaryRequestAuth(matchingIdentityOf: refreshed) == refreshed else {
+                    throw HTTPError.requestIdentityChanged
+                }
+                capturedAuth = refreshed
+            } else {
+                capturedAuth = try Self.keepingUnexpiredBearer(current, token: accessToken, method: method, path: path)
+            }
         }
         let serverUrl = if let capturedAuth {
             capturedAuth.account.serverURL
@@ -951,29 +1026,36 @@ actor HTTPClient {
             await attachLegacyAuthHeaders(&request)
         }
         Self.apply(additionalHeaders, to: &request)
+        if !sendsProfile { Self.removeProfileHeaders(from: &request) }
 
         let (data, response) = try await perform(
             request: request,
             timeout: timeout,
-            dispatchRevision: dispatchRevision
+            dispatchRevision: dispatchRevision,
+            dispatchRecord: dispatchRecord
         )
 
-        if response.statusCode == 401, shouldAttemptRefresh(path: path) {
+        if response.statusCode == 401, shouldAttemptRefresh(path: path, method: method) {
             if let capturedAuth,
-               let refreshedAuth = await refreshTokens(
+               let refreshedAuth = try await refreshTokens(
                    expected: capturedAuth,
                    dispatchRevision: dispatchRevision
                ),
+               expectedAuth.map({ refreshedAuth.sameCredentialIdentity(as: $0) }) ?? true,
                refreshedAuth.accessToken != nil,
                await tokenStore.currentOrdinaryRequestAuth(
                    matchingIdentityOf: refreshedAuth
                ) == refreshedAuth {
                 // Rebuild from one account-owner/profile snapshot. If any of
                 // those identities changed during the shared flight, keep the
-                // original 401 instead of sending mixed credentials.
+                // original 401 instead of sending mixed credentials. This is
+                // deliberately not `withOwnerFence`: the retry must attach
+                // exactly the credential set that is current now, including
+                // the rotated access token, so the whole snapshot is compared.
                 var retry = try makeRequest(serverUrl)
                 attachOrdinaryAuthHeaders(&retry, auth: refreshedAuth)
                 Self.apply(additionalHeaders, to: &retry)
+                if !sendsProfile { Self.removeProfileHeaders(from: &retry) }
                 #if os(iOS) || os(tvOS)
                 Self.logRefreshRetry(
                     method: method,
@@ -984,7 +1066,8 @@ actor HTTPClient {
                 let (retryData, retryResponse) = try await perform(
                     request: retry,
                     timeout: timeout,
-                    dispatchRevision: dispatchRevision
+                    dispatchRevision: dispatchRevision,
+                    dispatchRecord: dispatchRecord
                 )
                 try ensureSuccess(retryData, retryResponse, method: method, quietStatuses: quietStatuses)
                 return (retryData, retryResponse)
@@ -1011,66 +1094,57 @@ actor HTTPClient {
         }
     }
 
-    private func sendRawBody<T: Decodable>(
-        method: String,
-        path: String,
-        body: Data,
-        contentType: String,
-        timeout: HTTPTimeout
-    ) async throws -> T {
-        let data = try await sendRawBodyData(
-            method: method,
-            path: path,
-            body: body,
-            contentType: contentType,
-            timeout: timeout
-        )
-        if data.isEmpty, let empty = EmptyResponse.empty as? T {
-            return empty
-        }
-        do {
-            return try decoder.decode(T.self, from: data)
-        } catch {
-            Self.logDecodingFailure(type: String(describing: T.self), path: path, error: error, data: data)
-            throw HTTPError.decodingFailed(type: String(describing: T.self), underlying: error)
-        }
-    }
-
-    private func sendRawBodyData(
-        method: String,
-        path: String,
-        body: Data,
-        contentType: String,
-        timeout: HTTPTimeout
-    ) async throws -> Data {
-        try await performWithAuthRetry(method: method, path: path, timeout: timeout) { serverUrl in
-            var request = try self.buildRequest(
-                serverUrl: serverUrl,
-                method: method,
-                path: path,
-                query: [:],
-                body: Optional<String>.none
-            )
-            request.setValue(contentType, forHTTPHeaderField: "Content-Type")
-            request.httpBody = body
-            return request
-        }.0
+    private static func removeProfileHeaders(from request: inout URLRequest) {
+        request.setValue(nil, forHTTPHeaderField: "X-Profile-Id")
+        request.setValue(nil, forHTTPHeaderField: "X-Profile-Token")
     }
 
     // MARK: - Request building
 
+    /// Whether `path` is a Prairie server route this client may request: a
+    /// `/api/v2` operation, or the retained unauthenticated health probe
+    /// (``ConnectionMonitor/healthPath``). `path` is the route relative to the
+    /// server URL, so a server mounted under a base path still passes.
+    ///
+    /// The DEBUG assertion in ``buildRequest(serverUrl:method:path:query:)``
+    /// covers only requests this client builds. Token refresh builds its URL
+    /// from the constant ``refreshPath``. Other code joins routes onto the
+    /// server URL itself and is not checked here: `TopShelfHTTPClient`,
+    /// `PairingDeviceAPI`, `APIv2Client.downloadFileURL`, the playback control
+    /// socket handshake and `ApplePushDisplayMetadata`. Requests to other
+    /// origins (the hosted diagnostics service) and server-minted absolute
+    /// media URLs are not checked either. `scripts/ci/check-no-api-v1.sh`
+    /// guards every app source against literal v1 route strings.
+    static func isPrairieServerPath(_ path: String) -> Bool {
+        let normalizedPath = path.hasPrefix("/") ? path : "/" + path
+        return normalizedPath == "/api/v2" || normalizedPath.hasPrefix("/api/v2/")
+            || normalizedPath == ConnectionMonitor.healthPath
+            // Prairie: Live TV stays on its Prairie-only v1 routes
+            // (`PrairieAPI+LiveTV.swift`, recorded in the API v1 allowlist).
+            || normalizedPath.hasPrefix(Self.prairieLiveTVPathPrefix)
+    }
+
+    /// Prairie-only Live TV routes, the one v1 surface this client still calls.
+    static let prairieLiveTVPathPrefix = "/api/v1/livetv/"
+
+    /// Builds every request this client sends to the active or a candidate
+    /// Prairie server, except token refresh.
     private func buildRequest(
         serverUrl: String,
         method: String,
         path: String,
-        query: [String: String],
-        body: (any Encodable)?
+        query: [String: String]
     ) throws -> URLRequest {
+        #if DEBUG
+        if !Self.isPrairieServerPath(path) {
+            assertionFailure("HTTPClient request outside /api/v2: \(method) \(path)")
+        }
+        #endif
         guard var components = URLComponents(string: serverUrl) else {
             throw HTTPError.invalidURL(serverUrl)
         }
 
-        // `path` arrives either as `/api/v1/foo` or `api/v1/foo`; normalize.
+        // `path` arrives either as `/api/v2/foo` or `api/v2/foo`; normalize.
         let normalizedPath = path.hasPrefix("/") ? path : "/" + path
         let basePath = components.percentEncodedPath
         let trimmedBase = basePath.hasSuffix("/") ? String(basePath.dropLast()) : basePath
@@ -1089,16 +1163,6 @@ actor HTTPClient {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-
-        if let body {
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            do {
-                request.httpBody = try encoder.encode(AnyEncodable(body))
-            } catch {
-                throw HTTPError.encodingFailed(underlying: error)
-            }
-        }
-
         return request
     }
 
@@ -1124,7 +1188,7 @@ actor HTTPClient {
         let path = request.url?.path ?? ""
         // Skip auth injection for /auth/refresh (avoid recursion) and
         // /auth/login (a prior expired token can't authorize a fresh login).
-        if path.hasSuffix("/auth/refresh") || path.hasSuffix("/auth/login") {
+        if Self.isPublicAuthPath(path) {
             return
         }
 
@@ -1152,7 +1216,7 @@ actor HTTPClient {
         auth: CapturedOrdinaryRequestAuth
     ) {
         let path = request.url?.path ?? ""
-        if path.hasSuffix("/auth/refresh") || path.hasSuffix("/auth/login") {
+        if Self.isPublicAuthPath(path) {
             return
         }
 
@@ -1223,10 +1287,10 @@ actor HTTPClient {
     /// network.
     ///
     /// Network diagnostics are instrumented here rather than at any caller.
-    /// There are dozens of call sites above this (`get`, `post`, `requestData`,
-    /// the raw and multipart variants, the 401 retries), and instrumenting them
-    /// individually would produce a ring full of near-duplicate lines with
-    /// inconsistent outcome vocabulary. Every exit below is classified exactly
+    /// There are dozens of call sites above this (`get`, the
+    /// `getUnauthenticated…` reads, `getWithBearer`, `requestData`, the 401
+    /// retries), and instrumenting them individually would produce a ring
+    /// full of near-duplicate lines with inconsistent outcome vocabulary. Every exit below is classified exactly
     /// once, so "one request, one line" holds by construction.
     ///
     /// Token refresh is the sole request shape that does not pass through here —
@@ -1239,6 +1303,7 @@ actor HTTPClient {
         request: URLRequest,
         timeout: HTTPTimeout = .standard,
         dispatchRevision: UInt64,
+        dispatchRecord: HTTPDispatchRecord? = nil,
         reportReachability: Bool = true
     ) async throws -> (Data, HTTPURLResponse) {
         #if os(iOS) || os(tvOS)
@@ -1279,6 +1344,9 @@ actor HTTPClient {
             #endif
             throw error
         }
+        // Nothing suspends between the dispatch check and the send, so a
+        // record left unset means this request never left the device.
+        dispatchRecord?.markDispatched()
         let data: Data
         let response: URLResponse
         do {
@@ -1660,7 +1728,7 @@ actor HTTPClient {
     ///
     /// `path` here is the caller's route argument rather than a built URL, and
     /// it still goes through ``HTTPDiagnosticsPath``: callers interpolate ids
-    /// into it (`"/api/v1/items/\(contentId)"`), and that helper also truncates
+    /// into it (`"/api/v2/catalog/items/\(itemID)"`), and that helper also truncates
     /// at the first `?` or `#`, so neither an id nor a query string can leak
     /// through this line.
     private static func logRefreshRetry(method: String, path: String, outcome: String) {
@@ -1683,9 +1751,58 @@ actor HTTPClient {
     }
     #endif
 
-    private func shouldAttemptRefresh(path: String) -> Bool {
+    /// Public auth operations carry no bearer. Collecting polls and other
+    /// public auth mutations may consume one-use state, so a rejected or
+    /// uncertain request is never replayed by the auth refresh machinery.
+    ///
+    /// Matched by suffix: `buildRequest` keeps the server URL's base path, so
+    /// the path seen at header-attachment time may be `/prefix/api/v2/...`.
+    private static func isPublicAuthPath(_ path: String) -> Bool {
+        publicAuthPathSuffixes.contains { path.hasSuffix($0) }
+    }
+
+    private static let publicAuthPathSuffixes = [
+        "/auth/refresh", "/auth/login",
+        "/api/v2/auth/device/start", "/api/v2/auth/device/poll", "/api/v2/auth/oauth/complete",
+        "/api/v2/system/setup", "/api/v2/auth/signup",
+    ]
+
+    /// The v2 exclusions are single-dispatch mutations (`docs/native-api-v2.md`):
+    /// a 401 on one of them surfaces as the failure it is instead of being
+    /// re-sent under a refreshed bearer, because the server may already have
+    /// consumed the first attempt. A bearer known to be expired is renewed
+    /// before any request is sent, so these operations do not meet that 401
+    /// just because the token timed out. Settings value writes are
+    /// `natural_idempotent` and are not excluded: a 401 refreshes once and
+    /// re-sends the same desired value under the same captured owner.
+    private func shouldAttemptRefresh(path: String, method: String) -> Bool {
         // Matches the guard in AuthInterceptorImpl.kt:96.
-        !path.hasSuffix("/auth/refresh") && !path.hasSuffix("/auth/login")
+        let diagnosticsUploads = "/api/v2/diagnostics/reports/uploads"
+        return !Self.isPublicAuthPath(path) && path != "/api/v2/diagnostics/reports"
+            && !(path.hasPrefix("/api/v2/watch-together/rooms/")
+                && ((method == "POST" && (path.hasSuffix("/playback/start") || path.hasSuffix("/suggestions/promote")))
+                    || (method == "PUT" && path.hasSuffix("/selection"))))
+            && !(method == "POST" && path.hasPrefix("/api/v2/playback/sessions/") && path.hasSuffix("/control/ws-ticket"))
+            && !(method == "POST" && path.hasPrefix("/api/v2/playback/") && (path.hasSuffix("/replan") || path.hasSuffix("/route-events")))
+            && path != "/api/v2/subtitles/download"
+            && !(method == "POST" && path == "/api/v2/devices/push/apple")
+            && !(["PUT", "DELETE"].contains(method) && path.hasPrefix("/api/v2/watchlist/"))
+            && !(["PUT", "DELETE"].contains(method) && path.hasPrefix("/api/v2/favorites/"))
+            && !(["POST", "DELETE"].contains(method) && path.hasPrefix("/api/v2/watched/"))
+            && !(path == "/api/v2/downloads/subscriptions" && method == "POST")
+            && path != "/api/v2/onboarding/progress"
+            && path != "/api/v2/subtitles/ai/translate"
+            && !(path.hasPrefix("/api/v2/catalog/items/") && path.hasSuffix("/translate-description"))
+            && !(method == "POST" && path.hasPrefix("/api/v2/catalog/items/") && path.hasSuffix("/trailers/refresh"))
+            && !(method == "POST" && path.hasPrefix("/api/v2/catalog/people/") && path.hasSuffix("/refresh"))
+            && !(path == "/api/v2/profiles" && method == "POST")
+            // A journaled own-profile PATCH has one dispatch, even when a
+            // refresh could obtain another bearer for the same account.
+            && !(method == "PATCH" && path.hasPrefix("/api/v2/profiles/")
+                && path.split(separator: "/").count == 4)
+            && !(path == "/api/v2/downloads" && method == "POST")
+            && path != diagnosticsUploads
+            && !(path.hasPrefix(diagnosticsUploads + "/") && path.hasSuffix("/complete"))
     }
 
     private var isRequestDispatchBlocked: Bool {
@@ -1704,11 +1821,13 @@ actor HTTPClient {
         }
     }
 
+    /// Throws the flight's `UpdateRequirement` when the refresh endpoint
+    /// answered update-required; the credentials are kept in that case.
     private func refreshScopedTokens(
         auth: CapturedHTTPRequestAuth,
         expected: HTTPRequestIdentity,
         dispatchRevision: UInt64
-    ) async -> Bool {
+    ) async throws -> Bool {
         guard !isRequestDispatchBlocked,
               requestDispatchRevision == dispatchRevision else { return false }
         let ownerMatchesExpectedServer = switch auth.credentialOwner {
@@ -1721,7 +1840,7 @@ actor HTTPClient {
               auth.account.serverId == expected.serverId,
               auth.account.serverURL == ServerRegistry.normalize(url: expected.serverURL),
               let refreshValue = auth.refreshToken, !refreshValue.isEmpty,
-              URL(string: auth.serverURL + "/api/v1/auth/refresh") != nil else {
+              URL(string: auth.serverURL + Self.refreshPath) != nil else {
             return false
         }
         if await scopedCredentialsChanged(since: auth, expected: expected) {
@@ -1733,11 +1852,11 @@ actor HTTPClient {
         let key = auth.account
         if let existing = inFlightRefreshes[key] {
             refreshFlightJoinObserver?(.scoped)
-            _ = await existing.task.value
+            if let requirement = await existing.task.value { throw requirement }
             return await scopedCredentialsChanged(since: auth, expected: expected)
         }
 
-        let task = Task<Bool, Never> { [tokenStore, session, decoder, encoder] in
+        let task = Task<UpdateRequirement?, Never> { [tokenStore, session, decoder, encoder] in
             await Self.performScopedRefresh(
                 auth: auth,
                 tokenStore: tokenStore,
@@ -1748,10 +1867,11 @@ actor HTTPClient {
         }
         let flightId = UUID()
         inFlightRefreshes[key] = .init(id: flightId, task: task)
-        _ = await task.value
+        let requirement = await task.value
         if inFlightRefreshes[key]?.id == flightId {
             inFlightRefreshes.removeValue(forKey: key)
         }
+        if let requirement { throw requirement }
         return await scopedCredentialsChanged(since: auth, expected: expected)
     }
 
@@ -1773,10 +1893,10 @@ actor HTTPClient {
         session: URLSession,
         decoder: JSONDecoder,
         encoder: JSONEncoder
-    ) async -> Bool {
+    ) async -> UpdateRequirement? {
         guard let refreshValue = auth.refreshToken,
-              let url = URL(string: auth.serverURL + "/api/v1/auth/refresh") else {
-            return false
+              let url = URL(string: auth.serverURL + Self.refreshPath) else {
+            return nil
         }
         let captured = CapturedRefreshCredential(
             account: auth.account,
@@ -1784,7 +1904,7 @@ actor HTTPClient {
             owner: auth.credentialOwner
         )
         guard await tokenStore.captureRefreshCredential(expected: auth.account) == captured else {
-            return false
+            return nil
         }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -1796,29 +1916,34 @@ actor HTTPClient {
                 request: request,
                 session: session
             )
-            guard !Task.isCancelled else { return false }
+            guard !Task.isCancelled else { return nil }
             guard let http = response as? HTTPURLResponse else {
                 Self.logger.error("Scoped refresh: non-HTTP response")
-                return false
+                return nil
             }
             await MainActor.run {
                 ConnectionMonitor.shared.noteServerResponded()
             }
             if (200..<300).contains(http.statusCode) {
                 let tokens = try decoder.decode(RefreshResponse.self, from: data)
-                return await tokenStore.saveRefreshedTokens(
+                _ = await tokenStore.saveRefreshedTokens(
                     tokens.accessToken,
                     tokens.refreshToken,
                     replacing: captured
                 )
+                return nil
             }
 
             let body = String(data: data, encoding: .utf8) ?? ""
             Self.logger.error(
                 "Scoped refresh failed: status=\(http.statusCode, privacy: .public) body=\(body, privacy: .private)"
             )
+            if let requirement = UpdateRequirement(v2StatusCode: http.statusCode, body: body) {
+                await noteRefreshUpdateRequirement(requirement, serverId: auth.account.serverId)
+                return requirement
+            }
             guard shouldInvalidateSessionAfterRefreshFailure(http.statusCode) else {
-                return false
+                return nil
             }
             let disposition = await tokenStore.invalidateRejectedRefresh(captured)
             if let disposition,
@@ -1836,17 +1961,90 @@ actor HTTPClient {
                     NotificationCenter.default.post(
                         name: disposition == .temporarySessionExpired
                             ? .temporaryRemoteAuthExpired
-                            : .continuumSessionExpired,
+                            : .prairieSessionExpired,
                         object: event
                     )
                 }
             }
-            return false
+            return nil
         } catch {
             await noteServerUnreachable(for: error)
             Self.logger.error("Scoped refresh threw: \(String(describing: error), privacy: .public)")
-            return false
+            return nil
         }
+    }
+
+    /// Media uses the same owner fence and refresh flight as ordinary API
+    /// requests. The playback authorizer validates the URL before calling here.
+    func mediaRequestHeaders(
+        expectedAuth: CapturedOrdinaryRequestAuth,
+        baseHeaders: [String: String],
+        rejectedHeaders: [String: String]? = nil,
+        now: Date = Date()
+    ) async throws -> [String: String] {
+        try Task.checkCancellation()
+        let revision = try captureRequestDispatchRevision()
+        guard var current = await tokenStore.currentOrdinaryRequestAuth(matchingIdentityOf: expectedAuth),
+              let token = current.accessToken, !token.isEmpty else {
+            throw HTTPError.requestIdentityChanged
+        }
+        let rejectedBearer = rejectedHeaders?.first {
+            $0.key.caseInsensitiveCompare("Authorization") == .orderedSame
+        }?.value
+        let challengedCurrentToken = rejectedBearer == "Bearer \(token)"
+        let expired = MediaAccessTokenExpiry.isExpired(token, now: now)
+        let backingOff = (mediaRefreshBackoff.map { $0.auth == current && ContinuousClock.now < $0.until } ?? false)
+            && !expired
+        let proactiveRefresh = rejectedHeaders == nil
+            && MediaAccessTokenExpiry.shouldRefresh(token, now: now)
+            && !backingOff
+        if challengedCurrentToken || expired {
+            if let refreshed = try await refreshTokens(expected: current, dispatchRevision: revision) {
+                current = refreshed
+                mediaRefreshBackoff = nil
+            } else if let latest = await tokenStore.currentOrdinaryRequestAuth(matchingIdentityOf: current),
+                      latest.accessToken != token, latest.accessToken != nil {
+                current = latest
+            } else {
+                throw HTTPError.http(statusCode: 401, body: nil)
+            }
+        } else if proactiveRefresh {
+            startProactiveMediaRefresh(expected: current, revision: revision)
+        }
+        try Task.checkCancellation()
+        guard let latest = await tokenStore.currentOrdinaryRequestAuth(matchingIdentityOf: current),
+              let accessToken = latest.accessToken, !accessToken.isEmpty else {
+            throw HTTPError.requestIdentityChanged
+        }
+        try ensureRequestDispatchAllowed(expectedRevision: revision)
+        var headers = baseHeaders.filter {
+            !["authorization", "x-profile-id", "x-profile-token"].contains($0.key.lowercased())
+        }
+        headers["Authorization"] = "Bearer \(accessToken)"
+        headers["X-Profile-Id"] = latest.profileId
+        headers["X-Profile-Token"] = latest.profileToken
+        return headers
+    }
+
+    /// Still-valid media must never wait for the refresh endpoint. The shared
+    /// flight continues in the background; a later 401/expired request joins it.
+    private func startProactiveMediaRefresh(
+        expected: CapturedOrdinaryRequestAuth, revision: UInt64
+    ) {
+        guard proactiveMediaRefreshes[expected.account] == nil,
+              !isRequestDispatchBlocked, requestDispatchRevision == revision else { return }
+        let id = UUID()
+        let task = Task { [self] in
+            let refreshed = try? await refreshTokens(expected: expected, dispatchRevision: revision)
+            guard proactiveMediaRefreshes[expected.account]?.id == id else { return }
+            proactiveMediaRefreshes.removeValue(forKey: expected.account)
+            if refreshed == nil, !Task.isCancelled, requestDispatchRevision == revision {
+                // Only the failed credential backs off. A rotated credential
+                // or a different account/profile cannot inherit this delay.
+                mediaRefreshBackoff = (expected, ContinuousClock.now.advanced(by: .seconds(10)))
+            }
+        }
+        proactiveMediaRefreshes[expected.account] = (id, task)
     }
 
     // MARK: - Refresh (single-flight)
@@ -1867,10 +2065,13 @@ actor HTTPClient {
     /// temporary generation, access token, and profile together. A caller can
     /// use a token rotated by another flight only when the rest of that exact
     /// request identity is still current.
+    ///
+    /// Throws the flight's `UpdateRequirement` when the refresh endpoint
+    /// answered update-required; the credentials are kept in that case.
     private func refreshTokens(
         expected: CapturedOrdinaryRequestAuth,
         dispatchRevision: UInt64
-    ) async -> CapturedOrdinaryRequestAuth? {
+    ) async throws -> CapturedOrdinaryRequestAuth? {
         guard !isRequestDispatchBlocked,
               requestDispatchRevision == dispatchRevision else { return nil }
         guard let current = await tokenStore.currentOrdinaryRequestAuth(
@@ -1888,7 +2089,7 @@ actor HTTPClient {
         let key = expected.account
         if let existing = inFlightRefreshes[key] {
             refreshFlightJoinObserver?(.ordinary)
-            _ = await existing.task.value
+            if let requirement = await existing.task.value { throw requirement }
             if let current = await tokenStore.currentOrdinaryRequestAuth(
                 matchingIdentityOf: expected
             ), current.accessToken != expected.accessToken,
@@ -1898,7 +2099,7 @@ actor HTTPClient {
             return nil
         }
 
-        let task = Task<Bool, Never> { [tokenStore, session, decoder, encoder] in
+        let task = Task<UpdateRequirement?, Never> { [tokenStore, session, decoder, encoder] in
             await Self.performRefresh(
                 expected: key,
                 tokenStore: tokenStore,
@@ -1909,10 +2110,11 @@ actor HTTPClient {
         }
         let flightId = UUID()
         inFlightRefreshes[key] = .init(id: flightId, task: task)
-        _ = await task.value
+        let requirement = await task.value
         if inFlightRefreshes[key]?.id == flightId {
             inFlightRefreshes.removeValue(forKey: key)
         }
+        if let requirement { throw requirement }
         if let current = await tokenStore.currentOrdinaryRequestAuth(
             matchingIdentityOf: expected
         ), current.accessToken != expected.accessToken,
@@ -1928,15 +2130,15 @@ actor HTTPClient {
         session: URLSession,
         decoder: JSONDecoder,
         encoder: JSONEncoder
-    ) async -> Bool {
+    ) async -> UpdateRequirement? {
         guard let captured = await tokenStore.captureRefreshCredential(expected: expected) else {
             Self.logger.error("Refresh skipped: no refresh token stored")
-            return false
+            return nil
         }
 
-        guard let url = URL(string: expected.serverURL + "/api/v1/auth/refresh") else {
+        guard let url = URL(string: expected.serverURL + Self.refreshPath) else {
             Self.logger.error("Refresh skipped: invalid server URL")
-            return false
+            return nil
         }
 
         var request = URLRequest(url: url)
@@ -1947,7 +2149,7 @@ actor HTTPClient {
             request.httpBody = try encoder.encode(RefreshRequest(refreshToken: captured.refreshToken))
         } catch {
             Self.logger.error("Refresh encode failed: \(String(describing: error), privacy: .public)")
-            return false
+            return nil
         }
 
         do {
@@ -1961,11 +2163,11 @@ actor HTTPClient {
             // server's Keychain slot.
             if Task.isCancelled {
                 Self.logger.info("Refresh cancelled post-response; skipping token save")
-                return false
+                return nil
             }
             guard let http = response as? HTTPURLResponse else {
                 Self.logger.error("Refresh: non-HTTP response")
-                return false
+                return nil
             }
             // Refresh bypasses perform(), so feed reachability from here too.
             await MainActor.run {
@@ -1973,16 +2175,21 @@ actor HTTPClient {
             }
             if (200..<300).contains(http.statusCode) {
                 let tokens = try decoder.decode(RefreshResponse.self, from: data)
-                return await tokenStore.saveRefreshedTokens(
+                _ = await tokenStore.saveRefreshedTokens(
                     tokens.accessToken,
                     tokens.refreshToken,
                     replacing: captured
                 )
+                return nil
             } else {
                 let body = String(data: data, encoding: .utf8) ?? ""
                 Self.logger.error("Refresh failed: status=\(http.statusCode, privacy: .public) body=\(body, privacy: .private)")
+                if let requirement = UpdateRequirement(v2StatusCode: http.statusCode, body: body) {
+                    await noteRefreshUpdateRequirement(requirement, serverId: expected.serverId)
+                    return requirement
+                }
                 guard shouldInvalidateSessionAfterRefreshFailure(http.statusCode) else {
-                    return false
+                    return nil
                 }
                 let disposition = await tokenStore.invalidateRejectedRefresh(captured)
                 let event = disposition.map {
@@ -1992,7 +2199,7 @@ actor HTTPClient {
                       let event,
                       !Task.isCancelled,
                       await tokenStore.shouldConsumeSessionExpiryEvent(event),
-                      !Task.isCancelled else { return false }
+                      !Task.isCancelled else { return nil }
                 // Tell the UI to route back to login for the current
                 // server. The registry entry (URL + display name) is
                 // preserved so the user doesn't have to re-add it.
@@ -2001,22 +2208,52 @@ actor HTTPClient {
                     NotificationCenter.default.post(
                         name: disposition == .temporarySessionExpired
                             ? .temporaryRemoteAuthExpired
-                            : .continuumSessionExpired,
+                            : .prairieSessionExpired,
                         object: event
                     )
                 }
-                return false
+                return nil
             }
         } catch {
             await noteServerUnreachable(for: error)
             Self.logger.error("Refresh threw: \(String(describing: error), privacy: .public)")
-            return false
+            return nil
         }
     }
 
-    /// Match Android's refresh-failure classifier. Client/auth rejection is
-    /// terminal; rate limits, gateway failures, and server faults are
-    /// retryable and must preserve the current credential snapshot.
+    /// `refreshSession`. Public: it carries no bearer, and `isPublicAuthPath`
+    /// matches its `/auth/refresh` suffix, so it never recurses into refresh.
+    static let refreshPath = "/api/v2/auth/refresh"
+
+    /// A refresh answered update-required never costs the user the session.
+    /// A v1-only server's legacy 404 on the v2 refresh route is the same
+    /// evidence the contract probe looks for, so it records that verdict for
+    /// the server, which makes `APIv2Client` refuse further calls with the
+    /// server-update message. An app-update answer has no stored state; it
+    /// reaches the user through the error the waiting requests throw.
+    private static func noteRefreshUpdateRequirement(
+        _ requirement: UpdateRequirement,
+        serverId: String
+    ) async {
+        guard requirement == .server, !Task.isCancelled else { return }
+        await MainActor.run {
+            ConnectionMonitor.shared.noteContractProbe(.updateServer, serverId: serverId)
+        }
+    }
+
+    /// Match Android's refresh-failure classifier (AuthInterceptorImpl.kt).
+    /// Client/auth rejection is terminal: v2 answers a malformed body with
+    /// 400, a revoked session with 401 `session_expired` and any other
+    /// rejected token with 401 `invalid_token`. Rate limits, gateway failures
+    /// and server faults are retryable and must preserve the current
+    /// credential snapshot.
+    ///
+    /// 422 is deliberately not terminal. v2 answers 422 only when the body
+    /// fails validation (a blank or over-long `refresh_token`); both refresh
+    /// paths refuse to send a blank token, so a 422 means the client and the
+    /// contract disagree, not that the credential was rejected. Update-required
+    /// answers (410 `client_upgrade_required`, the legacy 404) are classified
+    /// before this and are never terminal either.
     static func shouldInvalidateSessionAfterRefreshFailure(_ statusCode: Int) -> Bool {
         statusCode == 400 || statusCode == 401 || statusCode == 403
     }
@@ -2041,6 +2278,27 @@ struct HTTPMultipartPart {
     let data: Data
 }
 
+// MARK: - Dispatch record
+
+/// Records whether a request reached the URL session. A caller passes one to
+/// ``HTTPClient/requestData`` when it must tell a refusal that happened
+/// before anything left the device from a failure after the request was
+/// sent: both surface as `HTTPError.requestIdentityChanged` or
+/// `.authorityChanged`. Once set it stays set, so a 401 refresh retry that is
+/// refused still counts as dispatched.
+final class HTTPDispatchRecord: @unchecked Sendable {
+    private let lock = NSLock()
+    private var dispatched = false
+
+    var didDispatch: Bool {
+        lock.withLock { dispatched }
+    }
+
+    fileprivate func markDispatched() {
+        lock.withLock { dispatched = true }
+    }
+}
+
 // MARK: - Undecoded response
 
 /// A 2xx response handed back undecoded, for callers that need the status or a
@@ -2048,12 +2306,14 @@ struct HTTPMultipartPart {
 struct HTTPRawResponse: Sendable {
     let data: Data
     let statusCode: Int
+    let url: URL?
     /// Header names are lowercased on the way in, because HTTP header names
     /// are case-insensitive and a lookup must not depend on the server's
     /// casing.
     let headers: [String: String]
 
-    init(data: Data, statusCode: Int, headers: [AnyHashable: Any]) {
+    init(data: Data, statusCode: Int, headers: [AnyHashable: Any], url: URL? = nil) {
+        self.url = url
         self.data = data
         self.statusCode = statusCode
         var normalized: [String: String] = [:]
@@ -2075,10 +2335,14 @@ struct HTTPRawResponse: Sendable {
 enum HTTPError: LocalizedError, CustomStringConvertible {
     case serverUrlNotConfigured
     case requestIdentityChanged
+    /// Thrown by `TokenStore.withOwnerFence` when the account, credential
+    /// owner, profile, or profile proof that issued an operation is no longer
+    /// current when the operation is about to start or when it returns. The
+    /// response was discarded; nothing was applied to the replacement owner.
+    case authorityChanged
     case invalidURL(String)
     case invalidResponse
     case network(underlying: Error)
-    case encodingFailed(underlying: Error)
     case decodingFailed(type: String, underlying: Error)
     case http(statusCode: Int, body: String?)
 
@@ -2088,19 +2352,19 @@ enum HTTPError: LocalizedError, CustomStringConvertible {
             return "Server URL is not configured."
         case .requestIdentityChanged:
             return "The active server or profile changed before the request could start."
+        case .authorityChanged:
+            return "The account or profile changed while the request was in flight."
         case .invalidURL(let url):
             return "Invalid URL: \(url)"
         case .invalidResponse:
             return "Invalid server response."
         case .network(let error):
             return "Network error: \(error.localizedDescription)"
-        case .encodingFailed(let error):
-            return "Failed to encode request body: \(error.localizedDescription)"
         case .decodingFailed(let type, let error):
             return "Failed to decode \(type): \(error.localizedDescription)"
         case .http(let statusCode, let body):
-            if let message = Self.parseServerMessage(body) {
-                return message
+            if UpdateRequirement.isClientUpgradeRequired(statusCode: statusCode, body: body) {
+                return UpdateRequirement.appMessage
             }
             return "Server returned status \(statusCode)"
         }
@@ -2114,14 +2378,14 @@ enum HTTPError: LocalizedError, CustomStringConvertible {
             return "server_url_not_configured"
         case .requestIdentityChanged:
             return "request_identity_changed"
+        case .authorityChanged:
+            return "authority_changed"
         case .invalidURL:
             return "invalid_url"
         case .invalidResponse:
             return "invalid_response"
         case .network:
             return "network_error"
-        case .encodingFailed:
-            return "encoding_failed"
         case .decodingFailed(let type, _):
             return "decoding_failed(type: \(type))"
         case .http(let statusCode, _):
@@ -2132,64 +2396,6 @@ enum HTTPError: LocalizedError, CustomStringConvertible {
     var statusCode: Int? {
         if case .http(let code, _) = self { return code }
         return nil
-    }
-
-    /// Machine-readable identifier from the server's JSON error envelope
-    /// (e.g. `profile_limit_reached`). Callers that want to branch on the
-    /// specific condition — rather than just showing `errorDescription` —
-    /// can match on this without re-parsing the body.
-    var serverErrorCode: String? {
-        if case .http(_, let body) = self {
-            return Self.parseServerError(body)?.error
-        }
-        return nil
-    }
-
-    /// The server's JSON error shape, mirrored from Go `errorResponse` in
-    /// `internal/api/handlers/auth.go`. Both fields are optional because
-    /// not every failing endpoint emits a body, and some middleware emits
-    /// just plain text (e.g. router 404s).
-    private struct ServerError: Decodable {
-        let error: String?
-        let message: String?
-    }
-
-    private static func parseServerError(_ body: String?) -> ServerError? {
-        guard let body, !body.isEmpty,
-              let data = body.data(using: .utf8),
-              let parsed = try? JSONDecoder().decode(ServerError.self, from: data)
-        else { return nil }
-        return parsed
-    }
-
-    private static func parseServerMessage(_ body: String?) -> String? {
-        guard let parsed = parseServerError(body) else { return nil }
-        if let message = parsed.message, !message.isEmpty { return message }
-        return nil
-    }
-}
-
-// MARK: - Internal helpers
-
-/// Sentinel used to satisfy `send<T>` for generic calls that expect an
-/// empty/void response. Not public.
-private struct EmptyResponse: Decodable {
-    static let empty = EmptyResponse()
-    init() {}
-    init(from decoder: Decoder) throws {}
-}
-
-/// Type-erased `Encodable` so `send` can accept `(any Encodable)?` bodies
-/// and hand them to `JSONEncoder` (which needs a concrete conforming type).
-private struct AnyEncodable: Encodable {
-    private let wrapped: any Encodable
-
-    init(_ wrapped: any Encodable) {
-        self.wrapped = wrapped
-    }
-
-    func encode(to encoder: Encoder) throws {
-        try wrapped.encode(to: encoder)
     }
 }
 
@@ -2208,7 +2414,7 @@ private struct AnyEncodable: Encodable {
 /// `attrs.path` value. Two categories of real Prairie route pass the first check
 /// and are still rejected:
 ///
-/// * **Dotted segments.** `/api/v1/settings/values/downloads.default_quality`
+/// * **Dotted segments.** `/api/v2/settings/values/downloads.default_quality`
 ///   is a static route with a static key, and every segment is a legal
 ///   identifier — but the collector reads `downloads.default_quality` as a
 ///   hostname-shaped token and rejects the report. It maintains a hand-curated

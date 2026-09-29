@@ -20,10 +20,10 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
-	<key>ContinuumKeychainAccessGroup</key>
+	<key>PrairieKeychainAccessGroup</key>
 	<string>$(AppIdentifierPrefix)org.prairieserver.prairie.shared</string>
-	<key>ContinuumUsesUserIndependentKeychain</key>
-	<string>$(SILO_USER_INDEPENDENT_KEYCHAIN)</string>
+	<key>PrairieUsesUserIndependentKeychain</key>
+	<string>$(PRAIRIE_USER_INDEPENDENT_KEYCHAIN)</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

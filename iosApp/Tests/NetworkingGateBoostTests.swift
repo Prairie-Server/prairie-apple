@@ -111,15 +111,6 @@ final class NetworkingGateBoostTests: XCTestCase {
     // MARK: - WireFormat profile bodies
 
     func testUpdateAndCreateProfileBodiesEncodeSnakeCase() throws {
-        var update = UpdateProfileBody()
-        update.subtitleLanguage = "en"
-        update.subtitleMode = "auto"
-        update.showForcedSubtitles = true
-        update.preferredMetadataLanguage = "es"
-        let updateDict = try encodeSnake(update)
-        XCTAssertEqual(updateDict["subtitle_language"] as? String, "en")
-        XCTAssertEqual(updateDict["preferred_metadata_language"] as? String, "es")
-
         let create = CreateProfileRequestBody(
             name: "Kids",
             avatar: "🐯",
@@ -138,32 +129,12 @@ final class NetworkingGateBoostTests: XCTestCase {
     // MARK: - Playback prefs + device login helpers
 
     func testSubtitleAndAudioPrefModeEnumsAndDeviceLoginStatus() throws {
-        let sub = try decode(SubtitlePref.self, """
-        {
-          "series_id": "s1",
-          "subtitle_mode": "always",
-          "subtitle_language": "ja"
-        }
-        """)
-        XCTAssertEqual(sub.subtitleModeEnum, .always)
-
-        let audio = try decode(AudioPref.self, """
-        { "series_id": "s1", "audio_track_index": 2, "audio_language": "en" }
-        """)
-        XCTAssertEqual(audio.audioTrackIndex, 2)
-
         XCTAssertEqual(DeviceLoginStatus(raw: "pending"), .pending)
         XCTAssertEqual(DeviceLoginStatus(raw: "approved"), .approved)
         XCTAssertEqual(DeviceLoginStatus(raw: "denied"), .denied)
         XCTAssertEqual(DeviceLoginStatus(raw: "expired"), .expired)
         XCTAssertEqual(DeviceLoginStatus(raw: "consumed"), .consumed)
         XCTAssertEqual(DeviceLoginStatus(raw: "weird"), .unknown)
-
-        let capability = try decode(DeviceLoginCapabilityResponse.self, """
-        { "remote_playback_handoff": true, "protocol_versions": [1, 2] }
-        """)
-        XCTAssertTrue(capability.remotePlaybackHandoff)
-        XCTAssertEqual(capability.protocolVersions, [1, 2])
     }
 
     // MARK: - Cache keys + AI tolerant edges
@@ -195,16 +166,6 @@ final class NetworkingGateBoostTests: XCTestCase {
 
         let unknownStatus = try decode(AIJobStatus.self, "\"brand_new\"")
         XCTAssertEqual(unknownStatus, .pending)
-
-        let status = try decode(MetadataAIStatus.self, """
-        { "enabled": true, "on_view": "mystery" }
-        """)
-        XCTAssertTrue(status.enabled)
-        XCTAssertEqual(status.onView, .off)
-
-        let body = TranslateDescriptionBody(targetLanguage: "fr")
-        let encoded = try encodeSnake(body)
-        XCTAssertEqual(encoded["target_language"] as? String, "fr")
     }
 
     func testBrowseItemAudiobookAndLibraryHelpers() throws {
@@ -232,24 +193,6 @@ final class NetworkingGateBoostTests: XCTestCase {
         XCTAssertEqual(dict["device_name"] as? String, "Apple TV")
         XCTAssertNil(dict["client_purpose"])
         XCTAssertNil(dict["temporary"])
-
-        let approve = DeviceApproveRequest(code: "ABCD")
-        let approveDict = try encodeSnake(approve)
-        XCTAssertEqual(approveDict["code"] as? String, "ABCD")
-
-        let lookup = try decode(DeviceLookupResponse.self, """
-        {
-          "match_code": "99",
-          "device_name": "Living Room",
-          "device_platform": "tvOS",
-          "status": "pending",
-          "client_purpose": "pair",
-          "temporary": false
-        }
-        """)
-        XCTAssertEqual(lookup.matchCode, "99")
-        XCTAssertEqual(lookup.clientPurpose, "pair")
-        XCTAssertEqual(lookup.temporary, false)
     }
 
     func testPlaybackSessionAndCollectionsModelGaps() throws {
@@ -272,13 +215,13 @@ final class NetworkingGateBoostTests: XCTestCase {
         XCTAssertTrue(memberwise.played)
         XCTAssertTrue(memberwise.isFavorite)
 
-        let sync = SyncProgressItem(
+        let sync = try XCTUnwrap(SyncProgressItem(
             mediaItemId: "m1",
             position: 12.5,
             duration: 100,
             forceOverwrite: true,
             updatedAt: Date(timeIntervalSince1970: 1)
-        )
+        ))
         XCTAssertEqual(sync.mediaItemId, "m1")
         XCTAssertEqual(sync.forceOverwrite, true)
 

@@ -87,7 +87,7 @@ final class NetworkingModelsGateFillTests: XCTestCase {
         {
           "file_id": 9,
           "file_name": "movie.mkv",
-          "edition": "  theatrical  ",
+          "edition_raw": "  theatrical  ",
           "codec_video": "hevc",
           "codec_audio": "aac",
           "container": "mkv"

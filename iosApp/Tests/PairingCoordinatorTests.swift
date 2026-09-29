@@ -56,8 +56,8 @@ private final class FakePairingAPI: PairingDeviceAuthorizing, @unchecked Sendabl
     var lookupError: Error?
     var approveError: Error?
     var startError: Error?
-    var pollResponse: DeviceLoginPollResponse?
-    var pollResults: [Result<DeviceLoginPollResponse, Error>] = []
+    var pollResponse: APIv2DevicePoll?
+    var pollResults: [Result<APIv2DevicePoll, Error>] = []
 
     private(set) var startedServers: [String] = []
     private(set) var approvedCodes: [String] = []
@@ -80,13 +80,13 @@ private final class FakePairingAPI: PairingDeviceAuthorizing, @unchecked Sendabl
         )
     }
 
-    func poll(serverURL: String, deviceCode: String) async throws -> DeviceLoginPollResponse {
+    func poll(serverURL: String, deviceCode: String) async throws -> APIv2DevicePoll {
         pollCount += 1
         if !pollResults.isEmpty {
             return try pollResults.removeFirst().get()
         }
         if let pollResponse { return pollResponse }
-        throw PairingDeviceAPI.APIError.http(500)
+        throw APIv2Error.httpStatus(500)
     }
 
     func lookup(serverURL: String, bearer: String, userCode: String) async throws -> DeviceLookupResponse {
@@ -94,7 +94,10 @@ private final class FakePairingAPI: PairingDeviceAuthorizing, @unchecked Sendabl
         return DeviceLookupResponse(matchCode: lookupMatchCode, deviceName: nil, devicePlatform: nil, status: nil)
     }
 
+    private(set) var approveAttempts = 0
+
     func approve(serverURL: String, bearer: String, userCode: String) async throws {
+        approveAttempts += 1
         if let approveError { throw approveError }
         approvedCodes.append(userCode)
     }
@@ -122,13 +125,25 @@ private func entry(_ id: String, name: String) -> ServerEntry {
     ServerEntry(id: id, url: "https://\(id).example", fetchedName: name, profileId: nil, lastUsedAt: Date())
 }
 
-private let approvedPoll = DeviceLoginPollResponse(
-    status: "approved", pollAfter: nil, accessToken: "ACCESS", refreshToken: "REFRESH", expiresIn: 3600, user: nil
-)
+private func devicePoll(_ status: String, tokens: APIv2LoginTokens? = nil) -> APIv2DevicePoll {
+    APIv2DevicePoll(status: status, pollAfter: 1, tokens: tokens, profileId: "", profileToken: "",
+        temporary: false, sessionExpiresAt: nil)
+}
 
-private let pendingPoll = DeviceLoginPollResponse(
-    status: "pending", pollAfter: 1, accessToken: nil, refreshToken: nil, expiresIn: nil, user: nil
-)
+private let approvedPoll = devicePoll("approved", tokens: APIv2LoginTokens(
+    accessToken: "ACCESS", refreshToken: "REFRESH", expiresIn: 3600,
+    user: APIv2Account(id: "account-1", username: "laura", email: "laura@example.test",
+        role: .user, permissions: [], downloadAllowed: true, impersonation: nil)
+))
+
+private let pendingPoll = devicePoll("pending")
+
+private func problem(_ status: Int, _ type: String) -> APIv2Problem {
+    APIv2Problem(type: "https://prairieserver.org/problems/\(type)", title: type, status: status,
+        detail: "", instance: nil, errors: nil)
+}
+
+private let expiredProblem = problem(404, "not_found")
 
 // MARK: - Server session persistence
 
@@ -234,7 +249,8 @@ final class CompanionPairingCoordinatorTests: XCTestCase {
     private func makeCoordinator(
         channel: FakePairingChannel,
         api: FakePairingAPI,
-        servers: [ServerEntry]
+        servers: [ServerEntry],
+        endpoints: [ServerEndpoint]? = nil
     ) -> CompanionPairingCoordinator {
         let coordinator = CompanionPairingCoordinator(
             channel: channel,
@@ -243,10 +259,56 @@ final class CompanionPairingCoordinatorTests: XCTestCase {
             api: api,
             deviceModel: "iPhone",
             availableServers: { servers },
-            accessToken: { _ in "token" }
+            accessToken: { _ in "token" },
+            serverEndpoints: { _, _ in endpoints }
         )
         coordinator.start()
         return coordinator
+    }
+
+    /// A server with a verified identity is pushed with that identity and
+    /// the deployment's other addresses, and a typed TV failure reaches the
+    /// summary. A server without one is pushed the legacy way.
+    func testPushCarriesIdentityAndEndpointsAndSummarisesTypedFailure() async {
+        let channel = FakePairingChannel()
+        let api = FakePairingAPI()
+        let identified = ServerEntry(
+            id: "a", url: "https://a.example", fetchedName: "Home", profileId: nil,
+            lastUsedAt: Date(), verifiedServerId: "S"
+        )
+        let legacy = entry("b", name: "Legacy")
+        let endpoints = [ServerEndpoint(url: "https://public.example", kind: .public)]
+        let coordinator = makeCoordinator(channel: channel, api: api, servers: [identified, legacy], endpoints: endpoints)
+
+        channel.deliver(.hello(tvName: "Living Room", tvDeviceId: "tv", state: .setup, supportedVersions: [1]))
+        await expectEventually("picker") {
+            if case .pickServers = coordinator.state { return true }
+            return false
+        }
+        await coordinator.pushSelected([identified, legacy])
+        await expectEventually("first push") {
+            channel.sent.contains {
+                if case .pushServer("https://a.example", "Home", "S", endpoints) = $0 { return true }
+                return false
+            }
+        }
+        channel.deliver(.serverResult(serverURL: "https://a.example", status: .failed, error: "unreachable"))
+        await expectEventually("legacy push") {
+            channel.sent.contains {
+                if case .pushServer("https://b.example", "Legacy", nil, nil) = $0 { return true }
+                return false
+            }
+        }
+        channel.deliver(.serverResult(serverURL: "https://b.example", status: .failed, error: nil))
+        await expectEventually("summary") {
+            if case .finished(let ok, let bad) = coordinator.state {
+                return ok.isEmpty && bad.map(\.code) == [.unreachable, .authFailed]
+            }
+            return false
+        }
+        if case .finished(_, let bad) = coordinator.state {
+            XCTAssertTrue(bad[0].summary.contains("couldn't reach"))
+        }
     }
 
     private func hello() -> PairingMessage {
@@ -327,12 +389,12 @@ final class CompanionPairingCoordinatorTests: XCTestCase {
 
         // Second server: the TV shows ZZZZ but the server says ABCD — splice.
         await expectEventually("second push") {
-            channel.sent.contains { if case .pushServer(let url, _) = $0 { return url == servers[1].url } else { return false } }
+            channel.sent.contains { if case .pushServer(let url, _, _, _) = $0 { return url == servers[1].url } else { return false } }
         }
         channel.deliver(.deviceStarted(serverURL: servers[1].url, userCode: "USER-2", matchCode: "ZZZZ"))
 
         await expectEventually("summary") {
-            if case .finished(let ok, let bad) = coordinator.state { return ok == ["Home"] && bad == ["Remote"] }
+            if case .finished(let ok, let bad) = coordinator.state { return ok == ["Home"] && bad.map(\.name) == ["Remote"] }
             return false
         }
         XCTAssertEqual(api.approvedCodes, ["USER-1"], "the spliced server must never be approved")
@@ -377,10 +439,65 @@ final class CompanionPairingCoordinatorTests: XCTestCase {
         await coordinator.pushSelected(servers)
         channel.deliver(.deviceStarted(serverURL: servers[0].url, userCode: "USER-1", matchCode: "ABCD"))
         await expectEventually("zero-success summary") {
-            if case .finished(let ok, let bad) = coordinator.state { return ok.isEmpty && bad == ["Home"] }
+            if case .finished(let ok, let bad) = coordinator.state { return ok.isEmpty && bad.map(\.name) == ["Home"] }
             return false
         }
         XCTAssertTrue(api.approvedCodes.isEmpty)
+    }
+
+    /// A v1-only server fails its lookup with the typed update code, so the
+    /// summary says what to update instead of a generic TV failure.
+    func testLookupOnV1OnlyServerSummarisesUpdateRequired() async {
+        let channel = FakePairingChannel()
+        let api = FakePairingAPI()
+        api.lookupError = APIv2Error.serverUpdateRequired
+        let coordinator = makeCoordinator(channel: channel, api: api, servers: [entry("a", name: "Home")])
+        channel.deliver(hello())
+        await expectEventually("picker") {
+            if case .pickServers = coordinator.state { return true }
+            return false
+        }
+        guard case let .pickServers(_, servers) = coordinator.state else {
+            return XCTFail("expected pickServers, got \(coordinator.state)")
+        }
+        await coordinator.pushSelected(servers)
+        channel.deliver(.deviceStarted(serverURL: servers[0].url, userCode: "USER-1", matchCode: "ABCD"))
+        await expectEventually("update summary") {
+            if case .finished(let ok, let bad) = coordinator.state { return ok.isEmpty && bad.map(\.code) == [.updateRequired] }
+            return false
+        }
+        XCTAssertTrue(api.approvedCodes.isEmpty)
+    }
+
+    /// A 409 means the request was already decided elsewhere. The approval
+    /// is not sent again, and the error says what happened instead of
+    /// blaming the phone's connection.
+    func testAlreadyDecidedApprovalEndsWithoutRetrying() async {
+        let channel = FakePairingChannel()
+        let api = FakePairingAPI()
+        api.approveError = APIv2Error.problem(problem(409, "conflict"))
+        let coordinator = makeCoordinator(channel: channel, api: api, servers: [entry("a", name: "Home")])
+        channel.deliver(hello())
+        await expectEventually("picker") {
+            if case .pickServers = coordinator.state { return true }
+            return false
+        }
+        guard case let .pickServers(_, servers) = coordinator.state else {
+            return XCTFail("expected pickServers, got \(coordinator.state)")
+        }
+        await coordinator.pushSelected(servers)
+        channel.deliver(.deviceStarted(serverURL: servers[0].url, userCode: "USER-1", matchCode: "ABCD"))
+        await expectEventually("confirm prompt") {
+            if case .confirmMatch = coordinator.state { return true }
+            return false
+        }
+        await coordinator.confirmMatch()
+        await expectEventually("approve error") {
+            if case .error(let message) = coordinator.state { return message.contains("already approved or declined") }
+            return false
+        }
+        XCTAssertEqual(api.approveAttempts, 1)
+        XCTAssertEqual(channel.lastSent, .cancel(reason: "approve_failed"))
     }
 }
 
@@ -395,6 +512,8 @@ final class ReceiverPairingCoordinatorTests: XCTestCase {
 
     private final class PersistRecorder: @unchecked Sendable {
         var persisted: [Persisted] = []
+        var verifiedIds: [String?] = []
+        var accountIDs: [String] = []
     }
 
     @MainActor
@@ -420,11 +539,309 @@ final class ReceiverPairingCoordinatorTests: XCTestCase {
         }
     }
 
-    private func makeCoordinator(api: FakePairingAPI, recorder: PersistRecorder) -> ReceiverPairingCoordinator {
-        ReceiverPairingCoordinator(api: api) { url, _, access, _ in
-            recorder.persisted.append(Persisted(url: url, access: access))
+    private func makeCoordinator(
+        api: FakePairingAPI,
+        recorder: PersistRecorder,
+        identities: [String: ServerIdentityProbeResult] = [:],
+        probeLog: ProbeLog? = nil
+    ) -> ReceiverPairingCoordinator {
+        ReceiverPairingCoordinator(
+            api: api,
+            identityProbe: { url in
+                probeLog?.record(url)
+                return identities[ServerRegistry.normalize(url: url)] ?? .unreachable
+            }
+        ) { pairing in
+            recorder.persisted.append(Persisted(url: pairing.url, access: pairing.accessToken))
+            recorder.verifiedIds.append(pairing.verifiedServerId)
+            recorder.accountIDs.append(pairing.accountID)
             return true
         }
+    }
+
+    private func allowPush(_ channel: FakePairingChannel, _ coordinator: ReceiverPairingCoordinator) async {
+        channel.deliver(.pushServer(serverURL: "https://home.example", serverName: "Home"))
+        await expectEventually("consent prompt") {
+            if case .consentRequested = coordinator.state { return true }
+            return false
+        }
+        coordinator.allowPendingServer()
+    }
+
+    /// A v1-only server answers the v2 start with Go's plain 404. The TV
+    /// explains the update instead of a generic sign-in failure, and tells
+    /// the phone with the typed code.
+    func testUpdateRequiredOnStartShowsTheUpdateMessage() async {
+        let channel = FakePairingChannel()
+        let api = FakePairingAPI()
+        api.startError = APIv2Error.serverUpdateRequired
+        let coordinator = makeCoordinator(api: api, recorder: PersistRecorder())
+        let runTask = Task { await coordinator.run(session: channel, stream: channel.stream) }
+
+        await allowPush(channel, coordinator)
+        await expectEventually("update-required failure") {
+            coordinator.state == .failed(serverName: "Home", code: .updateRequired, help: UpdateRequirement.serverMessage)
+        }
+        XCTAssertTrue(channel.sent.contains {
+            if case .serverResult("https://home.example", .failed, "update_required") = $0 { return true }
+            return false
+        })
+        channel.deliver(.done)
+        await runTask.value
+    }
+
+    /// A 410 `client_upgrade_required` on a poll ends the attempt with the
+    /// app-update message instead of polling until the code expires.
+    func testClientUpgradeRequiredOnPollStopsPolling() async {
+        let channel = FakePairingChannel()
+        let api = FakePairingAPI()
+        api.pollResults = [.failure(APIv2Error.problem(problem(410, "client_upgrade_required")))]
+        let recorder = PersistRecorder()
+        let coordinator = makeCoordinator(api: api, recorder: recorder)
+        let runTask = Task { await coordinator.run(session: channel, stream: channel.stream) }
+
+        await allowPush(channel, coordinator)
+        await expectEventually("update-required failure") {
+            coordinator.state == .failed(serverName: "Home", code: .updateRequired, help: UpdateRequirement.appMessage)
+        }
+        XCTAssertEqual(api.pollCount, 1)
+        XCTAssertTrue(recorder.persisted.isEmpty)
+        channel.deliver(.done)
+        await runTask.value
+    }
+
+    /// The approved poll's `TokenPair.user.id` is what the session binds as
+    /// its verified account.
+    func testApprovedPollPersistsTheVerifiedAccount() async {
+        let channel = FakePairingChannel()
+        let api = FakePairingAPI()
+        api.pollResponse = approvedPoll
+        let recorder = PersistRecorder()
+        let coordinator = makeCoordinator(api: api, recorder: recorder)
+        let runTask = Task { await coordinator.run(session: channel, stream: channel.stream) }
+
+        await allowPush(channel, coordinator)
+        await expectEventually("signed in") {
+            if case .signedIn = coordinator.state { return true }
+            return false
+        }
+        XCTAssertEqual(recorder.persisted, [Persisted(url: "https://home.example", access: "ACCESS")])
+        XCTAssertEqual(recorder.accountIDs, ["account-1"])
+        channel.deliver(.done)
+        await runTask.value
+    }
+
+    private final class ProbeLog: @unchecked Sendable {
+        private let lock = NSLock()
+        private var urls: [String] = []
+        func record(_ url: String) { lock.withLock { urls.append(url) } }
+        var probed: [String] { lock.withLock { urls } }
+    }
+
+    private static let identity = "96c1bd08-b839-4d47-980e-57d4e7a44cfa"
+    private static let pushedURL = "https://prairie.overlay.example"
+    private static let publicURL = "https://prairie.example"
+    private static let endpoints = [
+        ServerEndpoint(url: publicURL, kind: .public),
+        ServerEndpoint(url: pushedURL, kind: .provider, provider: "tailscale", displayName: "Tailscale"),
+    ]
+
+    private func pushWithIdentity() -> PairingMessage {
+        .pushServer(serverURL: Self.pushedURL, serverName: "Home", serverIdentity: Self.identity, endpoints: Self.endpoints)
+    }
+
+    /// The pushed (plugin) address is unreachable from the TV, and the public
+    /// address answers with the same identity: the TV must OFFER it, name
+    /// the provider in its help, and only switch when the user chooses. The
+    /// frames back to the phone keep naming the pushed address; the TV
+    /// persists the address that worked, with the verified identity.
+    func testUnreachablePushOffersVerifiedAlternateAndPersistsWorkingAddress() async {
+        let channel = FakePairingChannel()
+        let api = FakePairingAPI()
+        api.pollResponse = approvedPoll
+        let recorder = PersistRecorder()
+        let probes = ProbeLog()
+        let coordinator = makeCoordinator(
+            api: api, recorder: recorder,
+            identities: [Self.publicURL: .identity(Self.identity)],
+            probeLog: probes
+        )
+        let runTask = Task { await coordinator.run(session: channel, stream: channel.stream) }
+
+        channel.deliver(pushWithIdentity())
+        await expectEventually("consent prompt") {
+            if case .consentRequested(let name) = coordinator.state { return name == "Home" }
+            return false
+        }
+        coordinator.allowPendingServer()
+        await expectEventually("unreachable with alternate") {
+            if case .unreachable(let name, let help, let alternate) = coordinator.state {
+                return name == "Home" && help.contains("Tailscale") && alternate?.url == Self.publicURL
+            }
+            return false
+        }
+        XCTAssertTrue(api.startedServers.isEmpty, "no device login until the user chooses an address")
+        XCTAssertEqual(probes.probed, [Self.pushedURL, Self.publicURL])
+
+        coordinator.useAlternateAddress()
+        await expectEventually("signed in") {
+            if case .signedIn(let count) = coordinator.state { return count == 1 }
+            return false
+        }
+        XCTAssertEqual(api.startedServers, [Self.publicURL])
+        XCTAssertEqual(recorder.persisted.map(\.url), [Self.publicURL])
+        XCTAssertEqual(recorder.verifiedIds, [Self.identity])
+        let started = channel.sent.compactMap { message -> String? in
+            if case .deviceStarted(let url, _, _) = message { return url } else { return nil }
+        }
+        let results = channel.sent.compactMap { message -> String? in
+            if case .serverResult(let url, .signedIn, _) = message { return url } else { return nil }
+        }
+        XCTAssertEqual(started, [Self.pushedURL], "deviceStarted echoes the pushed address")
+        XCTAssertEqual(results, [Self.pushedURL], "serverResult echoes the pushed address")
+
+        channel.deliver(.done)
+        await runTask.value
+    }
+
+    /// Retry after the user set the provider up: the pushed address is
+    /// probed again and, once it answers with the right identity, used.
+    func testRetryAfterProviderSetupUsesThePushedAddress() async {
+        let channel = FakePairingChannel()
+        let api = FakePairingAPI()
+        api.pollResponse = approvedPoll
+        let recorder = PersistRecorder()
+        let answers = ProbeAnswers([.unreachable, .identity(Self.identity)])
+        let coordinator = ReceiverPairingCoordinator(
+            api: api,
+            identityProbe: { _ in answers.next() }
+        ) { pairing in
+            recorder.persisted.append(Persisted(url: pairing.url, access: pairing.accessToken))
+            return true
+        }
+        let runTask = Task { await coordinator.run(session: channel, stream: channel.stream) }
+
+        channel.deliver(.pushServer(serverURL: Self.pushedURL, serverName: "Home", serverIdentity: Self.identity, endpoints: nil))
+        await expectEventually("consent prompt") {
+            if case .consentRequested = coordinator.state { return true }
+            return false
+        }
+        coordinator.allowPendingServer()
+        await expectEventually("unreachable without alternate") {
+            if case .unreachable(_, _, let alternate) = coordinator.state { return alternate == nil }
+            return false
+        }
+        coordinator.retryPushedAddress()
+        await expectEventually("signed in") {
+            if case .signedIn = coordinator.state { return true }
+            return false
+        }
+        XCTAssertEqual(api.startedServers, [Self.pushedURL])
+        XCTAssertEqual(recorder.persisted.map(\.url), [Self.pushedURL])
+        channel.deliver(.done)
+        await runTask.value
+    }
+
+    private final class ProbeAnswers: @unchecked Sendable {
+        private let lock = NSLock()
+        private var queue: [ServerIdentityProbeResult]
+        init(_ queue: [ServerIdentityProbeResult]) { self.queue = queue }
+        func next() -> ServerIdentityProbeResult {
+            lock.withLock { queue.isEmpty ? .unreachable : queue.removeFirst() }
+        }
+    }
+
+    /// An address that answers as a different deployment is refused, never
+    /// used, and the phone learns why.
+    func testIdentityMismatchFailsWithoutDeviceLogin() async {
+        let channel = FakePairingChannel()
+        let api = FakePairingAPI()
+        api.pollResponse = approvedPoll
+        let recorder = PersistRecorder()
+        let coordinator = makeCoordinator(
+            api: api, recorder: recorder,
+            identities: [Self.pushedURL: .identity("someone-else")]
+        )
+        let runTask = Task { await coordinator.run(session: channel, stream: channel.stream) }
+
+        channel.deliver(pushWithIdentity())
+        await expectEventually("consent prompt") {
+            if case .consentRequested = coordinator.state { return true }
+            return false
+        }
+        coordinator.allowPendingServer()
+        await expectEventually("identity mismatch failure") {
+            if case .failed("Home", .identityMismatch, _) = coordinator.state { return true }
+            return false
+        }
+        XCTAssertTrue(api.startedServers.isEmpty)
+        XCTAssertTrue(recorder.persisted.isEmpty)
+        XCTAssertTrue(channel.sent.contains {
+            if case .serverResult(Self.pushedURL, .failed, "identity_mismatch") = $0 { return true }
+            return false
+        })
+        channel.deliver(.done)
+        await runTask.value
+    }
+
+    /// Cancelling from the unreachable screen ends the attempt cleanly, with
+    /// nothing persisted and the receiver back at idle.
+    func testCancelWhileUnreachableReturnsToIdle() async {
+        let channel = FakePairingChannel()
+        let api = FakePairingAPI()
+        let recorder = PersistRecorder()
+        let coordinator = makeCoordinator(api: api, recorder: recorder)
+        let runTask = Task { await coordinator.run(session: channel, stream: channel.stream) }
+
+        channel.deliver(pushWithIdentity())
+        await expectEventually("consent prompt") {
+            if case .consentRequested = coordinator.state { return true }
+            return false
+        }
+        coordinator.allowPendingServer()
+        await expectEventually("unreachable") {
+            if case .unreachable = coordinator.state { return true }
+            return false
+        }
+        await coordinator.cancel()
+        await runTask.value
+        guard case .idle = coordinator.state else {
+            return XCTFail("expected idle, got \(coordinator.state)")
+        }
+        XCTAssertTrue(api.startedServers.isEmpty)
+        XCTAssertTrue(recorder.persisted.isEmpty)
+    }
+
+    /// A push from an older phone carries no identity: the pushed address is
+    /// used exactly, no probe runs, and a denied approval reports `denied`.
+    func testLegacyPushSkipsProbingAndReportsTypedFailure() async {
+        let channel = FakePairingChannel()
+        let api = FakePairingAPI()
+        api.pollResponse = devicePoll("denied")
+        let recorder = PersistRecorder()
+        let probes = ProbeLog()
+        let coordinator = makeCoordinator(api: api, recorder: recorder, probeLog: probes)
+        let runTask = Task { await coordinator.run(session: channel, stream: channel.stream) }
+
+        channel.deliver(.pushServer(serverURL: "https://home.example", serverName: "Home"))
+        await expectEventually("consent prompt") {
+            if case .consentRequested = coordinator.state { return true }
+            return false
+        }
+        coordinator.allowPendingServer()
+        await expectEventually("denied failure") {
+            if case .failed("Home", .denied, nil) = coordinator.state { return true }
+            return false
+        }
+        XCTAssertTrue(probes.probed.isEmpty)
+        XCTAssertEqual(api.startedServers, ["https://home.example"])
+        XCTAssertEqual(recorder.verifiedIds, [])
+        XCTAssertTrue(channel.sent.contains {
+            if case .serverResult("https://home.example", .failed, "denied") = $0 { return true }
+            return false
+        })
+        channel.deliver(.done)
+        await runTask.value
     }
 
     /// The consent gate: nothing touches the pushed URL until the TV user
@@ -487,7 +904,7 @@ final class ReceiverPairingCoordinatorTests: XCTestCase {
         let channel = FakePairingChannel()
         let api = FakePairingAPI()
         api.pollResults = [
-            .failure(PairingDeviceAPI.APIError.http(502)),
+            .failure(APIv2Error.httpStatus(502)),
             .success(approvedPoll),
         ]
         let recorder = PersistRecorder()
@@ -519,7 +936,7 @@ final class ReceiverPairingCoordinatorTests: XCTestCase {
     func testMissingPollRequestFailsWithoutRetrying() async {
         let channel = FakePairingChannel()
         let api = FakePairingAPI()
-        api.pollResults = [.failure(PairingDeviceAPI.APIError.http(404))]
+        api.pollResults = [.failure(APIv2Error.problem(expiredProblem))]
         let recorder = PersistRecorder()
         let coordinator = makeCoordinator(api: api, recorder: recorder)
         let runTask = Task { await coordinator.run(session: channel, stream: channel.stream) }
@@ -531,7 +948,7 @@ final class ReceiverPairingCoordinatorTests: XCTestCase {
         }
         coordinator.allowPendingServer()
         await expectEventually("missing request failure") {
-            if case .failed(let name) = coordinator.state { return name == "Home" }
+            if case .failed(let name, _, _) = coordinator.state { return name == "Home" }
             return false
         }
 
@@ -544,7 +961,7 @@ final class ReceiverPairingCoordinatorTests: XCTestCase {
     func testCancellationDuringTransientPollBackoffDoesNotPublishFailure() async {
         let channel = FakePairingChannel()
         let api = FakePairingAPI()
-        api.pollResults = [.failure(PairingDeviceAPI.APIError.http(502))]
+        api.pollResults = [.failure(APIv2Error.httpStatus(502))]
         let recorder = PersistRecorder()
         let coordinator = makeCoordinator(api: api, recorder: recorder)
         let runTask = Task { await coordinator.run(session: channel, stream: channel.stream) }
@@ -576,9 +993,9 @@ final class ReceiverPairingCoordinatorTests: XCTestCase {
         api.pollResponse = approvedPoll
         let recorder = PersistRecorder()
         let gate = PersistGate()
-        let coordinator = ReceiverPairingCoordinator(api: api) { url, _, access, _ in
+        let coordinator = ReceiverPairingCoordinator(api: api) { pairing in
             await gate.wait()
-            recorder.persisted.append(Persisted(url: url, access: access))
+            recorder.persisted.append(Persisted(url: pairing.url, access: pairing.accessToken))
             return true
         }
         let runTask = Task { await coordinator.run(session: channel, stream: channel.stream) }
@@ -618,9 +1035,9 @@ final class ReceiverPairingCoordinatorTests: XCTestCase {
         api.pollResponse = approvedPoll
         let recorder = PersistRecorder()
         let gate = PersistGate()
-        let coordinator = ReceiverPairingCoordinator(api: api) { url, _, access, _ in
+        let coordinator = ReceiverPairingCoordinator(api: api) { pairing in
             await gate.wait()
-            recorder.persisted.append(Persisted(url: url, access: access))
+            recorder.persisted.append(Persisted(url: pairing.url, access: pairing.accessToken))
             return true
         }
         let runTask = Task { await coordinator.run(session: channel, stream: channel.stream) }
@@ -651,7 +1068,7 @@ final class ReceiverPairingCoordinatorTests: XCTestCase {
     func testDoneWithZeroSignInsKeepsFailureOnScreen() async {
         let channel = FakePairingChannel()
         let api = FakePairingAPI()
-        api.startError = PairingDeviceAPI.APIError.http(500)
+        api.startError = APIv2Error.httpStatus(500)
         let coordinator = makeCoordinator(api: api, recorder: PersistRecorder())
         let runTask = Task { await coordinator.run(session: channel, stream: channel.stream) }
 
@@ -662,7 +1079,7 @@ final class ReceiverPairingCoordinatorTests: XCTestCase {
         }
         coordinator.allowPendingServer()
         await expectEventually("failed state") {
-            if case .failed(let name) = coordinator.state { return name == "Home" }
+            if case .failed(let name, _, _) = coordinator.state { return name == "Home" }
             return false
         }
         channel.deliver(.done)
@@ -679,7 +1096,7 @@ final class ReceiverPairingCoordinatorTests: XCTestCase {
     func testSecondAttemptAfterFailureIsNotAutomatic() async {
         let channel = FakePairingChannel()
         let api = FakePairingAPI()
-        api.startError = PairingDeviceAPI.APIError.http(500)
+        api.startError = APIv2Error.httpStatus(500)
         let coordinator = makeCoordinator(api: api, recorder: PersistRecorder())
         let runTask = Task { await coordinator.run(session: channel, stream: channel.stream) }
 
@@ -747,11 +1164,11 @@ final class ReceiverPairingCoordinatorTests: XCTestCase {
         let api = FakePairingAPI()
         api.pollResponse = approvedPoll
         let recorder = PersistRecorder()
-        let coordinator = ReceiverPairingCoordinator(api: api) { url, _, access, _ in
+        let coordinator = ReceiverPairingCoordinator(api: api) { pairing in
             guard let lease = await http.beginIdentityTransition() else {
                 return false
             }
-            recorder.persisted.append(Persisted(url: url, access: access))
+            recorder.persisted.append(Persisted(url: pairing.url, access: pairing.accessToken))
             await http.endIdentityTransition(lease)
             return true
         }

@@ -33,7 +33,7 @@
   }
   function renderQR(el) {
     var n = 25; // modules
-    var rnd = seeded(el.getAttribute("data-qr") || "silo");
+    var rnd = seeded(el.getAttribute("data-qr") || "prairie");
     var cells = "";
     function reserved(r, c) {
       return (r < 8 && c < 8) || (r < 8 && c > n - 9) || (r > n - 9 && c < 8);

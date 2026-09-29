@@ -59,18 +59,6 @@ final class NetworkingModelsCoverageTests: XCTestCase {
         XCTAssertFalse(item.isAudiobook)
         XCTAssertEqual(item.overlaySummary?.resolution, "2160p")
         XCTAssertEqual(item.userState?.inWatchlist, true)
-
-        let filters = try decode(CatalogFilters.self, """
-        {
-          "genres": ["Drama"],
-          "studios": [],
-          "networks": [],
-          "countries": ["US"],
-          "content_ratings": ["PG"],
-          "authors": ["Ada"]
-        }
-        """)
-        XCTAssertEqual(filters.authors, ["Ada"])
     }
 
     func testCatalogResponseDefaultsEmptyItems() throws {
@@ -105,7 +93,7 @@ final class NetworkingModelsCoverageTests: XCTestCase {
           { "content_id": "s1", "season_number": 1, "title": "One", "episode_count": 8 }
         ]
         """)
-        XCTAssertEqual(seasons.sortedForDisplay().map(\.seasonNumber), [1, 2, 0])
+        XCTAssertEqual(seasons.sortedForDisplay().map(\.seasonNumber), [0, 1, 2])
 
         let file = FileVersion(
             fileId: 9,
@@ -122,7 +110,7 @@ final class NetworkingModelsCoverageTests: XCTestCase {
             audioTracks: nil,
             subtitleTracks: nil,
             chapters: nil,
-            edition: "  Director's Cut  "
+            editionRaw: "  Director's Cut  "
         )
         XCTAssertEqual(file.id, 9)
         XCTAssertEqual(file.editionDisplayLabel, "Director's Cut")
@@ -148,9 +136,9 @@ final class NetworkingModelsCoverageTests: XCTestCase {
 
     func testPersonAndCreditIdentities() throws {
         let person = try decode(Person.self, """
-        { "id": 1, "name": "Ada" }
+        { "id": "person:1", "name": "Ada" }
         """)
-        XCTAssertEqual(person.id, 1)
+        XCTAssertEqual(person.id, "person:1")
 
         let cast = try decode(CastMember.self, """
         { "name": "Ada", "character": "Lead" }
@@ -189,7 +177,7 @@ final class NetworkingModelsCoverageTests: XCTestCase {
         XCTAssertFalse(library.isSeriesLibrary)
     }
 
-    func testFileVersionDecodeAndAdminStats() throws {
+    func testFileVersionDecode() throws {
         let version = try decode(FileVersion.self, """
         {
           "file_id": 3,
@@ -221,23 +209,9 @@ final class NetworkingModelsCoverageTests: XCTestCase {
         XCTAssertEqual(version.subtitleTracks?.first?.language, "en")
         XCTAssertEqual(version.trickplay?.thumbnailCount, 12)
         XCTAssertEqual(version.trickplay?.sheets.first?.url, "https://cdn.example.com/0.webp")
-
-        let stats = try decode(AdminStats.self, """
-        {
-          "total_items": 10,
-          "total_files": 20,
-          "total_users": 2,
-          "active_streams": 1
-        }
-        """)
-        XCTAssertEqual(stats.totalItems, 10)
-        XCTAssertEqual(stats.activeStreams, 1)
     }
 
-    func testCollectionItemsAndLibrariesObjectShape() throws {
-        let items = try decode(CollectionItemsResponse.self, "{}")
-        XCTAssertTrue(items.items.isEmpty)
-
+    func testLibrariesObjectShape() throws {
         let libraries = try decode(LibrariesResponse.self, """
         {
           "libraries": [

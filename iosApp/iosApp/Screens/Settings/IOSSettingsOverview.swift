@@ -13,6 +13,7 @@ struct IOSSettingsOverview: View {
     @Environment(AppRouter.self) private var router
     @State private var navPrefs = AppNavPreferences.shared
     @State private var launchPreferences = ProfileLaunchPreferences.shared
+    @State private var experimental = ExperimentalFeatures.shared
     @State private var searchText = ""
 
     var body: some View {
@@ -50,6 +51,10 @@ struct IOSSettingsOverview: View {
                             connectionSection
                         }
 
+                        if matchesExperimentalSection {
+                            experimentalSection
+                        }
+
                         if matchesAboutSection {
                             aboutSection
                         }
@@ -72,9 +77,9 @@ struct IOSSettingsOverview: View {
             .scrollDismissesKeyboard(.interactively)
         }
         .navigationTitle("")
-        .continuumNavigationTitleDisplayMode(.inline)
-        .continuumNavigationBarBackgroundHidden()
-        .continuumToolbarColorSchemeDark()
+        .prairieNavigationTitleDisplayMode(.inline)
+        .prairieNavigationBarBackgroundHidden()
+        .prairieToolbarColorSchemeDark()
         .onAppear(perform: navPrefs.refresh)
     }
 
@@ -83,11 +88,11 @@ struct IOSSettingsOverview: View {
             Text("Settings")
                 .font(.largeTitle)
                 .bold()
-                .foregroundStyle(Color.continuumOnSurface)
+                .foregroundStyle(Color.prairieOnSurface)
 
             Text("Make Prairie work the way you like.")
                 .font(.subheadline)
-                .foregroundStyle(Color.continuumSecondaryText)
+                .foregroundStyle(Color.prairieSecondaryText)
         }
         .accessibilityElement(children: .combine)
     }
@@ -137,7 +142,7 @@ struct IOSSettingsOverview: View {
     private var playbackSection: some View {
         if matchesPlaybackSection {
             SettingsOverviewSection("Playback") {
-                if matches("playback", "quality", "audio", "dolby vision", "episodes", "skipping") {
+                if matches("playback", "quality", "audio", "dolby vision", "episodes", "skipping", "skip interval", "rewind", "fast forward", "audiobooks") {
                     NavigationLink {
                         PlaybackSettingsView(viewModel: viewModel)
                     } label: {
@@ -164,7 +169,7 @@ struct IOSSettingsOverview: View {
                             subtitle: "Language, behavior, and appearance",
                             systemImage: "captions.bubble.fill",
                             tint: .pink,
-                            value: subtitleLanguageName(viewModel.editorSubtitleLanguage)
+                            value: subtitleLanguageName(viewModel.prefs.subtitleLanguage)
                         )
                     }
                     .buttonStyle(.plain)
@@ -281,6 +286,26 @@ struct IOSSettingsOverview: View {
         }
     }
 
+    private var experimentalSection: some View {
+        SettingsOverviewSection("Experimental") {
+            ForEach(Array(ExperimentalFeature.allCases.enumerated()), id: \.element) { index, feature in
+                if index > 0 {
+                    SettingsOverviewDivider()
+                }
+                SettingsOverviewToggleRow(
+                    title: feature.title,
+                    subtitle: feature.subtitle,
+                    systemImage: feature.systemImage,
+                    tint: .pink,
+                    isOn: Binding(
+                        get: { experimental.isEnabled(feature) },
+                        set: { feature.setEnabled($0) }
+                    )
+                )
+            }
+        }
+    }
+
     private var signOutButton: some View {
         Button(role: .destructive) {
             showSignOutConfirm = true
@@ -352,7 +377,7 @@ struct IOSSettingsOverview: View {
     }
 
     private var matchesPlayback: Bool {
-        matches("playback", "quality", "audio", "dolby vision", "episodes", "skipping")
+        matches("playback", "quality", "audio", "dolby vision", "episodes", "skipping", "skip interval", "rewind", "fast forward", "audiobooks")
     }
 
     private var matchesInterface: Bool {
@@ -398,6 +423,11 @@ struct IOSSettingsOverview: View {
         )
     }
 
+    private var matchesExperimentalSection: Bool {
+        matches("experimental", "beta", "testing")
+            || ExperimentalFeature.allCases.contains { matches($0.title, $0.subtitle) }
+    }
+
     private var matchesSignOut: Bool {
         matches("sign out", "account")
     }
@@ -417,6 +447,7 @@ struct IOSSettingsOverview: View {
             || (diagnosticsModel.shouldShowSettings && matchesDiagnostics)
             || matchesLibrarySection
             || matchesConnectionSection
+            || matchesExperimentalSection
             || matchesAboutSection
             || matchesSignOut
     }

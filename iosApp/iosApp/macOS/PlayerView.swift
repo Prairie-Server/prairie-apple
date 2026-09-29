@@ -9,6 +9,9 @@ struct PlayerView: View {
     let preferredSubtitleTrackIndex: Int?
     let startFromBeginning: Bool
     let resumePositionOverride: Double?
+    /// Continue Watching resume intent: select the server's last-used file
+    /// before the profile-wide quality preference.
+    let prefersLastUsedVersion: Bool
     /// Set when the caller wants offline playback of a completed download.
     /// Routes the prepare through `OfflinePlaybackBuilder` (stored manifest
     /// + local media file, no server session) so playback works with no
@@ -16,25 +19,29 @@ struct PlayerView: View {
     let offlineDownloadId: String?
 
     @Environment(\.dismiss) private var dismiss
-    @State private var viewModel = PlayerViewModel()
+    @State private var viewModel: PlayerViewModel
     @State private var isOptionsPresented = false
     @State private var selectedOptionsTab: MacPlayerOptionsPanel.Tab = .audio
 
     init(
         contentId: String,
+        libraryId: Int? = nil,
         preferredFileId: Int? = nil,
         preferredAudioTrackIndex: Int? = nil,
         preferredSubtitleTrackIndex: Int? = nil,
         startFromBeginning: Bool = false,
         resumePositionOverride: Double? = nil,
+        prefersLastUsedVersion: Bool = false,
         offlineDownloadId: String? = nil
     ) {
         self.contentId = contentId
+        _viewModel = State(initialValue: PlayerViewModel(libraryId: libraryId))
         self.preferredFileId = preferredFileId
         self.preferredAudioTrackIndex = preferredAudioTrackIndex
         self.preferredSubtitleTrackIndex = preferredSubtitleTrackIndex
         self.startFromBeginning = startFromBeginning
         self.resumePositionOverride = resumePositionOverride
+        self.prefersLastUsedVersion = prefersLastUsedVersion
         self.offlineDownloadId = offlineDownloadId
     }
 
@@ -67,6 +74,18 @@ struct PlayerView: View {
                     .padding(.bottom, 116)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                }
+
+                if let pill = viewModel.introSkipPrompt.pill {
+                    MacIntroSkipPill(pill: pill) {
+                        viewModel.selectIntroSkipPrompt()
+                    }
+                    .padding(.trailing, 24)
+                    // Above the control bar while it shows; toward the corner
+                    // once it hides.
+                    .padding(.bottom, shouldShowControls ? 136 : 24)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                    .transition(.opacity)
                 }
 
                 if viewModel.isLoading || viewModel.isBuffering {
@@ -106,6 +125,7 @@ struct PlayerView: View {
                 preferredSubtitleTrackIndex: preferredSubtitleTrackIndex,
                 startFromBeginning: startFromBeginning,
                 resumePositionOverride: resumePositionOverride,
+                prefersLastUsedVersion: prefersLastUsedVersion,
                 offlineDownloadId: offlineDownloadId
             )
         }
@@ -115,6 +135,7 @@ struct PlayerView: View {
         .preferredColorScheme(.dark)
         .animation(.easeOut(duration: 0.16), value: shouldShowControls)
         .animation(.easeOut(duration: 0.16), value: isOptionsPresented)
+        .animation(.easeOut(duration: 0.2), value: viewModel.showIntroSkip)
     }
 
     private var shouldShowControls: Bool {
@@ -131,7 +152,10 @@ struct PlayerView: View {
             AetherPlayerSurface(engine: viewModel.aetherEngine)
             AetherSubtitleOverlay(
                 engine: viewModel.aetherEngine,
+                assSubtitles: viewModel.assSubtitles,
                 sourceTime: viewModel.currentTime,
+                primaryUsesMovieTimeline: viewModel.subtitleUsesMovieTimeline(viewModel.selectedSubtitleId),
+                secondaryUsesMovieTimeline: viewModel.subtitleUsesMovieTimeline(viewModel.selectedSecondarySubtitleId, slot: .secondary),
                 livePrimaryCues: viewModel.selectedSubtitleId.map(SubtitleTrackIdSpace.isAILive) == true
                     ? viewModel.livePrimarySubtitleCues
                     : [],
@@ -150,9 +174,9 @@ struct PlayerView: View {
         case .playPause:
             viewModel.togglePlayPause()
         case .skipBackward:
-            viewModel.skipBackward(15)
+            viewModel.skipBackward()
         case .skipForward:
-            viewModel.skipForward(15)
+            viewModel.skipForward()
         case .previousChapter:
             viewModel.seekToAdjacentChapter(forward: false)
         case .nextChapter:
@@ -170,9 +194,15 @@ struct PlayerView: View {
         case .escape:
             if isOptionsPresented {
                 isOptionsPresented = false
+            } else if viewModel.dismissIntroSkipPrompt() {
+                // The intro pill takes Escape before the window does; the next
+                // Escape closes the player as usual.
             } else {
                 dismiss()
             }
+        case .confirm:
+            // Return acts on the intro pill; with none showing it does nothing.
+            viewModel.selectIntroSkipPrompt()
         case .speedDown:
             viewModel.setPlaybackSpeed(nextSpeed(offset: -1))
         case .speedUp:
@@ -196,10 +226,10 @@ struct PlayerView: View {
         VStack(spacing: 16) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 40))
-                .foregroundStyle(Color.continuumError)
+                .foregroundStyle(Color.prairieError)
 
             Text(error)
-                .font(.continuumBody)
+                .font(.prairieBody)
                 .foregroundStyle(.white)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 520)

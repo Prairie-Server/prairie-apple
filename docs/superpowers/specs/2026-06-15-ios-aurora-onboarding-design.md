@@ -111,7 +111,7 @@ iOS view).
 
 ## 6. Screens
 
-Each screen = backdrop variant + centered `SILO.` wordmark + gold eyebrow + a
+Each screen = backdrop variant + centered `PRAIRIE.` wordmark + gold eyebrow + a
 heading block + a liquid-glass form/content card.
 
 ### 6.1 Server setup — `ServerSetupView`
@@ -179,7 +179,7 @@ that reveals the protocol segments + port (focus-managed for the remote).
 
 ## 9. What stays untouched / out of scope
 
-- `AuthService`, `ServerRegistry`, `TokenStore`, `ContinuumAPI`, `HTTPClient`.
+- `AuthService`, `ServerRegistry`, `TokenStore`, `PrairieAPI`, `HTTPClient`.
 - `AppRouter` auth-state machine and view models (`ServerSetupViewModel`,
   `LoginViewModel`, `SignupViewModel`, `ProfileSelectionViewModel`,
   `QRLoginViewModel`).

@@ -216,8 +216,10 @@ struct LibrariesTabView: View {
     @State private var isLoading = true
     @State private var error: ErrorState?
     @State private var showPicker = false
-    @State private var currentProfile: UserProfile?
     @State private var navPrefs = AppNavPreferences.shared
+    /// Feeds the glass strip behind the hoisted top chrome. Tab content reads
+    /// it from the environment so each tab's ScrollView can report its offset.
+    @State private var chromeScrollState = PageChromeScrollState()
 
     /// Persist the last-selected library per authored root so visiting Series
     /// cannot replace the Movies or aggregate selection. Fixed-library roots
@@ -267,7 +269,7 @@ struct LibrariesTabView: View {
                 )
             }
         }
-        .continuumBackground()
+        .prairiePageBackground()
         #if !os(macOS)
         .toolbar(.hidden, for: .navigationBar)
         #endif
@@ -284,7 +286,6 @@ struct LibrariesTabView: View {
             // under the new destination.
             applyLibrarySelection()
             await loadLibraries()
-            await loadCurrentProfile()
         }
         .onChange(of: navPrefs.showAudiobooks) {
             applyLibrarySelection()
@@ -318,8 +319,14 @@ struct LibrariesTabView: View {
             // Forces the whole tab subtree to reset when switching
             // libraries, so stale content never flashes on screen.
             .id(activeLibrary.id)
+            .environment(chromeScrollState)
             .safeAreaInset(edge: .top, spacing: 0) {
                 topChrome(activeLibrary: activeLibrary)
+                    // Same scroll-driven glass as the Detail page chrome so
+                    // the selector and actions stay legible over posters.
+                    .background {
+                        PageChromeGlass(scrollState: chromeScrollState)
+                    }
             }
     }
 
@@ -344,7 +351,6 @@ struct LibrariesTabView: View {
                     fixedLibraryId: fixedLibraryId,
                     visibleLibraryCount: visibleLibraries.count
                 ),
-                profile: currentProfile,
                 onLibraryTap: { showPicker = true },
                 onSearch: { router.navigate(to: .search) },
                 onOpenSettings: { router.navigate(to: .settings) },
@@ -355,12 +361,12 @@ struct LibrariesTabView: View {
                 onSwitchServer: { router.navigate(to: .serverList) },
                 onSignOut: { router.signOutAndReset() }
             )
-            .padding(.horizontal, ContinuumTheme.padding)
-            .padding(.top, ContinuumTheme.smallPadding)
-            .padding(.bottom, ContinuumTheme.smallPadding)
+            .padding(.horizontal, PrairieTheme.padding)
+            .padding(.top, PrairieTheme.smallPadding)
+            .padding(.bottom, PrairieTheme.smallPadding)
 
             LibraryPageTabSelector(selectedTab: $selectedTab)
-                .padding(.bottom, ContinuumTheme.padding)
+                .padding(.bottom, PrairieTheme.padding)
         }
     }
 
@@ -479,17 +485,6 @@ struct LibrariesTabView: View {
         }
     }
 
-    /// Load the currently-selected profile so we can render its avatar in
-    /// the top bar. Non-fatal on failure — we fall back to a generic icon.
-    private func loadCurrentProfile() async {
-        guard let profileId = AuthService.shared.profileId else { return }
-        do {
-            let profiles = try await AuthService.shared.getProfiles()
-            currentProfile = profiles.first(where: { $0.id == profileId })
-        } catch {
-            // Leave currentProfile nil; the top bar renders a fallback.
-        }
-    }
 }
 
 // MARK: - Top Bar
@@ -499,7 +494,6 @@ struct LibrariesTabView: View {
 private struct LibrariesTopBar: View {
     let activeLibrary: Library
     let canSwitch: Bool
-    let profile: UserProfile?
     let onLibraryTap: () -> Void
     let onSearch: () -> Void
     let onOpenSettings: () -> Void
@@ -521,7 +515,6 @@ private struct LibrariesTopBar: View {
             Spacer(minLength: 8)
 
             TabTopBarActions(
-                profile: profile,
                 onSearch: onSearch,
                 onOpenSettings: onOpenSettings,
                 onOpenRequests: onOpenRequests,
@@ -545,18 +538,18 @@ private struct LibrarySelectorButton: View {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
                     Text(library.name)
-                        .font(.continuumTitle)
-                    .foregroundStyle(Color.continuumOnSurface)
+                        .font(.prairieTitle)
+                    .foregroundStyle(Color.prairieOnSurface)
                         .lineLimit(1)
                     if canSwitch {
                         Image(systemName: "chevron.down")
                             .font(.system(size: 12, weight: .semibold))
-                            .foregroundColor(.continuumOnSurface)
+                            .foregroundColor(.prairieOnSurface)
                     }
                 }
                 Text(typeLabel)
-                    .font(.continuumCaption)
-                    .foregroundStyle(Color.continuumSecondaryText)
+                    .font(.prairieCaption)
+                    .foregroundStyle(Color.prairieSecondaryText)
                     .lineLimit(1)
             }
         }
@@ -625,10 +618,10 @@ private struct LibraryPickerSheet: View {
                     )
                 }
             }
-            .padding(.horizontal, ContinuumTheme.padding)
-            .padding(.vertical, ContinuumTheme.padding)
+            .padding(.horizontal, PrairieTheme.padding)
+            .padding(.vertical, PrairieTheme.padding)
         }
-        .continuumBackground()
+        .prairieSheetBackground()
         .navigationTitle("Libraries")
     }
 }
@@ -644,21 +637,21 @@ private struct LibraryPickerRow: View {
             HStack(spacing: 12) {
                 ZStack {
                     Circle()
-                        .fill(Color.continuumOnSurface.opacity(0.12))
+                        .fill(Color.prairieOnSurface.opacity(0.12))
                     Image(systemName: iconName)
                         .font(.system(size: 18, weight: .semibold))
-                        .foregroundColor(.continuumOnSurface)
+                        .foregroundColor(.prairieOnSurface)
                 }
                 .frame(width: 40, height: 40)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(library.name)
-                        .font(.continuumHeadline)
-                        .foregroundColor(.continuumOnSurface)
+                        .font(.prairieHeadline)
+                        .foregroundColor(.prairieOnSurface)
                     if let typeLabel {
                         Text(typeLabel)
-                            .font(.continuumCaption)
-                            .foregroundColor(.continuumSecondaryText)
+                            .font(.prairieCaption)
+                            .foregroundColor(.prairieSecondaryText)
                     }
                 }
 
@@ -667,17 +660,17 @@ private struct LibraryPickerRow: View {
                 if isSelected {
                     Image(systemName: "checkmark")
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.continuumOnSurface)
+                        .foregroundColor(.prairieOnSurface)
                 }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
             .background(
-                RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius)
-                    .fill(isSelected ? Color.continuumOnSurface.opacity(0.10) : Color.continuumSurfaceElevated)
+                RoundedRectangle(cornerRadius: PrairieTheme.cornerRadius)
+                    .fill(isSelected ? Color.prairieOnSurface.opacity(0.10) : Color.prairieSurfaceElevated)
                     .overlay(
-                        RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius)
-                            .stroke(Color.continuumOutline, lineWidth: 1)
+                        RoundedRectangle(cornerRadius: PrairieTheme.cornerRadius)
+                            .stroke(Color.prairieOutline, lineWidth: 1)
                     )
             )
         }

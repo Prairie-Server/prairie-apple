@@ -6,7 +6,7 @@ import XCTest
 /// live in this repository against each other:
 ///
 /// 1. `Tests/Fixtures/DiagnosticsContract/attr-registry.json`, vendored verbatim
-///    from silo-server `docs/design/schemas/client-diagnostics/v1/`.
+///    from prairie-server `docs/design/schemas/client-diagnostics/v1/`.
 /// 2. `DiagLogAttributeRegistry.registry`, which decides what this client is
 ///    allowed to emit at all.
 /// 3. `DiagnosticsBundleBuilder.hostedAttributeRegistry`, the narrower privacy

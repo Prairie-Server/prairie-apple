@@ -7,7 +7,6 @@ struct PINEntryView: View {
     let onCancel: (() -> Void)?
 
     @State private var pin: String = ""
-    @State private var isShaking: Bool = false
     @FocusState private var focusedPadKey: String?
     @Environment(\.dismiss) private var dismiss
 
@@ -37,21 +36,21 @@ struct PINEntryView: View {
 
     private var phoneBody: some View {
         ZStack {
-            Color.continuumBackground.ignoresSafeArea()
+            PrairiePageBackdrop()
 
             VStack(spacing: 32) {
                 header(avatarSize: 64)
-                    .padding(.top, ContinuumTheme.largePadding + sheetDragIndicatorClearance)
+                    .padding(.top, PrairieTheme.largePadding + sheetDragIndicatorClearance)
 
                 pinDots(dotSize: 20, spacing: 20)
 
                 Spacer()
 
                 numberPad
-                    .padding(.horizontal, ContinuumTheme.largePadding)
+                    .padding(.horizontal, PrairieTheme.largePadding)
 
                 cancelButton
-                    .padding(.bottom, ContinuumTheme.largePadding)
+                    .padding(.bottom, PrairieTheme.largePadding)
             }
         }
     }
@@ -72,7 +71,7 @@ struct PINEntryView: View {
             .frame(width: 620)
             .background(
                 RoundedRectangle(cornerRadius: 34, style: .continuous)
-                    .fill(Color.continuumSurfaceElevated.opacity(0.98))
+                    .fill(Color.prairieSurfaceElevated.opacity(0.98))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 34, style: .continuous)
@@ -102,8 +101,8 @@ struct PINEntryView: View {
             )
 
             Text("Enter PIN for \(profile.name)")
-                .font(.continuumSubheadline)
-                .foregroundColor(.continuumOnSurface)
+                .font(.prairieSubheadline)
+                .foregroundColor(.prairieOnSurface)
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
         }
@@ -113,17 +112,10 @@ struct PINEntryView: View {
         HStack(spacing: spacing) {
             ForEach(0..<maxDigits, id: \.self) { index in
                 Circle()
-                    .fill(index < pin.count ? Color.continuumPrimary : Color.continuumSurfaceVariant)
+                    .fill(index < pin.count ? Color.prairiePrimary : Color.prairieSurfaceVariant)
                     .frame(width: dotSize, height: dotSize)
             }
         }
-        .offset(x: isShaking ? -8 : 0)
-        .animation(
-            isShaking
-                ? .default.repeatCount(3, autoreverses: true).speed(6)
-                : .default,
-            value: isShaking
-        )
     }
 
     private var numberPad: some View {
@@ -196,15 +188,6 @@ struct PINEntryView: View {
         guard !pin.isEmpty else { return }
         pin.removeLast()
     }
-
-    /// Trigger a shake animation (e.g., on wrong PIN).
-    func shakeAndReset() {
-        isShaking = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-            isShaking = false
-            pin = ""
-        }
-    }
 }
 
 // MARK: - Number Pad Button
@@ -240,7 +223,7 @@ private struct NumberPadButton: View {
                     .font(.system(size: symbolSize, weight: .semibold))
             } else {
                 Text(label)
-                    .font(.continuumPIN)
+                    .font(.prairiePIN)
             }
         }
         .buttonStyle(NumberPadButtonStyle(isFocused: isFocused))
@@ -274,7 +257,7 @@ private struct NumberPadButtonBody: View {
 
     var body: some View {
         configuration.label
-            .foregroundColor(isFocused ? .continuumBackground : .continuumOnSurface)
+            .foregroundColor(isFocused ? .prairieBackground : .prairieOnSurface)
             .frame(width: NumberPadButton.size, height: NumberPadButton.size)
             .background(background)
             .overlay(border)
@@ -283,17 +266,17 @@ private struct NumberPadButtonBody: View {
             #if os(tvOS)
             .focusEffectDisabled()
             #endif
-            .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
+            .animation(.easeOut(duration: PrairieTheme.fastDuration), value: isFocused)
     }
 
     @ViewBuilder
     private var background: some View {
         #if os(tvOS)
         RoundedRectangle(cornerRadius: 18, style: .continuous)
-            .fill(isFocused ? Color.continuumOnSurface : Color.white.opacity(0.1))
+            .fill(isFocused ? Color.prairieOnSurface : Color.white.opacity(0.1))
         #else
         Circle()
-            .fill(Color.continuumSurfaceVariant)
+            .fill(Color.prairieSurfaceVariant)
         #endif
     }
 

@@ -16,7 +16,7 @@ struct TVDiagnosticsDestinationScreen: View {
                     .font(.largeTitle.bold())
                 Text("Prairie Diagnostics is the default and does not require diagnostics storage on your own server.")
                     .font(.title2)
-                    .foregroundStyle(Color.continuumSecondaryText)
+                    .foregroundStyle(Color.prairieSecondaryText)
 
                 Button("Prairie Diagnostics") {
                     select(.hosted)

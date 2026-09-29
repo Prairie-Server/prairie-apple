@@ -1,7 +1,11 @@
 import SwiftUI
 
-/// A single, shell-level buffering indicator shared by every player surface.
+/// Keep brief loads quiet; show feedback only for a sustained video stall.
 struct PlayerBufferingCapsule: View {
+    var message: LocalizedStringKey = "Loading…"
+    var delay: Duration = .milliseconds(1_500)
+    @State private var isVisible = false
+
     var body: some View {
         HStack(spacing: spacing) {
             ProgressView()
@@ -9,21 +13,30 @@ struct PlayerBufferingCapsule: View {
                 .progressViewStyle(.circular)
                 .scaleEffect(spinnerScale)
 
-            Text("Loading…")
-                .font(.continuumSmall.weight(.medium))
+            Text(message)
+                .font(.prairieSmall.weight(.medium))
                 .foregroundStyle(.white.opacity(0.82))
         }
         .padding(.horizontal, horizontalPadding)
         .padding(.vertical, 6)
-        .siloPlayerGlass(in: Capsule())
+        .prairiePlayerGlass(in: Capsule())
         .shadow(color: .black.opacity(0.45), radius: 18, y: 7)
         .padding(.top, topPadding)
         .padding(.trailing, trailingPadding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
         .allowsHitTesting(false)
         .transition(.opacity)
+        .opacity(isVisible ? 1 : 0)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Loading")
+        .accessibilityLabel(message)
+        .accessibilityHidden(!isVisible)
+        .task {
+            isVisible = false
+            try? await Task.sleep(for: delay)
+            // Resuming playback removes this view and cancels the delay.
+            guard !Task.isCancelled else { return }
+            isVisible = true
+        }
     }
 
     private var spacing: CGFloat {

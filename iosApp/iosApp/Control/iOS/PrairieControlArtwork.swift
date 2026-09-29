@@ -26,7 +26,7 @@ final class PrairieControlArtworkResolver {
         }
 
         do {
-            let detail = try await ContinuumAPI.shared.itemDetail(contentId: contentId)
+            let detail = try await PrairieAPI.shared.itemDetail(contentId: contentId)
             try Task.checkCancellation()
             apply(detail, contentId: contentId)
         } catch {
@@ -48,7 +48,7 @@ struct PrairieControlArtworkBackground: View {
 
     var body: some View {
         ZStack {
-            Color.continuumBackground
+            Color.prairieBackground
             if let urlString, !urlString.isEmpty {
                 AsyncImageView(url: urlString, contentMode: .fill, placeholderStyle: .clear)
                     .id(urlString)
@@ -56,7 +56,7 @@ struct PrairieControlArtworkBackground: View {
                     .opacity(0.45)
                     .clipped()
             }
-            Color.continuumBackground.opacity(0.55)
+            Color.prairieBackground.opacity(0.55)
         }
         .ignoresSafeArea()
     }

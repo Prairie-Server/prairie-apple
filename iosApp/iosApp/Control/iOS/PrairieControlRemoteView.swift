@@ -114,7 +114,7 @@ struct PrairieControlRemoteView: View {
     @ViewBuilder
     private var content: some View {
         if controller.isReconnecting {
-            statusView(title: "Reconnecting…", showSpinner: true)
+            reconnectingView
         } else if let state = controller.state, state.contentId == nil {
             idleConnectedView(state: state)
         } else if let state = controller.state {
@@ -125,6 +125,7 @@ struct PrairieControlRemoteView: View {
                 posterURL: artwork.posterURL ?? artwork.backdropURL,
                 onCommand: { controller.send($0) },
                 onTogglePlayPause: { controller.togglePlayPauseOptimistic() },
+                skipIntervals: controller.skipIntervals,
                 onSeek: { controller.seekOptimistic(to: $0) },
                 onPlayNext: { controller.playNext() },
                 onSetVolume: { controller.setVolume($0) },
@@ -139,22 +140,37 @@ struct PrairieControlRemoteView: View {
         VStack(spacing: 18) {
             Image(systemName: "appletvremote.gen4")
                 .font(.system(size: 44, weight: .medium))
-                .foregroundStyle(Color.continuumOnSurface)
+                .foregroundStyle(Color.prairieOnSurface)
             Text("Connected to \(controller.activeTarget?.name ?? "Prairie TV")")
                 .font(.title3.weight(.semibold))
-                .foregroundStyle(Color.continuumOnSurface)
+                .foregroundStyle(Color.prairieOnSurface)
             Text("Pick something from your library to start playing.")
                 .font(.subheadline)
                 .multilineTextAlignment(.center)
-                .foregroundStyle(Color.continuumSecondaryText)
+                .foregroundStyle(Color.prairieSecondaryText)
         }
         .padding(32)
     }
 
-    private func statusView(title: String, showSpinner: Bool) -> some View {
-        VStack(spacing: 14) {
-            if showSpinner { ProgressView() }
-            Text(title).font(.headline).foregroundStyle(Color.continuumSecondaryText)
+    private var reconnectingView: some View {
+        VStack(spacing: 18) {
+            ProgressView()
+            Text("Reconnecting to \(controller.lastTarget?.name ?? "Prairie TV")…")
+                .font(.headline)
+                .foregroundStyle(Color.prairieSecondaryText)
+            Text("Make sure the TV is on and on the same network.")
+                .font(.subheadline)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(Color.prairieSecondaryText)
+            Button {
+                controller.cancelReconnect()
+                dismiss()
+            } label: {
+                Text("Stop Reconnecting")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .buttonStyle(.bordered)
+            .tint(Color.prairieOnSurface)
         }
         .padding(32)
     }
@@ -162,16 +178,16 @@ struct PrairieControlRemoteView: View {
     private var connectingView: some View {
         VStack(spacing: 18) {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color.continuumSurfaceElevated)
+                .fill(Color.prairieSurfaceElevated)
                 .frame(width: 150, height: 216)
             if let error = controller.errorMessage, !error.isEmpty {
                 Text(error)
                     .font(.subheadline)
-                    .foregroundStyle(Color.continuumOnSurface)
+                    .foregroundStyle(Color.prairieOnSurface)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
-                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.continuumError.opacity(0.9)))
+                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.prairieError.opacity(0.9)))
                 Button {
                     isShowingPicker = true
                 } label: {
@@ -179,12 +195,12 @@ struct PrairieControlRemoteView: View {
                         .font(.subheadline.weight(.semibold))
                 }
                 .buttonStyle(.bordered)
-                .tint(Color.continuumOnSurface)
+                .tint(Color.prairieOnSurface)
             } else {
                 ProgressView()
                 Text("Connecting to \(controller.activeTarget?.name ?? "Prairie TV")…")
                     .font(.headline)
-                    .foregroundStyle(Color.continuumSecondaryText)
+                    .foregroundStyle(Color.prairieSecondaryText)
             }
         }
         .padding(24)
@@ -200,12 +216,15 @@ private struct RemoteNowPlayingContent: View {
     let posterURL: String?
     let onCommand: (PrairieControlCommand) -> Void
     let onTogglePlayPause: () -> Void
+    /// The profile's video intervals, or 10/30 on servers without them.
+    let skipIntervals: SeekIntervalPair
     let onSeek: (Double) -> Void
     let onPlayNext: () -> Void
     let onSetVolume: (Double) -> Void
     let onSetMuted: (Bool) -> Void
 
     @State private var scrubPreview: Double?
+    @State private var scrubSettleTask: Task<Void, Never>?
     private let speedOptions: [Double] = [0.75, 1.0, 1.25, 1.5, 2.0]
     private let subtitleDelayOptions = [-2_000, -1_500, -1_000, -500, -250, 0, 250, 500, 1_000, 1_500, 2_000]
 
@@ -234,12 +253,12 @@ private struct RemoteNowPlayingContent: View {
                 AsyncImageView(url: posterURL, contentMode: .fit)
             } else {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color.continuumSurfaceElevated)
+                    .fill(Color.prairieSurfaceElevated)
                     .aspectRatio(2.0 / 3.0, contentMode: .fit)
                     .overlay {
                         Image(systemName: "tv")
                             .font(.system(size: 36))
-                            .foregroundStyle(Color.continuumSecondaryText)
+                            .foregroundStyle(Color.prairieSecondaryText)
                     }
             }
         }
@@ -254,13 +273,13 @@ private struct RemoteNowPlayingContent: View {
                 .font(.title2.weight(.semibold))
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
-                .foregroundStyle(Color.continuumOnSurface)
+                .foregroundStyle(Color.prairieOnSurface)
             if let subtitle = state.subtitle, !subtitle.isEmpty {
                 Text(subtitle)
                     .font(.subheadline)
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
-                    .foregroundStyle(Color.continuumSecondaryText)
+                    .foregroundStyle(Color.prairieSecondaryText)
             }
         }
     }
@@ -274,10 +293,10 @@ private struct RemoteNowPlayingContent: View {
                 Text("Playing on \(targetName)")
                     .font(.caption.weight(.medium))
             }
-            .foregroundStyle(Color.continuumSecondaryText)
+            .foregroundStyle(Color.prairieSecondaryText)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            .background(Capsule().fill(Color.continuumChromeRestingFill))
+            .background(Capsule().fill(Color.prairieChromeRestingFill))
         }
     }
 
@@ -289,12 +308,10 @@ private struct RemoteNowPlayingContent: View {
                     value: Binding(get: { live }, set: { scrubPreview = $0 }),
                     in: 0...max(state.duration, 1),
                     onEditingChanged: { editing in
-                        guard !editing, let scrubPreview else { return }
-                        onSeek(scrubPreview)
-                        self.scrubPreview = nil
+                        if !editing { commitScrub() }
                     }
                 )
-                .tint(Color.continuumOnSurface)
+                .tint(Color.prairieOnSurface)
                 .disabled(state.duration <= 0)
                 .accessibilityLabel("Playback position")
                 .accessibilityValue(PlayerTimeFormatter.formatHMS(live))
@@ -305,14 +322,57 @@ private struct RemoteNowPlayingContent: View {
                     Text(remainingLabel(live: live))
                 }
                 .font(.caption.monospacedDigit())
-                .foregroundStyle(Color.continuumSecondaryText)
+                .foregroundStyle(Color.prairieSecondaryText)
             }
         }
+        // The slider's end-of-edit callback is not guaranteed: a tap that
+        // lands elsewhere while the finger is still down (play/pause, the
+        // mini-bar) can swallow the touch-up, and SwiftUI then never reports
+        // `editing == false`. The preview would stay pinned and every later
+        // drag would be ignored as "still editing". So the value stream is
+        // the commit signal too: once it goes quiet the seek is sent, and the
+        // slider is released whether or not the callback ever comes.
+        .onChange(of: scrubPreview) { _, value in
+            guard value != nil else { return }
+            scrubSettleTask?.cancel()
+            scrubSettleTask = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(250))
+                guard !Task.isCancelled else { return }
+                commitScrub()
+            }
+        }
+        .onChange(of: state.contentId) { _, _ in
+            scrubSettleTask?.cancel()
+            scrubPreview = nil
+        }
+    }
+
+    /// Sends the scrubbed position once and releases the slider. Safe to
+    /// call from both the settle timer and the end-of-edit callback: the
+    /// preview is cleared before sending so the second caller finds nothing.
+    private func commitScrub() {
+        scrubSettleTask?.cancel()
+        scrubSettleTask = nil
+        guard let target = scrubPreview else { return }
+        scrubPreview = nil
+        onSeek(target)
     }
 
     private func remainingLabel(live: Double) -> String {
         guard state.duration > 0 else { return PlayerTimeFormatter.formatHMS(state.duration) }
         return "-" + PlayerTimeFormatter.formatHMS(max(0, state.duration - live))
+    }
+
+    /// The clock already shows the last optimistic seek, so repeated presses
+    /// build on the requested target.
+    private func skip(_ direction: SeekDirection) {
+        let seconds = Double(skipIntervals[direction])
+        onSeek(RelativeSeek.target(
+            current: clock.displayTime(),
+            pending: nil,
+            delta: direction == .backward ? -seconds : seconds,
+            duration: state.duration
+        ))
     }
 
     private var transport: some View {
@@ -324,36 +384,36 @@ private struct RemoteNowPlayingContent: View {
             }
 
             Button {
-                onSeek(max(0, clock.displayTime() - 10))
+                skip(.backward)
             } label: {
-                Image(systemName: "gobackward.10").font(.system(size: 30, weight: .regular))
+                Image(systemName: SeekIntervalLabel.symbolName(.backward, seconds: skipIntervals.backward))
+                    .font(.system(size: 30, weight: .regular))
             }
-            .accessibilityLabel("Back 10 seconds")
+            .accessibilityLabel(SeekIntervalLabel.accessibilityLabel(.backward, seconds: skipIntervals.backward))
 
             Button {
                 onTogglePlayPause()
             } label: {
                 ZStack {
-                    Circle().fill(Color.continuumOnSurface).frame(width: 64, height: 64)
+                    Circle().fill(Color.prairieOnSurface).frame(width: 64, height: 64)
                     if state.isLoading || state.isBuffering {
-                        ProgressView().tint(Color.continuumBackground)
+                        ProgressView().tint(Color.prairieBackground)
                     } else {
                         Image(systemName: clock.isPlaying() ? "pause.fill" : "play.fill")
                             .font(.system(size: 28, weight: .medium))
-                            .foregroundStyle(Color.continuumBackground)
+                            .foregroundStyle(Color.prairieBackground)
                     }
                 }
             }
             .accessibilityLabel(clock.isPlaying() ? "Pause" : "Play")
 
             Button {
-                let base = clock.displayTime()
-                let target = state.duration > 0 ? min(state.duration, base + 30) : base + 30
-                onSeek(target)
+                skip(.forward)
             } label: {
-                Image(systemName: "goforward.30").font(.system(size: 30, weight: .regular))
+                Image(systemName: SeekIntervalLabel.symbolName(.forward, seconds: skipIntervals.forward))
+                    .font(.system(size: 30, weight: .regular))
             }
-            .accessibilityLabel("Forward 30 seconds")
+            .accessibilityLabel(SeekIntervalLabel.accessibilityLabel(.forward, seconds: skipIntervals.forward))
 
             if state.hasNextEpisode {
                 Button { onPlayNext() } label: {
@@ -362,7 +422,7 @@ private struct RemoteNowPlayingContent: View {
                 .accessibilityLabel(state.nextEpisodeTitle.map { "Next: \($0)" } ?? "Next episode")
             }
         }
-        .foregroundStyle(Color.continuumOnSurface)
+        .foregroundStyle(Color.prairieOnSurface)
         .buttonStyle(.plain)
     }
 
@@ -383,17 +443,17 @@ private struct RemoteNowPlayingContent: View {
                 ),
                 in: 0...1
             )
-            .tint(Color.continuumOnSurface)
+            .tint(Color.prairieOnSurface)
             .accessibilityLabel("Volume")
             .accessibilityValue("\(Int((state.isMuted ? 0 : state.volume) * 100)) percent")
 
             Image(systemName: "speaker.wave.3.fill")
                 .font(.system(size: 18, weight: .medium))
                 .frame(width: 28)
-                .foregroundStyle(Color.continuumOnSurface.opacity(0.55))
+                .foregroundStyle(Color.prairieOnSurface.opacity(0.55))
         }
         .frame(maxWidth: 280)
-        .foregroundStyle(Color.continuumOnSurface)
+        .foregroundStyle(Color.prairieOnSurface)
         .buttonStyle(.plain)
     }
 
@@ -535,12 +595,12 @@ private struct RemoteNowPlayingContent: View {
     private func errorBanner(_ message: String) -> some View {
         Text(message)
             .font(.footnote)
-            .foregroundStyle(Color.continuumOnSurface)
+            .foregroundStyle(Color.prairieOnSurface)
             .multilineTextAlignment(.center)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 10)
             .padding(.horizontal, 14)
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.continuumError.opacity(0.9)))
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.prairieError.opacity(0.9)))
     }
 }
 
@@ -555,7 +615,7 @@ private struct RemoteChipLabel: View {
             Text(caption)
                 .font(.caption2)
         }
-        .foregroundStyle(Color.continuumOnSurface.opacity(0.9))
+        .foregroundStyle(Color.prairieOnSurface.opacity(0.9))
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
     }
@@ -596,6 +656,7 @@ private extension PrairieControlPlaybackState {
             posterURL: nil,
             onCommand: { _ in },
             onTogglePlayPause: {},
+            skipIntervals: SeekIntervalSurface.videoRemoteControl.legacy,
             onSeek: { _ in },
             onPlayNext: {},
             onSetVolume: { _ in },

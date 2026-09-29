@@ -59,8 +59,8 @@ protocol HostedDiagnosticsCredentialStoring: Sendable {
 }
 
 struct HostedDiagnosticsKeychainCredentialStore: HostedDiagnosticsCredentialStoring, @unchecked Sendable {
-    private static let installationIDAccount = "com.continuum.diagnostics.hosted.installationID"
-    private static let installationTokenAccount = "com.continuum.diagnostics.hosted.installationToken"
+    private static let installationIDAccount = SharedStorage.keychainAccountPrefix + "diagnostics.hosted.installationID"
+    private static let installationTokenAccount = SharedStorage.keychainAccountPrefix + "diagnostics.hosted.installationToken"
 
     private let keychain: SharedKeychain
 
@@ -361,7 +361,7 @@ actor HostedDiagnosticsAPI {
     private func registerInstallation(platform: Platform) async throws -> HostedDiagnosticsCredential {
         let body = HostedInstallationRequest(
             platform: platform,
-            appID: Bundle.main.bundleIdentifier ?? "org.siloserver.silo",
+            appID: Bundle.main.bundleIdentifier ?? "org.prairieserver.prairie",
             appVersion: AppleDeviceIdentity.bundleAppVersion,
             appBuild: AppleDeviceIdentity.bundleAppBuild
         )
@@ -405,26 +405,8 @@ actor HostedDiagnosticsAPI {
         _ request: URLRequest,
         as type: Response.Type
     ) async throws -> Response {
-        do {
-            let (data, response) = try await session.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse else {
-                throw HostedDiagnosticsAPIError.invalidResponse
-            }
-            guard (200...299).contains(httpResponse.statusCode) else {
-                let envelope = try? DiagnosticsJSONCoding.makeDecoder().decode(
-                    HostedErrorEnvelope.self,
-                    from: data
-                )
-                throw HostedDiagnosticsAPIError.http(
-                    statusCode: httpResponse.statusCode,
-                    code: envelope?.error
-                )
-            }
-            return try DiagnosticsJSONCoding.makeDecoder().decode(type, from: data)
-        } catch let error as HostedDiagnosticsAPIError {
-            throw error
-        } catch {
-            throw HostedDiagnosticsAPIError.underlying(String(describing: error))
+        try await perform(request, successCodes: 200...299) { data in
+            try DiagnosticsJSONCoding.makeDecoder().decode(type, from: data)
         }
     }
 
@@ -432,36 +414,26 @@ actor HostedDiagnosticsAPI {
         _ request: URLRequest,
         as type: Response.Type
     ) async throws -> Response {
-        do {
-            let (data, response) = try await session.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse else {
-                throw HostedDiagnosticsAPIError.invalidResponse
-            }
-            guard httpResponse.statusCode == 202 else {
-                let envelope = try? DiagnosticsJSONCoding.makeDecoder().decode(
-                    HostedErrorEnvelope.self,
-                    from: data
-                )
-                throw HostedDiagnosticsAPIError.http(
-                    statusCode: httpResponse.statusCode,
-                    code: envelope?.error
-                )
-            }
-            return try DiagnosticsJSONCoding.makeDecoder().decode(type, from: data)
-        } catch let error as HostedDiagnosticsAPIError {
-            throw error
-        } catch {
-            throw HostedDiagnosticsAPIError.underlying(String(describing: error))
+        try await perform(request, successCodes: 202...202) { data in
+            try DiagnosticsJSONCoding.makeDecoder().decode(type, from: data)
         }
     }
 
     private func performNoContent(_ request: URLRequest) async throws {
+        try await perform(request, successCodes: 204...204) { _ in () }
+    }
+
+    private func perform<Response>(
+        _ request: URLRequest,
+        successCodes: ClosedRange<Int>,
+        decode: (Data) throws -> Response
+    ) async throws -> Response {
         do {
             let (data, response) = try await session.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw HostedDiagnosticsAPIError.invalidResponse
             }
-            guard httpResponse.statusCode == 204 else {
+            guard successCodes.contains(httpResponse.statusCode) else {
                 let envelope = try? DiagnosticsJSONCoding.makeDecoder().decode(
                     HostedErrorEnvelope.self,
                     from: data
@@ -471,6 +443,7 @@ actor HostedDiagnosticsAPI {
                     code: envelope?.error
                 )
             }
+            return try decode(data)
         } catch let error as HostedDiagnosticsAPIError {
             throw error
         } catch {

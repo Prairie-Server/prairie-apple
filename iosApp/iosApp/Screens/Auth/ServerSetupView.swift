@@ -27,11 +27,11 @@ struct ServerSetupView: View {
             VStack(spacing: 10) {
                 AuroraEyebrow(text: "Connect", centered: true)
                 Text("Where is your Prairie server?")
-                    .font(.continuumTitle)
+                    .font(.prairieTitle)
                     .foregroundStyle(Color.auroraInk)
                     .multilineTextAlignment(.center)
                 Text("Enter the address you use to open Prairie in a browser.")
-                    .font(.continuumBody)
+                    .font(.prairieBody)
                     .foregroundStyle(Color.auroraInkSecondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
@@ -53,7 +53,7 @@ struct ServerSetupView: View {
                 )
 
                 Label("Prairie tries secure HTTPS automatically.", systemImage: "lock.shield")
-                    .font(.continuumCaption)
+                    .font(.prairieCaption)
                     .foregroundStyle(Color.auroraInkSecondary)
 
                 advancedDisclosure
@@ -85,7 +85,7 @@ struct ServerSetupView: View {
     @ViewBuilder
     private var advancedDisclosure: some View {
         Button {
-            withAnimation(ContinuumTheme.springAnimation) {
+            withAnimation(PrairieTheme.springAnimation) {
                 viewModel.showsAdvancedOptions.toggle()
             }
         } label: {

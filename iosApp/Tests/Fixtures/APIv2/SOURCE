@@ -1,0 +1,64 @@
+Source: prairie-server contracts/api/v2/fixtures (plus contracts/api/v2/fixtures.schema.json)
+Server ref: 83ac7a9b3da25914a04176185fe4f3a0a98eab45
+Server commit: 83ac7a9b3da25914a04176185fe4f3a0a98eab45 (2026-09-26)
+
+Written by scripts/sync-apiv2-fixtures.sh 83ac7a9b3da25914a04176185fe4f3a0a98eab45. Every vendored byte is read
+with git show <commit>:<path> from the server repository, never from a
+working tree. Do not hand-edit the vendored files; re-run the script at a
+new server commit instead, then cd iosApp && xcodegen generate.
+
+Vendored from the server, 45 files: the SELECTED bodies in the script,
+index.json filtered to those entries, and fixtures.schema.json.
+  fixtures.schema.json
+  index.json
+  authentication_required.json
+  download_capability.json
+  download_manifest.json
+  download_status_event.json
+  downloads_empty.json
+  get_catalog_filters_ok.json
+  get_catalog_item_ok.json
+  get_catalog_search_capabilities_ok.json
+  get_current_user_ok.json
+  get_device_login_capability_ok.json
+  get_device_login_ok.json
+  get_image_capabilities_ok.json
+  get_metadata_ai_capability_ok.json
+  get_setup_status_ok.json
+  get_system_info_ok.json
+  list_progress_offset_rejected.json
+  list_progress_ok.json
+  list_progress_profile_header_required.json
+  login_ok.json
+  not_acceptable.json
+  not_found.json
+  notification_apple_push_display.json
+  playback_capability_available.json
+  playback_capability_unconfigured.json
+  playback_installation_changed.json
+  playback_invalid_protocol.json
+  playback_progress_applied.json
+  playback_progress_stale.json
+  playback_start_opaque_ids.json
+  playback_stop_completed.json
+  poll_device_login_ok.json
+  profile_verification_required.json
+  rate_limited.json
+  refresh_catalog_item_trailers_ok.json
+  start_device_login_ok.json
+  subtitle_ai_job_opaque_id.json
+  subtitle_ai_quota.json
+  subtitles_search_partial.json
+  subtitles_stored.json
+  update_profile_null_not_clearable.json
+  update_profile_ok.json
+  user_libraries.json
+  validation_failed_body.json
+
+Client-authored, 2 file(s): the AUTHORED list in the script, written by
+hand from the server OpenAPI document for cases the server fixture set does
+not publish. They are absent from index.json and the script never
+overwrites them; it refuses to run once the server publishes one of them,
+so it can move to SELECTED. The script deletes any other *.json here.
+  playback_control_capabilities.json
+  playback_stop_draining.json

@@ -14,8 +14,8 @@ struct PrairieWordmarkView: View {
 
             if let subtitle {
                 Text(subtitle)
-                    .font(.continuumCaption)
-                    .foregroundColor(.continuumSecondaryText)
+                    .font(.prairieCaption)
+                    .foregroundColor(.prairieSecondaryText)
                     .tracking(2)
             }
         }

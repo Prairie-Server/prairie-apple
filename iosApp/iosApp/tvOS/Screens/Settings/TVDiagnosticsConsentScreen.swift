@@ -17,7 +17,7 @@ struct TVDiagnosticsConsentScreen: View {
                     .font(.system(size: 48, weight: .bold))
                 Text("Choose what Prairie should do when a crash, hang, or unclean shutdown report is available.")
                     .font(.system(size: 24))
-                    .foregroundStyle(Color.continuumSecondaryText)
+                    .foregroundStyle(Color.prairieSecondaryText)
 
                 Button("Cancel", action: dismiss.callAsFunction)
                     .buttonStyle(TVSettingsPaneRowStyle())

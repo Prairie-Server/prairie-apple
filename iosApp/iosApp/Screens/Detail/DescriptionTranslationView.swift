@@ -103,12 +103,13 @@ struct DescriptionTranslationView: View {
             Text("Translate")
         }
         .font(.subheadline.weight(.semibold))
-        .foregroundStyle(Color.continuumPrimary)
+        .foregroundStyle(Color.prairiePrimary)
     }
 
     private func startTranslation(targetLanguage: String) {
         coordinator.translate(
             contentId: contentId,
+            libraryId: viewModel.libraryId,
             targetLanguage: targetLanguage
         ) { refreshed in
             // Through the view model's generation gate, so a detail load

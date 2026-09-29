@@ -32,10 +32,10 @@ struct TVPlayerScrubber: View {
     /// the focus-lost path doesn't turn into an accidental seek.
     var cancelOnBlur: Bool = false
 
-    private static let scrubBackwardStep: Double = 10
-    private static let scrubForwardStep: Double = 30
-    private static let timelineHoldBackwardStep: Double = 2
-    private static let timelineHoldForwardStep: Double = 2
+    /// Click and swipe steps follow the profile's video intervals (10/30 on
+    /// servers without them). Hold-to-scrub keeps its own ramp.
+    private var scrubBackwardStep: Double { Double(viewModel.skipIntervals.backward) }
+    private var scrubForwardStep: Double { Double(viewModel.skipIntervals.forward) }
     private static let timelineAutoSeekTickNanos: UInt64 = 100_000_000
     private static let timelineAutoSeekBaseStep: Double = 2
     private static let timelineAutoSeekRates = [-32, -16, -8, -4, -2, -1, 1, 2, 4, 8, 16, 32]
@@ -53,6 +53,10 @@ struct TVPlayerScrubber: View {
     private static let panDeadzone: CGFloat = 12
     @State private var isPanScrubbing = false
     @State private var panEngaged = false
+    /// When an engaged drag last ended. Move commands from the same swipe can
+    /// arrive just after the pan ends and must not step a full interval.
+    @State private var panEndedAt: ContinuousClock.Instant?
+    private static let panTrailingMoveWindow: Duration = .milliseconds(150)
     @State private var panAccumulated: CGFloat = 0
     /// Distinguishes entering/exiting timeline mode from a real seek. A
     /// Select-only round trip should resume the paused pipeline in place.
@@ -141,7 +145,7 @@ struct TVPlayerScrubber: View {
                     )
                     // Continuous trackpad drag while the puck is selected —
                     // Select enters timeline-scrub mode, then swipes stream
-                    // through here instead of stepping ±10s/30s per move
+                    // through here instead of stepping by the skip interval per move
                     // command.
                     TVPanCaptureView(
                         isActive: isFocused && isTimelineScrubbing && !isTimelineAutoSeeking,
@@ -151,7 +155,10 @@ struct TVPlayerScrubber: View {
                             panAccumulated = 0
                         },
                         onPanChanged: handlePanChanged,
-                        onPanEnded: { isPanScrubbing = false }
+                        onPanEnded: {
+                            isPanScrubbing = false
+                            if panEngaged { panEndedAt = .now }
+                        }
                     )
                 }
                 .frame(width: 1, height: 1)
@@ -241,7 +248,7 @@ struct TVPlayerScrubber: View {
             .frame(height: Self.trackStackHeight, alignment: .center)
         }
         .frame(height: Self.trackStackHeight)
-        .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
+        .animation(.easeOut(duration: PrairieTheme.fastDuration), value: isFocused)
         // Deliberately no animation on `progressFraction` — it animated every
         // tick of the playhead AND every transition between scrub preview and
         // live position, which turned any state drift (keyframe snapping,
@@ -314,7 +321,7 @@ struct TVPlayerScrubber: View {
         .padding(.vertical, 7)
         .background(Capsule(style: .continuous).fill(.white))
         .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
-        .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: timelineAutoSeekRate)
+        .animation(.easeOut(duration: PrairieTheme.fastDuration), value: timelineAutoSeekRate)
     }
 
     // MARK: - Input
@@ -335,15 +342,15 @@ struct TVPlayerScrubber: View {
         switch direction {
         case .left:
             if isTimelineScrubbing {
-                stepTimeline(by: -Self.scrubBackwardStep)
+                stepTimeline(by: -scrubBackwardStep)
             } else {
-                viewModel.skipBackward(Self.scrubBackwardStep)
+                viewModel.skipBackward(scrubBackwardStep)
             }
         case .right:
             if isTimelineScrubbing {
-                stepTimeline(by: Self.scrubForwardStep)
+                stepTimeline(by: scrubForwardStep)
             } else {
-                viewModel.skipForward(Self.scrubForwardStep)
+                viewModel.skipForward(scrubForwardStep)
             }
         case .up, .down:
             break
@@ -453,21 +460,22 @@ struct TVPlayerScrubber: View {
         // While a trackpad drag is in flight the same swipe also surfaces
         // here as discrete left/right move commands — the pan owns the
         // playhead, so the fixed-step path must stay quiet.
-        let panOwnsTimeline = isPanScrubbing && isTimelineScrubbing && !isTimelineAutoSeeking
+        let panJustEnded = panEndedAt.map { ContinuousClock.now - $0 < Self.panTrailingMoveWindow } ?? false
+        let panOwnsTimeline = (isPanScrubbing || panJustEnded) && isTimelineScrubbing && !isTimelineAutoSeeking
         switch direction {
         case .left:
             guard viewModel.duration > 0 else { return }
             if isTimelineAutoSeeking {
                 adjustTimelineAutoSeekRate(delta: -1)
             } else if isTimelineScrubbing, !panOwnsTimeline {
-                stepTimeline(by: -Self.scrubBackwardStep)
+                stepTimeline(by: -scrubBackwardStep)
             }
         case .right:
             guard viewModel.duration > 0 else { return }
             if isTimelineAutoSeeking {
                 adjustTimelineAutoSeekRate(delta: 1)
             } else if isTimelineScrubbing, !panOwnsTimeline {
-                stepTimeline(by: Self.scrubForwardStep)
+                stepTimeline(by: scrubForwardStep)
             }
         case .up:
             break
@@ -489,11 +497,6 @@ struct TVPlayerScrubber: View {
             hasTimelineSelectionMoved = true
         }
         viewModel.updateScrub(fraction: target / viewModel.duration)
-    }
-
-    private func stepTimelineHold(direction: Int) {
-        let step = direction < 0 ? -Self.timelineHoldBackwardStep : Self.timelineHoldForwardStep
-        stepTimeline(by: step)
     }
 
     private func formatTime(_ seconds: Double) -> String {

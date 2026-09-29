@@ -6,7 +6,7 @@ struct PrairieControlModeButton: View {
     let onChooseTarget: () -> Void
 
     var body: some View {
-        if controller.hasActiveSession {
+        if controller.remotePlaybackEngaged {
             Menu {
                 Button { controller.showRemoteControl() } label: {
                     Label("Remote Control", systemImage: "slider.horizontal.3")
@@ -23,6 +23,7 @@ struct PrairieControlModeButton: View {
             }
             .menuStyle(.borderlessButton)
             .accessibilityLabel("TV control mode")
+            .accessibilityValue("Active")
         } else {
             Button(action: onChooseTarget) {
                 buttonLabel(isActive: false)
@@ -33,20 +34,11 @@ struct PrairieControlModeButton: View {
     }
 
     private func buttonLabel(isActive: Bool) -> some View {
-        Image(systemName: "appletvremote.gen4")
+        Image(systemName: isActive ? "appletvremote.gen4.fill" : "appletvremote.gen4")
             .font(.system(size: 18, weight: .semibold))
-            .foregroundStyle(isActive ? Color.continuumBackground : Color.continuumOnSurface)
-            .frame(width: ContinuumTheme.topBarIconHitSize, height: ContinuumTheme.topBarIconHitSize)
-            .background {
-                // Chrome-free at rest (Plex-style); a filled disc appears only
-                // while actively controlling a TV so the state stays obvious.
-                if isActive {
-                    Circle()
-                        .fill(Color.continuumOnSurface)
-                        .frame(width: 36, height: 36)
-                }
-            }
-            .contentShape(Circle())
+            .foregroundStyle(isActive ? Color.prairieAccent : Color.prairieOnSurface)
+            .frame(width: PrairieTheme.topBarIconHitSize, height: PrairieTheme.topBarIconHitSize)
+            .contentShape(Rectangle())
     }
 }
 
@@ -56,7 +48,7 @@ struct PrairieControlModeButton: View {
         PrairieControlModeButton(controller: PrairieControlClient(), onChooseTarget: {})
     }
     .padding()
-    .background(Color.continuumBackground)
+    .background(Color.prairieBackground)
 }
 #endif
 #endif

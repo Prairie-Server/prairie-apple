@@ -28,7 +28,7 @@ enum PersonMediaFilter: String, CaseIterable, Identifiable {
 @Observable
 @MainActor
 final class PersonDetailViewModel {
-    let personId: Int
+    let personId: String
     var person: Person?
     var items: [BrowseItem] = []
     var isLoadingPerson = false
@@ -46,22 +46,23 @@ final class PersonDetailViewModel {
     /// settled — the server refresh ran and this is all the metadata it has.
     private static let metadataRefreshSettledPollCount = 5
     private static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "com.continuum.app",
+        subsystem: Bundle.main.bundleIdentifier ?? "org.prairieserver.prairie",
         category: "PersonDetail"
     )
     private let pageSize = 60
-    private var nextOffset = 0
-    private var snapshot: String?
+    /// Where the next credits page starts; `nil` before the first page and
+    /// after the last one.
+    private var continuation: APIv2CatalogContinuation?
     private var generation = 0
     private var metadataRefreshTask: Task<Void, Never>?
-    private var autoRefreshRequestedPersonId: Int?
-    private var metadataRefreshExhaustedPersonId: Int?
+    private var autoRefreshRequestedPersonId: String?
+    private var metadataRefreshExhaustedPersonId: String?
 
     #if os(tvOS)
     private var prefetchedPosterURLs: Set<URL> = []
     #endif
 
-    init(personId: Int) {
+    init(personId: String) {
         self.personId = personId
     }
 
@@ -100,7 +101,7 @@ final class PersonDetailViewModel {
 
         do {
             if person == nil {
-                person = try await ContinuumAPI.shared.person(id: personId)
+                person = try await PrairieAPI.shared.person(id: personId)
             }
             scheduleMetadataRefreshIfNeeded(for: person)
             async let availability: Void = refreshAvailableFilters(generation: currentGeneration)
@@ -135,7 +136,7 @@ final class PersonDetailViewModel {
             .compactMap(URL.init(string:))
         let newURLs = urls.filter { prefetchedPosterURLs.insert($0).inserted }
         guard !newURLs.isEmpty else { return }
-        PosterImageCache.prefetcher.startPrefetching(with: newURLs)
+        PosterImageCache.prefetchCardArtwork(newURLs)
     }
     #endif
 
@@ -164,7 +165,24 @@ final class PersonDetailViewModel {
         }
     }
 
-    private func runMetadataAutoRefresh(for personId: Int, shouldQueueRefresh: Bool) async {
+    /// Whether the read-only poll still runs after the server rejected the
+    /// refresh dispatch. A rate limit or a transient server error leaves the
+    /// refresh a plain person read queues when one is due, and a malformed
+    /// receipt may still mean the refresh was queued. A missing person, an
+    /// unconfigured refresh queue (503), a refused credential, request or
+    /// client, or a v1-only server means the read cannot queue one either.
+    nonisolated static func pollsAfterRejectedRefresh(_ error: APIv2Error) -> Bool {
+        let status: Int
+        switch error {
+        case .problem(let problem): status = problem.status
+        case .httpStatus(let code): status = code
+        case .incompleteCatalogRead: return true
+        default: return false
+        }
+        return (200..<300).contains(status) || status == 429 || ((500...599).contains(status) && status != 503)
+    }
+
+    private func runMetadataAutoRefresh(for personId: String, shouldQueueRefresh: Bool) async {
         defer {
             let wasCancelled = Task.isCancelled
             metadataRefreshTask = nil
@@ -175,10 +193,27 @@ final class PersonDetailViewModel {
             Self.logger.debug("finishMetadataRefresh personId=\(personId, privacy: .public) cancelled=\(wasCancelled, privacy: .public)")
         }
 
-        if shouldQueueRefresh,
-           let token = await ContinuumAPI.shared.currentAccessToken(),
-           !token.isEmpty {
-            _ = try? await ContinuumAPI.shared.refreshPerson(id: personId)
+        // The refresh is dispatched at most once per person. Viewing the
+        // person already queues a provider refresh when one is due, so a
+        // rejected dispatch ends the poll only when that read cannot queue one
+        // either; otherwise the poll keeps watching without dispatching again.
+        // A lost answer may still have queued the refresh, so it is observed
+        // the same way.
+        if shouldQueueRefresh {
+            do {
+                try await PrairieAPI.shared.refreshPerson(id: personId)
+            } catch is CancellationError {
+                return
+            } catch let error as APIv2Error {
+                let keepsPolling = Self.pollsAfterRejectedRefresh(error)
+                Self.logger.error("refreshPerson rejected personId=\(personId, privacy: .public) keepsPolling=\(keepsPolling, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+                guard keepsPolling else { return }
+            } catch HTTPError.requestIdentityChanged {
+                Self.logger.debug("refreshPerson not sent personId=\(personId, privacy: .public): owner changed")
+                return
+            } catch {
+                Self.logger.info("refreshPerson outcome unknown personId=\(personId, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            }
         }
 
         let deadline = Date.now.addingTimeInterval(Self.metadataRefreshWindowSeconds)
@@ -193,7 +228,7 @@ final class PersonDetailViewModel {
             guard !Task.isCancelled else { return }
 
             do {
-                let updatedPerson = try await ContinuumAPI.shared.person(id: personId)
+                let updatedPerson = try await PrairieAPI.shared.person(id: personId)
                 guard personId == self.personId else { return }
                 if updatedPerson == person {
                     unchangedPolls += 1
@@ -222,24 +257,26 @@ final class PersonDetailViewModel {
         defer { isLoadingItems = false }
 
         do {
-            let response = try await ContinuumAPI.shared.personCatalogItems(
-                personId: personId,
-                type: selectedFilter.catalogType,
-                offset: nextOffset,
-                limit: pageSize,
-                snapshot: snapshot
-            )
+            let nextPage = reset ? nil : continuation
+            let startsOver = nextPage == nil
+            let page: CatalogListPage
+            if let nextPage {
+                page = try await PrairieAPI.shared.nextCatalogPage(nextPage)
+            } else {
+                page = try await PrairieAPI.shared.catalogPage(.personCredits(
+                    personId: personId, type: selectedFilter.catalogType, limit: pageSize
+                ))
+            }
             guard currentGeneration == generation else { return }
 
-            if reset {
-                items = response.items
+            if startsOver || page.startsOver {
+                items = page.response.items
             } else {
-                items.append(contentsOf: response.items)
+                items.append(contentsOf: page.response.items)
             }
-            totalItems = response.total
-            hasMore = response.hasMore ?? false
-            nextOffset += response.items.count
-            if snapshot == nil { snapshot = response.snapshot }
+            totalItems = page.response.total
+            continuation = page.continuation
+            hasMore = page.continuation != nil
         } catch {
             guard currentGeneration == generation else { return }
             self.error = ErrorState(error)
@@ -262,12 +299,9 @@ final class PersonDetailViewModel {
     /// remains visible rather than hiding content based on a network error.
     private func catalogHasItems(type: String) async -> Bool? {
         do {
-            let response = try await ContinuumAPI.shared.personCatalogItems(
-                personId: personId,
-                type: type,
-                offset: 0,
-                limit: 1
-            )
+            let response = try await PrairieAPI.shared.catalogPage(
+                .personCredits(personId: personId, type: type, limit: 1)
+            ).response
             return !response.items.isEmpty || (response.total ?? 0) > 0
         } catch {
             return nil
@@ -277,27 +311,35 @@ final class PersonDetailViewModel {
     private func resetFilmography() {
         #if os(tvOS)
         if !prefetchedPosterURLs.isEmpty {
-            PosterImageCache.prefetcher.stopPrefetching(with: Array(prefetchedPosterURLs))
+            PosterImageCache.stopPrefetchingCardArtwork(Array(prefetchedPosterURLs))
             prefetchedPosterURLs.removeAll()
         }
         #endif
         items = []
         totalItems = nil
-        nextOffset = 0
-        snapshot = nil
+        continuation = nil
         hasMore = true
     }
 }
 
 struct PersonDetailView: View {
     @State private var viewModel: PersonDetailViewModel
+    #if os(iOS)
+    @Environment(\.detailPullBackAction) private var goBack
+    @Environment(\.dismiss) private var dismiss
+    #endif
 
-    init(personId: Int) {
+    init(personId: String) {
         _viewModel = State(initialValue: PersonDetailViewModel(personId: personId))
     }
 
     var body: some View {
         rootContent
+            #if os(iOS)
+            .environment(\.detailPullBackAction, {
+                if let goBack { goBack() } else { dismiss() }
+            })
+            #endif
             .onAppear {
                 viewModel.resumeMetadataRefreshIfNeeded()
             }
@@ -319,7 +361,7 @@ struct PersonDetailView: View {
             Color.clear
         } else {
             EmptyStateView(icon: "person", title: "Person not found")
-                .continuumBackground()
+                .prairiePageBackground()
         }
     }
 
@@ -328,14 +370,26 @@ struct PersonDetailView: View {
         #if os(tvOS)
         TVPersonDetailContent(person: person, viewModel: viewModel)
         #else
+        #if os(iOS)
+        // On iOS this pull means Back, including actor pages opened from
+        // outside a title's detail sheet. Do not start a metadata refresh too.
+        PhonePersonDetailContent(person: person, viewModel: viewModel)
+        #else
+        refreshablePersonContent(person: person)
+        #endif
+        #endif
+    }
+
+    #if !os(tvOS)
+    private func refreshablePersonContent(person: Person) -> some View {
         PhonePersonDetailContent(person: person, viewModel: viewModel)
             .refreshable {
                 async let overlayRefresh: Void = OverlayPrefsStore.shared.refresh()
                 await viewModel.reload()
                 await overlayRefresh
             }
-        #endif
     }
+    #endif
 }
 
 #if os(tvOS)
@@ -349,7 +403,7 @@ private struct TVPersonDetailContent: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 48) {
                 header
-                    .padding(.horizontal, ContinuumTheme.safePadding)
+                    .padding(.horizontal, PrairieTheme.safePadding)
                     .padding(.top, 48)
 
                 VStack(alignment: .leading, spacing: 28) {
@@ -373,8 +427,8 @@ private struct TVPersonDetailContent: View {
                             items: viewModel.items,
                             isLoading: viewModel.isLoadingItems,
                             hasMore: viewModel.hasMore,
-                            onItemTap: { contentId in
-                                router.navigate(to: .itemDetail(contentId: contentId))
+                            onItemTap: { item in
+                                router.navigate(to: .itemDetail(browseItem: item))
                             },
                             onNearEnd: { index in
                                 Task { await viewModel.loadMoreIfNeeded() }
@@ -384,11 +438,11 @@ private struct TVPersonDetailContent: View {
                         )
                     }
                 }
-                .padding(.horizontal, ContinuumTheme.safePadding)
+                .padding(.horizontal, PrairieTheme.safePadding)
             }
             .padding(.bottom, 72)
         }
-        .continuumBackground()
+        .prairiePageBackground()
     }
 
     private var header: some View {
@@ -398,15 +452,15 @@ private struct TVPersonDetailContent: View {
             VStack(alignment: .leading, spacing: 22) {
                 Text(person.name)
                     .font(.system(size: 72, weight: .bold))
-                    .foregroundColor(.continuumOnSurface)
+                    .foregroundColor(.prairieOnSurface)
                     .lineLimit(2)
 
                 metadataRow
 
                 if let bio = clean(person.bio) {
                     Text(bio)
-                        .font(.continuumBody)
-                        .foregroundColor(.continuumSecondaryText)
+                        .font(.prairieBody)
+                        .foregroundColor(.prairieSecondaryText)
                         .lineLimit(7)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: 920, alignment: .leading)
@@ -420,13 +474,13 @@ private struct TVPersonDetailContent: View {
         HStack(spacing: 12) {
             ForEach(metadataBadges, id: \.self) { badge in
                 Text(badge)
-                    .font(.continuumSmall)
-                    .foregroundColor(.continuumOnSurface)
+                    .font(.prairieSmall)
+                    .foregroundColor(.prairieOnSurface)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
                     .background(
                         Capsule()
-                            .fill(Color.continuumSurfaceVariant)
+                            .fill(Color.prairieSurfaceVariant)
                     )
             }
 
@@ -440,13 +494,13 @@ private struct TVPersonDetailContent: View {
         VStack(alignment: .leading, spacing: 20) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Filmography")
-                    .font(.continuumHeadline)
-                    .foregroundColor(.continuumOnSurface)
+                    .font(.prairieHeadline)
+                    .foregroundColor(.prairieOnSurface)
 
                 if let label = totalLabel {
                     Text(label)
-                        .font(.continuumCaption)
-                        .foregroundColor(.continuumSecondaryText)
+                        .font(.prairieCaption)
+                        .foregroundColor(.prairieSecondaryText)
                 }
 
                 Spacer()
@@ -477,7 +531,7 @@ private struct PhonePersonDetailContent: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 header
-                    .padding(.horizontal, ContinuumTheme.padding)
+                    .padding(.horizontal, PrairieTheme.padding)
                     .padding(.top, 12)
 
                 VStack(alignment: .leading, spacing: 16) {
@@ -485,7 +539,7 @@ private struct PhonePersonDetailContent: View {
 
                     if viewModel.items.isEmpty && viewModel.isLoadingItems {
                         ProgressView()
-                            .tint(.continuumOnSurface)
+                            .tint(.prairieOnSurface)
                             .frame(maxWidth: .infinity, minHeight: 180)
                     } else if let error = viewModel.error, viewModel.items.isEmpty {
                         ErrorView(state: error, onRetry: { Task { await viewModel.reload() } })
@@ -502,20 +556,21 @@ private struct PhonePersonDetailContent: View {
                             items: viewModel.items,
                             isLoading: viewModel.isLoadingItems,
                             hasMore: viewModel.hasMore,
-                            onItemTap: { contentId in
-                                router.navigate(to: .itemDetail(contentId: contentId))
+                            onItemTap: { item in
+                                router.navigate(to: .itemDetail(browseItem: item))
                             },
                             onLoadMore: {
                                 Task { await viewModel.loadMoreIfNeeded() }
                             }
                         )
-                        .padding(.horizontal, ContinuumTheme.padding)
+                        .padding(.horizontal, PrairieTheme.padding)
                     }
                 }
             }
-            .padding(.bottom, ContinuumTheme.largePadding)
+            .padding(.bottom, PrairieTheme.largePadding)
         }
-        .continuumBackground()
+        .detailScrollDismissal()
+        .prairiePageBackground()
     }
 
     private var header: some View {
@@ -525,15 +580,15 @@ private struct PhonePersonDetailContent: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text(person.name)
                     .font(.system(size: 30, weight: .bold))
-                    .foregroundColor(.continuumOnSurface)
+                    .foregroundColor(.prairieOnSurface)
                     .lineLimit(3)
 
                 metadataWrap
 
                 if let bio = clean(person.bio) {
                     Text(bio)
-                        .font(.continuumBody)
-                        .foregroundColor(.continuumSecondaryText)
+                        .font(.prairieBody)
+                        .foregroundColor(.prairieSecondaryText)
                         .lineLimit(8)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -545,13 +600,13 @@ private struct PhonePersonDetailContent: View {
         FlowLayout(spacing: 6) {
             ForEach(person.personMetadataBadges, id: \.self) { badge in
                 Text(badge)
-                    .font(.continuumSmall)
-                    .foregroundColor(.continuumOnSurface)
+                    .font(.prairieSmall)
+                    .foregroundColor(.prairieOnSurface)
                     .padding(.horizontal, 9)
                     .padding(.vertical, 5)
                     .background(
                         Capsule()
-                            .fill(Color.continuumSurfaceVariant)
+                            .fill(Color.prairieSurfaceVariant)
                     )
             }
 
@@ -565,8 +620,8 @@ private struct PhonePersonDetailContent: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Filmography")
-                    .font(.continuumHeadline)
-                    .foregroundColor(.continuumOnSurface)
+                    .font(.prairieHeadline)
+                    .foregroundColor(.prairieOnSurface)
 
                 if let label = personFilmographyCountLabel(
                     total: viewModel.totalItems,
@@ -574,18 +629,18 @@ private struct PhonePersonDetailContent: View {
                     hasMore: viewModel.hasMore
                 ) {
                     Text(label)
-                        .font(.continuumCaption)
-                        .foregroundColor(.continuumSecondaryText)
+                        .font(.prairieCaption)
+                        .foregroundColor(.prairieSecondaryText)
                 }
 
                 Spacer()
             }
-            .padding(.horizontal, ContinuumTheme.padding)
+            .padding(.horizontal, PrairieTheme.padding)
 
             PersonFilterBar(filters: viewModel.availableFilters, selected: viewModel.selectedFilter) { filter in
                 Task { await viewModel.applyFilter(filter) }
             }
-            .padding(.horizontal, ContinuumTheme.padding)
+            .padding(.horizontal, PrairieTheme.padding)
         }
     }
 }
@@ -599,7 +654,7 @@ private struct PersonPortrait: View {
 
     var body: some View {
         ZStack {
-            Color.continuumSurfaceElevated
+            Color.prairieSurfaceElevated
 
             if let photoUrl = clean(person.photoUrl) {
                 AsyncImageView(
@@ -611,13 +666,13 @@ private struct PersonPortrait: View {
             } else {
                 Text(person.initials)
                     .font(.system(size: width * 0.28, weight: .semibold))
-                    .foregroundColor(.continuumSecondaryText)
+                    .foregroundColor(.prairieSecondaryText)
             }
         }
         .frame(width: width, height: height)
-        .clipShape(RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius))
+        .clipShape(RoundedRectangle(cornerRadius: PrairieTheme.cornerRadius))
         .overlay(
-            RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius)
+            RoundedRectangle(cornerRadius: PrairieTheme.cornerRadius)
                 .stroke(Color.white.opacity(0.10), lineWidth: 1)
         )
     }
@@ -628,17 +683,17 @@ private struct PersonMetadataRefreshIndicator: View {
         HStack(spacing: 8) {
             ProgressView()
                 .controlSize(controlSize)
-                .tint(.continuumOnSurface)
+                .tint(.prairieOnSurface)
 
             Text("Loading metadata")
-                .font(.continuumSmall)
-                .foregroundColor(.continuumSecondaryText)
+                .font(.prairieSmall)
+                .foregroundColor(.prairieSecondaryText)
         }
         .padding(.horizontal, horizontalPadding)
         .padding(.vertical, verticalPadding)
         .background(
             Capsule()
-                .fill(Color.continuumSurfaceVariant.opacity(0.72))
+                .fill(Color.prairieSurfaceVariant.opacity(0.72))
         )
         .accessibilityElement(children: .combine)
     }
@@ -715,32 +770,32 @@ private struct PersonFilterButton: View {
                         .stroke(strokeColor, lineWidth: isFocused ? 2 : 1)
                 )
         }
-        .buttonStyle(.continuumFlat)
+        .buttonStyle(.prairieFlat)
         .focused($isFocused)
         .scaleEffect(isFocused ? 1.06 : 1.0)
-        .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isFocused)
-        .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: isSelected)
+        .animation(.easeOut(duration: PrairieTheme.fastDuration), value: isFocused)
+        .animation(.easeOut(duration: PrairieTheme.fastDuration), value: isSelected)
     }
 
     private var foregroundColor: Color {
-        isSelected || isFocused ? .continuumOnSurface : .continuumSecondaryText
+        isSelected || isFocused ? .prairieOnSurface : .prairieSecondaryText
     }
 
     private var backgroundColor: Color {
-        if isSelected { return .continuumSurfaceVariant }
-        if isFocused { return Color.continuumSurfaceVariant.opacity(0.8) }
-        return Color.continuumSurfaceElevated.opacity(0.55)
+        if isSelected { return .prairieSurfaceVariant }
+        if isFocused { return Color.prairieSurfaceVariant.opacity(0.8) }
+        return Color.prairieSurfaceElevated.opacity(0.55)
     }
 
     private var strokeColor: Color {
-        isFocused ? .continuumOnSurface.opacity(0.85) : Color.white.opacity(isSelected ? 0.16 : 0.08)
+        isFocused ? .prairieOnSurface.opacity(0.85) : Color.white.opacity(isSelected ? 0.16 : 0.08)
     }
 
     private var buttonFont: Font {
         #if os(tvOS)
-        .continuumCaption
+        .prairieCaption
         #else
-        .continuumCaption
+        .prairieCaption
         #endif
     }
 

@@ -1,15 +1,26 @@
 import SwiftUI
 
 extension View {
-    /// Prairie's Liquid Glass background in `shape`. All Apple targets (iOS / macOS /
-    /// tvOS) are at the 26 minimum, so this is unconditional. It's the single
-    /// place glass styling is configured — call sites never write `glassEffect`
-    /// directly so tint/shape conventions stay consistent.
+    /// Prairie's Liquid Glass background in `shape` on Apple 26+, with the native
+    /// material fallback used by iOS 18. This is the single place glass styling
+    /// is configured so call sites keep the same tint and shape conventions.
+    @ViewBuilder
     func prairieGlass(in shape: some Shape, tint: Color? = nil, interactive: Bool = false) -> some View {
-        var glass = Glass.regular
-        if let tint { glass = glass.tint(tint) }
-        if interactive { glass = glass.interactive() }
-        return self.glassEffect(glass, in: shape)
+        #if os(iOS)
+        if #available(iOS 26.0, *) {
+            self.glassEffect(
+                prairieGlassConfiguration(tint: tint, interactive: interactive),
+                in: shape
+            )
+        } else {
+            self.background(.ultraThinMaterial, in: shape)
+        }
+        #else
+        self.glassEffect(
+            prairieGlassConfiguration(tint: tint, interactive: interactive),
+            in: shape
+        )
+        #endif
     }
 
     /// Glass for surfaces drawn over LIVE VIDEO (player HUD, controls,
@@ -17,14 +28,39 @@ extension View {
     /// materials alike — make the render server re-sample and re-blur the
     /// covered video region on every video frame, which A12-class Apple
     /// TVs pay for as a visible spike whenever the player menu is up.
-    /// Low-power devices draw a non-sampling translucent fill instead;
+    /// Low-power devices and iOS 18 (whose oldest supported phone is the
+    /// A12 iPhone XS) draw a non-sampling translucent fill instead;
     /// everything else gets standard Prairie glass.
     @ViewBuilder
-    func prairiePlayerGlass(in shape: some Shape, tint: Color? = nil) -> some View {
+    func prairiePlayerGlass(in shape: some Shape, tint: Color? = nil, interactive: Bool = false) -> some View {
+        #if os(iOS)
+        if #available(iOS 26.0, *) {
+            self.prairieGlass(in: shape, tint: tint, interactive: interactive)
+        } else {
+            // Avoid per-frame backdrop sampling over video on A12-era phones.
+            // Layer the tint over the fill as glass would, so the white
+            // play/pause disc stays white under its dark glyph.
+            self.background {
+                ZStack {
+                    shape.fill(Color(white: 0.10).opacity(0.88))
+                    if let tint { shape.fill(tint) }
+                }
+            }
+        }
+        #else
         if DevicePower.isLowPowerAppleTV {
             self.background(shape.fill(Color(white: 0.10).opacity(0.88)))
         } else {
-            self.prairieGlass(in: shape, tint: tint)
+            self.prairieGlass(in: shape, tint: tint, interactive: interactive)
         }
+        #endif
     }
+}
+
+@available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *)
+private func prairieGlassConfiguration(tint: Color?, interactive: Bool) -> Glass {
+    var glass = Glass.regular
+    if let tint { glass = glass.tint(tint) }
+    if interactive { glass = glass.interactive() }
+    return glass
 }

@@ -12,18 +12,22 @@ struct ServerUnreachablePill: View {
                 ? "exclamationmark.arrow.trianglehead.2.clockwise.rotate.90"
                 : "wifi.slash")
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(.continuumOnSurface)
+                .foregroundColor(.prairieOnSurface)
 
             Text(ConnectionMonitor.shared.isDeviceOnline
                 ? "Can't reach server — showing cached content"
                 : "You're offline — showing cached content")
-                .font(.continuumCaption)
+                .font(.prairieCaption)
                 .fontWeight(.semibold)
-                .foregroundColor(.continuumOnSurface)
+                .foregroundColor(.prairieOnSurface)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
+        #if os(iOS)
+        .background(Color(white: 0.10), in: Capsule())
+        #else
         .background(.ultraThinMaterial, in: Capsule())
+        #endif
         .overlay {
             Capsule()
                 .stroke(Color.white.opacity(0.14), lineWidth: 0.8)

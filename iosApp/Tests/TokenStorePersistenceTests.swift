@@ -106,9 +106,11 @@ final class TokenStorePersistenceTests: XCTestCase {
         let store = makeStore()
 
         await store.switchActiveServer(serverId: a)
+        await store.setServerUrl("https://a.example")
         await store.saveTokens(accessToken: "A-A", refreshToken: "R-A")
 
         await store.switchActiveServer(serverId: b)
+        await store.setServerUrl("https://b.example")
         await store.saveTokens(accessToken: "A-B", refreshToken: "R-B")
 
         let value11 = await store.getAccessToken(for: a)
@@ -131,8 +133,10 @@ final class TokenStorePersistenceTests: XCTestCase {
         let store = makeStore()
 
         await store.switchActiveServer(serverId: a)
+        await store.setServerUrl("https://a.example")
         await store.saveTokens(accessToken: "A-A", refreshToken: "R-A")
         await store.switchActiveServer(serverId: b)
+        await store.setServerUrl("https://b.example")
         await store.saveTokens(accessToken: "A-B", refreshToken: "R-B")
         await store.clearTokens()
 
@@ -147,6 +151,7 @@ final class TokenStorePersistenceTests: XCTestCase {
         let serverId = ServerRegistry.serverId(for: "https://home.example")
         let store = makeStore()
         await store.switchActiveServer(serverId: serverId)
+        await store.setServerUrl("https://home.example")
         await store.saveTokens(accessToken: "PERM", refreshToken: "PERM-R")
 
         await store.beginTemporaryScope(TemporaryAuthScope(
@@ -197,6 +202,7 @@ final class TokenStorePersistenceTests: XCTestCase {
         let serverId = ServerRegistry.serverId(for: "https://home.example")
         let store = makeStore()
         await store.switchActiveServer(serverId: serverId)
+        await store.setServerUrl("https://home.example")
         await store.saveTokens(accessToken: "PERM", refreshToken: "PERM-R")
         await store.beginTemporaryScope(TemporaryAuthScope(
             serverId: "temp-server",
@@ -223,20 +229,24 @@ final class TokenStorePersistenceTests: XCTestCase {
         XCTAssertFalse(value23)
 
         await store.switchActiveServer(serverId: serverId)
+        await store.setServerUrl("https://home.example")
         await store.saveTokens(accessToken: "YES", refreshToken: "R")
         let value24 = await store.hasAccessTokenForActiveServer(serverId: serverId)
         XCTAssertTrue(value24)
     }
 
     func testKeyDerivationHelpers() {
-        XCTAssertEqual(TokenStore.accessTokenKey(for: "abc"), "com.continuum.abc.accessToken")
-        XCTAssertEqual(TokenStore.refreshTokenKey(for: "abc"), "com.continuum.abc.refreshToken")
-        XCTAssertEqual(TokenStore.profileTokenKey(for: "abc"), "com.continuum.abc.profileToken")
+        XCTAssertEqual(TokenStore.accessTokenKey(for: "abc"), "org.prairieserver.prairie.abc.accessToken")
+        XCTAssertEqual(TokenStore.refreshTokenKey(for: "abc"), "org.prairieserver.prairie.abc.refreshToken")
+        XCTAssertEqual(TokenStore.profileTokenKey(for: "abc"), "org.prairieserver.prairie.abc.profileToken")
     }
 
     func testSharedStorageIdentitiesAreStable() {
-        // Documented upgrade contract — renaming these orphans installs.
+        // Documented upgrade contract. The keychain moved off the pre-rename
+        // continuum service; the legacy names must stay so upgrades migrate.
         XCTAssertEqual(SharedStorage.appGroup, "group.org.prairieserver.prairie")
-        XCTAssertEqual(SharedStorage.keychainService, "com.continuum.app")
+        XCTAssertEqual(SharedStorage.keychainService, "org.prairieserver.prairie")
+        XCTAssertEqual(SharedStorage.legacyKeychainService, "com.continuum.app")
+        XCTAssertEqual(SharedStorage.legacyKeychainAccountPrefix, "com.continuum.")
     }
 }

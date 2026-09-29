@@ -16,7 +16,7 @@ struct BrowseView: View {
         if let title {
             rootContent
                 .navigationTitle(title)
-                .continuumNavigationTitleDisplayMode(.large)
+                .prairieNavigationTitleDisplayMode(.large)
         } else {
             rootContent
         }
@@ -34,13 +34,13 @@ struct BrowseView: View {
                 emptyContent
             }
         }
-        .continuumBackground()
+        .prairiePageBackground()
         .overlay(alignment: .top) {
             // Grid is painted from cache but the server can't be reached —
             // flag the staleness instead of letting refresh fail silently.
             if ConnectionMonitor.shared.isOffline, !viewModel.items.isEmpty {
                 ServerUnreachablePill()
-                    .padding(.top, ContinuumTheme.padding)
+                    .padding(.top, PrairieTheme.padding)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
@@ -62,7 +62,7 @@ struct BrowseView: View {
 
     private var emptyContent: some View {
         ScrollView {
-            VStack(spacing: ContinuumTheme.padding) {
+            VStack(spacing: PrairieTheme.padding) {
                 if showsSearchShortcut {
                     searchBar
                 }
@@ -79,15 +79,17 @@ struct BrowseView: View {
                     subtitle: "Try adjusting your filters"
                 )
                 .frame(minHeight: 320)
-                .padding(.horizontal, ContinuumTheme.padding)
+                .padding(.horizontal, PrairieTheme.padding)
             }
             .frame(maxWidth: .infinity)
         }
+        .reportsPageChromeScroll()
+        .environment(\.browseLibraryId, libraryId)
     }
 
     private var scrollContent: some View {
         ScrollView {
-            VStack(spacing: ContinuumTheme.padding) {
+            VStack(spacing: PrairieTheme.padding) {
                 if showsSearchShortcut {
                     searchBar
                 }
@@ -102,14 +104,17 @@ struct BrowseView: View {
                     items: viewModel.items,
                     isLoading: viewModel.isLoading,
                     hasMore: viewModel.hasMore,
-                    onItemTap: { router.navigate(to: .itemDetail(contentId: $0)) },
+                    forcesThreeColumnsOnPhone: libraryId != nil,
+                    onItemTap: { router.navigate(to: .itemDetail(browseItem: $0, libraryId: libraryId)) },
                     onLoadMore: {
                         Task { await viewModel.loadItems() }
                     }
                 )
-                .padding(.horizontal, ContinuumTheme.padding)
+                .padding(.horizontal, PrairieTheme.padding)
             }
         }
+        .reportsPageChromeScroll()
+        .environment(\.browseLibraryId, libraryId)
     }
 
     // MARK: - Search Bar
@@ -120,25 +125,25 @@ struct BrowseView: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
-                    .foregroundColor(.continuumSecondaryText)
+                    .foregroundColor(.prairieSecondaryText)
                 Text("Search...")
-                    .foregroundColor(.continuumSecondaryText)
+                    .foregroundColor(.prairieSecondaryText)
                 Spacer()
             }
-            .font(.continuumBody)
+            .font(.prairieBody)
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
             .background(
-                RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius)
-                    .fill(Color.continuumSurfaceVariant)
+                RoundedRectangle(cornerRadius: PrairieTheme.cornerRadius)
+                    .fill(Color.prairieSurfaceVariant)
                     .overlay(
-                        RoundedRectangle(cornerRadius: ContinuumTheme.cornerRadius)
-                            .stroke(Color.continuumOutline, lineWidth: 1)
+                        RoundedRectangle(cornerRadius: PrairieTheme.cornerRadius)
+                            .stroke(Color.prairieOutline, lineWidth: 1)
                     )
             )
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, ContinuumTheme.padding)
+        .padding(.horizontal, PrairieTheme.padding)
     }
 
     // MARK: - Control bar (Sort + Filter)
@@ -156,7 +161,7 @@ struct BrowseView: View {
             .buttonStyle(.plain)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, ContinuumTheme.padding)
+        .padding(.horizontal, PrairieTheme.padding)
     }
 
     private var sortMenu: some View {
@@ -189,22 +194,22 @@ struct BrowseView: View {
             Image(systemName: icon)
                 .font(.system(size: 13, weight: .semibold))
             Text(text)
-                .font(.continuumBody)
+                .font(.prairieBody)
             if let trailing {
                 Text(trailing)
-                    .font(.continuumCaption)
-                    .foregroundColor(.continuumSecondaryText)
+                    .font(.prairieCaption)
+                    .foregroundColor(.prairieSecondaryText)
             }
             if let badge, badge > 0 {
                 Text("\(badge)")
                     .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .foregroundColor(.continuumBackground)
+                    .foregroundColor(.prairieBackground)
                     .padding(.horizontal, 5)
                     .padding(.vertical, 1)
-                    .background(Capsule().fill(Color.continuumOnSurface))
+                    .background(Capsule().fill(Color.prairieOnSurface))
             }
         }
-        .foregroundColor(.continuumOnSurface)
+        .foregroundColor(.prairieOnSurface)
         .padding(.horizontal, 13)
         .padding(.vertical, 8)
         .prairieGlass(in: .capsule)
@@ -223,19 +228,19 @@ struct BrowseView: View {
                     }
                 }
             }
-            .padding(.horizontal, ContinuumTheme.padding)
+            .padding(.horizontal, PrairieTheme.padding)
         }
     }
 
     private func filterChip(label: String, onRemove: @escaping () -> Void) -> some View {
         HStack(spacing: 4) {
             Text(label)
-                .font(.continuumCaption)
-                .foregroundColor(.continuumOnSurface)
+                .font(.prairieCaption)
+                .foregroundColor(.prairieOnSurface)
             Button(action: onRemove) {
                 Image(systemName: "xmark.circle.fill")
                     .font(.system(size: 14))
-                    .foregroundColor(.continuumSecondaryText)
+                    .foregroundColor(.prairieSecondaryText)
             }
         }
         .padding(.horizontal, 10)
@@ -279,26 +284,26 @@ struct LibraryPageTabSelector: View {
             HStack(spacing: 8) {
                 ForEach(LibraryPageTab.allCases) { tab in
                     Button {
-                        withAnimation(.easeInOut(duration: ContinuumTheme.normalDuration)) {
+                        withAnimation(.easeInOut(duration: PrairieTheme.normalDuration)) {
                             selectedTab = tab
                         }
                     } label: {
                         Text(tab.title)
-                            .font(.continuumCaption)
+                            .font(.prairieCaption)
                             .fontWeight(selectedTab == tab ? .semibold : .regular)
-                            .foregroundColor(selectedTab == tab ? Color.continuumBackground : .continuumSecondaryText)
+                            .foregroundColor(selectedTab == tab ? Color.prairieBackground : .prairieSecondaryText)
                             .padding(.horizontal, 16)
                             .padding(.vertical, 8)
                             .background(
                                 Capsule()
-                                    .fill(selectedTab == tab ? Color.continuumOnSurface : Color.continuumSurfaceElevated)
+                                    .fill(selectedTab == tab ? Color.prairieOnSurface : Color.prairieSurfaceElevated)
                             )
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, ContinuumTheme.padding)
-            .padding(.vertical, ContinuumTheme.smallPadding)
+            .padding(.horizontal, PrairieTheme.padding)
+            .padding(.vertical, PrairieTheme.smallPadding)
         }
     }
 }
@@ -339,7 +344,7 @@ struct LibraryDetailView: View {
             tabContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .continuumBackground()
+        .prairiePageBackground()
         .task {
             await loadLibraryMetadataIfNeeded()
         }
@@ -454,7 +459,7 @@ struct LibraryRecommendedView: View {
         }
         .animation(.easeInOut(duration: 0.18), value: isRefreshing)
         .animation(.easeInOut(duration: 0.18), value: ConnectionMonitor.shared.isOffline)
-        .continuumBackground()
+        .prairiePageBackground()
         .task(id: libraryId) {
             await viewModel.loadSections(libraryId: libraryId)
         }
@@ -465,21 +470,31 @@ struct LibraryRecommendedView: View {
 
     private var content: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            LazyVStack(spacing: ContinuumTheme.largePadding) {
+            LazyVStack(spacing: PrairieTheme.largePadding) {
                 ForEach(viewModel.regularSections) { section in
                     SectionRow(
                         section: section,
-                        onItemTap: { router.navigate(to: .itemDetail(contentId: $0)) }
+                        onItemTap: { destinationContentId, item in
+                            router.navigate(
+                                to: .itemDetail(
+                                    destinationContentId: destinationContentId,
+                                    sectionItem: item,
+                                    libraryId: libraryId
+                                )
+                            )
+                        }
                     )
                 }
             }
-            .padding(.bottom, ContinuumTheme.largePadding)
+            .padding(.bottom, PrairieTheme.largePadding)
         }
-        .continuumScrollEdgeEffect()
+        .prairieScrollEdgeEffect()
+        .reportsPageChromeScroll()
+        .environment(\.browseLibraryId, libraryId)
     }
 
     private var refreshStatusTopPadding: CGFloat {
-        ContinuumTheme.padding
+        PrairieTheme.padding
     }
 
     private func refreshRecommendations() async {
@@ -528,7 +543,7 @@ private struct LibraryDetailTitleModifier: ViewModifier {
         if isEnabled {
             content
                 .navigationTitle(title)
-                .continuumNavigationTitleDisplayMode(.large)
+                .prairieNavigationTitleDisplayMode(.large)
         } else {
             content
         }

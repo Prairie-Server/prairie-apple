@@ -3,7 +3,7 @@ import Foundation
 /// Drives the on-view "translate this description" flow for a single item.
 ///
 /// The server has no job-status endpoint for description translation: you
-/// `POST /items/{id}/translate-description` and then observe completion by
+/// `POST /api/v2/catalog/items/{id}/translate-description` and then observe completion by
 /// re-fetching the item detail until `pendingTranslationLanguage` clears
 /// (the localized overview lands within seconds). This coordinator owns
 /// that POST-then-poll loop, the bounded backoff, and the `idle /
@@ -23,8 +23,8 @@ final class DescriptionTranslationCoordinator {
 
     private(set) var phase: Phase = .idle
 
-    private let api: ContinuumAI
-    private let catalog: ContinuumAPI
+    private let api: PrairieAI
+    private let catalog: PrairieAPI
     private var task: Task<Void, Never>?
     private var activeRunID: UUID?
 
@@ -33,7 +33,7 @@ final class DescriptionTranslationCoordinator {
     /// is the hard cap (~31s) after which we give up and surface `.failed`.
     private let backoff: [TimeInterval] = [1, 2, 3, 5, 5, 5, 5, 5]
 
-    init(api: ContinuumAI = .shared, catalog: ContinuumAPI = .shared) {
+    init(api: PrairieAI = .shared, catalog: PrairieAPI = .shared) {
         self.api = api
         self.catalog = catalog
     }
@@ -43,6 +43,7 @@ final class DescriptionTranslationCoordinator {
     /// translation is already in flight.
     func translate(
         contentId: String,
+        libraryId: Int? = nil,
         targetLanguage: String,
         apply: @MainActor @escaping (ItemDetail) -> Void
     ) {
@@ -51,7 +52,7 @@ final class DescriptionTranslationCoordinator {
         let runID = UUID()
         activeRunID = runID
         task = Task { [weak self] in
-            await self?.run(contentId: contentId, targetLanguage: targetLanguage, runID: runID, apply: apply)
+            await self?.run(contentId: contentId, libraryId: libraryId, targetLanguage: targetLanguage, runID: runID, apply: apply)
         }
     }
 
@@ -66,6 +67,7 @@ final class DescriptionTranslationCoordinator {
 
     private func run(
         contentId: String,
+        libraryId: Int? = nil,
         targetLanguage: String,
         runID: UUID,
         apply: @MainActor @escaping (ItemDetail) -> Void
@@ -77,8 +79,19 @@ final class DescriptionTranslationCoordinator {
             }
         }
 
+        // Capture the owner once: the POST runs for it, and a poll result is
+        // applied only while it is still current.
+        let auth: CapturedOrdinaryRequestAuth
         do {
-            try await api.translateDescription(contentId: contentId, targetLanguage: targetLanguage)
+            auth = try await api.captureAuthority()
+            guard isCurrentRun(runID) else { return }
+            let job = try await api.translateDescription(contentId: contentId, targetLanguage: targetLanguage, auth: auth)
+            guard isCurrentRun(runID) else { return }
+            // The server may return a recently failed job without new work.
+            if job.failed {
+                phase = .failed
+                return
+            }
         } catch {
             guard isCurrentRun(runID) else { return }
             phase = .failed
@@ -89,16 +102,20 @@ final class DescriptionTranslationCoordinator {
             guard isCurrentRun(runID) else { return }
             try? await Task.sleep(for: .seconds(delay))
             guard isCurrentRun(runID) else { return }
+            guard await api.matchesAuthority(auth) else { return fail(runID) }
 
-            guard let refreshed = try? await catalog.itemDetail(contentId: contentId) else {
+            guard let refreshed = try? await catalog.itemDetail(contentId: contentId, libraryId: libraryId) else {
                 continue
             }
             // A cancellation (disappear / item change) may have landed during
             // the fetch above; bail before applying so a stale poll can't
             // clobber the view model / cache with the previous item's detail.
             guard isCurrentRun(runID) else { return }
+            // Nor apply a detail read after the account or profile changed.
+            guard await api.matchesAuthority(auth) else { return fail(runID) }
+            guard isCurrentRun(runID) else { return }
             apply(refreshed)
-            ResponseCache.shared.set(refreshed, for: CacheKey.itemDetail(contentId))
+            ResponseCache.shared.set(refreshed, for: CacheKey.itemDetail(contentId, libraryId: libraryId))
 
             if refreshed.pendingTranslationLanguage == nil {
                 guard isCurrentRun(runID) else { return }
@@ -108,6 +125,11 @@ final class DescriptionTranslationCoordinator {
         }
 
         // Cap hit without the pending flag clearing.
+        guard isCurrentRun(runID) else { return }
+        phase = .failed
+    }
+
+    private func fail(_ runID: UUID) {
         guard isCurrentRun(runID) else { return }
         phase = .failed
     }

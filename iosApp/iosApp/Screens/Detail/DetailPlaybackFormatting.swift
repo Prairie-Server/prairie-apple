@@ -30,6 +30,18 @@ enum DetailPlaybackFormatting {
         return tokens.isEmpty ? "Auto" : tokens.joined(separator: " · ")
     }
 
+    /// Resting-state video summary for the compact tvOS selector segment.
+    /// Keep the two facts viewers need at a glance (resolution + HDR family),
+    /// while the focused segment expands to ``versionShortLabel(_:)``.
+    static func versionCompactLabel(_ version: FileVersion?) -> String {
+        guard let version else { return "Auto" }
+        let tokens = [
+            nonEmpty(version.resolution),
+            dynamicRangeLabel(version),
+        ].compactMap { $0 }
+        return tokens.isEmpty ? "Auto" : tokens.joined(separator: " · ")
+    }
+
     static func versionDetailLabel(_ version: FileVersion) -> String {
         let tokens = [
             nonEmpty(normalizedVideoCodec(version.codecVideo)),
@@ -236,7 +248,7 @@ enum DetailPlaybackFormatting {
         if let signature,
            let tracks = version?.subtitleTracks,
            let match = bestSignatureMatch(signature, in: tracks) {
-            return match.index
+            return match.selectionIndex
         }
         if SubtitleMode(rawValue: mode ?? "") == .off {
             return -1
@@ -270,7 +282,9 @@ enum DetailPlaybackFormatting {
         in tracks: [SubtitleTrack]
     ) -> SubtitleTrack? {
         var best: (SubtitleTrack, Int)?
-        for track in tracks where track.index != nil {
+        // Every row is a candidate, external ones included, exactly as the
+        // player's `SubtitleAutoResolver.bestSignatureMatch` scores them.
+        for track in tracks {
             var score = 0
             var strongSignal = false
             if let sigLang = sig.language, !sigLang.isEmpty,
@@ -316,7 +330,30 @@ enum DetailPlaybackFormatting {
         version: FileVersion?,
         context: SubtitleAutoContext
     ) -> (track: SubtitleTrack, ordinal: Int)? {
-        let tracks = version?.subtitleTracks ?? []
+        let catalog = Array((version?.subtitleTracks ?? []).enumerated())
+        guard !catalog.isEmpty else { return nil }
+        // Search in the Protocol V3 combined order (externals first) that
+        // `SubtitleTrackCandidates` and the plan inventory use, so a first-match
+        // tie resolves to the same track playback will start. The returned
+        // ordinal stays the catalog offset so "Track N" labels line up with
+        // `subtitleOptions`.
+        // Same candidate set and order as `SubtitleTrackCandidates`: externals
+        // first, then embedded. An embedded row with no index is FFmpeg stream
+        // 0 (the wire omits a zero index), so it stays selectable.
+        let ordered = catalog.filter { $0.element.external == true }
+            + catalog.filter { $0.element.external != true }
+        guard let pick = autoResolvedSubtitle(in: ordered.map(\.element), context: context) else {
+            return nil
+        }
+        return (pick.track, ordered[pick.ordinal].offset)
+    }
+
+    /// `autoResolvedSubtitle(version:context:)` over an already ordered list;
+    /// `ordinal` is the position in `tracks`.
+    private static func autoResolvedSubtitle(
+        in tracks: [SubtitleTrack],
+        context: SubtitleAutoContext
+    ) -> (track: SubtitleTrack, ordinal: Int)? {
         guard !tracks.isEmpty else { return nil }
 
         let mode = SubtitleMode(rawValue: context.mode ?? "") ?? .auto
@@ -423,7 +460,9 @@ enum DetailPlaybackFormatting {
             )
         }
         return ordered.map { ordinal, track in
-            let index = track.index
+            // `selectionIndex` reads an embedded nil index as stream 0, so
+            // only external sidecars without a stream index are unselectable.
+            let index = track.selectionIndex
             let isSelectable = index != nil
             return SubtitleOption(
                 selectionIndex: index,
@@ -472,7 +511,7 @@ enum DetailPlaybackFormatting {
         if selectedSubtitleTrackIndex == -1 { return "Off" }
         guard let selectedSubtitleTrackIndex,
               let match = (version?.subtitleTracks ?? []).enumerated().first(where: { _, track in
-                  track.index == selectedSubtitleTrackIndex
+                  track.selectionIndex == selectedSubtitleTrackIndex
               }) else {
             // An explicit positive selection that doesn't resolve in this
             // version's track list (e.g. the displayed version was re-scoped):

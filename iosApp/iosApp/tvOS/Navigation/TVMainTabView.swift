@@ -17,6 +17,11 @@ func tvVisibleRootsFocusRearm(
 #if os(tvOS)
 import SwiftUI
 
+private enum TVPersonalRootDestination: Hashable {
+    case watchlist
+    case favorites
+}
+
 /// Root tvOS shell. Owns a custom Skyline top bar instead of relying on
 /// `TabView(.sidebarAdaptable)`, so content can use horizontal remote
 /// navigation without the system sidebar claiming leftward focus.
@@ -27,6 +32,11 @@ import SwiftUI
 struct TVMainTabView: View {
     @Bindable var router: AppRouter
     @State private var selectedRoot: TVRootDestination = .home
+    /// Watchlist and Favorites are root-shell pages rather than pushed
+    /// destinations, so the Skyline bar and profile controls remain present.
+    /// The previously selected content root stays underneath and is restored
+    /// when the user backs out of the personal page.
+    @State private var personalRoot: TVPersonalRootDestination?
     /// Seeded from the startup prefetch so the bar's first frame already
     /// shows the active profile's avatar instead of filling it in late.
     @State private var currentProfile: UserProfile? = {
@@ -36,7 +46,6 @@ struct TVMainTabView: View {
         }
         return cached.first(where: { $0.id == profileId })
     }()
-    @State private var showServerPicker = false
     @State private var showSignOutConfirm = false
     @State private var registry = ServerRegistry.shared
     /// Local, per-profile tab-visibility prefs (e.g. whether the Audiobooks
@@ -90,9 +99,13 @@ struct TVMainTabView: View {
     /// panel items) is on the stack. When the stack pops back to root,
     /// focus returns to the bar — the explicit "next owner" choice
     /// (docs/tvos-focus.md); leaving it to the engine landed on an
-    /// arbitrary row card. Card-pushed routes (detail pages) never set
-    /// this, so their pops keep the engine's restore-to-card behavior.
+    /// arbitrary row card. Card-pushed routes (detail pages) never set this;
+    /// their pops emit `detailReturnFocusRequest` so the exact launch row/card
+    /// explicitly reclaims focus.
     @State private var barOwnsFocusOnPopToRoot = false
+    /// The Siri request the pushed Search screen fills its field from;
+    /// Search clears it.
+    @State private var siriSearchRequest: AppRouter.SearchRequest?
     @State private var topMenuFocusRequest = 0
     /// Bumped by the focus watchdog to drop the bar's `@FocusState` when the
     /// engine has already dropped focus without telling it. Re-suppressing is
@@ -106,6 +119,9 @@ struct TVMainTabView: View {
     /// d-pad entry"). Starts at 1 so the initial Home content focuses on
     /// first appear.
     @State private var contentFocusRequest = 1
+    /// Card-pushed detail routes return to their exact Skyline owner instead
+    /// of relying on NavigationStack's best-effort focus restoration.
+    @State private var detailReturnFocusRequest = 0
     @Namespace private var tabContentNamespace
     @Environment(AudioPlaybackStore.self) private var audioStore
     @Environment(\.scenePhase) private var scenePhase
@@ -139,9 +155,12 @@ struct TVMainTabView: View {
                     onSearch: { navigateFromBar(.search) },
                     onDwell: handleDwell(_:),
                     onEnterPanel: enterPanelFor,
+                    onEnterContent: enterContentFromBar,
                     onProfilePressed: openProfilePanelImmediately,
                     onContentFocusHandoff: suppressTopMenuFocusForContentHandoff,
-                    onExit: selectedRoot == .home ? nil : returnToHomeInMenu
+                    onExit: personalRoot != nil
+                        ? returnFromPersonalRootInMenu
+                        : (selectedRoot == .home ? nil : returnToHomeInMenu)
                 )
             }
 
@@ -172,9 +191,9 @@ struct TVMainTabView: View {
                 .transition(.opacity)
             }
         }
-        .animation(.easeOut(duration: ContinuumTheme.fastDuration), value: showSignOutConfirm)
+        .animation(.easeOut(duration: PrairieTheme.fastDuration), value: showSignOutConfirm)
         .ignoresSafeArea(edges: [.top, .horizontal])
-        .tint(.continuumOnSurface)
+        .tint(.prairieOnSurface)
         .fullScreenCover(isPresented: Binding(
             get: { audioStore.isShowingFullPlayer },
             set: { if !$0 { audioStore.dismissFullPlayer() } }
@@ -184,36 +203,35 @@ struct TVMainTabView: View {
         .fullScreenCover(item: $router.presentedPlayer) { payload in
             PlayerView(
                 contentId: payload.contentId,
+                libraryId: payload.libraryId,
                 preferredFileId: payload.fileId,
                 preferredAudioTrackIndex: payload.audioTrackIndex,
                 preferredSubtitleTrackIndex: payload.subtitleTrackIndex,
                 startFromBeginning: payload.startFromBeginning,
                 resumePositionOverride: payload.resumePosition,
+                prefersLastUsedVersion: payload.prefersLastUsedVersion,
                 posterURLHint: payload.posterURL,
                 backdropURLHint: payload.backdropURL,
+                watchPartyContext: payload.watchPartyContext,
                 onPlaybackStarted: {
                     guard let returnToContentId = payload.returnToContentId,
                           router.presentedPlayer?.id == payload.id else { return }
-                    router.replaceCurrent(with: .itemDetail(contentId: returnToContentId))
+                    router.replaceCurrent(with: .itemDetail(contentId: returnToContentId, libraryId: payload.libraryId))
                 }
             )
+            .id(payload.id)
         }
-        .confirmationDialog(
-            "Switch Server",
-            isPresented: $showServerPicker,
-            titleVisibility: .visible
-        ) {
-            ForEach(registry.sortedEntries) { entry in
-                Button(serverButtonLabel(entry)) {
-                    switchToServer(entry)
-                }
+        .fullScreenCover(item: $router.presentedLivePlayer) { session in
+            LiveTVPlayerView(
+                session: LiveTVPlayerSession(
+                    sessionId: session.sessionId,
+                    streamURL: session.streamURL,
+                    title: session.title,
+                    isHLS: session.isHLS
+                )
+            ) {
+                router.presentedLivePlayer = nil
             }
-            Button("Add Server…") {
-                router.navigate(to: .serverSetup)
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Choose a saved server to switch to.")
         }
         // Outside the presentation modifiers so presented covers (audio
         // player) inherit the router — ErrorView requires it and traps
@@ -223,6 +241,11 @@ struct TVMainTabView: View {
             // Re-read tab-visibility prefs for the now-known profile (the
             // singleton may hold the previous profile's value after a switch).
             navPrefs.refresh()
+            // A cold-launch Siri search can be requested before this view
+            // exists to observe the change. Open it before the network
+            // refresh below so a slow server can't hold it back; a later
+            // menu change leaves the pushed Search in place.
+            openRequestedSearch()
             await uiCustomization.refresh()
             controlReceiver.start(router: router)
             await loadCurrentProfile()
@@ -250,6 +273,8 @@ struct TVMainTabView: View {
                     DispatchQueue.main.async {
                         focusTopMenuIfVisible()
                     }
+                } else {
+                    detailReturnFocusRequest += 1
                 }
             }
         }
@@ -263,6 +288,9 @@ struct TVMainTabView: View {
             if requestedTab == .home {
                 selectRoot(.home)
             }
+        }
+        .onChange(of: router.requestedSearch) { _, _ in
+            openRequestedSearch()
         }
         .onChange(of: visibleRoots) { _, _ in
             reconcileVisibleRootsChange()
@@ -286,7 +314,10 @@ struct TVMainTabView: View {
                 Task { await loadLibraries(for: authority) }
             }
         }
-        .tvFocusWatchdog(isActive: focusWatchdogIsActive, onRepair: repairLostFocus)
+        .tvFocusWatchdog(
+            isActive: focusWatchdogIsActive,
+            onRepair: { attempt in repairLostFocus(attempt: attempt) }
+        )
     }
 
     /// The watchdog's reading is only actionable while this shell's focus graph
@@ -298,42 +329,60 @@ struct TVMainTabView: View {
             && router.presentedPlayer == nil
             && !audioStore.isShowingFullPlayer
             && !showSignOutConfirm
-            && !showServerPicker
             && controlReceiver.standbyState == nil
     }
 
     /// One nudge per detected focus outage (docs/tvos-focus.md: do not fight
-    /// the engine). At root the shell owns the hand-down, so clear the bar's
-    /// stale focus state and re-arm content entry focus — the same path a tab
-    /// selection uses. On a pushed route the shell owns no focus target, so ask
-    /// the engine to re-resolve from the window instead of pinning one.
+    /// the engine), escalating from the page to the top menu when the first
+    /// nudge fails — see `tvFocusRepairAction`.
     ///
     /// `rootContent` blocks hit testing while a panel is open, so an open panel
-    /// has to come down first or the content focus hand-down lands on nothing.
-    private func repairLostFocus() {
+    /// has to come down first or either hand-down lands on nothing.
+    private func repairLostFocus(attempt: Int) {
+        // Drop the bar's stale @FocusState first. While it holds a non-nil
+        // value, the bar's own focus claim is a no-op write and nothing moves.
         topMenuFocusResetRequest += 1
-        if router.path.isEmpty {
+
+        switch tvFocusRepairAction(attempt: attempt, isShowingRoot: router.path.isEmpty) {
+        case .contentHandoff:
             closePanelForContentHandoff()
             suppressTopMenuFocusForContentHandoff()
             contentFocusRequest += 1
-        } else {
+        case .topMenu:
+            closePanelForContentHandoff()
+            // Stay suppressed across the reset above: while the bar is
+            // enabled, its nil-focus path hands focus back to content and
+            // would undo this repair before it lands. Un-suppress and claim a
+            // turn later, once the reset has committed.
+            suppressTopMenuFocusForContentHandoff()
+            DispatchQueue.main.async {
+                focusTopMenuIfVisible()
+            }
+        case .engineReresolve:
             TVFocusSystemProbe.requestFocusUpdate()
         }
     }
 
     private var rootContent: some View {
         ZStack(alignment: .top) {
-            Color.continuumBackground
+            Color.prairieBackground
                 .ignoresSafeArea()
 
-            selectedRootContent
+            Group {
+                if let personalRoot {
+                    personalRootContent(personalRoot)
+                        .id(personalRoot)
+                } else {
+                    selectedRootContent
+                        .id(selectedRoot)
+                }
+            }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 // §4.2 tab content switch: an explicit 200 ms opacity
                 // crossfade keyed on the selected root, so the incoming page
                 // fades in and the outgoing one fades out in place (it never
                 // slides). The crossfade animation is supplied by `selectRoot`;
                 // Reduce Motion snaps via the `.identity` transition.
-                .id(selectedRoot)
                 .transition(reduceMotion ? .identity : .opacity)
                 .focusScope(tabContentNamespace)
                 // Keep the page from taking remote/pointer events while a
@@ -346,8 +395,22 @@ struct TVMainTabView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea(edges: [.top, .horizontal])
         .onExitCommand {
-            focusTopMenuIfVisible()
+            if router.path.isEmpty {
+                focusTopMenuIfVisible()
+            } else {
+                // The root remains mounted behind NavigationStack pushes.
+                // Its old no-op top-menu request consumed Back/Menu while the
+                // bar was absent, stranding detail pages. On a push, Back owns
+                // exactly one stack pop so focus can restore to the launch card.
+                router.goBack()
+            }
         }
+    }
+
+    /// The bar and an entered panel both own chrome focus. Native bar-focus
+    /// telemetry can be false during those handoffs, so use shell ownership.
+    private var menuOwnsFocus: Bool {
+        !isTopMenuFocusSuppressed || panelEntersFocus
     }
 
     @ViewBuilder
@@ -356,13 +419,14 @@ struct TVMainTabView: View {
         case .home:
             HomeView(
                 homeFocusRequest: contentFocusRequest,
-                isTopMenuFocused: isTopMenuFocused,
+                detailReturnFocusRequest: detailReturnFocusRequest,
+                isTopMenuFocused: menuOwnsFocus,
                 onTopMenuFocusRequest: { focusTopMenuIfVisible() }
             )
         case .recommendations:
             RecommendationsView(
                 focusRequest: contentFocusRequest,
-                isTopMenuFocused: isTopMenuFocused,
+                isTopMenuFocused: menuOwnsFocus,
                 onTopMenuFocusRequest: { focusTopMenuIfVisible() }
             )
         case .libraryType(let type):
@@ -373,7 +437,7 @@ struct TVMainTabView: View {
                 activeLibrary: active,
                 selectedPill: pillSelection(for: type),
                 focusRequest: contentFocusRequest,
-                isTopMenuFocused: isTopMenuFocused,
+                isTopMenuFocused: menuOwnsFocus,
                 onTopMenuFocusRequest: { focusTopMenuIfVisible() }
             )
             // Re-create the tab body when the type changes so per-type
@@ -389,7 +453,7 @@ struct TVMainTabView: View {
                     activeLibrary: library,
                     selectedPill: shortcutPillSelection(for: libraryId, categoryType: type),
                     focusRequest: contentFocusRequest,
-                    isTopMenuFocused: isTopMenuFocused,
+                    isTopMenuFocused: menuOwnsFocus,
                     onTopMenuFocusRequest: { focusTopMenuIfVisible() }
                 )
                 .id(library.id)
@@ -400,10 +464,45 @@ struct TVMainTabView: View {
                     subtitle: "This pinned library is no longer visible to the active profile."
                 )
                 .padding(.top, TVTopMenuLayout.contentTopInset)
+                .tvPageFocusOwner(
+                    focusRequest: contentFocusRequest,
+                    isTopMenuFocused: menuOwnsFocus,
+                    accessibilityLabel: "Library unavailable",
+                    onMoveUp: { focusTopMenuIfVisible() }
+                )
             }
         case .calendar:
             CalendarView(
                 focusRequest: contentFocusRequest,
+                isTopMenuFocused: menuOwnsFocus,
+                onTopMenuFocusRequest: { focusTopMenuIfVisible() }
+            )
+        case .liveTV:
+            LiveTVChannelListView(
+                viewModel: LiveTVChannelListViewModel(),
+                focusRequest: contentFocusRequest,
+                onTopMenuFocusRequest: { focusTopMenuIfVisible() }
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func personalRootContent(_ destination: TVPersonalRootDestination) -> some View {
+        switch destination {
+        case .watchlist:
+            WatchlistView(
+                showsNavigationTitle: false,
+                usesTVTopMenu: true,
+                focusRequest: contentFocusRequest,
+                isTopMenuFocused: menuOwnsFocus,
+                onTopMenuFocusRequest: { focusTopMenuIfVisible() }
+            )
+        case .favorites:
+            FavoritesView(
+                showsNavigationTitle: false,
+                usesTVTopMenu: true,
+                focusRequest: contentFocusRequest,
+                isTopMenuFocused: menuOwnsFocus,
                 onTopMenuFocusRequest: { focusTopMenuIfVisible() }
             )
         }
@@ -450,7 +549,7 @@ struct TVMainTabView: View {
             switch root {
             case .libraryType, .libraryShortcut, .recommendations:
                 return .root(root)
-            case .home, .calendar:
+            case .home, .calendar, .liveTV:
                 return nil
             }
         }
@@ -461,11 +560,11 @@ struct TVMainTabView: View {
     private func panelIntrinsicWidth(for panel: TVTopMenuPanel) -> CGFloat {
         switch panel {
         case .profile, .root(.recommendations), .root(.libraryShortcut):
-            return ContinuumTheme.Skyline.dropdownWidth
+            return PrairieTheme.Skyline.dropdownWidth
         case .root:
-            return ContinuumTheme.Skyline.dropdownWidth
-                + ContinuumTheme.Skyline.flyoutGap
-                + ContinuumTheme.Skyline.flyoutWidth
+            return PrairieTheme.Skyline.dropdownWidth
+                + PrairieTheme.Skyline.flyoutGap
+                + PrairieTheme.Skyline.flyoutWidth
         }
     }
 
@@ -489,16 +588,16 @@ struct TVMainTabView: View {
 
         return panelBody(for: panel, isActive: isActive)
             .padding(.leading, leading)
-            .padding(.top, ContinuumTheme.Skyline.dropdownTopInset)
+            .padding(.top, PrairieTheme.Skyline.dropdownTopInset)
             .opacity(isActive ? 1 : 0)
             .scaleEffect(
-                reduceMotion || isActive ? 1 : ContinuumTheme.Skyline.cascadeOpenScale,
+                reduceMotion || isActive ? 1 : PrairieTheme.Skyline.cascadeOpenScale,
                 anchor: UnitPoint(x: anchorX, y: 0)
             )
             .allowsHitTesting(isActive)
             .accessibilityHidden(!isActive)
             .animation(
-                reduceMotion ? nil : .easeOut(duration: ContinuumTheme.Skyline.cascadeOpenDuration),
+                reduceMotion ? nil : .easeOut(duration: PrairieTheme.Skyline.topMenuPanelOpenDuration),
                 value: isActive
             )
             .onExitCommand { closePanel() }
@@ -513,8 +612,8 @@ struct TVMainTabView: View {
         anchors: [TVTopMenuPanel: Anchor<CGRect>],
         proxy: GeometryProxy
     ) -> CGFloat {
-        let safe = ContinuumTheme.Skyline.safeAreaX
-        let level1Width = ContinuumTheme.Skyline.dropdownWidth
+        let safe = PrairieTheme.Skyline.safeAreaX
+        let level1Width = PrairieTheme.Skyline.dropdownWidth
         let screenWidth = proxy.size.width
 
         switch panel {
@@ -540,8 +639,8 @@ struct TVMainTabView: View {
             // right; keep the whole thing on screen while preferring to
             // center level-1 under the tab.
             let totalWidth = level1Width
-                + ContinuumTheme.Skyline.flyoutGap
-                + ContinuumTheme.Skyline.flyoutWidth
+                + PrairieTheme.Skyline.flyoutGap
+                + PrairieTheme.Skyline.flyoutWidth
             let maxLeading = max(safe, screenWidth - safe - totalWidth)
             return min(max(centered, safe), maxLeading)
         }
@@ -557,7 +656,7 @@ struct TVMainTabView: View {
     ) -> CGFloat {
         guard let anchor = anchors[panel] else { return 0.5 }
         let rect = proxy[anchor]
-        let level1Width = ContinuumTheme.Skyline.dropdownWidth
+        let level1Width = PrairieTheme.Skyline.dropdownWidth
         let originInPanel = rect.midX - leading
         return min(max(originInPanel / level1Width, 0), 1)
     }
@@ -576,7 +675,7 @@ struct TVMainTabView: View {
                 )
             case .recommendations:
                 forYouPanel(isActive: isActive)
-            case .home, .calendar:
+            case .home, .calendar, .liveTV:
                 EmptyView()
             }
         case .profile:
@@ -593,6 +692,7 @@ struct TVMainTabView: View {
             focusEntryGeneration: panelFocusEntryGeneration,
             onCommitLibrary: { commitScope(type: type, library: $0, pill: nil) },
             onCommitSection: { commitScope(type: type, library: $0, pill: $1) },
+            onPreviewLibrary: { prefetchLibrarySectionsIfNeeded($0) },
             onClose: { closePanel() },
             onPanelFocusChanged: { handlePanelFocusChanged($0) },
             onExitToContent: { exitPanelToContent() }
@@ -615,6 +715,7 @@ struct TVMainTabView: View {
                 focusEntryGeneration: panelFocusEntryGeneration,
                 onCommitLibrary: { commitShortcut(root: root, library: $0, pill: nil) },
                 onCommitSection: { commitShortcut(root: root, library: $0, pill: $1) },
+                onPreviewLibrary: { prefetchLibrarySectionsIfNeeded($0) },
                 onClose: { closePanel() },
                 onPanelFocusChanged: { handlePanelFocusChanged($0) },
                 onExitToContent: { exitPanelToContent() }
@@ -649,8 +750,9 @@ struct TVMainTabView: View {
             onFavorites: { closePanel(then: { navigateFromBar(.favorites) }) },
             onHistory: { closePanel(then: { navigateFromBar(.history) }) },
             onRequests: { closePanel(then: { navigateFromBar(.requestsHub) }) },
+            onWatchParty: { closePanel(then: { navigateFromBar(.watchParty) }) },
             onSettings: { closePanel(then: { navigateFromBar(.settings) }) },
-            onSwitchServer: { closePanel(then: { showServerPicker = true }) },
+            onSwitchServer: { closePanel(then: { navigateFromBar(.serverList) }) },
             onSignOut: { closePanel(then: { showSignOutConfirm = true }) }
         )
     }
@@ -690,7 +792,7 @@ struct TVMainTabView: View {
         panelFocusExitTask = nil
         panelEntersFocus = false
         panelHasFocus = false
-        withAnimation(reduceMotion ? nil : .easeOut(duration: ContinuumTheme.Skyline.cascadeScrimDuration)) {
+        withAnimation(reduceMotion ? nil : .easeOut(duration: PrairieTheme.Skyline.cascadeScrimDuration)) {
             openPanel = panel
         }
     }
@@ -745,7 +847,7 @@ struct TVMainTabView: View {
         panelEntersFocus = true
         panelHasFocus = true
         panelFocusEntryGeneration += 1
-        withAnimation(reduceMotion ? nil : .easeOut(duration: ContinuumTheme.Skyline.cascadeScrimDuration)) {
+        withAnimation(reduceMotion ? nil : .easeOut(duration: PrairieTheme.Skyline.cascadeScrimDuration)) {
             openPanel = panel
         }
     }
@@ -761,18 +863,14 @@ struct TVMainTabView: View {
         panelFocusExitTask?.cancel()
         panelFocusExitTask = nil
         let wasFocused = panelHasFocus
-        withAnimation(reduceMotion ? nil : .easeOut(duration: ContinuumTheme.Skyline.cascadeScrimDuration)) {
+        withAnimation(reduceMotion ? nil : .easeOut(duration: PrairieTheme.Skyline.cascadeScrimDuration)) {
             openPanel = nil
         }
         panelEntersFocus = false
         panelHasFocus = false
 
-        // Returning focus to *that panel's* tab/avatar (§7) keeps the remote
-        // from stranding. Do it whether or not a follow-up action runs:
-        // route-pushing actions tear the bar down (the request is a no-op),
-        // but `Switch Server` opens a confirmation dialog and leaves the bar
-        // on screen — without re-arming, focus would be lost after dismiss.
-        // Re-arm before the action so a route push still wins the focus.
+        // Restore the panel's tab/avatar before the action so a route push
+        // can take focus and dismissing a confirmation returns to the bar.
         if wasFocused {
             focusTopMenuIfVisible(focusing: panel)
         }
@@ -808,12 +906,32 @@ struct TVMainTabView: View {
         guard openPanel != nil else { return }
         panelFocusExitTask?.cancel()
         panelFocusExitTask = nil
-        withAnimation(reduceMotion ? nil : .easeOut(duration: ContinuumTheme.Skyline.cascadeScrimDuration)) {
+        withAnimation(reduceMotion ? nil : .easeOut(duration: PrairieTheme.Skyline.cascadeScrimDuration)) {
             openPanel = nil
         }
         panelEntersFocus = false
         panelHasFocus = false
         suppressTopMenuFocusForContentHandoff()
+    }
+
+    /// D-pad down on a bar element with no panel (Home, Calendar, Search).
+    /// Without this the engine resolves Down geometrically and lands on the
+    /// card under the centered tab, so the entry point drifts with which tab
+    /// is focused. Use the same explicit hand-down `selectRoot` uses, which
+    /// every root page resolves to its first (left-most) item.
+    private func enterContentFromBar() {
+        guard router.path.isEmpty else { return }
+        closePanelForContentHandoff()
+        suppressTopMenuFocusForContentHandoff()
+        // The current content stays mounted here (same `.id`), so this has
+        // the reselect shape from `selectRoot`: a synchronous bump lands the
+        // row's focus claim in the same transaction as the bar's disable +
+        // focus teardown, and the engine's repair from the resigning tab
+        // wins, stranding focus in the menu. Defer one turn so the claim
+        // applies after the bar has fully resigned.
+        DispatchQueue.main.async {
+            contentFocusRequest += 1
+        }
     }
 
     /// D-pad down past the last cascade row leaves the menu for the page
@@ -825,6 +943,21 @@ struct TVMainTabView: View {
     private func exitPanelToContent() {
         closePanelForContentHandoff()
         contentFocusRequest += 1
+    }
+
+    private func prefetchLibrarySectionsIfNeeded(_ library: Library) {
+        if TVLibraryTabType.series.matches(library) {
+            // This joins the same single-flight section request as the panel
+            // preview, then primes one Series hero. Repeated focus visits are
+            // cache-only and never fan out across the whole rail.
+            StartupContentPrefetcher.prefetchTVSeriesLanding(libraryId: library.id)
+            return
+        }
+        let cached: SectionsResponse? = ResponseCache.shared.get(
+            CacheKey.librarySections(library.id)
+        )
+        guard cached == nil else { return }
+        StartupContentPrefetcher.prefetchLibrarySections(libraryId: library.id)
     }
 
     /// Commit a cascade selection (§5.3, §F): set + persist the tab scope,
@@ -842,7 +975,7 @@ struct TVMainTabView: View {
         // Tear down the panel first, then select the tab + hand focus to the
         // swapped-in content. Selecting the root bumps contentFocusRequest,
         // which the new page consumes as its entry generation.
-        withAnimation(reduceMotion ? nil : .easeOut(duration: ContinuumTheme.Skyline.cascadeScrimDuration)) {
+        withAnimation(reduceMotion ? nil : .easeOut(duration: PrairieTheme.Skyline.cascadeScrimDuration)) {
             openPanel = nil
         }
         panelEntersFocus = false
@@ -861,7 +994,7 @@ struct TVMainTabView: View {
         panelFocusExitTask = nil
         shortcutPillSelections[libraryId] = pill ?? .recommended
 
-        withAnimation(reduceMotion ? nil : .easeOut(duration: ContinuumTheme.Skyline.cascadeScrimDuration)) {
+        withAnimation(reduceMotion ? nil : .easeOut(duration: PrairieTheme.Skyline.cascadeScrimDuration)) {
             openPanel = nil
         }
         panelEntersFocus = false
@@ -902,6 +1035,11 @@ struct TVMainTabView: View {
             if let root, !roots.contains(root) { roots.append(root) }
         }
         if !roots.contains(.home) { roots.insert(.home, at: 0) }
+        // Prairie: surface Live TV only when the channel probe found at
+        // least one enabled channel (mirrors Downloads gating on iOS).
+        if LiveTVFeatureStore.shared.isEnabled, !roots.contains(.liveTV) {
+            roots.append(.liveTV)
+        }
         return roots
     }
 
@@ -985,6 +1123,7 @@ struct TVMainTabView: View {
            let cached: LibrariesResponse = ResponseCache.shared.get(CacheKey.userLibraries) {
             libraries = cached.libraries
             ensureSelectedRootIsVisible()
+            prefetchActiveSeriesLanding()
         }
 
         do {
@@ -996,11 +1135,20 @@ struct TVMainTabView: View {
                 response.libraries.contains { $0.id == libraryId }
             }
             ensureSelectedRootIsVisible()
+            prefetchActiveSeriesLanding()
         } catch {
             // Keep whatever tabs we already have (cached or none) — Home
             // and Calendar always stay reachable, so a transient failure
             // never strands the user.
         }
+    }
+
+    /// Backstop the launch prefetch with the shell's authoritative in-session
+    /// scope. This covers a changed Series-library selection without making
+    /// any other tab wait for the warmup.
+    private func prefetchActiveSeriesLanding() {
+        guard let library = activeLibrary(for: .series) else { return }
+        StartupContentPrefetcher.prefetchTVSeriesLanding(libraryId: library.id)
     }
 
     /// The selected root can stop being visible — a library refresh removes
@@ -1062,8 +1210,9 @@ struct TVMainTabView: View {
         // Tab content switches crossfade over 200 ms (§4.2); the outgoing
         // view never owns focus here because selection happens from the bar.
         // Reduce Motion snaps (the `.identity` transition + nil animation).
-        withAnimation(reduceMotion ? nil : .easeInOut(duration: ContinuumTheme.normalDuration)) {
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: PrairieTheme.normalDuration)) {
             selectedRoot = root
+            personalRoot = nil
             openPanel = nil
         }
         panelEntersFocus = false
@@ -1104,8 +1253,17 @@ struct TVMainTabView: View {
         // hand-down tokens cannot briefly re-focus rows during an Up return.
         isTopMenuFocused = true
 
-        withAnimation(reduceMotion ? nil : ContinuumTheme.springAnimation) {
+        withAnimation(reduceMotion ? nil : PrairieTheme.springAnimation) {
             isTopMenuFocusSuppressed = false
+        }
+        // Let the bar's enabled state commit before asking its @FocusState to
+        // claim the selected tab. A swipe-up move can arrive in the same
+        // transaction that unsuppresses the bar; writing both together made
+        // tvOS occasionally reject the claim, forcing another swipe or Back.
+        DispatchQueue.main.async {
+            guard router.path.isEmpty,
+                  isTopMenuFocused,
+                  !isTopMenuFocusSuppressed else { return }
             topMenuFocusRequest += 1
         }
     }
@@ -1113,12 +1271,18 @@ struct TVMainTabView: View {
     private func returnToHomeInMenu() {
         selectedRoot = .home
         panelReturnFocus = nil
-        withAnimation(reduceMotion ? nil : ContinuumTheme.springAnimation) {
+        withAnimation(reduceMotion ? nil : PrairieTheme.springAnimation) {
             // Un-suppress before requesting focus: requestMenuFocus drops the
             // request while the menu is suppressed, which could leave the
             // Home button unfocused after the exit-to-home gesture.
             isTopMenuFocusSuppressed = false
             topMenuFocusRequest += 1
+        }
+    }
+
+    private func returnFromPersonalRootInMenu() {
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: PrairieTheme.normalDuration)) {
+            personalRoot = nil
         }
     }
 
@@ -1132,8 +1296,67 @@ struct TVMainTabView: View {
     /// focus to the bar instead of letting the engine free-resolve into
     /// the row band.
     private func navigateFromBar(_ route: Route) {
+        switch route {
+        case .watchlist:
+            showPersonalRoot(.watchlist)
+            return
+        case .favorites:
+            showPersonalRoot(.favorites)
+            return
+        default:
+            break
+        }
+
         barOwnsFocusOnPopToRoot = true
         router.navigate(to: route)
+    }
+
+    /// Opens Search for a Siri request as if the bar's Search button had been
+    /// picked: Search replaces the stack (including a Search already open)
+    /// and Back returns focus to the bar.
+    ///
+    /// Video playback closes the way Menu closes it. A player started from a
+    /// detail page is a route and leaves with the pop; one started from a
+    /// card is a cover and is dismissed here. An audiobook's full player
+    /// steps aside while the audiobook keeps playing in the mini player. An
+    /// open sign-out confirmation is cancelled; Search takes focus instead of
+    /// the profile button.
+    ///
+    /// A Siri press on this TV's remote means someone here is taking over, so
+    /// an idle phone remote-control session ends the way the standby screen's
+    /// Disconnect Remote button ends it. Standby would otherwise cover Search.
+    private func openRequestedSearch() {
+        guard let request = router.requestedSearch else { return }
+        router.requestedSearch = nil
+        siriSearchRequest = request
+        if controlReceiver.standbyState != nil {
+            controlReceiver.disconnectRemoteControl()
+        }
+        router.presentedPlayer = nil
+        if audioStore.isShowingFullPlayer {
+            audioStore.dismissFullPlayer()
+        }
+        showSignOutConfirm = false
+        closePanelForContentHandoff()
+        if !router.path.isEmpty {
+            router.popToRoot()
+        }
+        navigateFromBar(.search)
+    }
+
+    private func showPersonalRoot(_ destination: TVPersonalRootDestination) {
+        router.popToRoot()
+        barOwnsFocusOnPopToRoot = false
+        suppressTopMenuFocusForContentHandoff()
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: PrairieTheme.normalDuration)) {
+            personalRoot = destination
+            openPanel = nil
+        }
+        panelEntersFocus = false
+        panelHasFocus = false
+        DispatchQueue.main.async {
+            contentFocusRequest += 1
+        }
     }
 
     private func switchProfile() {
@@ -1163,63 +1386,6 @@ struct TVMainTabView: View {
         }
     }
 
-    private func serverButtonLabel(_ entry: ServerEntry) -> String {
-        entry.id == registry.activeServerId
-            ? "\(entry.displayName) (Current)"
-            : entry.displayName
-    }
-
-    /// Switch to the selected server and snap the auth state machine to
-    /// the right screen (login / profile select / home) based on what's
-    /// remembered for that server.
-    private func switchToServer(_ entry: ServerEntry) {
-        guard entry.id != registry.activeServerId else { return }
-        Task {
-            guard await registry.switchTo(
-                serverId: entry.id,
-                resolveDestinationProfile: true
-            ) else { return }
-            await MainActor.run {
-                selectedRoot = .home
-                currentProfile = nil
-                libraries = []
-                loadedLibraryAuthority = nil
-                ResponseCache.shared.remove(CacheKey.userLibraries)
-                pillSelections = [:]
-                shortcutPillSelections = [:]
-                // Re-read tab-visibility prefs under the new server+profile
-                // key: this path switches in place without rebuilding the
-                // shell, so `.task` (the only other caller of refresh) won't
-                // re-run and the cached mirror would otherwise stay stale.
-                navPrefs.refresh()
-                refreshAuthState()
-            }
-            if AuthService.shared.hasProfile {
-                async let profileTask: Void = loadCurrentProfile()
-                async let librariesTask: Void = loadLibraries(for: currentLibraryAuthority)
-                _ = await (profileTask, librariesTask)
-            }
-        }
-    }
-
-    private func refreshAuthState() {
-        router.popToRoot()
-        // A server switch can land back on `.authenticated`, which the
-        // router's same-value guard drops — so the identity boundary for an
-        // engaged PiP video is enforced here, before the reassignment.
-        PlayerIdentityBoundary.endEngagedVideoPictureInPicture()
-        let auth = AuthService.shared
-        if !auth.hasServer {
-            router.authState = .needsServerSetup
-        } else if !auth.isLoggedIn {
-            router.authState = .needsLogin
-        } else if !auth.hasProfile {
-            router.authState = .needsProfile
-        } else {
-            router.authState = .authenticated
-        }
-    }
-
     @ViewBuilder
     private func routeContent(for route: Route) -> some View {
         switch route {
@@ -1232,19 +1398,22 @@ struct TVMainTabView: View {
                 title: title,
                 kind: kind
             )
-        case .itemDetail(let contentId):
-            ItemDetailView(contentId: contentId)
+        case .itemDetail(let contentId, let tvSeed, let libraryId, let context):
+            ItemDetailView(contentId: contentId, libraryId: libraryId, tvSeed: tvSeed, resumeContext: context)
         case .personDetail(let personId):
             PersonDetailView(personId: personId)
-        case .player(let contentId, let startFromBeginning, let resumePosition):
+        case .player(let contentId, let startFromBeginning, let resumePosition, let prefersLastUsedVersion, let libraryId):
             PlayerView(
                 contentId: contentId,
+                libraryId: libraryId,
                 startFromBeginning: startFromBeginning,
-                resumePositionOverride: resumePosition
+                resumePositionOverride: resumePosition,
+                prefersLastUsedVersion: prefersLastUsedVersion
             )
-        case .playerWithFile(let contentId, let fileId, let audioTrackIndex, let subtitleTrackIndex, let startFromBeginning, let resumePosition):
+        case .playerWithFile(let contentId, let fileId, let audioTrackIndex, let subtitleTrackIndex, let startFromBeginning, let resumePosition, let libraryId):
             PlayerView(
                 contentId: contentId,
+                libraryId: libraryId,
                 preferredFileId: fileId,
                 preferredAudioTrackIndex: audioTrackIndex,
                 preferredSubtitleTrackIndex: subtitleTrackIndex,
@@ -1263,6 +1432,12 @@ struct TVMainTabView: View {
             CollectionDetailView(collectionId: id)
         case .browse(let libraryId):
             BrowseView(libraryId: libraryId)
+        case .watchParty:
+            #if os(iOS) || os(tvOS)
+            WatchPartyHubView(session: .shared)
+            #else
+            EmptyView()
+            #endif
         case .requestsHub:
             RequestsHubView()
         case .requestDetail(let mediaType, let tmdbId):
@@ -1270,7 +1445,7 @@ struct TVMainTabView: View {
         case .myRequests:
             MyRequestsView()
         case .search:
-            SearchView(usesTVTopMenuInset: false)
+            SearchView(usesTVTopMenuInset: false, seededQuery: $siriSearchRequest)
         case .settings:
             TVSettingsView()
         case .recommendations:
@@ -1278,7 +1453,7 @@ struct TVMainTabView: View {
         case .serverList:
             ServerListView()
         case .serverSetup:
-            // Pushed from the profile menu's "Add Server…" button — staying
+            // Pushed from the server list's "Add Server" button — staying
             // on the nav stack means the tvOS back button returns to the
             // previous active server instead of dropping the authenticated
             // tree entirely. Successful `connect()` flips authState to
@@ -1294,7 +1469,7 @@ struct TVMainTabView: View {
             )
         default:
             EmptyStateView(icon: "questionmark.circle", title: "Unknown", subtitle: nil)
-                .continuumBackground()
+                .prairieBackground()
         }
     }
 }
