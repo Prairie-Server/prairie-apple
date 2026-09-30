@@ -787,6 +787,9 @@ private struct StatsPane: View {
         if !viewModel.playbackStats.engineRows.isEmpty {
             ids.append(PlaybackStatsPanel.engineSectionID)
         }
+        if !viewModel.playbackStats.recentEvents.isEmpty {
+            ids.append(PlaybackStatsPanel.eventsSectionID)
+        }
         ids.append(Self.bottomAnchor)
         return ids
     }

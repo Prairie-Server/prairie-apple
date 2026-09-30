@@ -215,6 +215,33 @@ final class AetherPlaybackStatsProjectionTests: XCTestCase {
         XCTAssertEqual(stats.dynamicRange, "HDR10 → SDR")
     }
 
+    func testPrairiePlanDetailPassesThroughToStats() throws {
+        let stats = AetherPlaybackStatsProjection.make(
+            snapshot: AetherPlaybackStatsSnapshot(route: .remoteBypass, phase: .playing),
+            source: AetherPlaybackStatsSourceMetadata(
+                sourceURL: try XCTUnwrap(URL(string: "https://h.example.test/api/v2/stream/abc123?st=do-not-display")),
+                delivery: "server_transcode_hls",
+                container: "mpegts",
+                playbackRate: 1,
+                planSummary: PlaybackPlanSummary(
+                    delivery: "server_transcode_hls",
+                    videoCodec: "h264",
+                    reason: "video_codec_unsupported"
+                ),
+                quality: " Auto ",
+                audioTrack: "English · Stereo · AAC (track 1)"
+            )
+        )
+
+        XCTAssertEqual(stats.playbackMethod, "Transcode (HLS)")
+        XCTAssertEqual(stats.plan, "H.264")
+        XCTAssertEqual(stats.plannerReason, "video codec unsupported")
+        XCTAssertEqual(stats.quality, "Auto")
+        XCTAssertEqual(stats.audioTrack, "English · Stereo · AAC (track 1)")
+        XCTAssertEqual(stats.streamPath, "Remote · /api/v2/stream/:id")
+        XCTAssertFalse(stats.allRows.map(\.1).joined().contains("do-not-display"))
+    }
+
     func testIdleSnapshotProducesNoSyntheticEngineRows() {
         let stats = AetherPlaybackStatsProjection.make(
             snapshot: AetherPlaybackStatsSnapshot(route: .none, phase: .idle),

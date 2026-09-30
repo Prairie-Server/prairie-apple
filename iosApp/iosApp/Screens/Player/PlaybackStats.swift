@@ -48,12 +48,24 @@ struct PlaybackStats: Equatable {
     var producerRestartCount: Int?
     var residentMemoryBytes: Int64?
 
+    // Prairie plan and session detail (prairie-smarttv #116 parity). Supplied
+    // by the host from the protocol-v3 plan, never by Aether.
+    var playbackMethod: String?
+    var plan: String?
+    var plannerReason: String?
+    var quality: String?
+    var audioTrack: String?
+    var streamPath: String?
+
+    /// Recent player events and errors, oldest first.
+    var recentEvents: [PlaybackEventLog.Entry] = []
+
     static let empty = PlaybackStats()
 }
 
 extension PlaybackStats {
     var allRows: [(String, String)] {
-        sourceRows + mediaRows + bufferRows + networkRows + engineRows
+        sourceRows + planRows + mediaRows + bufferRows + networkRows + engineRows
     }
 
     /// The short set shown over iPhone video. It intentionally leaves the
@@ -61,6 +73,7 @@ extension PlaybackStats {
     var compactRows: [(String, String)] {
         let wanted = [
             "Route", "Source", "Delivery", "Container",
+            "Method", "Plan", "Planner reason", "Quality", "Audio track", "Stream path",
             "Video", "Audio", "Dynamic range", "Subtitles",
             "Playback status", "Forward buffer", "Display cushion",
             "Dropped frames", "Instant read bitrate", "Network throughput"
@@ -80,6 +93,31 @@ extension PlaybackStats {
             ("Delivery", delivery),
             ("Container", container)
         ])
+    }
+
+    /// The server's plan for this attempt: how the file is delivered and why.
+    var planRows: [(String, String)] {
+        stringRows([
+            ("Method", playbackMethod),
+            ("Plan", plan),
+            ("Planner reason", plannerReason),
+            ("Quality", quality),
+            ("Audio track", audioTrack),
+            ("Stream path", streamPath)
+        ])
+    }
+
+    /// Newest first, capped at `limit`. Kept out of `allRows`: timestamps are
+    /// not unique labels, so views render these with their own identity.
+    func eventRows(limit: Int = PlaybackEventLog.defaultCapacity) -> [PlaybackEventRow] {
+        recentEvents.reversed().prefix(max(0, limit)).enumerated().map { offset, entry in
+            PlaybackEventRow(
+                id: offset,
+                time: entry.timeLabel(),
+                message: entry.displayMessage,
+                kind: entry.kind
+            )
+        }
     }
 
     var mediaRows: [(String, String)] {
@@ -220,4 +258,12 @@ extension PlaybackStats {
     private func formatBytes(_ bytes: Int64) -> String {
         ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
+}
+
+/// One rendered line of the recent-events list.
+struct PlaybackEventRow: Identifiable, Equatable {
+    let id: Int
+    let time: String
+    let message: String
+    let kind: PlaybackEventLog.Kind
 }

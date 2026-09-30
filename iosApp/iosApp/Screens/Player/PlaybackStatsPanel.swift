@@ -19,6 +19,8 @@ struct PlaybackStatsPanel: View {
     var usesTwoColumnLayout = false
 
     static let sourceSectionID = "stats-source"
+    static let planSectionID = "stats-plan"
+    static let eventsSectionID = "stats-events"
     static let mediaSectionID = "stats-media"
     static let bufferSectionID = "stats-buffer"
     static let networkSectionID = "stats-network"
@@ -33,10 +35,10 @@ struct PlaybackStatsPanel: View {
                 HStack(alignment: .top, spacing: 34) {
                     column(leftSections)
                     divider
-                    column(rightSections)
+                    column(rightSections, includesEvents: true)
                 }
             case .sectioned:
-                column(allSections)
+                column(allSections, includesEvents: true)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -59,15 +61,52 @@ struct PlaybackStatsPanel: View {
                     Text(row.1)
                         .foregroundStyle(.white.opacity(0.95))
                         .fixedSize(horizontal: false, vertical: true)
+                        // Plan and stream-path values run long; wrap them
+                        // instead of widening the plate across the picture.
+                        .frame(maxWidth: 320, alignment: .leading)
                 }
             }
         }
         .font(.system(size: 11))
     }
 
+    /// Recent player events for the iOS overlay: `time  message`, newest
+    /// first. Rendered beside or below `plainList` by the overlay.
+    func plainEventList(limit: Int) -> some View {
+        Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 10, verticalSpacing: 3) {
+            GridRow {
+                Text("Recent events")
+                    .foregroundStyle(.white.opacity(0.58))
+                    .gridCellColumns(2)
+            }
+            ForEach(stats.eventRows(limit: limit)) { row in
+                GridRow {
+                    Text(row.time)
+                        .monospacedDigit()
+                        .foregroundStyle(.white.opacity(0.58))
+                    Text(row.message)
+                        .foregroundStyle(Self.eventColor(row.kind))
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: 280, alignment: .leading)
+                }
+            }
+        }
+        .font(.system(size: 11))
+    }
+
+    static func eventColor(_ kind: PlaybackEventLog.Kind) -> Color {
+        switch kind {
+        case .info: return .white.opacity(0.95)
+        case .warning: return Color(red: 1, green: 0.8, blue: 0.4)
+        case .error: return Color(red: 1, green: 0.55, blue: 0.5)
+        }
+    }
+
     private var leftSections: [StatsSection] {
         [
             .init(id: Self.sourceSectionID, title: "Source", rows: stats.sourceRows),
+            .init(id: Self.planSectionID, title: "Plan", rows: stats.planRows),
             .init(id: Self.mediaSectionID, title: "Media", rows: stats.mediaRows)
         ]
     }
@@ -91,13 +130,47 @@ struct PlaybackStatsPanel: View {
             .frame(maxHeight: .infinity)
     }
 
-    private func column(_ sections: [StatsSection]) -> some View {
+    private func column(_ sections: [StatsSection], includesEvents: Bool = false) -> some View {
         Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 24, verticalSpacing: 10) {
             ForEach(sections) { section in
                 rows(for: section)
             }
+            if includesEvents {
+                eventRows
+            }
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    /// "Recent events" section: timestamp in the label column, message in
+    /// the value column. Row identity is positional because timestamps repeat.
+    @ViewBuilder
+    private var eventRows: some View {
+        let events = stats.eventRows()
+        if !events.isEmpty {
+            GridRow {
+                Text("RECENT EVENTS")
+                    .font(headerFont)
+                    .foregroundStyle(.white.opacity(0.52))
+                    .gridColumnAlignment(.trailing)
+                    .id(Self.eventsSectionID)
+                Color.clear
+                    .frame(height: 1)
+            }
+            ForEach(events) { row in
+                GridRow {
+                    Text(row.time)
+                        .font(labelFont)
+                        .monospacedDigit()
+                        .foregroundStyle(.white.opacity(0.74))
+                    Text(row.message)
+                        .font(valueFont)
+                        .foregroundStyle(Self.eventColor(row.kind))
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.76)
+                }
+            }
+        }
     }
 
     @ViewBuilder
