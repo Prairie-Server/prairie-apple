@@ -1,0 +1,73 @@
+# Prairie-only Apple client code that upstream (Silo) syncs have silently
+# deleted or unwired before.
+#
+# One invariant per line, tab-separated:
+#   <path>  <min matches>  <extended regex>  <why / where it came from>
+#
+# scripts/check-prairie-invariants.sh fails CI when a file is missing or the
+# pattern matches fewer times than required. When you restore something a sync
+# dropped, add its anchor here in the same PR so the next sync cannot drop it
+# unnoticed. Keep patterns on stable identifiers, not on formatting.
+
+# --- Rebrand (PR #1). Wire names that must stay Prairie.
+iosApp/project.yml	1	bundleIdPrefix: org\.prairieserver\.prairie	Prairie bundle IDs (#1)
+iosApp/iosApp/Networking/PrairieAPI.swift	1	^actor PrairieAPI	PrairieAPI client name (#1; upstream calls it SiloAPI)
+iosApp/iosApp/Shared/AppleDeviceIdentity.swift	1	X-Prairie-Device-Id	X-Prairie-* identity headers
+iosApp/iosApp/Networking/HostedDiagnosticsAPI.swift	1	diagnostics\.prairieserver\.org	hosted diagnostics collector; sync #31 brought back Silo's host
+iosApp/iosApp/tvOS/Navigation/TVTopMenuBar.swift	1	PrairieWordmarkView	tvOS top bar wordmark (#7)
+iosApp/iosApp/Theme/Colors.swift	1	prairieBackground = Color\(hex: \"#141820\"\)	Prairie dusk palette (#10, #12)
+
+# --- Live TV (PR #3, #10, #12, #26): API, gating, iOS tab and tvOS root.
+iosApp/iosApp/Networking/PrairieAPI+LiveTV.swift	1	func liveTVChannels\(	channel lineup / feature probe
+iosApp/iosApp/Networking/PrairieAPI+LiveTV.swift	1	func startLiveTVSession\(	live tuner session start
+iosApp/iosApp/Networking/PrairieAPI+LiveTV.swift	1	func heartbeatLiveTVSession\(	tuner heartbeat; server reclaims idle sessions after 90 s
+iosApp/iosApp/Networking/PrairieAPI+LiveTV.swift	1	func scheduleLiveTVRecording\(	DVR scheduling (#10)
+iosApp/iosApp/Networking/LiveTVFeatureStore.swift	1	final class LiveTVFeatureStore	Live TV availability gate
+iosApp/iosApp/Navigation/TabRouter.swift	1	case liveTV	iOS Live TV tab id
+iosApp/iosApp/ContentView.swift	1	LiveTVFeatureStore\.shared\.isEnabled	iOS Live TV tab appears when channels exist
+iosApp/iosApp/ContentView.swift	2	LiveTVFeatureStore\.shared\.refresh\(\)	Live TV probe on launch and foreground
+iosApp/iosApp/ContentView.swift	1	LiveTVChannelListView\(	iOS Live TV screen
+iosApp/iosApp/ContentView.swift	1	LiveTVPlayerView\(	iOS Live TV player
+iosApp/iosApp/tvOS/Navigation/TVMainTabView.swift	1	LiveTVFeatureStore\.shared\.isEnabled	tvOS Live TV root gating
+iosApp/iosApp/tvOS/Navigation/TVMainTabView.swift	1	LiveTVChannelListView\(	tvOS Live TV screen
+iosApp/iosApp/tvOS/Navigation/TVMainTabView.swift	1	LiveTVPlayerView\(	tvOS Live TV player
+iosApp/iosApp/tvOS/Navigation/TVTopMenuBar.swift	1	case liveTV	tvOS top bar Live TV entry
+iosApp/iosApp/Screens/Auth/AuthService.swift	1	LiveTVFeatureStore\.shared\.reset\(\)	reset Live TV gate on sign-out / profile switch
+iosApp/iosApp/Screens/LiveTV/LiveTVPlayerView.swift	1	releaseLiveTVSession\(	free the tuner on dismiss
+iosApp/iosApp/Screens/LiveTV/LiveTVPlayerView.swift	1	heartbeatLiveTVSession\(	keep the tuner while paused
+iosApp/iosApp/Screens/LiveTV/LiveTVChannelListView.swift	1	livetv-tab-	Guide / Channels / My recordings tabs (#26)
+
+# --- Stats for nerds (upstream panel + Prairie wiring).
+iosApp/iosApp/Screens/Player/tvOS/TVPlayerInfoHUD.swift	1	PlaybackStatsPanel\(	tvOS Info HUD stats pane
+iosApp/iosApp/Screens/Player/iOS/MobilePlayerControls.swift	1	MobilePlaybackStatsOverlay\(	iOS stats overlay
+iosApp/iosApp/Screens/Player/PlayerViewModel.swift	1	AetherPlaybackStatsProjection\.make\(	stats refresh from Aether
+
+# --- Trickplay scrub previews (PR #28).
+iosApp/iosApp/Networking/Models.swift	1	let trickplay: VersionTrickplay\?	trickplay sprite metadata on file versions
+iosApp/iosApp/Screens/Player/PlayerViewModel.swift	1	var trickplay: VersionTrickplay\?	active version trickplay for scrubbers
+iosApp/iosApp/Screens/Player/tvOS/TVPlayerScrubber.swift	1	ScrubPreviewBubble\(	tvOS scrub preview bubble
+iosApp/iosApp/Screens/Player/iOS/MobilePlayerControls.swift	1	Trickplay\.resolveTile\(	iOS scrub bubble uses trickplay tiles; lost in the Aether sync
+
+# --- Artwork formats and width variants (PR #9, #23, #28).
+iosApp/iosApp/tvOS/Caching/ArtworkVariantURL.swift	1	static func widthVariant\(	w200/w300/w500 poster rungs
+iosApp/iosApp/tvOS/Caching/CachedAsyncImage.swift	1	ArtworkVariantURL\.candidates\(	AVIF/WebP/PNG candidate cascade
+iosApp/iosApp/tvOS/Caching/ImageFormats.swift	1	X-Prairie-Image-Formats	raster capability header name
+iosApp/iosApp/Networking/HTTPClient.swift	2	ImageFormats\.apply\(to:	image-format header on API requests; lost in a sync
+iosApp/iosApp/Downloads/DownloadSessionDelegate.swift	1	ImageFormats\.apply\(to:	image-format header on downloads
+iosApp/iosApp/Pairing/PairingDeviceAPI.swift	1	ImageFormats\.apply\(to:	image-format header on pairing requests
+
+# --- Connect flow: server list first, with LAN discovery (PR #8, #21).
+iosApp/iosApp/ContentView.swift	1	ConnectServerListView\(router: router\)	first-run connect list; lost in a sync
+iosApp/iosApp/Discovery/LanDiscovery.swift	1	^enum LanDiscovery	LAN server discovery
+
+# --- Settings (PR #18, #22, #24).
+iosApp/iosApp/Screens/Settings/IOSSettingsOverview.swift	1	QuickConnectView\(\)	iOS Quick Connect entry; lost in the settings restyle sync
+iosApp/iosApp/Screens/Settings/SettingsView.swift	1	QuickConnectView\(\)	macOS Quick Connect entry
+iosApp/iosApp/Screens/Settings/IOSSettingsOverview.swift	1	appUpdateStatus	iOS About update status; lost in the settings restyle sync
+iosApp/iosApp/tvOS/Screens/Settings/TVSettingsView.swift	1	appUpdateStatus	tvOS About update status
+iosApp/iosApp/Screens/Settings/SettingsViewModel.swift	1	AppUpdateChecker\.check\(\)	update check
+
+# --- CI gates (PR #2, #13, #17, #20).
+.github/workflows/unit-tests.yml	1	check-xccov-coverage\.sh	Networking coverage gate
+.github/workflows/unit-tests.yml	1	LiveTVModelDecodingTests	Live TV decoding tests run in CI
+.github/workflows/prairie-invariants.yml	1	check-prairie-invariants\.sh	this guard

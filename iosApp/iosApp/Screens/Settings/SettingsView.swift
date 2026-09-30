@@ -227,6 +227,17 @@ struct SettingsView: View {
 
     private var connectionSection: some View {
         Section {
+            // Prairie: Quick Connect approver (PR #22).
+            NavigationLink {
+                QuickConnectView()
+            } label: {
+                SettingsRowLabel(
+                    title: "Quick Connect",
+                    systemImage: "qrcode.viewfinder",
+                    color: .green
+                )
+            }
+
             Button {
                 router.navigate(to: .serverList)
             } label: {
@@ -255,6 +266,30 @@ struct SettingsView: View {
             } label: {
                 Text("Version")
                     .foregroundStyle(Color.prairieOnSurface)
+            }
+
+            // Prairie: update check against the Prairie release feed (PR #18).
+            LabeledContent {
+                Text(viewModel.appUpdateStatus.statusLabel)
+                    .foregroundStyle(Color.prairieSecondaryText)
+            } label: {
+                Text("Update status")
+                    .foregroundStyle(Color.prairieOnSurface)
+            }
+            if let latest = viewModel.appUpdateStatus.latestVersionLabel {
+                LabeledContent {
+                    Text(latest)
+                        .foregroundStyle(Color.prairieSecondaryText)
+                } label: {
+                    Text("Latest version")
+                        .foregroundStyle(Color.prairieOnSurface)
+                }
+            }
+            if let changelogURL = viewModel.appUpdateStatus.changelogURL {
+                Link("Changelog", destination: changelogURL)
+            }
+            if let releaseURL = viewModel.appUpdateStatus.releaseURL {
+                Link("View update", destination: releaseURL)
             }
 
             Link("Privacy Policy", destination: PrairieLegalLinks.privacyPolicy)

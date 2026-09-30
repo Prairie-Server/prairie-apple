@@ -13,6 +13,10 @@ struct LiveTVPlayerView: View {
     @State private var didRelease = false
     @State private var itemStatusObservation: NSKeyValueObservation?
 
+    /// Heartbeat cadence. The server reclaims a session after 90 s with no
+    /// segment fetch or heartbeat, and a paused player fetches nothing.
+    static let heartbeatInterval: Duration = .seconds(30)
+
     var body: some View {
         ZStack(alignment: .topLeading) {
             Color.black.ignoresSafeArea()
@@ -42,6 +46,9 @@ struct LiveTVPlayerView: View {
         }
         .task {
             await startPlaybackIfPossible()
+        }
+        .task(id: session.sessionId) {
+            await keepSessionAlive()
         }
         .onDisappear {
             itemStatusObservation?.invalidate()
@@ -109,6 +116,22 @@ struct LiveTVPlayerView: View {
             headers["X-Profile-Token"] = profileToken
         }
         return headers
+    }
+
+    /// Heartbeats until the view goes away (task cancellation) or the
+    /// session is released. Failures are ignored: a missed beat is recovered
+    /// by the next one, and segment fetches also keep the session alive.
+    private func keepSessionAlive() async {
+        let sessionId = session.sessionId
+        while !Task.isCancelled {
+            do {
+                try await Task.sleep(for: Self.heartbeatInterval)
+            } catch {
+                return
+            }
+            guard !didRelease else { return }
+            try? await PrairieAPI.shared.heartbeatLiveTVSession(sessionId: sessionId)
+        }
     }
 
     private func dismissAndRelease() {

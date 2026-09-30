@@ -36,6 +36,11 @@ struct IOSSettingsOverview: View {
                 .listRowSeparator(.hidden)
 
             if hasSearchResults {
+                // Prairie: Quick Connect sits near the top (PR #22 / #24).
+                if matchesQuickConnect {
+                    quickConnectSection
+                }
+
                 preferencesSection
                 playbackSection
 
@@ -173,6 +178,23 @@ struct IOSSettingsOverview: View {
         }
     }
 
+    /// Prairie: approve a sign-in code shown on a TV, Roku, Smart TV or the
+    /// web login screen (`QuickConnectView`).
+    private var quickConnectSection: some View {
+        Section {
+            NavigationLink {
+                QuickConnectView()
+            } label: {
+                SettingsOverviewRow(
+                    title: "Quick Connect",
+                    subtitle: "Sign in another device with its on-screen code",
+                    systemImage: "qrcode.viewfinder"
+                )
+            }
+            .accessibilityIdentifier("settings-quick-connect")
+        }
+    }
+
     private var connectionSection: some View {
         Section("Connection") {
             Button {
@@ -197,6 +219,46 @@ struct IOSSettingsOverview: View {
                 systemImage: "info.circle.fill",
                 value: versionString
             )
+
+            // Prairie: update check against the Prairie release feed (PR #18).
+            SettingsOverviewRow(
+                title: "Update Status",
+                subtitle: "Compares this build with the latest Prairie release",
+                systemImage: "arrow.triangle.2.circlepath",
+                value: viewModel.appUpdateStatus.statusLabel
+            )
+            .accessibilityIdentifier("settings-update-status")
+
+            if let latest = viewModel.appUpdateStatus.latestVersionLabel {
+                SettingsOverviewRow(
+                    title: "Latest Version",
+                    subtitle: "Newest published Prairie release",
+                    systemImage: "tag.fill",
+                    value: latest
+                )
+            }
+
+            if let changelogURL = viewModel.appUpdateStatus.changelogURL {
+                Link(destination: changelogURL) {
+                    SettingsOverviewRow(
+                        title: "Changelog",
+                        subtitle: "What changed in recent Prairie releases",
+                        systemImage: "doc.text.fill",
+                        showsChevron: true
+                    )
+                }
+            }
+
+            if let releaseURL = viewModel.appUpdateStatus.releaseURL {
+                Link(destination: releaseURL) {
+                    SettingsOverviewRow(
+                        title: "View Update",
+                        subtitle: "Open the newer Prairie release",
+                        systemImage: "arrow.down.app.fill",
+                        showsChevron: true
+                    )
+                }
+            }
 
             Link(destination: PrairieLegalLinks.privacyPolicy) {
                 SettingsOverviewRow(
@@ -351,6 +413,9 @@ struct IOSSettingsOverview: View {
             "about",
             "version",
             versionString,
+            "update",
+            "changelog",
+            "release",
             "privacy",
             "policy",
             "information",
@@ -358,6 +423,10 @@ struct IOSSettingsOverview: View {
             "licenses",
             "acknowledgements"
         )
+    }
+
+    private var matchesQuickConnect: Bool {
+        matches("quick connect", "code", "sign in", "device", "tv", "pair")
     }
 
     private var matchesExperimentalName: Bool {
@@ -379,7 +448,8 @@ struct IOSSettingsOverview: View {
     }
 
     private var hasSearchResults: Bool {
-        matchesGeneral
+        matchesQuickConnect
+            || matchesGeneral
             || matchesInterface
             || matchesPlaybackSection
             || (diagnosticsModel.shouldShowSettings && matchesDiagnostics)

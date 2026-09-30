@@ -149,6 +149,7 @@ struct PairingDeviceAPI: PairingDeviceAuthorizing {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let bearer { request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization") }
         AppleDeviceIdentity.current.applyHeaders(to: &request)
+        ImageFormats.apply(to: &request)
     }
 
     private func send<R: Decodable>(_ request: URLRequest, expectedStatus: Int) async throws -> R {

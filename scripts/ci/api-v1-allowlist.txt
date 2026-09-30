@@ -12,4 +12,4 @@ iosApp/iosApp/Discovery/LanDiscovery.swift	3
 iosApp/iosApp/Networking/ConnectionMonitor.swift	1
 iosApp/iosApp/Networking/HTTPClient.swift	1
 iosApp/iosApp/Networking/LiveTVModels.swift	4
-iosApp/iosApp/Networking/PrairieAPI+LiveTV.swift	10
+iosApp/iosApp/Networking/PrairieAPI+LiveTV.swift	11

@@ -656,11 +656,15 @@ struct ContentView: View {
             }
 
         case .needsServerSetup:
-            #if os(tvOS)
-            TVServerSetupView(router: router)
-            #else
-            ServerSetupView(router: router)
-            #endif
+            // Prairie: first-run connect list (Saved + LAN discovery, PR #8).
+            // Manual URL entry, and tvOS phone pairing, are one push away via
+            // "Add manually" (`.serverSetup`).
+            NavigationStack(path: $router.path) {
+                ConnectServerListView(router: router)
+                    .navigationDestination(for: Route.self) { route in
+                        destinationView(for: route)
+                    }
+            }
 
         case .needsLogin:
             NavigationStack(path: $router.path) {

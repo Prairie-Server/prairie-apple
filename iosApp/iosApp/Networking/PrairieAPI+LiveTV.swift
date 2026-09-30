@@ -54,6 +54,13 @@ extension PrairieAPI {
         try await liveTVSend("DELETE", "/api/v1/livetv/sessions/\(try Self.encodePathSegment(sessionId))")
     }
 
+    /// Keep the tuner claimed while the player is open, including while
+    /// paused (no segment fetches). The server reclaims a session after 90 s
+    /// with neither a segment fetch nor a heartbeat.
+    func heartbeatLiveTVSession(sessionId: String) async throws {
+        try await liveTVSend("POST", "/api/v1/livetv/sessions/\(try Self.encodePathSegment(sessionId))/heartbeat")
+    }
+
     func liveTVRecordings(status: String? = nil) async throws -> [LiveTVRecording] {
         var query: [String: String] = [:]
         if let status, !status.isEmpty {
