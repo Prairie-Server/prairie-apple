@@ -11,6 +11,11 @@ struct AetherPlaybackStatsSourceMetadata: Equatable {
     let plannedSourceDynamicRange: String?
     let plannedOutputDynamicRange: String?
     let plannedSourceDolbyVisionProfile: Int?
+    /// Prairie protocol-v3 plan detail and session labels for stats for nerds.
+    let planSummary: PlaybackPlanSummary?
+    let quality: String?
+    let audioTrack: String?
+    let streamPath: String?
 
     init(
         sourceURL: URL?,
@@ -20,7 +25,10 @@ struct AetherPlaybackStatsSourceMetadata: Equatable {
         secondarySubtitleLabel: String? = nil,
         plannedSourceDynamicRange: String? = nil,
         plannedOutputDynamicRange: String? = nil,
-        plannedSourceDolbyVisionProfile: Int? = nil
+        plannedSourceDolbyVisionProfile: Int? = nil,
+        planSummary: PlaybackPlanSummary? = nil,
+        quality: String? = nil,
+        audioTrack: String? = nil
     ) {
         source = Self.sourceLabel(for: sourceURL)
         self.delivery = Self.deliveryLabel(delivery)
@@ -30,6 +38,10 @@ struct AetherPlaybackStatsSourceMetadata: Equatable {
         self.plannedSourceDynamicRange = plannedSourceDynamicRange
         self.plannedOutputDynamicRange = plannedOutputDynamicRange
         self.plannedSourceDolbyVisionProfile = plannedSourceDolbyVisionProfile
+        self.planSummary = planSummary
+        self.quality = Self.normalized(quality)
+        self.audioTrack = Self.normalized(audioTrack)
+        streamPath = PlaybackStreamPath.describe(sourceURL)
     }
 
     private static func sourceLabel(for url: URL?) -> String? {
@@ -209,7 +221,13 @@ enum AetherPlaybackStatsProjection {
             cachedBytes: telemetry?.cachedBytes,
             demuxerBytesFetched: telemetry.map(\.demuxerBytesFetched),
             producerRestartCount: telemetry.map(\.producerRestartCount),
-            residentMemoryBytes: telemetry.map { Int64($0.rssMb) * 1_000_000 }
+            residentMemoryBytes: telemetry.map { Int64($0.rssMb) * 1_000_000 },
+            playbackMethod: source.planSummary?.method,
+            plan: source.planSummary?.detailLine,
+            plannerReason: source.planSummary?.reasonLabel,
+            quality: source.quality,
+            audioTrack: source.audioTrack,
+            streamPath: source.streamPath
         )
     }
 

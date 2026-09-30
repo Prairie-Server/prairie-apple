@@ -41,6 +41,12 @@ iosApp/iosApp/Screens/LiveTV/LiveTVChannelListView.swift	1	livetv-tab-	Guide / C
 iosApp/iosApp/Screens/Player/tvOS/TVPlayerInfoHUD.swift	1	PlaybackStatsPanel\(	tvOS Info HUD stats pane
 iosApp/iosApp/Screens/Player/iOS/MobilePlayerControls.swift	1	MobilePlaybackStatsOverlay\(	iOS stats overlay
 iosApp/iosApp/Screens/Player/PlayerViewModel.swift	1	AetherPlaybackStatsProjection\.make\(	stats refresh from Aether
+iosApp/iosApp/Screens/Player/PlaybackDiagnostics.swift	1	struct PlaybackEventLog	on-device player event ring buffer (smarttv #116 parity)
+iosApp/iosApp/Screens/Player/PlayerViewModel.swift	3	recordPlaybackEvent\(	player events feed the stats log
+iosApp/iosApp/Screens/Player/PlayerViewModel.swift	1	PlaybackPlanSummary\.init\(plan:\)	plan summary in stats
+iosApp/iosApp/Screens/Player/PlaybackStats.swift	1	var planRows	Plan section rows
+iosApp/iosApp/Screens/Player/PlaybackStatsPanel.swift	1	RECENT EVENTS	tvOS stats pane event list
+iosApp/iosApp/Screens/Player/iOS/MobilePlaybackStatsOverlay.swift	1	plainEventList\(	iOS overlay event list
 
 # --- Trickplay scrub previews (PR #28).
 iosApp/iosApp/Networking/Models.swift	1	let trickplay: VersionTrickplay\?	trickplay sprite metadata on file versions

@@ -310,6 +310,9 @@ class PlayerViewModel {
     /// the active route cannot report a comparable value.
     var bufferedAheadSeconds: Double = 0
     var playbackStats: PlaybackStats = .empty
+    /// Prairie: rolling log of recent player events for stats for nerds.
+    /// Survives item changes so a failure stays readable after teardown.
+    @ObservationIgnored private var playbackEventLog = PlaybackEventLog()
     var showNextUpScreen = false
     /// A Next Up load keeps its preview until the successor's own startup
     /// milestone. Repeated actions cannot reload it or expand an unready frame.
@@ -1219,6 +1222,16 @@ class PlayerViewModel {
             case .playing, .paused, .seeking, .ended, .idle, .error:
                 isLoading = false
             }
+            switch phase {
+            case .rebuffering:
+                recordPlaybackEvent("Rebuffering", kind: .warning)
+            case .stalled(let reconnecting):
+                recordPlaybackEvent(reconnecting ? "Stalled, reconnecting" : "Stalled", kind: .warning)
+            case .ended:
+                recordPlaybackEvent("Ended")
+            default:
+                break
+            }
             refreshPlaybackStats(force: true)
             syncIntroSkipPrompt()
         case .playerTime(let playerSeconds):
@@ -1294,6 +1307,29 @@ class PlayerViewModel {
         }
     }
 
+    // MARK: Prairie stats-for-nerds detail
+
+    /// Active quality as the picker labels it (`Auto`, `1080p 8 Mbps`, …).
+    private var statsQualityLabel: String? {
+        qualityOptions.first(where: { $0.id == activeQualityId })?.label ?? activeQualityId
+    }
+
+    /// Selected audio track, e.g. `English · 5.1 · EAC3 · default (track 2)`.
+    private var statsAudioTrackLabel: String? {
+        guard let selectedAudioId,
+              let track = audioTracks.first(where: { $0.trackId == selectedAudioId }) else {
+            return nil
+        }
+        return "\(track.displayLabel) (track \(track.trackId))"
+    }
+
+    /// Append to the on-device event log and publish it to the stats panel
+    /// without waiting for the next throttled refresh.
+    private func recordPlaybackEvent(_ message: String, kind: PlaybackEventLog.Kind = .info) {
+        playbackEventLog.record(message, kind: kind)
+        playbackStats.recentEvents = playbackEventLog.entries
+    }
+
     @MainActor
     private func handleAetherControllerEvent(_ event: AetherPlaybackController.ControllerEvent) {
         guard !isDisposed else { return }
@@ -1302,6 +1338,9 @@ class PlayerViewModel {
             syncNowPlayingDestination()
             refreshPlaybackStats(force: true)
         case .externalPlaybackChanged(let supported, let active):
+            if active != isExternalPlaybackActive {
+                recordPlaybackEvent(active ? "External playback on" : "External playback off")
+            }
             supportsExternalPlayback = supported
             isExternalPlaybackActive = active
             refreshPlaybackStats(force: true)
@@ -1311,6 +1350,7 @@ class PlayerViewModel {
     private func refreshPlaybackStats(force: Bool = false) {
         guard let spec = aetherPlaybackController.activeSpec else {
             playbackStats = .empty
+            playbackStats.recentEvents = playbackEventLog.entries
             bufferedAheadSeconds = 0
             return
         }
@@ -1334,22 +1374,27 @@ class PlayerViewModel {
             secondarySubtitleLabel: secondaryLabel,
             plannedSourceDynamicRange: playbackPlan?.source.dynamicRange,
             plannedOutputDynamicRange: playbackPlan?.effectiveRecipe.dynamicRange,
-            plannedSourceDolbyVisionProfile: playbackPlan?.source.dolbyVisionProfile
+            plannedSourceDolbyVisionProfile: playbackPlan?.source.dolbyVisionProfile,
+            planSummary: playbackPlan.map(PlaybackPlanSummary.init(plan:)),
+            quality: statsQualityLabel,
+            audioTrack: statsAudioTrackLabel
         )
         let snapshot = AetherPlaybackStatsSnapshot(
             engine: aetherPlaybackController.engine
         )
-        let projected = AetherPlaybackStatsProjection.make(
+        var projected = AetherPlaybackStatsProjection.make(
             snapshot: snapshot,
             source: source,
             sampledAt: sampledAt
         )
+        projected.recentEvents = playbackEventLog.entries
         playbackStats = projected
         bufferedAheadSeconds = max(0, projected.bufferedAheadSeconds ?? 0)
     }
 
     @MainActor
     private func handleAetherFailure(_ failure: PlaybackErrorInfo) {
+        recordPlaybackEvent("\(failure.kind.rawValue): \(failure.message)", kind: .error)
         if failure.kind == .audioTrackSwitchFailed {
             // The engine tore its pipeline down for the switch and the rebuild
             // failed, so there is nothing left playing whatever the phase. It
@@ -1453,6 +1498,7 @@ class PlayerViewModel {
     private func handleAetherStartupMilestone(epoch: AetherPlaybackController.LoadEpoch) {
         guard startedAetherLoadEpoch != epoch else { return }
         startedAetherLoadEpoch = epoch
+        recordPlaybackEvent(isAudioOnlyAetherLoad ? "Audio started" : "First frame")
         handleFileLoaded()
         if isNextUpTransitioning {
             isNextUpTransitioning = false
@@ -1527,6 +1573,10 @@ class PlayerViewModel {
 
     private func handlePlaybackError(_ message: String, failure: PlaybackErrorInfo? = nil) {
         let logMessage = MediaLogRedactor.sanitize(message)
+        if failure == nil {
+            // Typed Aether failures were already logged by handleAetherFailure.
+            recordPlaybackEvent(message, kind: .error)
+        }
         Self.logger.error("Player error: \(logMessage, privacy: .public)")
         guard !hasReachedEndOfFile else {
             Self.logger.info("Ignoring playback error after EOF: \(logMessage, privacy: .public)")
@@ -1923,6 +1973,11 @@ class PlayerViewModel {
         trackTarget: QueuedProtocolV3TrackTarget? = nil,
         outputRouteSnapshot: ApplePlaybackV3CapabilitySnapshot? = nil
     ) -> Bool {
+        // A user-driven change names its operation; recovery replans don't.
+        recordPlaybackEvent(
+            "Replan: \(classification.replacingOccurrences(of: "_", with: " "))",
+            kind: operation == nil ? .warning : .info
+        )
         // One classification of the user's target. A track change must have a
         // stable server ordinal before it is queued or issued: falling back to
         // the currently published engine selection would turn an unmappable tap
@@ -2107,6 +2162,12 @@ class PlayerViewModel {
                 self.currentWatchDetail = prepared.watchDetail
                 self.currentSelectedVersion = prepared.selectedVersion
                 self.activePreparedProtocolV3 = prepared.protocolV3
+                if let plan = prepared.protocolV3?.plan {
+                    let summary = PlaybackPlanSummary(plan: plan)
+                    self.recordPlaybackEvent(
+                        "Plan: \(summary.method)" + (summary.reasonLabel.map { " (\($0))" } ?? "")
+                    )
+                }
                 if targetsSubtitle || classification == "subtitle_track_changed" {
                     self.localProtocolV3SubtitleSelection = nil
                 } else if priorPreparedProtocolV3?.plan.effectiveMediaFileId != prepared.protocolV3?.plan.effectiveMediaFileId,
@@ -4802,6 +4863,9 @@ class PlayerViewModel {
             ? ApplePlaybackQuality.normalizeStoredId(qualityId)
             : ApplePlaybackQuality.protocolV3QualityId(qualityId)
         guard resolvedQualityId != activeQualityId || qualitySwitchError != nil else { return }
+        recordPlaybackEvent(
+            "Quality: \(qualityOptions.first(where: { $0.id == resolvedQualityId })?.label ?? resolvedQualityId)"
+        )
 
         let target = currentTime.isFinite ? max(0, currentTime) : 0
         isQualitySwitching = true
@@ -5587,6 +5651,7 @@ class PlayerViewModel {
     // Aether's media-track id namespace.
 
     func selectAudio(_ track: PlayerTrack) {
+        recordPlaybackEvent("Audio: \(track.displayLabel)")
         if activePreparedProtocolV3 != nil {
             // The server owns the switch on this path, so the track must not
             // be applied locally before its plan arrives. The selection is

@@ -23,19 +23,24 @@ struct MobilePlaybackStatsOverlay: View {
     private static let topInset: CGFloat = 60
 
     var body: some View {
-        plate
-            .padding(.leading, 16)
-            .padding(.top, Self.topInset)
-            .frame(
-                maxWidth: .infinity,
-                maxHeight: .infinity,
-                alignment: .topLeading
-            )
-            .allowsHitTesting(false)
+        // Side by side when the phone is wide enough (landscape), stacked with
+        // a shorter event list otherwise, so the plate never runs off-screen.
+        ViewThatFits(in: .horizontal) {
+            plate(stacked: false)
+            plate(stacked: true)
+        }
+        .padding(.leading, 16)
+        .padding(.top, Self.topInset)
+        .frame(
+            maxWidth: .infinity,
+            maxHeight: .infinity,
+            alignment: .topLeading
+        )
+        .allowsHitTesting(false)
     }
 
-    private var plate: some View {
-        content
+    private func plate(stacked: Bool) -> some View {
+        content(stacked: stacked)
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             // Flat translucent black rather than a material: a blur reads as
@@ -50,11 +55,32 @@ struct MobilePlaybackStatsOverlay: View {
     }
 
     @ViewBuilder
-    private var content: some View {
+    private func content(stacked: Bool) -> some View {
+        let panel = PlaybackStatsPanel(stats: stats, layout: .plain)
+        let hasEvents = !stats.recentEvents.isEmpty
+        if stacked {
+            VStack(alignment: .leading, spacing: 10) {
+                rows(panel)
+                if hasEvents {
+                    panel.plainEventList(limit: 4)
+                }
+            }
+        } else {
+            HStack(alignment: .top, spacing: 18) {
+                rows(panel)
+                if hasEvents {
+                    panel.plainEventList(limit: PlaybackEventLog.defaultCapacity)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func rows(_ panel: PlaybackStatsPanel) -> some View {
         // Gated on the compact set, not `hasRows`: early snapshots can carry
         // only rows this overlay filters out, which would draw a blank plate.
         if !stats.compactRows.isEmpty {
-            PlaybackStatsPanel(stats: stats, layout: .plain)
+            panel
         } else {
             Text("Stats appear once playback starts.")
                 .font(.system(size: 11))
