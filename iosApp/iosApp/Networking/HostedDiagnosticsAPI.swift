@@ -122,8 +122,10 @@ enum HostedDiagnosticsAPIError: Error, Equatable {
 }
 
 actor HostedDiagnosticsAPI {
+    /// Prairie's collector, matching Android `DEFAULT_HOSTED_DIAGNOSTICS_BASE_URL`.
+    /// Upstream syncs bring back Silo's host; never send Prairie reports there.
     static let defaultBaseURL: URL = {
-        guard let url = URL(string: "https://diagnostics.siloserver.org") else {
+        guard let url = URL(string: "https://diagnostics.prairieserver.org") else {
             fatalError("The hosted diagnostics URL must be valid.")
         }
         return url

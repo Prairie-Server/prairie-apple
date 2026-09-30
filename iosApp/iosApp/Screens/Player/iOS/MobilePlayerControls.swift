@@ -473,14 +473,15 @@ struct MobilePlayerControls: View {
             )
             .overlay(alignment: .topLeading) {
                 if viewModel.isScrubbing {
-                    let previewInset: CGFloat = viewModel.scrubPreviewImage == nil ? 80 : 102
+                    let hasArtwork = hasScrubPreviewArtwork
+                    let previewInset: CGFloat = hasArtwork ? 102 : 80
                     scrubPreviewBubble
                         .position(
                             x: min(
                                 max(width * progress, previewInset),
                                 max(width - previewInset, previewInset)
                             ),
-                            y: viewModel.scrubPreviewImage == nil ? -36 : -92
+                            y: hasArtwork ? -92 : -36
                         )
                         .transition(.opacity)
                         .allowsHitTesting(false)
@@ -513,14 +514,29 @@ struct MobilePlayerControls: View {
     /// Floating time + chapter readout pinned above the touch point while
     /// scrubbing. Presentation-only: reads the same `scrubPreviewTime` the
     /// seek machinery already maintains.
+    ///
+    /// Prairie: the server's trickplay sprite tile wins (PR #28, same as the
+    /// tvOS scrubber), then Aether's decoded frame, then the chapter still.
     private var scrubPreviewBubble: some View {
         VStack(spacing: 6) {
-            if let image = viewModel.scrubPreviewImage {
+            if let tile = scrubTrickplayTile {
+                TrickplayTileImage(tile: tile, displayWidth: 176)
+                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            } else if let image = viewModel.scrubPreviewImage {
                 Image(decorative: image, scale: 1)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
                     .frame(width: 176, height: 99)
                     .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            } else if let chapterURL = scrubChapterThumbnailURL {
+                CachedAsyncImage(
+                    url: chapterURL,
+                    targetSize: CGSize(width: 176, height: 99),
+                    contentMode: .fill,
+                    placeholderStyle: .clear
+                )
+                .frame(width: 176, height: 99)
+                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
             }
             Text(PlayerTimeFormatter.formatHMS(viewModel.scrubPreviewTime))
                 .font(.system(size: 19, weight: .bold))
@@ -536,6 +552,22 @@ struct MobilePlayerControls: View {
         .padding(7)
         .prairiePlayerGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .fixedSize()
+    }
+
+    private var scrubTrickplayTile: TrickplayTilePreview? {
+        Trickplay.resolveTile(viewModel.trickplay, seconds: viewModel.scrubPreviewTime)
+    }
+
+    private var scrubChapterThumbnailURL: String? {
+        guard let url = viewModel.chapterThumbnailURL(at: viewModel.scrubPreviewTime),
+              !url.isEmpty else { return nil }
+        return url
+    }
+
+    private var hasScrubPreviewArtwork: Bool {
+        scrubTrickplayTile != nil
+            || viewModel.scrubPreviewImage != nil
+            || scrubChapterThumbnailURL != nil
     }
 
     private func chapterTitle(at time: Double) -> String? {

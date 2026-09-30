@@ -377,6 +377,7 @@ enum DownloadAuthHeaders {
             request.setValue(profileToken, forHTTPHeaderField: "X-Profile-Token")
         }
         AppleDeviceIdentity.current.applyHeaders(to: &request)
+        ImageFormats.apply(to: &request)
         return request
     }
 }

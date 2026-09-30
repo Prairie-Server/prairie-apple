@@ -1251,6 +1251,8 @@ actor HTTPClient {
     ) {
         let device = AppleDeviceIdentity.current
         device.applyHeaders(to: &request)
+        // Prairie: one-time raster capability for artwork URLs (PR #23).
+        ImageFormats.apply(to: &request)
         let trace = credentials + [
             "device=\(device.platform)/\(device.clientFamily)",
             // Channel included deliberately: it is the only field that
@@ -1279,6 +1281,7 @@ actor HTTPClient {
             request.setValue(profileToken, forHTTPHeaderField: "X-Profile-Token")
         }
         AppleDeviceIdentity.current.applyHeaders(to: &request)
+        ImageFormats.apply(to: &request)
     }
 
     // MARK: - Response handling

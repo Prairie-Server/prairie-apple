@@ -10,8 +10,16 @@ enum ImageFormats {
     /// Ordered best-first format tokens for this process.
     static var preferred: [String] = [avif, webp, png]
 
+    /// Request header the server reads to pick AVIF / WebP / PNG artwork.
+    static let headerField = "X-Prairie-Image-Formats"
+
     /// Value for the `X-Prairie-Image-Formats` request header.
     static var headerValue: String { preferred.joined(separator: ",") }
+
+    /// Stamp the raster preference on an outgoing Prairie request.
+    static func apply(to request: inout URLRequest) {
+        request.setValue(headerValue, forHTTPHeaderField: headerField)
+    }
 
     /// Replace the process-wide preference list (tests / future OS gates).
     static func configure(_ formats: [String]) {

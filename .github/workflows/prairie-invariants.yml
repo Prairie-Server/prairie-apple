@@ -1,0 +1,28 @@
+name: Prairie invariants
+
+# Build-free tripwire for Prairie-only code that upstream Silo syncs have
+# silently deleted or unwired before (Live TV entries, Quick Connect, the
+# connect list, trickplay, image-format header). Unfiltered so it runs on
+# every PR, including a sync that only touches files it resolves to upstream.
+# See docs/upstream-sync.md.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prairie-invariants:
+    name: Prairie invariants
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check Prairie invariants
+        run: scripts/check-prairie-invariants.sh
