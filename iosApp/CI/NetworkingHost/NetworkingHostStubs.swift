@@ -150,6 +150,9 @@ final class ConnectionMonitor {
     /// API v2 contract gate. The host never probes, so no server is flagged.
     var isServerUpdateRequired: Bool { false }
 
+    /// Off-actor read; the host never records a verdict, so always false.
+    nonisolated static func readServerUpdateRequired() async -> Bool { false }
+
     func noteContractProbe(_ result: APIv2ProbeResult, serverId: String) {}
 }
 
@@ -251,5 +254,17 @@ enum DownloadSessionDelegate {
               let scheme = parts.scheme?.lowercased(), let host = parts.host?.lowercased() else { return nil }
         let port = parts.port ?? (scheme == "https" ? 443 : 80)
         return "\(scheme)://\(host):\(port)\(parts.percentEncodedPath)"
+    }
+}
+
+/// Stand-in for the watch-party lobby policy; WatchPartySocket only needs the
+/// path-prefix helper. The real type lives in WatchPartyLobbyState.swift, which
+/// pulls the full lobby state machine into the host. basePath copied verbatim.
+enum WatchPartyLobbyPolicy {
+    /// A server's path prefix in `/a/b` form (empty at the root), ready for
+    /// an API or web path to be appended.
+    static func basePath(_ percentEncodedPath: String) -> String {
+        percentEncodedPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            .split(separator: "/").reduce("") { $0 + "/" + $1 }
     }
 }
