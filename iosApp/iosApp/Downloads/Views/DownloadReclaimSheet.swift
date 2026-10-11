@@ -11,12 +11,12 @@ struct DownloadReclaimSheet: View {
     /// Record ids the user has chosen to keep (everything starts selected).
     @State private var kept: Set<String> = []
 
-    private var records: [DownloadRecord] { manager.reclaimableRecords }
-    private var selected: [DownloadRecord] { records.filter { !kept.contains($0.id) } }
-    private var selectedBytes: Int64 { selected.reduce(0) { $0 + $1.fileSize } }
     private var allSelected: Bool { kept.isEmpty }
 
     var body: some View {
+        // Read once: the body re-runs on every progress publish.
+        let records = manager.reclaimableRecords
+        let selected = records.filter { !kept.contains($0.id) }
         NavigationStack {
             Group {
                 if records.isEmpty {
@@ -26,7 +26,7 @@ struct DownloadReclaimSheet: View {
                         subtitle: "There are no watched downloads to clear right now."
                     )
                 } else {
-                    list
+                    list(records)
                 }
             }
             .prairieSheetBackground()
@@ -41,18 +41,21 @@ struct DownloadReclaimSheet: View {
                 if !records.isEmpty {
                     ToolbarItem(placement: .primaryAction) {
                         Button(allSelected ? "Deselect All" : "Select All", systemImage: allSelected ? "arrow.counterclockwise" : "checkmark.circle") { toggleAll() }
+                        Button(allSelected ? "Deselect All" : "Select All") { toggleAll(records) }
                     }
                 }
             }
-            .safeAreaInset(edge: .bottom) { bottomBar }
+            .safeAreaInset(edge: .bottom) {
+                if !records.isEmpty { bottomBar(selected: selected) }
+            }
             .prairieToolbarColorSchemeDark()
         }
     }
 
-    private var list: some View {
+    private func list(_ records: [DownloadRecord]) -> some View {
         ScrollView {
             LazyVStack(spacing: 0) {
-                header
+                header(count: records.count)
                 ForEach(records) { record in
                     row(record)
                     Divider().overlay(Color.prairieDivider).padding(.leading, 56)
@@ -62,9 +65,9 @@ struct DownloadReclaimSheet: View {
         }
     }
 
-    private var header: some View {
+    private func header(count: Int) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("\(records.count) item\(records.count == 1 ? "" : "s") you've finished watching")
+            Text("\(count) item\(count == 1 ? "" : "s") you've finished watching")
                 .font(.footnote)
                 .foregroundColor(.prairieSecondaryText)
         }
@@ -80,7 +83,10 @@ struct DownloadReclaimSheet: View {
         } label: {
             HStack(spacing: 12) {
                 DownloadSelectionCircle(selected: !kept.contains(record.id))
-                ThumbhashImage(thumbhash: record.posterThumbhash)
+                DownloadArtworkImage(
+                    thumbhash: record.posterThumbhash,
+                    fileURL: DownloadManager.shared.posterImageURL(for: record)
+                )
                     .frame(width: 48, height: 28)
                     .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                 VStack(alignment: .leading, spacing: 2) {
@@ -104,25 +110,17 @@ struct DownloadReclaimSheet: View {
         .buttonStyle(.plain)
     }
 
-    @ViewBuilder
-    private var bottomBar: some View {
-        if !records.isEmpty {
-            VStack(spacing: 9) {
-                Button {
-                    manager.deleteDownloads(ids: selected.map(\.id))
-                    dismiss()
-                } label: {
-                    HStack(spacing: 9) {
-                        Image(systemName: "trash")
-                        Text("Delete \(selected.count) · Free \(DownloadFormatting.bytes(selectedBytes))")
-                            .fontWeight(.bold)
-                    }
-                    .font(.subheadline)
-                    .frame(maxWidth: .infinity)
-                    .frame(minHeight: 50)
-                    .background(selected.isEmpty ? Color.prairieDisabled : Color.prairieOnSurface)
-                    .foregroundColor(.black)
-                    .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+    private func bottomBar(selected: [DownloadRecord]) -> some View {
+        let selectedBytes = selected.reduce(Int64(0)) { $0 + $1.fileSize }
+        return VStack(spacing: 9) {
+            Button {
+                manager.deleteDownloads(ids: selected.map(\.id))
+                dismiss()
+            } label: {
+                HStack(spacing: 9) {
+                    Image(systemName: "trash")
+                    Text("Delete \(selected.count) · Free \(DownloadFormatting.bytes(selectedBytes))")
+                        .fontWeight(.bold)
                 }
                 .buttonStyle(.plain)
                 .disabled(selected.isEmpty)
@@ -141,12 +139,35 @@ struct DownloadReclaimSheet: View {
                             )
                     )
                     .buttonStyle(.plain)
+                .font(.subheadline)
+                .frame(maxWidth: .infinity)
+                .frame(minHeight: 50)
+                .background(selected.isEmpty ? Color.prairieDisabled : Color.prairieOnSurface)
+                .foregroundColor(.black)
+                .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 10)
-            .padding(.bottom, 8)
-            .background(.ultraThinMaterial)
+            .buttonStyle(.plain)
+            .disabled(selected.isEmpty)
+
+            Button("Not now") { dismiss() }
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.prairieOnSurface)
+                .frame(maxWidth: .infinity)
+                .frame(minHeight: 44)
+                .background(
+                    RoundedRectangle(cornerRadius: 13, style: .continuous)
+                        .fill(Color.prairieChromeRestingFill)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                                .stroke(Color.prairieChromeRestingBorder, lineWidth: 1)
+                        )
+                )
+                .buttonStyle(.plain)
         }
+        .padding(.horizontal, 16)
+        .padding(.top, 10)
+        .padding(.bottom, 8)
+        .background(.ultraThinMaterial)
     }
 
     private func label(_ record: DownloadRecord) -> String {
@@ -162,7 +183,7 @@ struct DownloadReclaimSheet: View {
         if kept.contains(id) { kept.remove(id) } else { kept.insert(id) }
     }
 
-    private func toggleAll() {
+    private func toggleAll(_ records: [DownloadRecord]) {
         if allSelected { kept = Set(records.map(\.id)) }
         else { kept.removeAll() }
     }

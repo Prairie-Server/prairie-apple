@@ -117,8 +117,6 @@ struct DownloadsStorageHeader: View {
     let breakdown: DownloadStorageBreakdown
     var activeCount: Int = 0
 
-    @State private var device = DownloadFilePaths.deviceStorage()
-
     private static let seriesColor = Color.prairieBrandBlue
     private static let moviesColor = Color.prairieBrandRed
     private static let inProgressColor = Color.prairieBrandOrange
@@ -126,14 +124,13 @@ struct DownloadsStorageHeader: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            (
-                Text(DownloadFormatting.bytes(used))
-                    .font(.title2.bold())
-                    .foregroundColor(.prairieOnSurface)
-                + Text(contextSuffix)
-                    .font(.subheadline)
-                    .foregroundColor(.prairieSecondaryText)
-            )
+            let amount = Text(DownloadFormatting.bytes(used))
+                .font(.title2.bold())
+                .foregroundColor(.prairieOnSurface)
+            let context = Text(contextSuffix)
+                .font(.subheadline)
+                .foregroundColor(.prairieSecondaryText)
+            Text("\(amount)\(context)")
 
             if activeCount > 0 {
                 Text(inProgressLine)
@@ -151,8 +148,9 @@ struct DownloadsStorageHeader: View {
     }
 
     private var contextSuffix: String {
-        device.total > 0
-            ? "  of \(DownloadFormatting.bytes(device.total)) on this device"
+        let deviceTotal = DownloadFilePaths.totalCapacity
+        return deviceTotal > 0
+            ? "  of \(DownloadFormatting.bytes(deviceTotal)) on this device"
             : "  downloaded"
     }
 
@@ -232,14 +230,13 @@ struct DownloadReclaimBanner: View {
     var body: some View {
         Button(action: onReview) {
             HStack(spacing: 12) {
-                (
-                    Text("Free up \(DownloadFormatting.bytes(bytes))")
-                        .foregroundColor(.prairieOnSurface)
-                    + Text(" · \(episodeCount) watched")
-                        .foregroundColor(.prairieSecondaryText)
-                )
-                .font(.subheadline)
-                .lineLimit(1)
+                let amount = Text("Free up \(DownloadFormatting.bytes(bytes))")
+                    .foregroundColor(.prairieOnSurface)
+                let count = Text(" · \(episodeCount) watched")
+                    .foregroundColor(.prairieSecondaryText)
+                Text("\(amount)\(count)")
+                    .font(.subheadline)
+                    .lineLimit(1)
 
                 Spacer(minLength: 8)
 
@@ -322,15 +319,15 @@ struct DownloadSelectionCircle: View {
     }
 }
 
-/// A 2:3 poster tile sized for a Manager / browse row.
-struct DownloadPosterThumb: View {
+/// Downloaded artwork filling its frame: the image on local disk drawn over
+/// its thumbhash, which stays visible until the file loads or when there is
+/// none.
+struct DownloadArtworkImage: View {
     let thumbhash: String?
-    /// Poster image on local disk, fetched by the download pipeline before
-    /// the media transfer starts — drawn over the thumbhash placeholder so
-    /// in-progress rows aren't a blank tile for the whole transfer.
-    var fileURL: URL? = nil
-    var width: CGFloat = 40
-    var corner: CGFloat = 7
+    /// Image on local disk, fetched by the download pipeline before the media
+    /// transfer starts, so in-progress rows aren't a placeholder for the whole
+    /// transfer.
+    let fileURL: URL?
 
     var body: some View {
         ZStack {
@@ -343,8 +340,20 @@ struct DownloadPosterThumb: View {
                 }
             }
         }
-        .frame(width: width, height: width * 1.5)
-        .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+    }
+}
+
+/// A 2:3 poster tile sized for a Manager / browse row.
+struct DownloadPosterThumb: View {
+    let thumbhash: String?
+    var fileURL: URL? = nil
+    var width: CGFloat = 40
+    var corner: CGFloat = 7
+
+    var body: some View {
+        DownloadArtworkImage(thumbhash: thumbhash, fileURL: fileURL)
+            .frame(width: width, height: width * 1.5)
+            .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
     }
 }
 #endif

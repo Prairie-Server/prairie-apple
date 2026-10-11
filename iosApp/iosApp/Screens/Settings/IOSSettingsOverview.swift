@@ -6,9 +6,9 @@ import SwiftUI
 /// still matches each row's longer description, which VoiceOver reads as
 /// the row's hint.
 struct IOSSettingsOverview: View {
-    @Bindable var viewModel: SettingsViewModel
-    @Bindable var diagnosticsModel: DiagnosticsViewModel
-    @Bindable var uiCustomization: UICustomizationPreferences
+    let viewModel: SettingsViewModel
+    let diagnosticsModel: DiagnosticsViewModel
+    let uiCustomization: UICustomizationPreferences
     @Binding var showSignOutConfirm: Bool
 
     @Environment(AppRouter.self) private var router
@@ -16,6 +16,8 @@ struct IOSSettingsOverview: View {
     @State private var launchPreferences = ProfileLaunchPreferences.shared
     @State private var experimental = ExperimentalFeatures.shared
     @State private var searchText = ""
+    @State private var showsSignInTV = false
+    @State private var accountSignIn = AccountSignInModel.live()
 
     var body: some View {
         List {
@@ -23,8 +25,8 @@ struct IOSSettingsOverview: View {
                 SettingsAccountCard(
                     avatar: viewModel.activeProfile?.avatarEmoji,
                     avatarImageUrl: viewModel.activeProfile?.avatarImageUrl,
-                    name: displayName,
-                    subtitle: subtitleLine,
+                    name: viewModel.displayName,
+                    subtitle: viewModel.accountSubtitleLine,
                     isAdministrator: viewModel.userInfo?.isAdmin == true,
                     action: switchProfile
                 )
@@ -46,6 +48,10 @@ struct IOSSettingsOverview: View {
 
                 if diagnosticsModel.shouldShowSettings && matchesDiagnostics {
                     diagnosticsSection
+                }
+
+                if matchesAccountSignIn {
+                    accountSignInSection
                 }
 
                 if matchesConnectionSection {
@@ -80,6 +86,13 @@ struct IOSSettingsOverview: View {
         .prairieNavigationTitleDisplayMode(.large)
         .prairieToolbarColorSchemeDark()
         .onAppear(perform: navPrefs.refresh)
+        .task { await accountSignIn.load() }
+        .sheet(isPresented: $showsSignInTV) {
+            SignInTVView(onSwitchAccount: { server, link, choosingAccount in
+                showsSignInTV = false
+                router.switchAccount(forTVApproval: link, on: server, choosingAccount: choosingAccount)
+            }, onClose: { showsSignInTV = false })
+        }
     }
 
     @ViewBuilder
@@ -140,7 +153,7 @@ struct IOSSettingsOverview: View {
                             title: "Subtitles",
                             subtitle: "Language, behavior, and appearance",
                             systemImage: "captions.bubble.fill",
-                            value: subtitleLanguageName(viewModel.prefs.subtitleLanguage)
+                            value: viewModel.subtitleLanguageName
                         )
                     }
                 }
@@ -195,6 +208,18 @@ struct IOSSettingsOverview: View {
         }
     }
 
+    /// Shown only when the server has an external sign-in provider or the
+    /// account already has a provider identity.
+    private var accountSignInSection: some View {
+        Section("Account") {
+                AccountSignInView(model: accountSignIn)
+                    title: "Sign-in",
+                    subtitle: "Connect or disconnect your sign-in provider",
+                    systemImage: "person.badge.key.fill",
+                    value: accountSignIn.identities.first?.providerName
+            .accessibilityIdentifier("settings.accountSignIn")
+    private var matchesAccountSignIn: Bool {
+        accountSignIn.showsEntry && matches("sign-in", "sign in", "account", "provider", "sso", "single sign-on", "connect")
     private var connectionSection: some View {
         Section("Connection") {
             Button {
@@ -208,7 +233,23 @@ struct IOSSettingsOverview: View {
                     showsChevron: true
                 )
             }
+            if matchesSignInTV {
+                Button {
+                    showsSignInTV = true
+                } label: {
+                    SettingsOverviewRow(
+                        title: "Sign in a TV",
+                        subtitle: "Approve a TV's sign-in code with this account",
+                        systemImage: "tv",
+                        showsChevron: true
+                    )
+                }
+            }
         }
+    }
+
+    private var matchesSignInTV: Bool {
+        matches("sign in a tv", "tv", "apple tv", "android tv", "code", "device")
     }
 
     private var aboutSection: some View {
@@ -217,7 +258,7 @@ struct IOSSettingsOverview: View {
                 title: "Version",
                 subtitle: "Installed Prairie app version",
                 systemImage: "info.circle.fill",
-                value: versionString
+                value: SettingsViewModel.versionString
             )
 
             // Prairie: update check against the Prairie release feed (PR #18).
@@ -270,12 +311,21 @@ struct IOSSettingsOverview: View {
             }
 
             NavigationLink {
-                OpenSourceAcknowledgementsView()
+                AcknowledgementsView()
             } label: {
                 SettingsOverviewRow(
-                    title: "Open Source Licenses",
-                    subtitle: "Acknowledgements, licenses, and exact source revisions",
+                    title: "Acknowledgements",
+                    subtitle: "Services Prairie uses, and open source licenses",
                     systemImage: "curlybraces"
+                )
+            }
+
+            Link(destination: PrairieLegalLinks.sourceCode) {
+                SettingsOverviewRow(
+                    title: "Source Code",
+                    subtitle: "Get Prairie's source code under the AGPL",
+                    systemImage: "chevron.left.forwardslash.chevron.right",
+                    showsChevron: true
                 )
             }
         }
@@ -284,7 +334,7 @@ struct IOSSettingsOverview: View {
     private var experimentalSection: some View {
         // A query naming the section shows every row; otherwise each row
         // appears only for its own terms.
-        Section("Experimental") {
+        Section("Extra Features") {
             if matchesExperimentalName || matchesAudiobooks {
                 SettingsOverviewToggleRow(
                     title: "Show Audiobooks",
@@ -323,60 +373,12 @@ struct IOSSettingsOverview: View {
         }
     }
 
-    private var displayName: String {
-        if let name = viewModel.activeProfile?.name, !name.isEmpty {
-            return name
-        }
-        if let username = viewModel.userInfo?.username, !username.isEmpty {
-            return username
-        }
-        return "Switch Profile"
-    }
-
-    private var subtitleLine: String {
-        let host = serverHost
-        let username = viewModel.userInfo?.username
-        switch (username, host) {
-        case let (user?, host?) where !user.isEmpty && user != displayName:
-            return "\(user) · \(host)"
-        case let (_, host?):
-            return host
-        case let (user?, _) where !user.isEmpty && user != displayName:
-            return user
-        default:
-            return "Tap to switch profile"
-        }
-    }
-
-    private var serverHost: String? {
-        guard let url = URL(string: viewModel.serverUrl), let host = url.host else {
-            return viewModel.serverUrl.isEmpty ? nil : viewModel.serverUrl
-        }
-        return host
-    }
-
     private func switchProfile() {
         router.switchProfile()
     }
 
-    private func subtitleLanguageName(_ tag: String) -> String {
-        if tag == PlaybackPrefSentinel.none || tag.isEmpty { return "None" }
-        return PlaybackLanguageOption.label(forCode: tag)
-    }
-
-    private var versionString: String {
-        let info = Bundle.main.infoDictionary
-        let version = info?["CFBundleShortVersionString"] as? String ?? "1.0"
-        guard let build = info?["CFBundleVersion"] as? String,
-              !build.isEmpty,
-              build != version else {
-            return version
-        }
-        return "\(version) (\(build))"
-    }
-
     private var matchesPlayback: Bool {
-        matches("playback", "quality", "audio", "dolby vision", "episodes", "skipping", "skip interval", "rewind", "fast forward", "audiobooks")
+        matches("playback", "quality", "audio", "dolby vision", "episodes", "skipping", "skip interval", "rewind", "fast forward", "audiobooks", "spoilers", "blur", "thumbnails", "descriptions")
     }
 
     private var matchesInterface: Bool {
@@ -405,7 +407,7 @@ struct IOSSettingsOverview: View {
     }
 
     private var matchesConnectionSection: Bool {
-        matches("server", "connection", viewModel.serverDisplayName)
+        matches("server", "connection", viewModel.serverDisplayName) || matchesSignInTV
     }
 
     private var matchesAboutSection: Bool {
@@ -416,12 +418,18 @@ struct IOSSettingsOverview: View {
             "update",
             "changelog",
             "release",
+            SettingsViewModel.versionString,
             "privacy",
             "policy",
             "information",
             "open source",
             "licenses",
-            "acknowledgements"
+            "acknowledgements",
+            "source code",
+            "AGPL",
+            "credits",
+            "attribution",
+            "TMDB"
         )
     }
 
@@ -430,7 +438,7 @@ struct IOSSettingsOverview: View {
     }
 
     private var matchesExperimentalName: Bool {
-        matches("experimental", "beta", "testing")
+        matches("extra features", "experimental")
     }
 
     private var matchesExperimentalSection: Bool {
@@ -453,6 +461,7 @@ struct IOSSettingsOverview: View {
             || matchesInterface
             || matchesPlaybackSection
             || (diagnosticsModel.shouldShowSettings && matchesDiagnostics)
+            || matchesAccountSignIn
             || matchesConnectionSection
             || matchesExperimentalSection
             || matchesAboutSection

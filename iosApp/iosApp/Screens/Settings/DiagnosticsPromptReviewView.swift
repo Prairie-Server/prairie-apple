@@ -3,9 +3,7 @@ import SwiftUI
 
 struct DiagnosticsPromptReviewView: View {
     let prompt: DiagnosticsPrompt
-    @Bindable var model: DiagnosticsViewModel
-
-    @State private var showAlwaysConfirmation = false
+    let model: DiagnosticsViewModel
 
     var body: some View {
         List {
@@ -34,7 +32,10 @@ struct DiagnosticsPromptReviewView: View {
                     Button("Cancel", role: .cancel) {}
                 } message: {
                     Text("These reports and future crash reports for this server account will be sent automatically.")
-                }
+                DiagnosticsAlwaysSendButton(
+                    model: model,
+                    message: "These reports and future crash reports for this server account will be sent automatically."
+                )
 
                 Button("Don't Send", systemImage: "nosign", role: .cancel, action: model.declinePrompt)
                     .disabled(model.isWorking)

@@ -5,6 +5,7 @@ extension Color {
     //
     // Mirrors prairie-server Phase 3 / prairie-smarttv tokens:
     // deep slate surfaces + amber wheat accent (#e0a84a).
+    // MARK: - Core Palette (OLED dark)
 
     /// Deep slate background (#141820)
     static let prairieBackground = Color(hex: "#141820")
@@ -49,9 +50,12 @@ extension Color {
 
     /// Storage-breakdown series color (Prairie sky).
     static let prairieBrandBlue = Color(hex: "#38BDF8")
-
     /// Storage-breakdown movies color (Prairie rose).
     static let prairieBrandRed = Color(hex: "#FB7185")
+    /// Deep blue field behind the mark on the app icon.
+    static let prairieIconField = Color(hex: "#010D9F")
+    /// Muted/secondary text — primary at 60% opacity (#99EDEDED)
+    static let prairieSecondaryText = Color(hex: "#99EDEDED")
 
     /// Error red (#B00020)
     static let prairieError = Color(hex: "#B00020")
@@ -112,4 +116,30 @@ extension Color {
 
     /// Disabled control tint
     static let prairieDisabled = Color(hex: "#4B5563")
+
+    // MARK: - First-run status
+
+    /// Error text and outlines on first-run surfaces.
+    static let prairieErrorInk = Color(hex: "#FF6961")
+
+    /// Attention status (unreachable server, setup needs a look).
+    static let prairieStatusWarning = Color(hex: "#F4C869")
+
+    /// Live/OK status; the same green as `prairieSwitchOn`.
+    static let prairieStatusLive = prairieSwitchOn
+
+    /// Text-field caret tint.
+    static let prairieFieldTint = Color(hex: "#0A84FF")
+
+    #if os(macOS)
+    /// Mac page canvas: one flat charcoal behind every signed-in page.
+    static let prairiePageCanvas = Color(hex: "#1A1A1C")
+
+    /// Mac sidebar surface, a shade darker than the page canvas so the two
+    /// regions read as separate without a border.
+    static let prairieSidebarCanvas = Color(hex: "#121214")
+    #else
+    /// Signed-in iOS page canvas behind `PrairiePageBackdrop`'s washes.
+    static let prairiePageCanvas = Color(hex: "#111111")
+    #endif
 }

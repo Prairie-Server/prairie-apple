@@ -70,7 +70,7 @@ enum TVLibraryTabType: String, CaseIterable, Hashable {
     /// one browsable library, reachable from either dropdown.
     func matches(_ library: Library) -> Bool {
         switch self {
-        case .movies: return library.type == "movies" || library.isMixedLibrary
+        case .movies: return library.isMovieLibrary || library.isMixedLibrary
         case .series: return library.isSeriesLibrary || library.isMixedLibrary
         case .music: return library.type == "music"
         case .audiobooks: return library.isAudiobookLibrary
@@ -85,11 +85,14 @@ enum TVRootDestination: Hashable {
     case libraryShortcut(libraryId: Int, label: String)
     case calendar
     case liveTV
+    /// Media requests; present only while the server has requests enabled.
+    case requests
 
     static func == (lhs: TVRootDestination, rhs: TVRootDestination) -> Bool {
         switch (lhs, rhs) {
         case (.home, .home), (.recommendations, .recommendations), (.calendar, .calendar),
              (.liveTV, .liveTV):
+             (.requests, .requests):
             return true
         case (.libraryType(let lhsType), .libraryType(let rhsType)):
             return lhsType == rhsType
@@ -115,6 +118,7 @@ enum TVRootDestination: Hashable {
         case .calendar:
             hasher.combine(4)
         case .liveTV:
+        case .requests:
             hasher.combine(5)
         }
     }
@@ -127,12 +131,13 @@ enum TVRootDestination: Hashable {
         case .libraryShortcut(_, let label): return label
         case .calendar: return "Calendar"
         case .liveTV: return "Live TV"
+        case .requests: return "Requests"
         }
     }
 }
 
-/// Skyline top bar: wordmark left, search + type-derived tabs centered
-/// (search sits just left of Home; the tabs stay screen-centered), profile
+/// Skyline top bar: wordmark left, search + the synced root tabs centered
+/// (search sits left of the first root; the tabs stay screen-centered), profile
 /// avatar right (§5.1). The bar is custom on purpose — the system
 /// `TabView` sidebar steals leftward focus — and draws no background band;
 /// it floats over each page's own scrim and dims to 70% while focus is
@@ -227,7 +232,7 @@ struct TVTopMenuBar: View {
 
                 Spacer(minLength: PrairieTheme.Skyline.tabSpacing)
 
-                trailingCluster
+                profileButton
             }
         }
         .frame(height: PrairieTheme.Skyline.barHeight)
@@ -249,7 +254,7 @@ struct TVTopMenuBar: View {
         // tab buttons. Toggling an `onExitCommand` ancestor when `openPanel`
         // changes invalidates tvOS focus and produces the preview-open flash.
         .background(
-            TVTopMenuExitPressCatcher(
+            TVWindowMenuPressCatcher(
                 isActive: shouldCaptureExitPress,
                 onExit: handleExitPress
             )
@@ -301,29 +306,13 @@ struct TVTopMenuBar: View {
                 scheduleDwell(for: newValue)
                 return
             }
-            // Focus dropped to nil while the panel is in entered (focus-owning)
-            // mode: the panel claimed focus through its own @FocusState, so the
-            // bar must stay passive. Re-pinning to the tab here fights the panel
-            // for focus — and because `panelHasFocus` lags a render pass and a
-            // stale `refocusAfterClose` can still be set from earlier bar
-            // navigation, the re-pin fires exactly when it shouldn't, producing
-            // the entry oscillation (focus yo-yos tab↔row until the flags
-            // converge, dropping any d-pad press made in between). The host
-            // closes the panel on a genuine exit via `onPanelFocusChanged`, so
-            // nothing is stranded by staying out of it.
+            // Entered mode: the panel claimed focus; stay passive (see
+            // `panelEntersFocus`).
             if panelEntersFocus {
                 isMenuFocused = false
                 dwellTask?.cancel()
                 return
             }
-            // Opening OR closing the dropdown overlay perturbs the focus graph
-            // and makes tvOS drop the bar's @FocusState, repairing to the Home
-            // tab (the flash). When that's why we lost focus — a preview panel
-            // is open, or a sideways move just closed one — re-pin to the tab
-            // the user is actually on in the same transaction. Deferring this by
-            // one main-queue turn leaves a visible frame where tvOS repairs
-            // focus back to Home. A legit leave (down into the page, Menu out)
-            // has neither flag, so it falls through and focus is allowed to go.
             // A suppressed bar must never take focus back. The shell suppresses
             // before handing focus down, and the watchdog's reset arrives while
             // suppression is already true with a passive preview still open —
@@ -336,6 +325,14 @@ struct TVTopMenuBar: View {
                 dwellTask?.cancel()
                 return
             }
+            // Opening OR closing the dropdown overlay perturbs the focus graph
+            // and makes tvOS drop the bar's @FocusState, repairing to the Home
+            // tab (the flash). When that's why we lost focus — a preview panel
+            // is open, or a sideways move just closed one — re-pin to the tab
+            // the user is actually on in the same transaction. Deferring this by
+            // one main-queue turn leaves a visible frame where tvOS repairs
+            // focus back to Home. A legit leave (down into the page, Menu out)
+            // has neither flag, so it falls through and focus is allowed to go.
             let spuriousFromOpenPreview = openPanel != nil && !panelHasFocus
             if (spuriousFromOpenPreview || refocusAfterClose), let target = lastBarFocus {
                 refocusAfterClose = false
@@ -427,18 +424,13 @@ struct TVTopMenuBar: View {
         .frame(maxWidth: .infinity)
     }
 
-    private var trailingCluster: some View {
-        profileButton
-    }
-
     // MARK: - Tabs
 
     private func rootButton(_ root: TVRootDestination, index: Int, count: Int) -> some View {
         // While its panel owns focus the tab reads as selected, not focused
         // (§5.1) — the inverted look transfers to the panel row.
         let panelOwnsFocus = panelHasFocus && openPanel == .root(root)
-        let hasFocus = focusedItem == .root(root) && !panelHasFocus
-        let isFocused = hasFocus && !panelOwnsFocus
+        let isFocused = focusedItem == .root(root) && !panelHasFocus
         let isSelected = selectedRoot == root || panelOwnsFocus
 
         return Button {
@@ -502,6 +494,7 @@ struct TVTopMenuBar: View {
         case .recommendations:
             return .root(root)
         case .home, .calendar, .liveTV:
+        case .home, .calendar, .requests:
             return nil
         }
     }
@@ -515,6 +508,7 @@ struct TVTopMenuBar: View {
         case .recommendations:
             return "Rest to choose Watchlist, Favorites, or Recommendations"
         case .home, .calendar, .liveTV:
+        case .home, .calendar, .requests:
             return ""
         }
     }
@@ -608,8 +602,7 @@ struct TVTopMenuBar: View {
         // The avatar keeps its focus ring while the profile panel is open
         // and focus is still on the avatar; once focus descends into the
         // panel the ring drops (the panel rows carry focus then, §5.8).
-        let panelOwnsFocus = panelHasFocus && openPanel == .profile
-        let isFocused = focusedItem == .profile && !panelHasFocus && !panelOwnsFocus
+        let isFocused = focusedItem == .profile && !panelHasFocus
 
         return Button {
             // Press opens and enters immediately (§5.8); dwell only previews.
@@ -644,10 +637,6 @@ struct TVTopMenuBar: View {
         .accessibilityHint("Rest or press to open the profile menu")
     }
 
-    /// Menu handler for the bar: closes a dwell-open panel first (§5.3
-    /// "Menu closes"), otherwise runs the page-level bar exit. This is captured
-    /// by `TVTopMenuExitPressCatcher` instead of `.onExitCommand` so changing
-    /// `openPanel` never rewrites the focused tab's SwiftUI ancestor chain.
     private var shouldCaptureExitPress: Bool {
         !isFocusSuppressed
             && focusedItem != nil
@@ -655,6 +644,10 @@ struct TVTopMenuBar: View {
             && (openPanel != nil || isFocusedAwayFromHome || onExit != nil)
     }
 
+    /// Menu handler for the bar: closes a dwell-open panel first (§5.3
+    /// "Menu closes"), otherwise runs the page-level bar exit. This is captured
+    /// by `TVWindowMenuPressCatcher` instead of `.onExitCommand` so changing
+    /// `openPanel` never rewrites the focused tab's SwiftUI ancestor chain.
     private func handleExitPress() {
         let item = focusedItem.map { String(describing: $0) } ?? "nil"
         Self.logger.debug("topMenu.exitPress focusedItem=\(item, privacy: .public) openPanel=\(openPanel != nil, privacy: .public) selectedRoot=\(String(describing: selectedRoot), privacy: .public)")
@@ -662,13 +655,9 @@ struct TVTopMenuBar: View {
             onDwell(nil)
             return
         }
-        if isFocusedAwayFromHome {
-            if selectedRoot == .home {
-                focusedItem = .root(.home)
-                isMenuFocused = true
-            } else {
-                onExit?()
-            }
+        if isFocusedAwayFromHome, selectedRoot == .home {
+            focusedItem = .root(.home)
+            isMenuFocused = true
             return
         }
         onExit?()
@@ -839,13 +828,32 @@ struct TVSkylinePanelChrome: ViewModifier {
     }
 }
 
+/// Mono section header shared by the Skyline panels and the action popover.
+struct TVSkylinePanelHeader: View {
+    let text: String
+    var size: CGFloat = PrairieTheme.Skyline.dropdownHeaderSize
+    var horizontalPadding: CGFloat = 16
+    var topPadding: CGFloat = 8
+    var bottomPadding: CGFloat = 10
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: size, design: .monospaced))
+            .tracking(size * 0.26)
+            .foregroundStyle(Color.white.opacity(0.38))
+            .lineLimit(1)
+            .padding(.horizontal, horizontalPadding)
+            .padding(.top, topPadding)
+            .padding(.bottom, bottomPadding)
+    }
+}
+
 /// Hands d-pad **down** on a panel-bearing bar element (library tab or
 /// avatar) to the host, which opens the element's panel if needed and moves
-/// focus into it (§5.3). Attachment is keyed on the element's *kind*
-/// (`canOpenPanel`, invariant) — never on whether its panel is currently
-/// open. Toggling the attachment on a *focused* button rebuilds its subtree
-/// and drops `@FocusState`, which bounced focus back to the Home tab; keeping
-/// it invariant fixes that. The live open/enter decision is in the closure.
+/// focus into it (§5.3). Toggling the attachment on a focused button rebuilds
+/// its subtree and drops `@FocusState`, so it is keyed on the invariant kind
+/// (`canOpenPanel`), never on whether the panel is open. The live open/enter
+/// decision is in the closure.
 ///
 /// Elements without a panel route Down to `onDownToContent`, so the shell
 /// hands focus to the page's first item instead of the engine landing on
@@ -904,32 +912,32 @@ private struct TVTopMenuAnchorPublisher: ViewModifier {
     }
 }
 
-/// Window-level Menu capture for the top bar. A SwiftUI `.onExitCommand`
-/// modifier would need to appear and disappear as a panel opens, which rebuilds
-/// the ancestor chain around the currently focused tab. This recognizer stays
-/// mounted and simply declines the press when the bar has nothing to handle, so
-/// the system Menu behavior still passes through on Home.
-private struct TVTopMenuExitPressCatcher: UIViewRepresentable {
-    var isActive: Bool
+/// Window-level Menu press capture. A SwiftUI `.onExitCommand` fires only
+/// while its view holds focus, and adding or removing one around a focused
+/// view rebuilds that view's ancestor chain. This recognizer stays mounted
+/// and declines the press while inactive, so the system Menu behavior still
+/// passes through (on Home, for the top bar).
+struct TVWindowMenuPressCatcher: UIViewRepresentable {
+    var isActive = true
     var onExit: () -> Void
 
-    func makeUIView(context: Context) -> TVTopMenuExitPressUIView {
-        let view = TVTopMenuExitPressUIView()
+    func makeUIView(context: Context) -> TVWindowMenuPressUIView {
+        let view = TVWindowMenuPressUIView()
         apply(to: view)
         return view
     }
 
-    func updateUIView(_ uiView: TVTopMenuExitPressUIView, context: Context) {
+    func updateUIView(_ uiView: TVWindowMenuPressUIView, context: Context) {
         apply(to: uiView)
     }
 
-    private func apply(to view: TVTopMenuExitPressUIView) {
+    private func apply(to view: TVWindowMenuPressUIView) {
         view.isActive = isActive
         view.onExit = onExit
     }
 }
 
-private final class TVTopMenuExitPressUIView: UIView, UIGestureRecognizerDelegate {
+final class TVWindowMenuPressUIView: UIView, UIGestureRecognizerDelegate {
     var isActive = false
     var onExit: () -> Void = {}
 
@@ -974,7 +982,7 @@ private final class TVTopMenuExitPressUIView: UIView, UIGestureRecognizerDelegat
     }
 
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        isActive
+        isActive && window != nil
     }
 }
 
@@ -1045,14 +1053,7 @@ struct TVForYouDropdown: View {
     }
 
     private var panelHeader: some View {
-        Text("FOR YOU")
-            .font(.system(size: PrairieTheme.Skyline.dropdownHeaderSize, design: .monospaced))
-            .tracking(PrairieTheme.Skyline.dropdownHeaderSize * 0.26)
-            .foregroundStyle(Color.white.opacity(0.38))
-            .lineLimit(1)
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
-            .padding(.bottom, 2)
+        TVSkylinePanelHeader(text: "FOR YOU", bottomPadding: 2)
             .accessibilityHidden(true)
     }
 
@@ -1094,21 +1095,16 @@ private struct TVDropdownBoundaryMoveHandler: ViewModifier {
     let onMoveUp: (() -> Void)?
     let onMoveDown: (() -> Void)?
 
-    @ViewBuilder
     func body(content: Content) -> some View {
-        if onMoveUp != nil || onMoveDown != nil {
-            content.onMoveCommand { direction in
-                switch direction {
-                case .up:
-                    onMoveUp?()
-                case .down:
-                    onMoveDown?()
-                default:
-                    break
-                }
+        content.onMoveCommand { direction in
+            switch direction {
+            case .up:
+                onMoveUp?()
+            case .down:
+                onMoveDown?()
+            default:
+                break
             }
-        } else {
-            content
         }
     }
 }
@@ -1120,7 +1116,6 @@ private enum TVProfileAction: Hashable {
     case watchlist
     case favorites
     case history
-    case requests
     case watchParty
     case settings
     case switchServer
@@ -1129,7 +1124,7 @@ private enum TVProfileAction: Hashable {
 
 /// Anchored profile dropdown panel (§5.8): the same `glass.strong` level-1
 /// panel as the cascade, hosted by the shell under the avatar. The shell
-/// owns the scrim and Menu-to-close; this view owns only its rows and the
+/// owns positioning and Menu-to-close; this view owns only its rows and the
 /// focus hand-off when the host bumps `focusEntryGeneration`.
 struct TVProfileDropdown: View {
     let profileName: String
@@ -1151,7 +1146,6 @@ struct TVProfileDropdown: View {
     let onWatchlist: () -> Void
     let onFavorites: () -> Void
     let onHistory: () -> Void
-    let onRequests: () -> Void
     let onWatchParty: () -> Void
     let onSettings: () -> Void
     let onSwitchServer: () -> Void
@@ -1159,12 +1153,6 @@ struct TVProfileDropdown: View {
 
     @FocusState private var focusedAction: TVProfileAction?
     @State private var lastAppliedEntryGeneration = 0
-
-    /// Capability-gated: the Requests row only exists (and only takes a
-    /// focus slot) when the server reports `requests_enabled`.
-    private var showRequests: Bool {
-        RequestsFeatureStore.shared.isEnabled
-    }
 
     var body: some View {
         panel
@@ -1200,9 +1188,6 @@ struct TVProfileDropdown: View {
             actionButton("Watchlist", systemImage: "bookmark.fill", id: .watchlist, action: onWatchlist)
             actionButton("Favorites", systemImage: "heart.fill", id: .favorites, action: onFavorites)
             actionButton("History", systemImage: "clock.fill", id: .history, action: onHistory)
-            if showRequests {
-                actionButton("Requests", systemImage: "sparkles", id: .requests, action: onRequests)
-            }
             if WatchPartyEntry.isAvailable {
                 actionButton(WatchPartySession.shared.isEngaged ? "Return to Watch Party" : "Watch Party", systemImage: "person.3", id: .watchParty, action: onWatchParty)
             }

@@ -1,8 +1,7 @@
 #if os(iOS)
 import SwiftUI
 
-/// Touch-driven overlay used on iOS/iPadOS. Layout (see
-/// docs/ios-player-redesign/mockups.html):
+/// Touch-driven overlay used on iOS/iPadOS. Layout:
 /// - Top strip: close, title block (series eyebrow + episode title), PiP,
 ///   AirPlay, rotate, rotation lock
 /// - Center: skip back, play/pause, skip forward (profile video intervals),
@@ -12,8 +11,8 @@ import SwiftUI
 ///   preview bubble, then a labeled action row (Quality menu, Audio &
 ///   Subtitles sheet, Chapters menu, More → settings sheet)
 ///
-/// The whole thing is wrapped in a tap-to-toggle gesture; auto-hide after 3 s
-/// of inactivity. The view is stateful only for sheet presentation and the
+/// The whole thing is wrapped in a tap-to-toggle gesture and the auto-hide.
+/// The view is stateful only for sheet presentation and the
 /// trailing-time display mode; the rest of the state lives on
 /// `PlayerViewModel`. Invisible gestures (double-tap skip, hold-2×, edge
 /// swipes) live in `MobilePlayerGestureLayer` underneath this overlay.
@@ -31,12 +30,14 @@ struct MobilePlayerControls: View {
     /// it is purely presentation, and kept outside the `showControls` gate
     /// below so the auto-hide takes the transport away without it.
     @State private var showsStats = false
-
+    @Environment(\.playerTabletopLayout) private var tabletopLayout
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     var body: some View {
         // NOTE: the .sheet modifier MUST live outside the `showControls` gate.
         // If it's attached to a view that only exists while controls are
-        // visible, the 3s auto-hide tears down the sheet's host and dismisses
+        // visible, the auto-hide tears down the sheet's host and dismisses
         // the sheet mid-interaction — then re-presents it when controls come
         // back, because @State activeSheet survives the rebuild.
         ZStack {
@@ -49,22 +50,28 @@ struct MobilePlayerControls: View {
                 // Clamping the stack to `proxy.size` keeps every overlay inside
                 // the visible frame regardless of how wide a bar wants to be.
                 GeometryReader { proxy in
+                    // In the tabletop posture the controls take the pane
+                    // below the fold, clear of the video above it.
+                    let paneTop = tabletopControlsTop(in: proxy)
+                    let pane = CGSize(width: proxy.size.width, height: proxy.size.height - paneTop)
                     ZStack {
                         Color.black.opacity(viewModel.isScrubbing ? 0.55 : 0.4)
                             .ignoresSafeArea()
                             .onTapGesture { viewModel.toggleControls() }
 
-                        // Centred on the whole screen, where the video is,
-                        // rather than between the top strip and the taller
-                        // bottom stack, which would pull it off-centre. Kept
-                        // beneath the bars so the scrub preview draws over it.
+                        // Centred on the whole pane (the screen, where the
+                        // video is, unless the tabletop posture moved the
+                        // controls below the fold) rather than between the top
+                        // strip and the taller bottom stack, which would pull
+                        // it off-centre. Kept beneath the bars so the scrub
+                        // preview draws over it.
                         centerCluster
                             .opacity(recedingOpacity)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .ignoresSafeArea()
 
                         VStack(spacing: 0) {
-                            topStrip(compact: proxy.size.width < proxy.size.height)
+                            topStrip(compact: pane.width < pane.height)
                                 .opacity(recedingOpacity)
                             Spacer()
                             bottomStack
@@ -75,8 +82,9 @@ struct MobilePlayerControls: View {
                         // the action row clear of the home indicator, so only
                         // a hairline of extra breathing room is needed.
                         .padding(.bottom, 2)
-                        .frame(width: proxy.size.width, height: proxy.size.height)
+                        .frame(width: pane.width, height: pane.height)
                     }
+                    .padding(.top, paneTop)
                     .animation(.easeOut(duration: 0.18), value: viewModel.isScrubbing)
                 }
                 .transition(.opacity)
@@ -103,24 +111,6 @@ struct MobilePlayerControls: View {
                 TrackSelectionSheet(viewModel: viewModel) { activeSheet = nil }
                     .presentationDetents([.medium, .large])
                     .presentationDragIndicator(.visible)
-            case .aiSubtitles:
-                SubtitleTranslateMenu(
-                    viewModel: viewModel,
-                    onDismiss: { activeSheet = nil },
-                    // Job accepted: close the sheet so the live overlay is
-                    // visible on the player.
-                    onJobStarted: { activeSheet = nil }
-                )
-                .presentationDetents([.medium, .large])
-            case .subtitleSearch:
-                SubtitleSearchMenu(
-                    viewModel: viewModel,
-                    onDismiss: { activeSheet = nil },
-                    // Download succeeded (track already selected): close the
-                    // sheet so the player is visible.
-                    onDownloaded: { activeSheet = nil }
-                )
-                .presentationDetents([.large])
             case .settings:
                 PlayerSettingsSheet(
                     viewModel: viewModel,
@@ -164,7 +154,7 @@ struct MobilePlayerControls: View {
                 if !compact { titleBlock }
                 Spacer(minLength: 0)
                 if !compact { externalPlaybackControls }
-                rotationControls
+                if showsRotationControls { rotationControls }
             }
             if compact {
                 HStack(spacing: 12) {
@@ -222,6 +212,22 @@ struct MobilePlayerControls: View {
         }
     }
 
+    /// The iPhone Duo's open display turns with the device and ignores the
+    /// app's rotation requests, so it gets no rotate or lock buttons. It is
+    /// the only phone window that is regular in both dimensions.
+    private var showsRotationControls: Bool {
+        !(UIDevice.current.userInterfaceIdiom == .phone
+            && horizontalSizeClass == .regular && verticalSizeClass == .regular)
+    }
+
+    /// Where the controls start: the top of the player, or just below the
+    /// fold in the iPhone Duo's tabletop posture.
+    private func tabletopControlsTop(in proxy: GeometryProxy) -> CGFloat {
+        guard let tabletopLayout else { return 0 }
+        let top = tabletopLayout.controlsMinY - proxy.frame(in: .global).minY
+        return min(max(top, 0), proxy.size.height)
+    }
+
     private var rotationControls: some View {
         HStack(spacing: 12) {
             controlButton(systemName: "rectangle.landscape.rotate") {
@@ -232,8 +238,11 @@ struct MobilePlayerControls: View {
             .accessibilityHint("Rotates the screen without interrupting playback")
             .accessibilityIdentifier("player.rotate")
 
+            // The open and closed glyphs differ only in the padlock's shackle,
+            // so the lock also takes the active tint the quality pill uses.
             controlButton(
-                systemName: orientationCoordinator.isRotationLocked ? "lock.rotation" : "lock.rotation.open"
+                systemName: orientationCoordinator.isRotationLocked ? "lock.rotation" : "lock.rotation.open",
+                tint: orientationCoordinator.isRotationLocked ? Color.white.opacity(0.22) : nil
             ) {
                 orientationCoordinator.toggleRotationLock()
                 viewModel.resumeAutoHide()
@@ -344,8 +353,7 @@ struct MobilePlayerControls: View {
 
     private var bottomStack: some View {
         VStack(spacing: 10) {
-            timeRow
-            progressSlider
+            MobilePlayerTimeline(viewModel: viewModel, showsRemainingTime: $showsRemainingTime)
             actionRow
                 .opacity(recedingOpacity)
         }
@@ -359,16 +367,12 @@ struct MobilePlayerControls: View {
                 .monospacedDigit()
 
             Spacer()
-
             if viewModel.sleepTimer.isActive {
                 statusChip(
                     systemImage: "moon.zzz.fill",
                     text: PlayerTimeFormatter.formatCountdown(viewModel.sleepTimer.remainingSeconds)
                 )
             }
-
-            Spacer()
-
             Button {
                 showsRemainingTime.toggle()
             } label: {
@@ -376,41 +380,29 @@ struct MobilePlayerControls: View {
                     .font(.caption2)
                     .foregroundStyle(.white.opacity(0.6))
                     .monospacedDigit()
-            }
             .buttonStyle(.plain)
             .accessibilityLabel(showsRemainingTime ? "Time Remaining" : "Duration")
             .accessibilityHint("Switches between time remaining and total duration")
         }
     }
-
     private var trailingTimeText: String {
         if showsRemainingTime {
             return "−" + PlayerTimeFormatter.formatHMS(max(viewModel.duration - displayTime, 0))
-        }
         return PlayerTimeFormatter.formatHMS(viewModel.duration)
-    }
-
     private func statusChip(systemImage: String, text: String) -> some View {
         HStack(spacing: 5) {
             Image(systemName: systemImage)
                 .font(.system(size: 10, weight: .semibold))
             Text(text)
                 .font(.system(size: 11, weight: .bold))
-                .monospacedDigit()
-        }
         .foregroundStyle(.white.opacity(0.85))
         .padding(.horizontal, 9)
         .padding(.vertical, 4)
         .background(Capsule().fill(.black.opacity(0.45)))
         .overlay(Capsule().stroke(.white.opacity(0.16), lineWidth: 0.5))
-    }
-
     private var displayTime: Double {
         viewModel.isScrubbing ? viewModel.scrubPreviewTime : viewModel.currentTime
-    }
-
     // MARK: - Scrubber
-
     private var progressSlider: some View {
         GeometryReader { geo in
             let width = geo.size.width
@@ -418,13 +410,11 @@ struct MobilePlayerControls: View {
                 ? min(max(displayTime / viewModel.duration, 0), 1)
                 : 0
             let barHeight: CGFloat = viewModel.isScrubbing ? 12 : 6
-
             ZStack(alignment: .leading) {
                 // Base track
                 Capsule()
                     .fill(Color.white.opacity(0.2))
                     .frame(height: barHeight)
-
                 // Buffered range from Aether telemetry. Routes that cannot
                 // report a comparable value leave the layer empty.
                 if let buffered = bufferedFraction, buffered > progress {
@@ -432,9 +422,7 @@ struct MobilePlayerControls: View {
                         .fill(Color.white.opacity(0.22))
                         .frame(width: max(width * buffered, barHeight), height: barHeight)
                 }
-
                 introMarker(width: width, height: barHeight)
-
                 // Chapter ticks. Rendered behind the fill so they're visible
                 // in unplayed territory; the fill covers them over played
                 // time, which matches Apple's native transport-bar behavior.
@@ -446,14 +434,10 @@ struct MobilePlayerControls: View {
                             .frame(width: 2, height: barHeight + 5)
                             .offset(x: width * min(max(fraction, 0), 1) - 1)
                     }
-                }
-
                 // Played portion. Thumbless — the whole bar is the handle.
-                Capsule()
                     .fill(Color.white)
                     .frame(width: max(width * progress, barHeight), height: barHeight)
                     .shadow(color: .white.opacity(viewModel.isScrubbing ? 0.35 : 0), radius: 8)
-            }
             .frame(height: 20, alignment: .center)
             .animation(.snappy(duration: 0.22), value: viewModel.isScrubbing)
             .contentShape(Rectangle())
@@ -466,10 +450,8 @@ struct MobilePlayerControls: View {
                         } else {
                             viewModel.beginScrub(fraction: fraction)
                         }
-                    }
                     .onEnded { _ in
                         viewModel.endScrub()
-                    }
             )
             .overlay(alignment: .topLeading) {
                 if viewModel.isScrubbing {
@@ -485,32 +467,22 @@ struct MobilePlayerControls: View {
                         )
                         .transition(.opacity)
                         .allowsHitTesting(false)
-                }
-            }
             // The custom scrubber is drag-only; expose it to VoiceOver as an
             // adjustable element that seeks through the same skip path.
             .accessibilityElement()
             .accessibilityLabel("Playback Position")
             .accessibilityValue(
                 "\(PlayerTimeFormatter.formatHMS(displayTime)) of \(PlayerTimeFormatter.formatHMS(viewModel.duration))"
-            )
             .accessibilityAdjustableAction { direction in
                 switch direction {
                 case .increment: viewModel.skipForward()
                 case .decrement: viewModel.skipBackward()
                 @unknown default: break
-                }
-            }
-        }
         .frame(height: 20)
-    }
-
     private var bufferedFraction: Double? {
         guard viewModel.duration > 0, viewModel.bufferedAheadSeconds > 0 else { return nil }
         let end = (viewModel.currentTime + viewModel.bufferedAheadSeconds) / viewModel.duration
         return min(max(end, 0), 1)
-    }
-
     /// Floating time + chapter readout pinned above the touch point while
     /// scrubbing. Presentation-only: reads the same `scrubPreviewTime` the
     /// seek machinery already maintains.
@@ -527,54 +499,38 @@ struct MobilePlayerControls: View {
                     .resizable()
                     .aspectRatio(contentMode: .fill)
                     .frame(width: 176, height: 99)
-                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
             } else if let chapterURL = scrubChapterThumbnailURL {
                 CachedAsyncImage(
                     url: chapterURL,
                     targetSize: CGSize(width: 176, height: 99),
                     contentMode: .fill,
                     placeholderStyle: .clear
-                )
                 .frame(width: 176, height: 99)
                 .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-            }
             Text(PlayerTimeFormatter.formatHMS(viewModel.scrubPreviewTime))
                 .font(.system(size: 19, weight: .bold))
                 .foregroundStyle(.white)
-                .monospacedDigit()
             if let chapter = chapterTitle(at: viewModel.scrubPreviewTime) {
                 Text(chapter)
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.65))
                     .lineLimit(1)
-            }
-        }
         .padding(7)
         .prairiePlayerGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .fixedSize()
-    }
-
     private var scrubTrickplayTile: TrickplayTilePreview? {
         Trickplay.resolveTile(viewModel.trickplay, seconds: viewModel.scrubPreviewTime)
-    }
-
     private var scrubChapterThumbnailURL: String? {
         guard let url = viewModel.chapterThumbnailURL(at: viewModel.scrubPreviewTime),
               !url.isEmpty else { return nil }
         return url
-    }
-
     private var hasScrubPreviewArtwork: Bool {
         scrubTrickplayTile != nil
             || viewModel.scrubPreviewImage != nil
             || scrubChapterThumbnailURL != nil
-    }
-
     private func chapterTitle(at time: Double) -> String? {
         guard let chapter = viewModel.chapters.last(where: { $0.time <= time }) else { return nil }
         return chapter.title ?? "Chapter \(chapter.index + 1)"
-    }
-
     @ViewBuilder
     private func introMarker(width: CGFloat, height: CGFloat) -> some View {
         if let introRange = viewModel.introRange, viewModel.duration > 0 {
@@ -585,10 +541,6 @@ struct MobilePlayerControls: View {
                     .fill(Color.cyan.opacity(0.4))
                     .frame(width: width * (end - start), height: height)
                     .offset(x: width * start)
-            }
-        }
-    }
-
     // MARK: - Action row
 
     private enum ActionRowStyle {
@@ -613,10 +565,7 @@ struct MobilePlayerControls: View {
         // The Audio & Subtitles pill is only inert when the picker would have
         // nothing at all in it. A track-less file can still offer subtitle
         // search (and the explanation when search isn't configured), so those
-        // entry points keep the sheet reachable. This also closes a pre-existing
-        // reachability gap: before, a file with no audio and no subtitle
-        // tracks disabled the pill outright, making subtitle search — the one
-        // feature that could fix exactly that file — impossible to reach.
+        // entry points keep the sheet reachable.
         let noTracks = viewModel.audioTracks.isEmpty
             && viewModel.subtitleTracks.isEmpty
             && !viewModel.subtitleSearchVisible
@@ -731,31 +680,11 @@ struct MobilePlayerControls: View {
 
     // MARK: - Chapters menu
 
-    private var currentChapterIndex: Int? {
-        viewModel.chapters.lastIndex(where: { $0.time <= viewModel.currentTime })
-    }
-
     /// Native chapter picker: one row per chapter with the timestamp as the
     /// menu subtitle and a checkmark on the chapter currently playing.
     private func chaptersMenu(style: ActionRowStyle) -> some View {
         Menu {
-            ForEach(viewModel.chapters) { chapter in
-                Button {
-                    viewModel.seekTo(seconds: chapter.time)
-                } label: {
-                    if currentChapterIndex == chapter.index {
-                        Label {
-                            Text(chapterMenuTitle(chapter))
-                            Text(PlayerTimeFormatter.formatHMS(chapter.time))
-                        } icon: {
-                            Image(systemName: "checkmark")
-                        }
-                    } else {
-                        Text(chapterMenuTitle(chapter))
-                        Text(PlayerTimeFormatter.formatHMS(chapter.time))
-                    }
-                }
-            }
+            MobileChapterMenuItems(viewModel: viewModel)
         } label: {
             menuPillLabel(
                 systemImage: "list.bullet",
@@ -766,10 +695,6 @@ struct MobilePlayerControls: View {
         // Keep Chapter 1 at the top, reading down.
         .menuOrder(.fixed)
         .buttonStyle(MobilePlayerGlassButtonStyle())
-    }
-
-    private func chapterMenuTitle(_ chapter: PlayerChapterInfo) -> String {
-        "\(chapter.index + 1).  \(chapter.title ?? "Chapter \(chapter.index + 1)")"
     }
 
     /// Menu label matching the `actionPill` (titled) / `controlButton`
@@ -883,21 +808,282 @@ struct MobilePlayerControls: View {
 
     // MARK: - Helpers
 
-    private func controlButton(systemName: String, action: @escaping () -> Void) -> some View {
+    private func controlButton(
+        systemName: String, tint: Color? = nil, action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(.white)
+                .contentTransition(.symbolEffect(.replace))
                 .frame(width: PrairieTheme.topBarIconHitSize, height: PrairieTheme.topBarIconHitSize)
         }
-        .buttonStyle(MobilePlayerGlassButtonStyle())
+        .buttonStyle(MobilePlayerGlassButtonStyle(tint: tint))
     }
 
     // MARK: - Sheet identifier
 
     private enum PlayerSheet: Identifiable {
-        case tracks, aiSubtitles, subtitleSearch, settings
+        case tracks, settings
         var id: Self { self }
+    }
+}
+
+/// Time row and scrubber. The only part of the controls that reads the
+/// playback clock, so clock ticks re-render this view alone.
+private struct MobilePlayerTimeline: View {
+    let viewModel: PlayerViewModel
+    @Binding var showsRemainingTime: Bool
+    /// True only while a finger drags the scrub bar. Skip buttons and
+    /// hold-seek also set `isScrubbing`, but they shouldn't play chapter ticks.
+    @GestureState private var isDraggingScrubBar = false
+
+    var body: some View {
+        VStack(spacing: 10) {
+            timeRow
+            progressSlider
+        }
+    }
+
+    private var timeRow: some View {
+        HStack {
+            Text(PlayerTimeFormatter.formatHMS(displayTime))
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.85))
+                .monospacedDigit()
+
+            Spacer()
+
+            if viewModel.sleepTimer.isActive {
+                statusChip(
+                    systemImage: "moon.zzz.fill",
+                    text: PlayerTimeFormatter.formatCountdown(viewModel.sleepTimer.remainingSeconds)
+                )
+            }
+
+            Spacer()
+
+            Button {
+                showsRemainingTime.toggle()
+            } label: {
+                Text(trailingTimeText)
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.6))
+                    .monospacedDigit()
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(showsRemainingTime ? "Time Remaining" : "Duration")
+            .accessibilityHint("Switches between time remaining and total duration")
+        }
+    }
+
+    private var trailingTimeText: String {
+        if showsRemainingTime {
+            return "−" + PlayerTimeFormatter.formatHMS(max(viewModel.duration - displayTime, 0))
+        }
+        return PlayerTimeFormatter.formatHMS(viewModel.duration)
+    }
+
+    private func statusChip(systemImage: String, text: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: systemImage)
+                .font(.system(size: 10, weight: .semibold))
+            Text(text)
+                .font(.system(size: 11, weight: .bold))
+                .monospacedDigit()
+        }
+        .foregroundStyle(.white.opacity(0.85))
+        .padding(.horizontal, 9)
+        .padding(.vertical, 4)
+        .background(Capsule().fill(.black.opacity(0.45)))
+        .overlay(Capsule().stroke(.white.opacity(0.16), lineWidth: 0.5))
+    }
+
+    private var displayTime: Double {
+        viewModel.isScrubbing ? viewModel.scrubPreviewTime : viewModel.currentTime
+    }
+
+    // MARK: - Scrubber
+
+    private var progressSlider: some View {
+        GeometryReader { geo in
+            let width = geo.size.width
+            let progress = viewModel.duration > 0
+                ? min(max(displayTime / viewModel.duration, 0), 1)
+                : 0
+            let barHeight: CGFloat = viewModel.isScrubbing ? 12 : 6
+
+            ZStack(alignment: .leading) {
+                // Base track
+                Capsule()
+                    .fill(Color.white.opacity(0.2))
+                    .frame(height: barHeight)
+
+                // Buffered range from Aether telemetry. Routes that cannot
+                // report a comparable value leave the layer empty.
+                if let buffered = bufferedFraction, buffered > progress {
+                    Capsule()
+                        .fill(Color.white.opacity(0.22))
+                        .frame(width: max(width * buffered, barHeight), height: barHeight)
+                }
+
+                introMarker(width: width, height: barHeight)
+
+                // Chapter ticks. Rendered behind the fill so they're visible
+                // in unplayed territory; the fill covers them over played
+                // time, which matches Apple's native transport-bar behavior.
+                if viewModel.duration > 0 && !viewModel.chapters.isEmpty {
+                    ForEach(viewModel.chapters) { chapter in
+                        let fraction = chapter.time / viewModel.duration
+                        Capsule()
+                            .fill(Color.white.opacity(0.6))
+                            .frame(width: 2, height: barHeight + 5)
+                            .offset(x: width * min(max(fraction, 0), 1) - 1)
+                    }
+                }
+
+                // Played portion. Thumbless — the whole bar is the handle.
+                Capsule()
+                    .fill(Color.white)
+                    .frame(width: max(width * progress, barHeight), height: barHeight)
+                    .shadow(color: .white.opacity(viewModel.isScrubbing ? 0.35 : 0), radius: 8)
+            }
+            .frame(height: 20, alignment: .center)
+            .animation(.snappy(duration: 0.22), value: viewModel.isScrubbing)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .updating($isDraggingScrubBar) { _, dragging, _ in dragging = true }
+                    .onChanged { value in
+                        let fraction = min(max(value.location.x / width, 0), 1)
+                        if viewModel.isScrubbing {
+                            viewModel.updateScrub(fraction: fraction)
+                        } else {
+                            viewModel.beginScrub(fraction: fraction)
+                        }
+                    }
+                    .onEnded { _ in
+                        viewModel.endScrub()
+                    }
+            )
+            .scrubTickFeedback(
+                tickTimes: viewModel.chapters.map(\.time),
+                scrubTime: isDraggingScrubBar ? viewModel.scrubPreviewTime : nil
+            )
+            .overlay(alignment: .topLeading) {
+                if viewModel.isScrubbing {
+                    let previewInset: CGFloat = viewModel.scrubPreviewImage == nil ? 80 : 102
+                    scrubPreviewBubble
+                        .position(
+                            x: min(
+                                max(width * progress, previewInset),
+                                max(width - previewInset, previewInset)
+                            ),
+                            y: viewModel.scrubPreviewImage == nil ? -36 : -92
+                        )
+                        .transition(.opacity)
+                        .allowsHitTesting(false)
+                }
+            }
+            // The custom scrubber is drag-only; expose it to VoiceOver as an
+            // adjustable element that seeks through the same skip path.
+            .accessibilityElement()
+            .accessibilityLabel("Playback Position")
+            .accessibilityValue(
+                "\(PlayerTimeFormatter.formatHMS(displayTime)) of \(PlayerTimeFormatter.formatHMS(viewModel.duration))"
+            )
+            .accessibilityAdjustableAction { direction in
+                switch direction {
+                case .increment: viewModel.skipForward()
+                case .decrement: viewModel.skipBackward()
+                @unknown default: break
+                }
+            }
+        }
+        .frame(height: 20)
+    }
+
+    private var bufferedFraction: Double? {
+        guard viewModel.duration > 0, viewModel.bufferedAheadSeconds > 0 else { return nil }
+        return viewModel.bufferedEndFraction
+    }
+
+    /// Floating time + chapter readout pinned above the touch point while
+    /// scrubbing. Presentation-only: reads the same `scrubPreviewTime` the
+    /// seek machinery already maintains.
+    private var scrubPreviewBubble: some View {
+        VStack(spacing: 6) {
+            if let image = viewModel.scrubPreviewImage {
+                Image(decorative: image, scale: 1)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 176, height: 99)
+                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            }
+            Text(PlayerTimeFormatter.formatHMS(viewModel.scrubPreviewTime))
+                .font(.system(size: 19, weight: .bold))
+                .foregroundStyle(.white)
+                .monospacedDigit()
+            if let chapter = chapterTitle(at: viewModel.scrubPreviewTime) {
+                Text(chapter)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.65))
+                    .lineLimit(1)
+            }
+        }
+        .padding(7)
+        .prairiePlayerGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .fixedSize()
+    }
+
+    private func chapterTitle(at time: Double) -> String? {
+        guard let chapter = viewModel.chapters.last(where: { $0.time <= time }) else { return nil }
+        return chapter.title ?? "Chapter \(chapter.index + 1)"
+    }
+
+    @ViewBuilder
+    private func introMarker(width: CGFloat, height: CGFloat) -> some View {
+        if let introRange = viewModel.introRange, viewModel.duration > 0 {
+            let start = min(max(introRange.start / viewModel.duration, 0), 1)
+            let end = min(max(introRange.end / viewModel.duration, 0), 1)
+            if end > start {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Color.cyan.opacity(0.4))
+                    .frame(width: width * (end - start), height: height)
+                    .offset(x: width * start)
+            }
+        }
+    }
+}
+
+/// Chapter menu rows. Reads the clock for the checkmark, so it is kept out of
+/// the controls' own body.
+private struct MobileChapterMenuItems: View {
+    let viewModel: PlayerViewModel
+
+    var body: some View {
+        let currentChapterIndex = viewModel.chapters.lastIndex(where: { $0.time <= viewModel.currentTime })
+        ForEach(viewModel.chapters) { chapter in
+            Button {
+                viewModel.seekTo(seconds: chapter.time)
+            } label: {
+                if currentChapterIndex == chapter.index {
+                    Label {
+                        Text(chapterMenuTitle(chapter))
+                        Text(PlayerTimeFormatter.formatHMS(chapter.time))
+                    } icon: {
+                        Image(systemName: "checkmark")
+                    }
+                } else {
+                    Text(chapterMenuTitle(chapter))
+                    Text(PlayerTimeFormatter.formatHMS(chapter.time))
+                }
+            }
+        }
+    }
+
+    private func chapterMenuTitle(_ chapter: PlayerChapterInfo) -> String {
+        "\(chapter.index + 1).  \(chapter.title ?? "Chapter \(chapter.index + 1)")"
     }
 }
 
