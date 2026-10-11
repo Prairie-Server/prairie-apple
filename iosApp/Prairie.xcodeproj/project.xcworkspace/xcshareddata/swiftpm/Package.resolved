@@ -4,7 +4,7 @@
     {
       "identity" : "aetherengine",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/Prairie-Server/AetherEngine",
+      "location" : "https://github.com/Silo-Server/AetherEngine",
       "state" : {
         "revision" : "ef0d2c7f2aa564c03b789c40f8f5c5351fc1d084"
       }
@@ -46,9 +46,9 @@
       }
     },
     {
-      "identity" : "prairieobjectaudio",
+      "identity" : "siloobjectaudio",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/Prairie-Server/PrairieObjectAudio",
+      "location" : "https://github.com/Silo-Server/SiloObjectAudio",
       "state" : {
         "revision" : "645b91c072fafb60146151fd5127f8ff0ca38b6f",
         "version" : "1.0.0"
