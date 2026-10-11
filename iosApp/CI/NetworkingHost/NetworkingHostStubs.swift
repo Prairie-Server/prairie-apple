@@ -80,6 +80,15 @@ final class ImageSizeCapability: @unchecked Sendable {
     func requestQueryForImageRequest() async -> [String: String] { [:] }
 }
 
+/// The real store lives in Screens/Home/CardDescriptionTranslation.swift; its
+/// coordinator and item-detail machinery pull the app's AI stack. ServerRegistry
+/// only resets it on a server switch.
+@MainActor
+final class CardDescriptionTranslation {
+    static let shared = CardDescriptionTranslation()
+    func reset() {}
+}
+
 /// The API v2 sync removed SubtitleProvidersStatus; nothing in the host calls
 /// PrairieAI any more, so the stand-in only has to exist.
 actor PrairieAI {
