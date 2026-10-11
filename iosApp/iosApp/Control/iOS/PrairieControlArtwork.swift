@@ -54,7 +54,7 @@ final class PrairieControlArtworkResolver {
     }
 
     private func seriesPosterURL(for detail: ItemDetail) async -> String? {
-        guard SiloMediaType.isEpisode(detail.type),
+        guard PrairieMediaType.isEpisode(detail.type),
               let seriesId = detail.seriesId, !seriesId.isEmpty else { return nil }
         let key = CacheKey.itemDetail(seriesId)
         let series: ItemDetail
