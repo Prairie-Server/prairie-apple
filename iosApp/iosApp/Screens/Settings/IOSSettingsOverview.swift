@@ -213,6 +213,9 @@ struct IOSSettingsOverview: View {
     private var accountSignInSection: some View {
         Section("Account") {
                 AccountSignInView(model: accountSignIn)
+            NavigationLink {
+            } label: {
+                SettingsOverviewRow(
                     title: "Sign-in",
                     subtitle: "Connect or disconnect your sign-in provider",
                     systemImage: "person.badge.key.fill",
@@ -220,6 +223,11 @@ struct IOSSettingsOverview: View {
             .accessibilityIdentifier("settings.accountSignIn")
     private var matchesAccountSignIn: Bool {
         accountSignIn.showsEntry && matches("sign-in", "sign in", "account", "provider", "sso", "single sign-on", "connect")
+                )
+            }
+        }
+    }
+
     private var connectionSection: some View {
         Section("Connection") {
             Button {

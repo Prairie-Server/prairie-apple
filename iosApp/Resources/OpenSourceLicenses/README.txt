@@ -14,6 +14,7 @@ AetherEngine
   diagnostics, and playback recovery)
   License: GNU LGPL version 3 with the upstream Apple Store / DRM exception
   Source (modified, as built): https://github.com/Prairie-Server/AetherEngine/tree/ef0d2c7f2aa564c03b789c40f8f5c5351fc1d084
+  Source (modified, as built): https://github.com/Silo-Server/AetherEngine/tree/ef0d2c7f2aa564c03b789c40f8f5c5351fc1d084
   Upstream base: https://github.com/superuser404notfound/AetherEngine/tree/dd1d5f885cd5da65a6641e42f5cd6ba341c6a05c
   Rebuild: the Package.swift and source tree at that revision
 

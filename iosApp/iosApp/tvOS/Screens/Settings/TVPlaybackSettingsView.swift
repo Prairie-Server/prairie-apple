@@ -160,6 +160,12 @@ struct TVPlaybackSettingsPane: View {
         .focused(detailFocus, equals: .playbackAutoPlayNext)
 
         TVSettingsPickerRow(
+            title: "Preview Next Episode",
+            value: viewModel.previewNextEpisode ? "On" : "Off"
+        ) { showPicker(.autoPlayNextPreview) }
+        .focused(detailFocus, equals: .playbackPreviewNextEpisode)
+
+        TVSettingsPickerRow(
             title: "Show Next Up",
             value: TVSettingsOptions.label(for: String(viewModel.nextUpPromptSeconds), in: TVSettingsOptions.nextUpPrompt)
         ) { showPicker(.nextUpPrompt) }
@@ -176,6 +182,12 @@ struct TVPlaybackSettingsPane: View {
             value: viewModel.skipCredits ? "On" : "Off"
         ) { showPicker(.skipCredits) }
         .focused(detailFocus, equals: .playbackSkipCredits)
+
+        TVSettingsPickerRow(
+            title: "Skip Recaps",
+            value: viewModel.skipRecaps ? "On" : "Off"
+        ) { showPicker(.skipRecaps) }
+        .focused(detailFocus, equals: .playbackSkipRecaps)
     }
 
     /// Profile-wide spoiler switches. The row has no description slot, so the
@@ -400,12 +412,26 @@ struct TVPlaybackSettingsPane: View {
                 selection: selection(.autoPlayNext),
                 returnFocus: .playbackAutoPlayNext
             )
+        case .autoPlayNextPreview:
+            TVSettingsPickerRequest(
+                title: "Preview Next Episode",
+                options: [TVSettingsOptions.useProfileSetting] + TVSettingsOptions.onOff,
+                selection: selection(.autoPlayNextPreview),
+                returnFocus: .playbackPreviewNextEpisode
+            )
         case .skipCredits:
             TVSettingsPickerRequest(
                 title: "Skip Credits",
                 options: [TVSettingsOptions.useProfileSetting] + TVSettingsOptions.onOff,
                 selection: selection(.autoSkipCredits),
                 returnFocus: .playbackSkipCredits
+            )
+        case .skipRecaps:
+            TVSettingsPickerRequest(
+                title: "Skip Recaps",
+                options: [TVSettingsOptions.useProfileSetting] + TVSettingsOptions.onOff,
+                selection: selection(.autoSkipRecap),
+                returnFocus: .playbackSkipRecaps
             )
         case .skipInterval(let media, let direction):
             TVSettingsPickerRequest(
@@ -436,7 +462,9 @@ struct TVPlaybackSettingsPane: View {
         case quality
         case audioLanguage
         case autoPlayNext
+        case autoPlayNextPreview
         case skipCredits
+        case skipRecaps
         case bufferAhead
         case deinterlaceMode
         case deinterlaceFieldRate

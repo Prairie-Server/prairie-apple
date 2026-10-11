@@ -401,11 +401,13 @@ class PlayerViewModel {
         let stats = projectPlaybackStats()
         cachedPlaybackStats = (revision, stats)
         return stats
+    }
     /// Bumped when the stats inputs change; panels observe it through
     /// `playbackStats`.
     private var playbackStatsRevision: UInt64 = 0
     @ObservationIgnored
     private var cachedPlaybackStats: (revision: UInt64, stats: PlaybackStats)?
+    @ObservationIgnored
     private var playbackStatsRevisedAt: Date = .distantPast
     var showNextUpScreen = false
     /// A Next Up load keeps its preview until the successor's own startup

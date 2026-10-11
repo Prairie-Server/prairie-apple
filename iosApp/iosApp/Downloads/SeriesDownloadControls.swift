@@ -461,6 +461,7 @@ private struct SeriesEpisodeDownloadPicker: View {
                     .prairieScaledFont(size: 10, weight: .medium, relativeTo: .caption2)
                     .foregroundColor(Color.prairieOnSurface.opacity(isMonitored ? 0.92 : 0.6))
                     .phoneActionCaption()
+            }
             .frame(maxWidth: .infinity, minHeight: 58)
             .contentShape(Rectangle())
         }

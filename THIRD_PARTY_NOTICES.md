@@ -52,7 +52,7 @@ published under the LGPL at the exact source revision below. The bundled
 acknowledgements include AetherEngine's complete license and exception plus
 the GNU GPL version 3 text incorporated by LGPLv3.
 
-- Exact source: <https://github.com/Silo-Server/AetherEngine/tree/b1e4879e6a41477ebef3b68e8d9f65239d1ba80b>
+- Exact source: <https://github.com/Silo-Server/AetherEngine/tree/ef0d2c7f2aa564c03b789c40f8f5c5351fc1d084>
   (engine pull requests: <https://github.com/Silo-Server/AetherEngine/pull/2>,
   <https://github.com/Silo-Server/AetherEngine/pull/6>)
 - Upstream base: <https://github.com/superuser404notfound/AetherEngine/tree/7.13.0>
@@ -61,6 +61,9 @@ the GNU GPL version 3 text incorporated by LGPLv3.
   <https://github.com/Prairie-Server/AetherEngine/pull/6>,
   <https://github.com/Prairie-Server/AetherEngine/pull/16>,
   <https://github.com/Prairie-Server/AetherEngine/pull/17>)
+  <https://github.com/Silo-Server/AetherEngine/pull/6>,
+  <https://github.com/Silo-Server/AetherEngine/pull/16>,
+  <https://github.com/Silo-Server/AetherEngine/pull/17>)
 - Upstream base: <https://github.com/superuser404notfound/AetherEngine/tree/dd1d5f885cd5da65a6641e42f5cd6ba341c6a05c>
 - Rebuild input: `Package.swift` and the source tree at that revision
 - Bundled texts: `AetherEngine-LGPL-3.0-App-Store-Exception.txt`,

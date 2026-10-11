@@ -357,10 +357,18 @@ struct PlaybackRealtimeSubtitleTimingChangedPayload: Equatable {
         let subtitleId = payload.subtitleSyncStoredId()
         guard let syncKey = payload.subtitleSyncKey() ?? subtitleId.map(SubtitleSyncState.storedKey) else {
         sessionId = payload.string(forKeys: "session_id", "sessionId")
+    let sessionId: String?
+    let fileId: Int
+
+    init?(payload: PlaybackRealtimePayload) {
+            return nil
+        }
+        self.fileId = fileId
         self.syncKey = syncKey
         self.subtitleId = subtitleId
     }
 }
+
 /// `subtitle_sync_updated`: `{session_id, file_id, sync_key, subtitle_id?,
 /// timing, job}`, sent at each step of a sync job: queued, every progress
 /// update, and the outcome. `job` has the `SubtitleSyncJobState` shape.
@@ -368,6 +376,13 @@ struct PlaybackRealtimeSubtitleSyncUpdatedPayload: Equatable {
     /// The subtitle's correction after this step.
     let timing: SubtitleTiming
     let job: SubtitleSyncJob
+    let sessionId: String?
+    let fileId: Int
+    let syncKey: String
+    let subtitleId: String?
+
+    init?(payload: PlaybackRealtimePayload) {
+        guard let fileId = payload.int(forKeys: "file_id", "fileId"),
               let syncKey = payload.subtitleSyncKey(),
               case .object(let timing)? = payload["timing"],
               case .number(let offset)? = timing["offset_ms"], let offsetMs = Int(exactly: offset),
@@ -383,6 +398,14 @@ struct PlaybackRealtimeSubtitleSyncUpdatedPayload: Equatable {
 private extension Dictionary where Key == String, Value == PlaybackRealtimeValue {
     func subtitleSyncKey() -> String? {
         string(forKeys: "sync_key", "syncKey").flatMap { $0.isEmpty ? nil : $0 }
+            return nil
+        }
+        sessionId = payload.string(forKeys: "session_id", "sessionId")
+        self.fileId = fileId
+        self.syncKey = syncKey
+    }
+}
+
     func subtitleSyncStoredId() -> String? {
         int(forKeys: "subtitle_id", "subtitleId").flatMap { $0 > 0 ? String($0) : nil }
     }

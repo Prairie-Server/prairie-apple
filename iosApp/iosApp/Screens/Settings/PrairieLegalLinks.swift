@@ -10,6 +10,7 @@ enum PrairieLegalLinks {
     static let sourceCode = sourceURL(
         stamped: Bundle.main.object(forInfoDictionaryKey: "PrairieSourceURL") as? String
     )
+
     /// Accepts only a release asset of this repository, so a malformed or
     /// unexpanded stamp still leads to the right source.
     static func sourceURL(stamped: String?) -> URL {

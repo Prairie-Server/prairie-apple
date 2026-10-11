@@ -312,6 +312,8 @@ final class AppRouter {
         #else
         nil
         #endif
+    }
+
     @ObservationIgnored private var watchPartySheetPresented = false
     @ObservationIgnored private var pendingWatchPartyPresentation: WatchPartyPlaybackContext?
 

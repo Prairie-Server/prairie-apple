@@ -139,7 +139,9 @@ extension SettingKey {
         .playbackAudioLanguage,
         .playbackIntroSkipMode,
         .playbackAutoSkipCredits,
+        .playbackAutoSkipRecap,
         .playbackAutoPlayNext,
+        .playbackAutoPlayNextPreview,
         .playbackNextUpPromptSeconds,
         .playbackSubtitleAppearance,
         .playerHdrEnabled,
@@ -162,7 +164,9 @@ enum ProfileBackedPlaybackSetting: CaseIterable {
     case audioLanguage
     case introSkipMode
     case autoSkipCredits
+    case autoSkipRecap
     case autoPlayNext
+    case autoPlayNextPreview
     case nextUpPrompt
 
     var keys: [SettingKey] {
@@ -171,7 +175,9 @@ enum ProfileBackedPlaybackSetting: CaseIterable {
         case .audioLanguage: return [.playbackAudioLanguage]
         case .introSkipMode: return [.playbackIntroSkipMode]
         case .autoSkipCredits: return [.playbackAutoSkipCredits]
+        case .autoSkipRecap: return [.playbackAutoSkipRecap]
         case .autoPlayNext: return [.playbackAutoPlayNext]
+        case .autoPlayNextPreview: return [.playbackAutoPlayNextPreview]
         case .nextUpPrompt: return [.playbackNextUpPromptSeconds]
         }
     }
@@ -188,7 +194,9 @@ private extension SettingKey {
     static var audioLanguage: SettingKey { .playbackAudioLanguage }
     static var introSkipMode: SettingKey { .playbackIntroSkipMode }
     static var autoSkipCredits: SettingKey { .playbackAutoSkipCredits }
+    static var autoSkipRecap: SettingKey { .playbackAutoSkipRecap }
     static var autoPlayNext: SettingKey { .playbackAutoPlayNext }
+    static var autoPlayNextPreview: SettingKey { .playbackAutoPlayNextPreview }
     static var nextUpPromptSeconds: SettingKey { .playbackNextUpPromptSeconds }
     static var subtitleAppearance: SettingKey { .playbackSubtitleAppearance }
     static var hdrEnabled: SettingKey { .playerHdrEnabled }
@@ -305,6 +313,13 @@ final class PlayerSettings {
         didSet {
             guard !isLoadingCache else { return }
             defaults.set(autoSkipCredits, forKey: Self.cacheKey(Keys.autoSkipCredits))
+        }
+    }
+
+    private(set) var autoSkipRecap: Bool {
+        didSet {
+            guard !isLoadingCache else { return }
+            defaults.set(autoSkipRecap, forKey: Self.cacheKey(Keys.autoSkipRecap))
         }
     }
 
@@ -523,6 +538,13 @@ final class PlayerSettings {
         }
     }
 
+    private(set) var autoPlayNextPreview: Bool {
+        didSet {
+            guard !isLoadingCache else { return }
+            defaults.set(autoPlayNextPreview, forKey: Self.cacheKey(Keys.autoPlayNextPreview))
+        }
+    }
+
     private(set) var nextUpPromptSeconds: Int {
         didSet {
             guard !isLoadingCache else { return }
@@ -589,6 +611,7 @@ final class PlayerSettings {
         audioLanguage = defaults.string(forKey: Self.cacheKey(Keys.audioLanguage)) ?? ""
         introSkipMode = Self.cachedIntroSkipMode(defaults)
         autoSkipCredits = Self.cachedBool(defaults, key: Keys.autoSkipCredits, defaultValue: false)
+        autoSkipRecap = Self.cachedBool(defaults, key: Keys.autoSkipRecap, defaultValue: false)
         hdrEnabled = Self.cachedBool(defaults, key: Keys.hdrEnabled, defaultValue: true)
         dolbyVisionEnabled = Self.cachedBool(defaults, key: Keys.dolbyVisionEnabled, defaultValue: true)
         seekCacheEnabled = Self.cachedBool(
@@ -639,6 +662,11 @@ final class PlayerSettings {
             key: Keys.autoPlayNextEpisode,
             legacyKey: Keys.legacyAutoPlayNextEpisode,
             defaultValue: true
+        )
+        autoPlayNextPreview = Self.cachedBool(
+            defaults,
+            key: Keys.autoPlayNextPreview,
+            defaultValue: false
         )
         nextUpPromptSeconds = Self.clampNextUpPromptSeconds(
             Self.cachedInt(defaults, key: Keys.nextUpPromptSeconds, defaultValue: 30)
@@ -817,9 +845,19 @@ final class PlayerSettings {
         enqueueDeviceValue(.autoSkipCredits, value: .bool(enabled))
     }
 
+    func setAutoSkipRecap(_ enabled: Bool) {
+        autoSkipRecap = enabled
+        enqueueDeviceValue(.autoSkipRecap, value: .bool(enabled))
+    }
+
     func setAutoPlayNextEpisode(_ enabled: Bool) {
         autoPlayNextEpisode = enabled
         enqueueDeviceValue(.autoPlayNext, value: .bool(enabled))
+    }
+
+    func setAutoPlayNextPreview(_ enabled: Bool) {
+        autoPlayNextPreview = enabled
+        enqueueDeviceValue(.autoPlayNextPreview, value: .bool(enabled))
     }
 
     func setNextUpPromptSeconds(_ seconds: Int) {
@@ -1201,7 +1239,9 @@ final class PlayerSettings {
             wireValue: effectiveByKey[.introSkipMode]?.value.stringValue
         ) ?? .default
         autoSkipCredits = effectiveBool(.autoSkipCredits, in: effectiveByKey, default: false)
+        autoSkipRecap = effectiveBool(.autoSkipRecap, in: effectiveByKey, default: false)
         autoPlayNextEpisode = effectiveBool(.autoPlayNext, in: effectiveByKey, default: true)
+        autoPlayNextPreview = effectiveBool(.autoPlayNextPreview, in: effectiveByKey, default: false)
         nextUpPromptSeconds = Self.clampNextUpPromptSeconds(
             effectiveByKey[.nextUpPromptSeconds]?.value.intValue ?? 30
         )
@@ -1315,6 +1355,11 @@ final class PlayerSettings {
                 Self.cachedBool(defaults, key: Keys.autoSkipCredits, defaultValue: false)
             )
         }
+        if hasStoredValue(Keys.autoSkipRecap) {
+            snapshot[.autoSkipRecap] = .bool(
+                Self.cachedBool(defaults, key: Keys.autoSkipRecap, defaultValue: false)
+            )
+        }
         if hasStoredValue(Keys.autoPlayNextEpisode)
             || defaults.object(forKey: Keys.legacyAutoPlayNextEpisode) != nil {
             snapshot[.autoPlayNext] = .bool(
@@ -1324,6 +1369,11 @@ final class PlayerSettings {
                     legacyKey: Keys.legacyAutoPlayNextEpisode,
                     defaultValue: true
                 )
+            )
+        }
+        if hasStoredValue(Keys.autoPlayNextPreview) {
+            snapshot[.autoPlayNextPreview] = .bool(
+                Self.cachedBool(defaults, key: Keys.autoPlayNextPreview, defaultValue: false)
             )
         }
         if hasStoredValue(Keys.nextUpPromptSeconds) {
@@ -1582,7 +1632,9 @@ final class PlayerSettings {
         defaults.set(false, forKey: key(Keys.autoSkipIntro))
         defaults.set(IntroSkipMode.default.wireValue, forKey: key(Keys.introSkipMode))
         defaults.set(false, forKey: key(Keys.autoSkipCredits))
+        defaults.set(false, forKey: key(Keys.autoSkipRecap))
         defaults.set(true, forKey: key(Keys.autoPlayNextEpisode))
+        defaults.set(false, forKey: key(Keys.autoPlayNextPreview))
         defaults.set(30, forKey: key(Keys.nextUpPromptSeconds))
         defaults.set(true, forKey: key(Keys.hdrEnabled))
         defaults.set(true, forKey: key(Keys.dolbyVisionEnabled))
@@ -1753,6 +1805,7 @@ final class PlayerSettings {
         static let autoSkipIntro = "skipIntros"
         static let introSkipMode = "player.introSkipMode"
         static let autoSkipCredits = "skipCredits"
+        static let autoSkipRecap = "skipRecaps"
         static let hdrEnabled = "player.hdrEnabled"
         static let dolbyVisionEnabled = "player.dolbyVisionEnabled"
         static let seekCacheEnabled = "player.seekCacheEnabled"
@@ -1772,6 +1825,7 @@ final class PlayerSettings {
         static let playerOrientationMode = "player.playerOrientationMode"
         static let autoPlayNextEpisode = "autoPlayNext"
         static let legacyAutoPlayNextEpisode = "player.autoPlayNextEpisode"
+        static let autoPlayNextPreview = "autoPlayNextPreview"
         static let nextUpPromptSeconds = "player.nextUpPromptSeconds"
         static let deviceOverriddenKeys = "player.deviceOverriddenKeys"
     }
