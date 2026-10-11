@@ -62,7 +62,7 @@ packages:
   # The only media engine in the replacement player. Keep this at an exact
   # reviewed revision; Package.resolved also freezes its binary dependencies.
   AetherEngine:
-    url: https://github.com/Prairie-Server/AetherEngine
+    url: https://github.com/Silo-Server/AetherEngine
     revision: ef0d2c7f2aa564c03b789c40f8f5c5351fc1d084
   SwiftAssRenderer:
     url: https://github.com/mihai8804858/swift-ass-renderer
