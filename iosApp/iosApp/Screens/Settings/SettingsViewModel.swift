@@ -57,6 +57,11 @@ final class SettingsViewModel {
         set { PlayerSettings.shared.setAutoPlayNextEpisode(newValue) }
     }
 
+    var previewNextEpisode: Bool {
+        get { PlayerSettings.shared.autoPlayNextPreview }
+        set { PlayerSettings.shared.setAutoPlayNextPreview(newValue) }
+    }
+
     var nextUpPromptSeconds: Int {
         get { PlayerSettings.shared.nextUpPromptSeconds }
         set { PlayerSettings.shared.setNextUpPromptSeconds(newValue) }
@@ -70,6 +75,11 @@ final class SettingsViewModel {
     var skipCredits: Bool {
         get { PlayerSettings.shared.autoSkipCredits }
         set { PlayerSettings.shared.setAutoSkipCredits(newValue) }
+    }
+
+    var skipRecaps: Bool {
+        get { PlayerSettings.shared.autoSkipRecap }
+        set { PlayerSettings.shared.setAutoSkipRecap(newValue) }
     }
 
     /// The player settings the HDR rows edit. Injectable so a test can drive
