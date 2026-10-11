@@ -269,3 +269,10 @@ enum WatchPartyLobbyPolicy {
             .split(separator: "/").reduce("") { $0 + "/" + $1 }
     }
 }
+
+/// Stand-in for the network-identity sign-in helper; APIv2ExternalSignInModels
+/// only classifies providers through apiPath. The real type lives in
+/// Screens/Auth/NetworkSignIn.swift, which pulls the app's UI copy helpers.
+enum NetworkSignIn {
+    static func apiPath(of provider: APIv2AuthProvider) -> String? { nil }
+}

@@ -119,7 +119,6 @@ targets:
       - path: iosApp/Control/tvOS/RemotePlaybackIdentityManager.swift
       - path: iosApp/Screens/Player/PlayerTrack.swift
       - path: iosApp/Screens/Auth/AuthModels.swift
-      - path: iosApp/Screens/Auth/NetworkSignIn.swift
       - path: iosApp/Screens/Calendar/CalendarModels.swift
       - path: iosApp/Screens/Player/Subtitles/SubtitleAppearance.swift
       - path: iosApp/Screens/Player/ProtocolV3/PlaybackProtocolV3Models.swift
