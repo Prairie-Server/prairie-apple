@@ -2,15 +2,10 @@
 //  PlayerSettingsFlusher.swift
 //  Prairie (iOS + tvOS + macOS)
 //
-//  Debounced writer for the player's device-scoped settings, speaking the
-//  canonical settings API (`PUT`/`DELETE /api/v2/settings/values/{key}` at
-//  scope `profile_device`).
-//
-//  Failure handling is the point of this type, not an afterthought. The
-//  inline flusher this replaces dropped nothing on purpose but also retried
-//  nothing: a write that failed mid-drain sat in the queue until the *next*
-//  user edit happened to trigger another flush, so one server hiccup made a
-//  setting look non-persistent until the user toggled something unrelated.
+//  Debounced, retried writer for device-scoped player settings (PUT/DELETE
+//  `/api/v2/settings/values/{key}` at `profile_device`). One pending value per
+//  key; transient failures retry on a bounded backoff, then the key is held
+//  until the user retries or discards it.
 //
 //  The writes are `natural_idempotent`: each one names the desired value of
 //  one row, so sending it again converges instead of applying twice. There
@@ -359,6 +354,13 @@ final class PlayerSettingsFlusher: @unchecked Sendable {
 
     private var lifecycleObservers: [NSObjectProtocol] = []
 
+    /// The connected server's manifest revision, from the last successful
+    /// ``effectiveValues(keys:)`` since ``forgetManifestRevision()``.
+    private var manifestRevision: Int?
+    /// Bumped by ``forgetManifestRevision()`` so a read that was already in
+    /// flight for the previous server cannot record that server's revision.
+    private var manifestRevisionGeneration: UInt64 = 0
+
     init(
         transport: PlayerSettingsTransport,
         debounce: Duration = PlayerSettingsFlusher.defaultDebounce,
@@ -404,8 +406,7 @@ final class PlayerSettingsFlusher: @unchecked Sendable {
     ///
     /// Without this the debounce window is a data-loss hole: a user who flips a
     /// toggle and immediately swipes the app away has their change sitting in a
-    /// timer that never fires. The old inline flusher had no window and so no
-    /// such gap; adding the window means adding this.
+    /// timer that never fires.
     ///
     /// The notification alone is not enough, which is why the durable journal
     /// exists alongside it. On macOS the only lifecycle signal available before
@@ -462,8 +463,49 @@ final class PlayerSettingsFlusher: @unchecked Sendable {
     /// On the flusher rather than reached for directly so ``PlayerSettings``
     /// has one seam to fake in tests, and so the read and the writes cannot
     /// drift onto different transports.
+    ///
+    /// A successful read also records the server's manifest revision, which
+    /// decides at send time what a key with ``SettingKey/revisionGatedMembers``
+    /// may carry.
     func effectiveValues(keys: [SettingKey]) async throws -> EffectiveSettingValuesResponse {
-        try await transport.effectiveValues(keys: keys)
+        let generation = lock.withLock { manifestRevisionGeneration }
+        let response = try await transport.effectiveValues(keys: keys)
+        lock.withLock {
+            if manifestRevisionGeneration == generation {
+                manifestRevision = response.revision
+            }
+        }
+        return response
+    }
+
+    /// The manifest revision the last successful ``effectiveValues(keys:)``
+    /// reported, or `nil` when none has succeeded since the last
+    /// ``forgetManifestRevision()``.
+    var knownManifestRevision: Int? {
+        lock.withLock { manifestRevision }
+    }
+
+    /// Stop trusting the recorded revision, because the server or profile the
+    /// next read answers for may be a different one. Writes that depend on the
+    /// revision wait until a read records it again.
+    func forgetManifestRevision() {
+        lock.withLock {
+            manifestRevision = nil
+            manifestRevisionGeneration &+= 1
+        }
+    }
+
+    /// True while a write for a key with ``SettingKey/revisionGatedMembers``
+    /// is queued and not yet attempted — typically one that waited because it
+    /// was made before ``knownManifestRevision`` was known. Ops on the backoff
+    /// schedule or held are left to their own triggers.
+    var hasRevisionGatedWrites: Bool {
+        lock.withLock {
+            pending.contains { key, write in
+                guard !write.isHeld, write.failedAttempts == 0, case .set = write.operation else { return false }
+                return !key.revisionGatedMembers.isEmpty
+            }
+        }
     }
 
     /// Re-read the journal and adopt anything it still owes.
@@ -523,6 +565,16 @@ final class PlayerSettingsFlusher: @unchecked Sendable {
         return !pending.isEmpty || !inFlight.isEmpty || isDraining
     }
 
+    /// Whether a debounce timer is waiting to drain the queue. Read by tests.
+    var hasArmedDebounce: Bool {
+        lock.withLock { debounceTask != nil }
+    }
+
+    /// Whether a backoff timer is waiting to retry a failed write. Read by tests.
+    var hasArmedRetry: Bool {
+        lock.withLock { retryTask != nil }
+    }
+
     /// True while a flush has something to send: held changes do not count.
     private var hasSendableWrites: Bool {
         lock.withLock { pending.values.contains { !$0.isHeld } || !inFlight.isEmpty || isDraining }
@@ -574,6 +626,27 @@ final class PlayerSettingsFlusher: @unchecked Sendable {
                 }
             }
             return values
+        }
+    }
+
+    /// Keys whose latest owed change is a clear — queued, in flight or held —
+    /// for the active partition. Until it lands the server still answers with
+    /// the device value the clear removes, so a refresh must not read that
+    /// answer as this device still holding its own value.
+    var unsettledClears: Set<SettingKey> {
+        lock.withLock {
+            var keys: Set<SettingKey> = []
+            for (key, write) in inFlight where write.scopeIdentifier == activeJournalScope {
+                if case .delete = write.operation { keys.insert(key) }
+            }
+            for (key, write) in pending {
+                if case .delete = write.operation {
+                    keys.insert(key)
+                } else {
+                    keys.remove(key)
+                }
+            }
+            return keys
         }
     }
 
@@ -947,7 +1020,19 @@ final class PlayerSettingsFlusher: @unchecked Sendable {
         do {
             switch write.operation {
             case .set(let value):
-                try await transport.putValue(key: key, value: value, profileId: write.profileId)
+                var wireValue = value
+                if !key.revisionGatedMembers.isEmpty {
+                    // Decided here rather than at enqueue: the queued value
+                    // keeps every member, so a write queued before the revision
+                    // was known is neither sent to an older server with members
+                    // it rejects nor stripped for a server that stores them.
+                    guard let revision = knownManifestRevision else {
+                        log(key, "server manifest revision not known yet", kept: true)
+                        return .retryOnNextTrigger
+                    }
+                    wireValue = key.wireValue(value, forServerRevision: revision)
+                }
+                try await transport.putValue(key: key, value: wireValue, profileId: write.profileId)
             case .delete:
                 try await transport.deleteValue(key: key, profileId: write.profileId)
             }

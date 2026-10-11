@@ -1,0 +1,20 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Problem with the server or web app
+    url: https://github.com/Prairie-Server/prairie-server/issues/new/choose
+    about: Report it in prairie-server, especially if it also happens in the web app.
+  - name: Problem in the Android phone or TV app
+    url: https://github.com/Prairie-Server/prairie-android/issues/new/choose
+    about: Report it in prairie-android.
+  - name: Questions and setup help
+    url: https://discord.gg/prairieserver
+    about: Ask how to set up or use Prairie in the Prairie Discord.
+  - name: Report a security vulnerability
+    url: https://github.com/Prairie-Server/prairie-apple/security/advisories/new
+    about: Report it privately. Do not open a public issue.
+  - name: How to report a problem
+    url: https://prairieserver.org/docs/report-a-problem
+    about: Where to find versions, player stats, and diagnostics, and what to include.
+  - name: Troubleshoot with an AI agent
+    url: https://github.com/Prairie-Server/prairie-troubleshooting-skill
+    about: Use Claude Code or Codex to collect the details and draft a reviewed report.

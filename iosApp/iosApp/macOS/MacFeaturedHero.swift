@@ -1,0 +1,430 @@
+#if os(macOS)
+import SwiftUI
+
+/// Hero for a Home section the server marks as featured.
+///
+/// The section's layout is defined on the server, so a featured section is a
+/// hero on every client, not a poster row. The current title fills the
+/// backdrop with its metadata, synopsis, and primary actions, and the
+/// section's full list runs along the bottom with the current title
+/// highlighted. Clicking a title in the list brings it up; the hero also
+/// advances on its own and pauses while the pointer is over it.
+struct MacFeaturedHero: View {
+    let section: ResolvedSection
+
+    @Environment(AppRouter.self) private var router
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
+    @State private var index = 0
+    @State private var isHovering = false
+    /// The logo that has finished loading. Until a title's logo is in, its
+    /// name is shown as text, so the hero is never untitled.
+    @State private var loadedLogoURL: String?
+    private var translation: CardDescriptionTranslation { .shared }
+
+    private struct TranslationTrigger: Hashable {
+        let contentId: String
+        let language: String?
+        let mode: MetadataAIStatus.OnViewMode
+    }
+
+    private var item: SectionItem? {
+        guard !section.items.isEmpty else { return nil }
+        return section.items[min(index, section.items.count - 1)]
+    }
+
+    var body: some View {
+        if let item {
+            ZStack(alignment: .bottomLeading) {
+                backdrop(for: item)
+                scrim
+                VStack(alignment: .leading, spacing: PrairieTheme.largePadding) {
+                    details(for: item)
+                    titleStrip
+                }
+                .padding(.bottom, PrairieTheme.padding)
+            }
+            .frame(maxWidth: .infinity)
+            // A share of the window, so the rows below stay in view.
+            .containerRelativeFrame(.vertical) { length, _ in
+                min(
+                    PrairieTheme.macHeroMaxHeight,
+                    max(PrairieTheme.macHeroMinHeight, length * PrairieTheme.macHeroWindowFraction)
+                )
+            }
+            .clipped()
+            .onHover { isHovering = $0 }
+            .task(id: AdvanceTrigger(index: index, isPaused: isPaused, ids: section.items.map(\.contentId))) {
+                await advanceAfterDelay()
+            }
+            // Only the slide on show translates on view; the others wait
+            // until they come up.
+            .task(id: TranslationTrigger(
+                contentId: item.contentId,
+                language: translatablePresentation(for: item)?.pendingLanguage,
+                mode: AICapabilities.shared.metadataOnView
+            )) {
+                translation.cardDidAppear(
+                    contentId: item.contentId,
+                    pendingLanguage: translatablePresentation(for: item)?.pendingLanguage,
+                    libraryId: nil
+                )
+            }
+            .onChange(of: section.items.map(\.contentId)) { _, ids in
+                // A reload can shorten the section; keep the label and the
+                // highlight on a title that still exists.
+                if index >= ids.count { index = max(0, ids.count - 1) }
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Featured")
+        }
+    }
+
+    // MARK: - Layers
+
+    private func backdrop(for item: SectionItem) -> some View {
+        Group {
+            // An empty URL is no artwork: fall back as for a missing one.
+            let backdropURL = item.backdropUrl?.nonEmpty
+            if let url = backdropURL ?? item.posterUrl?.nonEmpty {
+                AsyncImageView(
+                    url: url,
+                    thumbhash: backdropURL == nil ? item.posterThumbhash : item.backdropThumbhash,
+                    contentMode: .fill
+                )
+                .episodeSpoilerBlur(EpisodeSpoilerPreferences.shared.settings.hidesImage(for: item))
+            } else {
+                Color.prairieSurfaceElevated
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
+        .id(item.contentId)
+        .transition(.opacity)
+        .accessibilityHidden(true)
+    }
+
+    /// Fades the artwork into the page canvas on the leading and bottom
+    /// edges: the text stays legible, and the hero has no hard edge beside
+    /// the sidebar or above the first row.
+    private var scrim: some View {
+        ZStack {
+            LinearGradient(
+                stops: [
+                    .init(color: .prairiePageCanvas, location: 0),
+                    .init(color: Color.prairiePageCanvas.opacity(0.7), location: 0.3),
+                    .init(color: .clear, location: 0.7),
+                ],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0.45),
+                    .init(color: .prairiePageCanvas, location: 1),
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private func details(for item: SectionItem) -> some View {
+        VStack(alignment: .leading, spacing: PrairieTheme.spacing) {
+            Text("Featured — No. \(Self.twoDigit(index + 1))")
+                .font(.prairieCaption.weight(.semibold))
+                .textCase(.uppercase)
+                .tracking(PrairieTheme.macSidebarHeadingTracking)
+                .foregroundStyle(Color.prairieSecondaryText)
+
+            title(for: item)
+
+            if let metadata = Self.metadataLine(for: item) {
+                Text(metadata)
+                    .font(.prairieBody.weight(.semibold))
+                    .foregroundStyle(Color.prairieOnSurface)
+                    .lineLimit(1)
+            }
+
+            overview(for: item)
+
+            HStack(spacing: PrairieTheme.spacing) {
+                // A series has nothing to play directly; More Info opens it.
+                if PrairieMediaType.isDirectlyPlayable(item.type) {
+                    Button { play(item) } label: {
+                        Label("Play", systemImage: "play.fill")
+                            .font(.prairieBody.weight(.semibold))
+                            .foregroundStyle(Color.prairieBackground)
+                            .padding(.horizontal, PrairieTheme.largePadding)
+                            .padding(.vertical, PrairieTheme.spacing)
+                            .background(Capsule().fill(Color.prairiePrimary))
+                            .contentShape(Capsule())
+                    }
+                }
+                Button { openDetail(item) } label: {
+                    Label("More Info", systemImage: "info.circle")
+                        .font(.prairieBody.weight(.semibold))
+                        .foregroundStyle(Color.prairieOnSurface)
+                        .padding(.horizontal, PrairieTheme.largePadding)
+                        .padding(.vertical, PrairieTheme.spacing)
+                        .background(Capsule().fill(Color.prairieChromeSelectedFill))
+                        .overlay(Capsule().stroke(Color.prairieChromeSelectedBorder))
+                        .contentShape(Capsule())
+                }
+            }
+            .buttonStyle(.prairieFlat)
+            .padding(.top, PrairieTheme.smallPadding)
+        }
+        .frame(maxWidth: PrairieTheme.macHeroTextWidth, alignment: .leading)
+        .padding(.leading, HomeFeedMetrics.gutter)
+    }
+
+    /// The synopsis, with its on-view translation status and, in the
+    /// server's `button` mode, a Translate chip.
+    @ViewBuilder
+    private func overview(for item: SectionItem) -> some View {
+        if let presentation = translatablePresentation(for: item),
+           let overview = presentation.overview, !overview.isEmpty {
+            let offersTranslation = translation.offersTranslation(
+                contentId: item.contentId,
+                pendingLanguage: presentation.pendingLanguage
+            )
+            VStack(alignment: .leading, spacing: PrairieTheme.smallPadding) {
+                Text(overview)
+                    .font(.prairieBody)
+                    .foregroundStyle(Color.prairieSecondaryText)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .opacity(presentation.status == .translating ? 0.5 : 1)
+                if presentation.status != nil || offersTranslation {
+                    HStack(spacing: PrairieTheme.spacing) {
+                        if let status = presentation.status {
+                            DescriptionTranslationStatusLabel(status: status)
+                        }
+                        if offersTranslation {
+                            Button {
+                                translation.translate(
+                                    contentId: item.contentId,
+                                    pendingLanguage: presentation.pendingLanguage,
+                                    libraryId: nil
+                                )
+                            } label: {
+                                Label("Translate", systemImage: MachineTranslation.symbol)
+                                    .font(.prairieCaption)
+                                    .foregroundStyle(Color.prairieSecondaryText)
+                                    .padding(.horizontal, PrairieTheme.spacing)
+                                    .padding(.vertical, 2)
+                                    .overlay(Capsule().stroke(Color.prairieChromeSelectedBorder))
+                                    .contentShape(Capsule())
+                            }
+                            .buttonStyle(.prairieFlat)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The slide's description and its translation state, or nil while
+    /// spoiler protection hides an unwatched episode's description: a
+    /// translation must neither show it nor start for it.
+    private func translatablePresentation(for item: SectionItem) -> CardDescriptionTranslation.Presentation? {
+        guard !EpisodeSpoilerPreferences.shared.settings.hidesOverview(for: item) else { return nil }
+        return translation.presentation(for: item)
+    }
+
+    /// The title's logo artwork where the server has one, otherwise its name.
+    @ViewBuilder
+    private func title(for item: SectionItem) -> some View {
+        let name = Text(item.title)
+            .font(.prairieHeroTitle)
+            .foregroundStyle(Color.prairieOnSurface)
+            .lineLimit(2)
+            .minimumScaleFactor(0.7)
+
+        if let logoURL = item.logoUrl, !logoURL.isEmpty {
+            let isLoaded = loadedLogoURL == logoURL
+            ZStack(alignment: .bottomLeading) {
+                name.opacity(isLoaded ? 0 : 1)
+                MacTitleLogo(url: logoURL, size: Self.logoSize) {
+                    loadedLogoURL = logoURL
+                }
+                .opacity(isLoaded ? 1 : 0)
+                .id(logoURL)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(item.title)
+            .accessibilityAddTraits(.isHeader)
+        } else {
+            name.accessibilityAddTraits(.isHeader)
+        }
+    }
+
+    private static var logoSize: CGSize {
+        CGSize(width: PrairieTheme.macHeroLogoWidth, height: PrairieTheme.macHeroLogoHeight)
+    }
+
+    /// Every title in the section, with the one on show highlighted.
+    private var titleStrip: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: HomeFeedMetrics.cardSpacing) {
+                    ForEach(Array(section.items.enumerated()), id: \.element.contentId) { offset, entry in
+                        Button { select(offset) } label: {
+                            thumbnail(for: entry, isCurrent: offset == index)
+                        }
+                        .buttonStyle(.prairieFlat)
+                        .id(entry.contentId)
+                        .accessibilityLabel(entry.title)
+                        .accessibilityAddTraits(offset == index ? .isSelected : [])
+                    }
+                }
+                .padding(.horizontal, HomeFeedMetrics.gutter)
+                // Room for the highlight ring, which draws outside the art.
+                .padding(.vertical, PrairieTheme.smallPadding)
+            }
+            .onChange(of: index) { _, newIndex in
+                guard section.items.indices.contains(newIndex) else { return }
+                withAnimation(.easeInOut(duration: PrairieTheme.slowDuration)) {
+                    proxy.scrollTo(section.items[newIndex].contentId, anchor: .center)
+                }
+            }
+        }
+        .frame(height: Self.thumbnailSize.height + PrairieTheme.smallPadding * 2)
+    }
+
+    /// The list's posters match the poster rows below the hero, including
+    /// the Poster Size setting.
+    private static var thumbnailSize: CGSize {
+        let width = HomeFeedRow.posterWidth
+        return CGSize(width: width, height: width * HomeFeedMetrics.posterAspect)
+    }
+
+    private func thumbnail(for entry: SectionItem, isCurrent: Bool) -> some View {
+        let shape = RoundedRectangle(cornerRadius: HomeFeedMetrics.posterRadius, style: .continuous)
+        return Group {
+            if let url = entry.posterUrl?.nonEmpty {
+                AsyncImageView(
+                    url: url,
+                    thumbhash: entry.posterThumbhash,
+                    targetSize: Self.thumbnailSize,
+                    contentMode: .fill
+                )
+                .episodeSpoilerBlur(entry.isEpisodeItem && EpisodeSpoilerPreferences.shared.settings.hidesImage(
+                    for: EpisodeWatchState(sectionItem: entry), isEpisodeStill: entry.posterIsEpisodeStill
+                ))
+            } else {
+                Color.prairieSurfaceElevated
+                    .overlay {
+                        Text(entry.title)
+                            .font(.prairieSmall)
+                            .foregroundStyle(Color.prairieSecondaryText)
+                            .multilineTextAlignment(.center)
+                            .padding(PrairieTheme.smallPadding)
+                    }
+            }
+        }
+        .frame(width: Self.thumbnailSize.width, height: Self.thumbnailSize.height)
+        .clipShape(shape)
+        .overlay {
+            shape.fill(Color.black.opacity(isCurrent ? 0 : PrairieTheme.macHeroUnselectedShade))
+        }
+        .overlay {
+            shape.strokeBorder(
+                isCurrent ? Color.prairiePrimary : Color.clear,
+                lineWidth: PrairieTheme.macHeroSelectionRingWidth
+            )
+        }
+        .contentShape(shape)
+    }
+
+    // MARK: - Behaviour
+
+    private struct AdvanceTrigger: Equatable {
+        let index: Int
+        let isPaused: Bool
+        /// Any change to the section's titles restarts the timer, so a
+        /// pending advance never acts on titles that have been replaced,
+        /// and a section that grows from one title starts advancing.
+        let ids: [String]
+    }
+
+    /// The title must not change under someone reading or operating the
+    /// hero: under the pointer, with Reduce Motion, or with VoiceOver on.
+    private var isPaused: Bool {
+        isHovering || reduceMotion || voiceOverEnabled
+    }
+
+    private func advanceAfterDelay() async {
+        guard !isPaused, section.items.count > 1 else { return }
+        try? await Task.sleep(for: .seconds(PrairieTheme.macHeroAdvanceSeconds))
+        guard !Task.isCancelled else { return }
+        step(1)
+    }
+
+    /// Brings a title up; clicking the one already on show opens it.
+    private func select(_ offset: Int) {
+        guard offset != index else {
+            if let item { openDetail(item) }
+            return
+        }
+        withAnimation(.easeInOut(duration: PrairieTheme.slowDuration)) {
+            index = offset
+        }
+    }
+
+    private func step(_ delta: Int) {
+        let count = section.items.count
+        guard count > 1 else { return }
+        withAnimation(.easeInOut(duration: PrairieTheme.slowDuration)) {
+            index = (index + delta + count) % count
+        }
+    }
+
+    private func play(_ item: SectionItem) {
+        router.presentPlayer(
+            contentId: item.contentId,
+            resumePosition: item.positionSeconds,
+            // Resume sections reopen the version last watched, as their
+            // cards do when the section is drawn as a row.
+            prefersLastUsedVersion: HomeFeed.isResume(section),
+            posterURL: item.posterUrl,
+            backdropURL: item.backdropUrl
+        )
+    }
+
+    private func openDetail(_ item: SectionItem) {
+        router.navigate(
+            to: .itemDetail(destinationContentId: item.contentId, sectionItem: item)
+        )
+    }
+
+    // MARK: - Formatting
+
+    static func twoDigit(_ value: Int) -> String {
+        value < 10 ? "0\(value)" : "\(value)"
+    }
+
+    /// "2015 · 2h 1m · IMDb 8.1 · Action · Adventure · R", skipping whatever
+    /// the item does not carry.
+    static func metadataLine(for item: SectionItem) -> String? {
+        var parts: [String] = []
+        if let year = item.year { parts.append(String(year)) }
+        if let runtime = MediaTextFormatting.runtime(minutes: item.runtime) { parts.append(runtime) }
+        if let rating = item.ratingImdb, rating > 0 {
+            parts.append("IMDb " + String(format: "%.1f", rating))
+        }
+        parts.append(contentsOf: (item.genres ?? []).prefix(2))
+        if let contentRating = item.contentRating, !contentRating.isEmpty {
+            parts.append(contentRating)
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+}
+
+private extension String {
+    var nonEmpty: String? { isEmpty ? nil : self }
+}
+#endif

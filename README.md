@@ -132,14 +132,20 @@ Fastlane lanes are defined in `fastlane/Fastfile`. All Apple IDs, team IDs, sign
 
 ## Contributing
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Features,
-navigation or behavior changes, large refactors, and shared contract changes
-should start as an issue.
+Right now, the most helpful way to contribute is a clear, accurate issue. We
+implement and review changes through our own workflow, and pull request volume
+has outgrown what we can review carefully, so a good issue usually helps us
+more than a pull request.
+
+Pull requests are still welcome from contributors who've had one merged in a
+Prairie repository, or when a maintainer asks for one. We close other pull
+requests without review. [CONTRIBUTING.md](CONTRIBUTING.md) explains what makes
+an issue useful.
 
 ## License & Trademarks
 
 Prairie Apple is licensed under `AGPL-3.0-or-later` with an additional
-permission under AGPL section 7, inherited from upstream Silo Apple, allowing
+permission under AGPL section 7, inherited from upstream Prairie Apple, allowing
 distribution through the Apple App Store and TestFlight despite those platforms' signing, DRM, and
 redistribution terms. See [LICENSE](LICENSE) and
 [APPSTORE-EXCEPTION.md](APPSTORE-EXCEPTION.md).

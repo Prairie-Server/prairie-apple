@@ -16,8 +16,11 @@ struct WatchPartySelectedItem: Equatable, Sendable {
     /// the season or series poster so the lobby's 2:3 slot gets portrait art.
     var posterUrl: String?
     var posterThumbhash: String?
+    var posterIsEpisodeStill: Bool?
     let backdropUrl: String?
     let backdropThumbhash: String?
+    let backdropIsEpisodeStill: Bool?
+    var episodeWatchState: EpisodeWatchState?
     let year: Int?
     let runtimeMinutes: Int?
     let contentRating: String?
@@ -34,8 +37,15 @@ struct WatchPartySelectedItem: Equatable, Sendable {
         } else { subtitle = item.seriesTitle }
         posterUrl = item.posterUrl
         posterThumbhash = item.posterThumbhash
+        posterIsEpisodeStill = item.posterIsEpisodeStill
         backdropUrl = item.backdropUrl
         backdropThumbhash = item.backdropThumbhash
+        backdropIsEpisodeStill = item.backdropIsEpisodeStill
+        episodeWatchState = PrairieMediaType.isEpisode(item.type) ? EpisodeWatchState(
+            played: item.userData?.played ?? item.userState?.played ?? false,
+            isInProgress: item.userData?.isInProgress,
+            positionSeconds: item.userData?.positionSeconds
+        ) : nil
         year = item.year.flatMap { Int(exactly: $0) }
         runtimeMinutes = item.runtime.flatMap { Int(exactly: $0) }
         contentRating = item.contentRating?.trimmingCharacters(in: .whitespaces).nilIfEmpty
@@ -54,15 +64,20 @@ struct WatchPartySelectedItem: Equatable, Sendable {
     /// The lobby lays out from this while the room and catalog reads run.
     init(previewContentId contentId: String, type: String, title: String, subtitle: String? = nil,
          posterUrl: String?, posterThumbhash: String? = nil, backdropUrl: String?, backdropThumbhash: String? = nil,
-         year: Int? = nil, runtimeMinutes: Int? = nil, overview: String? = nil) {
+         year: Int? = nil, runtimeMinutes: Int? = nil, overview: String? = nil,
+         posterIsEpisodeStill: Bool? = nil, backdropIsEpisodeStill: Bool? = nil,
+         episodeWatchState: EpisodeWatchState? = nil) {
         self.contentId = contentId
         self.type = type
         self.title = title
         self.subtitle = subtitle
         self.posterUrl = posterUrl
         self.posterThumbhash = posterThumbhash
+        self.posterIsEpisodeStill = posterIsEpisodeStill
         self.backdropUrl = backdropUrl
         self.backdropThumbhash = backdropThumbhash
+        self.backdropIsEpisodeStill = backdropIsEpisodeStill
+        self.episodeWatchState = PrairieMediaType.isEpisode(type) ? (episodeWatchState ?? EpisodeWatchState(played: false)) : nil
         self.year = year
         self.runtimeMinutes = runtimeMinutes
         contentRating = nil
@@ -70,13 +85,33 @@ struct WatchPartySelectedItem: Equatable, Sendable {
         self.overview = overview
     }
 
+    func hidesPoster(with spoilers: EpisodeSpoilerSettings) -> Bool {
+        episodeWatchState.map { spoilers.hidesImage(for: $0, isEpisodeStill: posterIsEpisodeStill) } ?? false
+    }
+
+    func hidesBackdrop(with spoilers: EpisodeSpoilerSettings) -> Bool {
+        let provenance = backdropUrl?.isEmpty == false ? backdropIsEpisodeStill : posterIsEpisodeStill
+        return episodeWatchState.map { spoilers.hidesImage(for: $0, isEpisodeStill: provenance) } ?? false
+    }
+
+    func visibleOverview(with spoilers: EpisodeSpoilerSettings) -> String? {
+        if let episodeWatchState, spoilers.hidesOverview(for: episodeWatchState) { return nil }
+        return overview
+    }
+
+    mutating func recordPlaybackProgress(_ positionSeconds: Double) {
+        guard positionSeconds.isFinite, positionSeconds > 0, var state = episodeWatchState else { return }
+        state.isInProgress = true
+        state.positionSeconds = max(state.positionSeconds ?? 0, positionSeconds)
+        episodeWatchState = state
+    }
+
+
     /// "2024 · 2h 46m" style facts for the hero.
     var factsLine: [String] {
         var facts: [String] = []
         if let year, year > 0 { facts.append(String(year)) }
-        if let runtimeMinutes, runtimeMinutes > 0 {
-            facts.append(runtimeMinutes >= 60 ? "\(runtimeMinutes / 60)h \(runtimeMinutes % 60)m" : "\(runtimeMinutes)m")
-        }
+        if let runtime = MediaTextFormatting.runtime(minutes: runtimeMinutes) { facts.append(runtime) }
         return facts
     }
 }
@@ -86,7 +121,10 @@ extension WatchPartySelectedItem {
         self.init(previewContentId: detail.contentId, type: detail.type, title: detail.title,
                   posterUrl: detail.posterUrl, posterThumbhash: detail.posterThumbhash,
                   backdropUrl: detail.backdropUrl, backdropThumbhash: detail.backdropThumbhash,
-                  year: detail.year, runtimeMinutes: detail.runtime, overview: detail.overview)
+                  year: detail.year, runtimeMinutes: detail.runtime, overview: detail.overview,
+                  posterIsEpisodeStill: detail.posterIsEpisodeStill,
+                  backdropIsEpisodeStill: detail.backdropIsEpisodeStill,
+                  episodeWatchState: EpisodeWatchState(detail.userData, playedOverride: detail.userData?.played ?? detail.userState?.played))
     }
 
     /// Shaped like the loaded episode: series and code as the subtitle, and
@@ -100,7 +138,9 @@ extension WatchPartySelectedItem {
                   posterUrl: seasonPoster ?? series.posterUrl,
                   posterThumbhash: seasonPoster != nil ? season?.posterThumbhash : series.posterThumbhash,
                   backdropUrl: series.backdropUrl, backdropThumbhash: series.backdropThumbhash,
-                  runtimeMinutes: episode.runtime, overview: episode.overview)
+                  runtimeMinutes: episode.runtime, overview: episode.overview,
+                  posterIsEpisodeStill: false, backdropIsEpisodeStill: false,
+                  episodeWatchState: EpisodeWatchState(episode.userData))
     }
 }
 
@@ -148,6 +188,13 @@ enum WatchPartyLobbyPolicy {
         return "\(scheme)://\(host):\(port)/\(path)"
     }
 
+    /// A server's path prefix in `/a/b` form (empty at the root), ready for
+    /// an API or web path to be appended.
+    static func basePath(_ percentEncodedPath: String) -> String {
+        percentEncodedPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            .split(separator: "/").reduce("") { $0 + "/" + $1 }
+    }
+
     static func inviteURL(path: String, serverURL: String) -> URL? {
         guard var invitation = URLComponents(string: path) else { return nil }
         if invitation.scheme == nil && invitation.host == nil {
@@ -155,8 +202,7 @@ enum WatchPartyLobbyPolicy {
             invitation.scheme = server.scheme
             invitation.host = server.host
             invitation.port = server.port
-            invitation.percentEncodedPath = server.percentEncodedPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-                .split(separator: "/").reduce("") { $0 + "/" + $1 } + "/rooms/join"
+            invitation.percentEncodedPath = basePath(server.percentEncodedPath) + "/rooms/join"
         }
         guard let url = invitation.url, let parsed = WatchPartyInvitation(url: url),
               sameServer(parsed.serverURL, serverURL) else { return nil }
@@ -241,5 +287,13 @@ enum WatchPartyLobbyPolicy {
             return .ready(isReady: member.lobbyReady)
         }
         return .none
+    }
+}
+
+extension WatchPartySuggestion {
+    /// Suggestions carry no watch state or artwork provenance, so an
+    /// episode's poster is treated as an untouched episode's still.
+    func hidesPoster(with spoilers: EpisodeSpoilerSettings) -> Bool {
+        PrairieMediaType.isEpisode(contentType) && spoilers.hidesImage(for: EpisodeWatchState(played: false))
     }
 }

@@ -32,6 +32,9 @@ struct OfflinePreparedPlayback {
     /// Cached poster on disk, so the Now Playing widget gets artwork
     /// without a catalog fetch.
     let posterFileURL: URL?
+    /// The file is an MP4 the server remuxed or transcoded, not the source.
+    /// Its container metadata needs `OfflinePreparedTrackInventory`.
+    let isServerPreparedFile: Bool
 }
 
 /// Synthesizes the same `PreparedPlayback` the online path produces, but
@@ -79,14 +82,13 @@ enum OfflinePlaybackBuilder {
                 duration: manifest.durationSeconds
             )
         )
-        let posterFileURL = record.posterFilename.flatMap {
-            manager.absoluteFileURL(for: record, filename: $0)
-        }
+        let posterFileURL = manager.posterImageURL(for: record)
         return OfflinePreparedPlayback(
             prepared: prepared,
             downloadId: record.id,
             mediaItemId: leafId,
-            posterFileURL: posterFileURL
+            posterFileURL: posterFileURL,
+            isServerPreparedFile: manifest.isServerPreparedFile
         )
     }
 
@@ -110,12 +112,15 @@ enum OfflinePlaybackBuilder {
                 index: index,
                 language: subtitle.language,
                 codec: subtitle.format,
-                label: nil,
+                label: subtitle.title,
                 // Manifest subtitles are always sidecar files
-                // (`external:{i}` / `downloaded:{id}`), never embedded, so
-                // they must survive Aether's embedded-track inventory merge.
+                // (`external:{i}`, `downloaded:{id}`, or an `embedded:{i}`
+                // ASS/PGS track extracted for a prepared MP4), never streams
+                // of the downloaded file, so they must survive Aether's
+                // embedded-track inventory merge.
                 source: "external",
                 forced: subtitle.forced,
+                hearingImpaired: subtitle.hearingImpaired,
                 url: fileURL.absoluteString
             ))
         }
@@ -259,10 +264,9 @@ enum OfflinePlaybackBuilder {
 }
 
 extension WatchDetail {
-    /// Build a `WatchDetail` from a stored offline manifest. `WatchDetail`
-    /// has only a decoding initializer, so this sets every stored property
-    /// directly. `userData` is nil — the offline resume point is carried on
-    /// the synthetic session's `position` instead.
+    /// Build a `WatchDetail` from a stored offline manifest. `userData` is
+    /// nil — the offline resume point is carried on the synthetic session's
+    /// `position` instead.
     init(offlineLeafContentId: String, manifest: OfflineManifest, version: FileVersion) {
         contentId = offlineLeafContentId
         type = manifest.type

@@ -93,9 +93,9 @@ final class ASSSubtitleRendererTests: XCTestCase {
     }
 
     func testAttachedFontActuallyShapesTheRenderedGlyph() async throws {
-        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "SiloASSFixture", withExtension: "ttf"))
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "PrairieASSFixture", withExtension: "ttf"))
         let font = FontAttachment(filename: "fixture.ttf", mimeType: "font/ttf", data: try Data(contentsOf: url))
-        let event = ASSSubtitleRenderer.Event(text: "0,0,Default,,0,0,0,,{\\an7\\pos(20,30)\\fnSilo ASS Fixture}X", start: 0, end: 2)
+        let event = ASSSubtitleRenderer.Event(text: "0,0,Default,,0,0,0,,{\\an7\\pos(20,30)\\fnPrairie ASS Fixture}X", start: 0, end: 2)
         let renderer = ASSSubtitleRenderer()
         let frame = try await renderer.render(header: header, fonts: [font], events: [event],
                                              revision: 1, time: 1, size: size, scale: 1)
@@ -137,8 +137,13 @@ final class ASSSubtitleRendererTests: XCTestCase {
         let epoch = controller.beginLoad(spec, shouldPlayWhenReady: false)
         try await controller.finishLoad(epoch)
         XCTAssertEqual(controller.engine.fontAttachments.count, 1)
+        // Start the playback packet pump so embedded cues do not depend on
+        // the background prefetcher winning CPU time on a busy CI runner.
+        controller.setMuted(true)
+        controller.play()
         controller.selectSubtitleTrack(id: 2)
-        try await waitForASS(controller)
+        try await waitForASS(controller, timeout: .seconds(20))
+        controller.pause()
         await controller.assSubtitles.render(size: size, scale: 1, delaySeconds: 0)
         XCTAssertTrue(controller.assSubtitles.handlesCurrentTrack)
         XCTAssertGreaterThan(pixel(controller.assSubtitles.frame, x: 25, y: 45).a, 200)
@@ -172,13 +177,16 @@ final class ASSSubtitleRendererTests: XCTestCase {
                                       panelIsInHDRMode: false)
         let epoch = controller.beginLoad(spec, shouldPlayWhenReady: false)
         try await controller.finishLoad(epoch)
+        controller.setMuted(true)
+        controller.play()
         controller.selectSubtitleTrack(id: 3)
-        try await waitForASS(controller)
+        try await waitForASS(controller, timeout: .seconds(20))
         controller.selectSecondarySubtitleTrack(id: 2)
         for _ in 0..<100 {
             if !controller.engine.secondarySubtitleCues.isEmpty { break }
             try await Task.sleep(for: .milliseconds(50))
         }
+        controller.pause()
         let text = controller.engine.secondarySubtitleCues.compactMap(\.text)
         XCTAssertTrue(text.contains("X"), "The companion overlay must receive display text, not an ASS event")
         XCTAssertFalse(text.contains { $0.contains("Default,,") || $0.contains("\\pos(") })
@@ -187,12 +195,68 @@ final class ASSSubtitleRendererTests: XCTestCase {
     }
 
     @MainActor
-    private func waitForASS(_ controller: AetherPlaybackController) async throws {
-        for _ in 0..<100 {
-            if !controller.engine.isLoadingSubtitles, !controller.engine.subtitleCues.isEmpty { return }
-            try await Task.sleep(for: .milliseconds(50))
+    func testASSReadinessReturnsImmediatelyWhenCuesAreReady() async throws {
+        let instant = ContinuousClock.now
+        var didSleep = false
+        try await waitForASS(timeout: .seconds(20), now: { instant }, sleep: { _ in
+            didSleep = true
+            throw ASSReadinessTimeout()
+        }, isReady: { true })
+        XCTAssertFalse(didSleep, "Published cues must not add a readiness delay")
+    }
+
+    @MainActor
+    func testASSReadinessTimeoutStopsTheCaller() async throws {
+        var instant = ContinuousClock.now
+        let deadline = instant + .seconds(20)
+        do {
+            try await waitForASS(timeout: .seconds(20), now: {
+                defer { instant = deadline }
+                return instant
+            }, sleep: { _ in
+                XCTFail("An expired readiness deadline must not sleep")
+                throw ASSReadinessTimeout()
+            }, isReady: { false })
+            XCTFail("A readiness timeout must throw before the caller continues")
+        } catch is ASSReadinessTimeout {
+            // Expected: rendering and content assertions require published cues.
         }
-        XCTFail("Aether did not publish ASS cues")
+    }
+
+    private struct ASSReadinessTimeout: LocalizedError {
+        var errorDescription: String? { "Aether did not publish ASS cues before the readiness deadline" }
+    }
+
+    @MainActor
+    private func waitForASS(_ controller: AetherPlaybackController, timeout: Duration? = nil) async throws {
+        try await waitForASS(timeout: timeout, isReady: {
+            !controller.engine.isLoadingSubtitles && !controller.engine.subtitleCues.isEmpty
+        })
+    }
+
+    @MainActor
+    private func waitForASS(
+        timeout: Duration?,
+        now: @MainActor () -> ContinuousClock.Instant = { ContinuousClock.now },
+        sleep: @MainActor (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
+        isReady: @MainActor () -> Bool
+    ) async throws {
+        guard let timeout else {
+            for _ in 0..<100 {
+                try Task.checkCancellation()
+                if isReady() { return }
+                try await sleep(.milliseconds(50))
+            }
+            throw ASSReadinessTimeout()
+        }
+        let deadline = now() + timeout
+        while true {
+            try Task.checkCancellation()
+            let remaining = now().duration(to: deadline)
+            guard remaining > .zero else { throw ASSReadinessTimeout() }
+            if isReady() { return }
+            try await sleep(min(.milliseconds(50), remaining))
+        }
     }
 
     private actor PendingFonts {

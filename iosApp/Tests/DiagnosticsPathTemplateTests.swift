@@ -4,7 +4,7 @@ import XCTest
 /// Emission-time path templating for the `network.path` attribute.
 ///
 /// The bar these tests hold the helper to is the hosted collector's own
-/// scanner: `silo-diagnostics/src/privacy.ts` `hasPrivatePathSegment`. That
+/// scanner: `prairie-diagnostics/src/privacy.ts` `hasPrivatePathSegment`. That
 /// function is a whole-report gate — one raw id in one line rejects the entire
 /// bundle — so `assertCollectorWouldAccept` reimplements its rules and every
 /// case asserts the *output* passes them, not merely that it changed.
@@ -151,9 +151,8 @@ final class DiagnosticsPathTemplateTests: XCTestCase {
             DiagnosticsPathTemplate.template("/api/v1/settings/subtitle_appearance/effective"),
             "/api/v1/settings/subtitle_appearance/effective"
         )
-        // …but a 20+ char segment still hits the historical OPAQUE rule, so the
-        // static `library-playback-prefs` route was already collapsing to {id}
-        // on the hosted path before this change.
+        // …but a segment of 20 or more characters still hits the opaque-id
+        // rule, so the static `library-playback-prefs` route collapses to {id}.
         XCTAssertEqual(
             DiagnosticsPathTemplate.template("/api/v1/library-playback-prefs"),
             "/api/v1/{id}"
@@ -197,7 +196,7 @@ final class DiagnosticsPathTemplateTests: XCTestCase {
         assertCollectorWouldAccept(actual, file: file, line: line)
     }
 
-    /// Mirrors `silo-diagnostics/src/privacy.ts` `hasPrivatePathSegment`. Kept
+    /// Mirrors `prairie-diagnostics/src/privacy.ts` `hasPrivatePathSegment`. Kept
     /// in the test rather than the helper on purpose: the helper must satisfy
     /// the collector's rules, so checking it against a copy of its own logic
     /// would prove nothing.

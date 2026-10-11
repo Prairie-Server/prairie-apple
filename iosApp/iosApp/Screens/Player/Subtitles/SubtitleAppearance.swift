@@ -20,11 +20,9 @@ enum SubtitleFontSizePreset: String, Codable, CaseIterable, Identifiable {
         }
     }
 
-    /// Point sizes are interpreted inside the overlay's 1080-line reference
-    /// and scale with the displayed video rect, so they read the same in any
-    /// orientation. The ladder is rebased ~1.4x from the original values
-    /// (large = old xxlarge) after the overlay switched from full-screen to
-    /// video-rect sizing, which shrank the effective render size.
+    /// Point sizes at the overlay's 1080-line reference, scaled with the
+    /// displayed video rect. Each platform's ladder is tuned for its viewing
+    /// distance.
     var pointSize: Double {
         #if os(iOS)
         switch self {
@@ -35,12 +33,6 @@ enum SubtitleFontSizePreset: String, Codable, CaseIterable, Identifiable {
         case .xxlarge: return 77
         }
         #elseif os(tvOS)
-        // Ladder shifted down one notch from the prior tvOS values (large =
-        // old medium) after the defaults read one size too big in the living
-        // room. Each preset now takes the prior rung's value; small is a new
-        // ~1.2x step below medium. Large (the default) was then eased from 63
-        // to 58 — 63 read a touch too big and medium's 51 a touch too small,
-        // so the default now lands between the two.
         switch self {
         case .small: return 43
         case .medium: return 51
@@ -58,14 +50,8 @@ enum SubtitleFontSizePreset: String, Codable, CaseIterable, Identifiable {
         }
         #endif
     }
-
-    static func nearest(to points: Double) -> SubtitleFontSizePreset {
-        allCases.min(by: { abs($0.pointSize - points) < abs($1.pointSize - points) }) ?? .large
-    }
 }
 
-// Future: add a "system" appearance source that maps Apple's Media
-// Accessibility caption preferences into this model before overlay styling.
 struct SubtitleFontFamilyPreset: RawRepresentable, Codable, CaseIterable, Hashable, Identifiable {
     let rawValue: String
 
@@ -91,8 +77,13 @@ struct SubtitleFontFamilyPreset: RawRepresentable, Codable, CaseIterable, Hashab
     static let serif = SubtitleFontFamilyPreset(rawValue: "serif")!
     static let monospace = SubtitleFontFamilyPreset(rawValue: "monospace")!
 
-    static var allCases: [SubtitleFontFamilyPreset] {
-        let legacy = [sansSerif, serif, monospace]
+    /// Computed once: the installed font families don't change while the app runs.
+    static let allCases: [SubtitleFontFamilyPreset] = {
+        let legacy = [
+            SubtitleFontFamilyPreset.sansSerif,
+            SubtitleFontFamilyPreset.serif,
+            SubtitleFontFamilyPreset.monospace,
+        ]
         let legacyValues = Set(legacy.map(\.rawValue))
         let systemFamilies = CTFontManagerCopyAvailableFontFamilyNames() as? [String] ?? []
         let systemPresets = systemFamilies
@@ -101,7 +92,7 @@ struct SubtitleFontFamilyPreset: RawRepresentable, Codable, CaseIterable, Hashab
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
             .compactMap(SubtitleFontFamilyPreset.init(rawValue:))
         return legacy + systemPresets
-    }
+    }()
 
     var id: String { rawValue }
 
@@ -166,14 +157,6 @@ enum SubtitlePositionPreset: String, Codable, CaseIterable, Identifiable {
         case .top: return "Top"
         }
     }
-
-    var legacyPosition: Int {
-        switch self {
-        case .top: return 0
-        case .lowerThird: return 70
-        case .bottom: return 100
-        }
-    }
 }
 
 /// Apple exposes five distinct caption edge treatments. This value is
@@ -221,6 +204,10 @@ struct SubtitleAppearance: Codable, Equatable {
     var backgroundColor: String
     var backgroundStyle: SubtitleBackgroundStylePreset
     var backgroundOpacity: Int
+    /// Opacity of the subtitle text itself, 1-100. Independent of
+    /// `backgroundOpacity` and distinct from the runtime-only `fontOpacity`
+    /// below: this one is a synced, server-backed user preference.
+    var textOpacity: Int
     var textOutline: Bool
     var textOutlineColor: String
     var position: SubtitlePositionPreset
@@ -243,6 +230,7 @@ struct SubtitleAppearance: Codable, Equatable {
         backgroundColor: String,
         backgroundStyle: SubtitleBackgroundStylePreset,
         backgroundOpacity: Int,
+        textOpacity: Int = 100,
         textOutline: Bool,
         textOutlineColor: String,
         position: SubtitlePositionPreset,
@@ -260,6 +248,7 @@ struct SubtitleAppearance: Codable, Equatable {
         self.backgroundColor = backgroundColor
         self.backgroundStyle = backgroundStyle
         self.backgroundOpacity = backgroundOpacity
+        self.textOpacity = textOpacity
         self.textOutline = textOutline
         self.textOutlineColor = textOutlineColor
         self.position = position
@@ -292,6 +281,7 @@ struct SubtitleAppearance: Codable, Equatable {
         ("#d946ef", "Magenta"),
         ("#ef4444", "Red"),
         ("#3b82f6", "Blue"),
+        ("#9ca3af", "Gray"),
         ("#000000", "Black"),
     ]
 
@@ -312,6 +302,7 @@ struct SubtitleAppearance: Codable, Equatable {
         case backgroundColor
         case backgroundStyle
         case backgroundOpacity
+        case textOpacity
         case textOutline
         case textOutlineColor
         case position
@@ -325,6 +316,7 @@ struct SubtitleAppearance: Codable, Equatable {
         self.backgroundColor = try container.decodeIfPresent(String.self, forKey: .backgroundColor) ?? Self.default.backgroundColor
         self.backgroundStyle = try container.decodeIfPresent(SubtitleBackgroundStylePreset.self, forKey: .backgroundStyle) ?? Self.default.backgroundStyle
         self.backgroundOpacity = try container.decodeIfPresent(Int.self, forKey: .backgroundOpacity) ?? Self.default.backgroundOpacity
+        self.textOpacity = try container.decodeIfPresent(Int.self, forKey: .textOpacity) ?? Self.default.textOpacity
         self.textOutline = try container.decodeIfPresent(Bool.self, forKey: .textOutline) ?? Self.default.textOutline
         self.textOutlineColor = try container.decodeIfPresent(String.self, forKey: .textOutlineColor) ?? Self.default.textOutlineColor
         self.position = try container.decodeIfPresent(SubtitlePositionPreset.self, forKey: .position) ?? Self.default.position
@@ -363,6 +355,7 @@ struct SubtitleAppearance: Codable, Equatable {
         if !Self.isValidHex(copy.textOutlineColor) { copy.textOutlineColor = Self.default.textOutlineColor }
         if !Self.isValidHex(copy.captionWindowColor) { copy.captionWindowColor = "#000000" }
         copy.backgroundOpacity = max(0, min(100, copy.backgroundOpacity))
+        copy.textOpacity = max(1, min(100, copy.textOpacity))
         copy.fontOpacity = max(0, min(100, copy.fontOpacity))
         copy.captionWindowOpacity = max(0, min(100, copy.captionWindowOpacity))
         if let scale = copy.systemRelativeFontScale {
@@ -381,6 +374,21 @@ struct SubtitleAppearance: Codable, Equatable {
         return copy
     }
 
+    /// Values for a stepped opacity picker: `lowest` up to 100 in `step`
+    /// increments, plus `current` when another client stored a value between
+    /// them. Without `current`, a D-pad picker shows no selection, focus lands
+    /// on the first option, and Select silently overwrites the real value.
+    ///
+    /// `lowest` must be a multiple of `step` so 100 stays reachable.
+    static func opacityPickerValues(current: Int, lowest: Int, step: Int) -> [Int] {
+        var values = Array(stride(from: lowest, through: 100, by: step))
+        if !values.contains(current) {
+            values.append(current)
+            values.sort()
+        }
+        return values
+    }
+
     /// One-word style descriptor for summary rows ("Large · Box · Bottom").
     var styleDescription: String {
         if backgroundStyle == .box { return "Box" }
@@ -389,9 +397,14 @@ struct SubtitleAppearance: Codable, Equatable {
         return "Plain"
     }
 
-    /// True when the configuration risks unreadable text: a dark font
-    /// color with no box behind it and no outline around it.
+    /// True when the configuration risks unreadable text: a dark font color
+    /// with no box behind it and no outline around it, or text faint enough
+    /// that no background style would save it.
     var isLowLegibilityRisk: Bool {
+        // Below this, text is faint enough to risk illegibility regardless of
+        // what's behind it — a box or outline gives the shape contrast, not
+        // the fill itself back its opacity.
+        if textOpacity < 30 { return true }
         guard backgroundStyle != .box || backgroundOpacity == 0 else { return false }
         guard !textOutline && backgroundStyle != .outline else { return false }
         let trimmed = fontColor.hasPrefix("#") ? String(fontColor.dropFirst()) : fontColor
