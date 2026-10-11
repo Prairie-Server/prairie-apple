@@ -34,7 +34,7 @@ ROOT_DOCUMENTATION = frozenset({"README.md", "CONTRIBUTING.md", "AGENTS.md", "SE
 # Refresh their ownership review after any other tracked input changes. Both Git
 # trees must retain every other path, mode and blob from the reviewed graph.
 TEST_SOURCE_OWNERSHIP = "scripts/ci/apple-test-source-ownership.json"
-TEST_SOURCE_OWNERSHIP_SHA256 = "cfbabb4be7fd3f3316cea06e14590dc347a5dce607ba39c9616046f642c6dfb7"
+TEST_SOURCE_OWNERSHIP_SHA256 = "4359f15f1cd3b94ef17da9812821d9445de37180022e4c0aa308fa8863b4fb67"
 TEST_SOURCE_INPUTS_SHA256 = "ccffff0f25127480afa371b6fdc7613b914efa532f5dcf51aa52a896fb49f91e"
 SELECTOR_FILES = ("scripts/ci/select-apple-platforms.py", "scripts/ci/select-apple-platforms.test.py", TEST_SOURCE_OWNERSHIP)
 SELECTOR_CONTRACT = "scripts/ci/apple-test-selector-contract.json"
@@ -133,7 +133,7 @@ def reviewed_test_sources():
     if hashlib.sha256(raw).hexdigest() != TEST_SOURCE_OWNERSHIP_SHA256:
         raise SelectionUnavailable("The test source ownership list needs a review.")
     paths = json.loads(raw)
-    if (not isinstance(paths, list) or len(paths) != 223
+    if (not isinstance(paths, list) or len(paths) != 260
             or any(not isinstance(path, str) or not path.startswith("iosApp/Tests/") or not path.endswith(".swift") for path in paths)
             or paths != sorted(set(paths))):
         raise SelectionUnavailable("The reviewed test source list is malformed.")
