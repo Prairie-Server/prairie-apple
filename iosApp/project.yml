@@ -165,6 +165,102 @@ targets:
         MACOSX_DEPLOYMENT_TARGET: "15.0"
         DYLIB_INSTALL_NAME_BASE: "@rpath"
         LD_RUNPATH_SEARCH_PATHS: ["@executable_path/../Frameworks", "@loader_path/Frameworks"]
+  PrairieNetworkingTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests
+        includes:
+          - NetworkingGateBoostTests.swift
+          - NetworkingModelsCoverageTests.swift
+          - NetworkingModelsGateFillTests.swift
+          - TokenStorePersistenceTests.swift
+          - TokenStoreDiagnosticsTests.swift
+          - ServerRegistryMigrationTests.swift
+          - WireFormatAndRequestsModelTests.swift
+          - AuthAndDeviceLoginModelTests.swift
+          - ResponseCacheTests.swift
+          - PrairieFrameTests.swift
+          - TrackSelectionPersistenceTests.swift
+          - LiveTVModelDecodingTests.swift
+          - AIModelDecodingTests.swift
+          - PlaybackPrefsModelTests.swift
+          - SubtitleSearchModelTests.swift
+          - AppUpdateCheckerTests.swift
+          - AIJobPollerTests.swift
+          - LibraryVisibilityTests.swift
+          - PrairieQualityPresetsTests.swift
+          - SettingValueModelsGateFillTests.swift
+          - SettingValuesAPITests.swift
+          - SettingsContractResolve.swift
+          - NetworkingPrairieGateFillTests.swift
+          - ItemVideosDecodingTests.swift
+          # Upstream's API v2 client, model and projection tests, run against
+          # the host through the shared URLProtocol stub and vendored fixtures.
+          - APIv2FixtureTestSupport.swift
+          - Support/APIv2TestStub.swift
+          - Support/StubURLProtocol.swift
+          - Support/OnboardingServerStub.swift
+          - APIv2ContractTests.swift
+          - APIv2MutationOutcomeTests.swift
+          - CatalogActionsAPITests.swift
+          - CatalogV2Tests.swift
+          - CollectionsV2Tests.swift
+          - LibraryBrowseV2Tests.swift
+          - MetadataAIV2Tests.swift
+          - OnboardingV2Tests.swift
+          - TrackPreferencesV2Tests.swift
+          - APIv2CatalogReadProjectionTests.swift
+          - APIv2PlaybackModelsTests.swift
+          - APIv2WireModelsTests.swift
+          - APIv2CatalogQueryAndSyncTests.swift
+          - MetadataRequestPoolTests.swift
+          - ServerIdentityProbeTests.swift
+          - TokenStoreSessionTests.swift
+          - CatalogShapeModelsTests.swift
+          - WatchPartyModelsTests.swift
+          - APIv2SubtitleSearchModelsTests.swift
+          - TokenStoreFailureTests.swift
+          - ServerRegistryEdgeTests.swift
+          - PlaybackV3FixtureTestSupport.swift
+          - CredentialIdentityTests.swift
+          - MediaRequestAuthorizationTests.swift
+          - MetadataSingleFlightTests.swift
+          - PersonalListsAPITests.swift
+          - ServerIdentityMatchingTests.swift
+          - SettingValueWritesTests.swift
+          - SharedDefaultsTests.swift
+          - SharedKeychainCheckedReadTests.swift
+          - WatchPartyAPITests.swift
+      - path: Tests/Fixtures/SettingsContract/conformance.json
+        buildPhase: resources
+      - path: Tests/Fixtures/APIv2
+        buildPhase: resources
+        excludes:
+          - SOURCE
+      - path: Tests/Fixtures/PlaybackV3
+        buildPhase: resources
+        excludes:
+          - SOURCE
+      - path: Tests/Fixtures/SettingsContract/manifest.json
+        buildPhase: resources
+    dependencies:
+      - target: PrairieNetworkingHost
+    settings:
+      base:
+        PRODUCT_NAME: PrairieNetworkingTests
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) PRAIRIE_NETWORKING_HOST"
+        GENERATE_INFOPLIST_FILE: "YES"
+        SDKROOT: macosx
+        SUPPORTED_PLATFORMS: macosx
+        CODE_SIGNING_ALLOWED: "NO"
+        MACOSX_DEPLOYMENT_TARGET: "15.0"
+
+  # Unit-test bundle for the tvOS PrairieTV app. Same Tests/ tree as PrairieTests
+  # minus the files that reference iOS-only declarations (each exclusion says
+  # which). Everything else compiles against the tvOS module, so the
+  # `#if os(tvOS)` branches in shared code and tests become real coverage.
+
   Prairie:
     templates: [ShippableProduct]
     type: application
