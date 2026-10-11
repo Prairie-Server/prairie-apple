@@ -402,7 +402,9 @@ final class SettingsViewModel {
         case .audioLanguage: return preferredAudioLanguage
         case .introSkipMode: return introSkipMode.wireValue
         case .autoSkipCredits: return skipCredits ? Self.onTag : Self.offTag
+        case .autoSkipRecap: return skipRecaps ? Self.onTag : Self.offTag
         case .autoPlayNext: return autoPlayNext ? Self.onTag : Self.offTag
+        case .autoPlayNextPreview: return previewNextEpisode ? Self.onTag : Self.offTag
         case .nextUpPrompt: return String(nextUpPromptSeconds)
         }
     }
@@ -429,8 +431,12 @@ final class SettingsViewModel {
             introSkipMode = mode
         case .autoSkipCredits:
             skipCredits = tag == Self.onTag
+        case .autoSkipRecap:
+            skipRecaps = tag == Self.onTag
         case .autoPlayNext:
             autoPlayNext = tag == Self.onTag
+        case .autoPlayNextPreview:
+            previewNextEpisode = tag == Self.onTag
         case .nextUpPrompt:
             guard let seconds = Int(tag) else { return }
             nextUpPromptSeconds = seconds
