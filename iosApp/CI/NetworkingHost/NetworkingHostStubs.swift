@@ -3,6 +3,7 @@ import Foundation
 extension Notification.Name {
     static let prairieSessionExpired = Notification.Name("prairieSessionExpired")
     static let temporaryRemoteAuthExpired = Notification.Name("temporaryRemoteAuthExpired")
+    static let prairieProfileVerificationRequired = Notification.Name("prairieProfileVerificationRequired")
 }
 
 /// Minimal stand-ins for app types that gated Networking code references but
@@ -230,4 +231,25 @@ struct PlaybackV3TerminalFailure: LocalizedError, Equatable {
 /// browse filters and player seeds into the host.
 enum Route: Hashable {
     case itemDetail(contentId: String, seriesContext: SeriesDetailContext? = nil)
+}
+
+/// Stand-in for the player-side SeekIntervalPreferences; HiddenLibraryPreference
+/// only needs the request-identity accessor as a default argument. The real store
+/// pulls the player UI and settings transport into the app.
+@MainActor
+final class SeekIntervalPreferences {
+    static func activeRequestIdentity() -> HTTPRequestIdentity? { nil }
+}
+
+/// Stand-in for the download session delegate; DownloadModels' attribution path
+/// only calls legacyTransferKey, copied verbatim so keys stay faithful. The real
+/// class owns the background URLSession.
+enum DownloadSessionDelegate {
+    static func legacyTransferKey(_ url: URL?) -> String? {
+        guard APIv2Client.isDownloadFileURL(url), let url,
+              let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let scheme = parts.scheme?.lowercased(), let host = parts.host?.lowercased() else { return nil }
+        let port = parts.port ?? (scheme == "https" ? 443 : 80)
+        return "\(scheme)://\(host):\(port)\(parts.percentEncodedPath)"
+    }
 }
