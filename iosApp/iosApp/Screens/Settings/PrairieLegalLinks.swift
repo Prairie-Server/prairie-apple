@@ -1,7 +1,6 @@
 import Foundation
 
 enum PrairieLegalLinks {
-    static let privacyPolicy = URL(string: "https://prairieserver.org/privacy/")!
     static let privacyPolicy = URL(string: "https://prairieserver.org/privacy")!
     static let repository = URL(string: "https://github.com/Prairie-Server/prairie-apple")!
 

@@ -12,7 +12,7 @@ enum OpenSourceAcknowledgements {
     /// warranty, the license and its additional permission, and where the
     /// source is published (this build's archive when a release lane stamped it).
     static let prairieNotice = """
-    Copyright (C) 2026 Silo Media L.L.C. and contributors.
+    Copyright (C) 2026 Prairie Media L.L.C. and contributors.
 
     Prairie is free software: you can redistribute it and/or modify it under the \
     terms of the GNU Affero General Public License as published by the Free \
@@ -27,7 +27,7 @@ enum OpenSourceAcknowledgements {
 
     Source code: \(PrairieLegalLinks.sourceCode.absoluteString)
 
-    The Prairie name, logo, and wordmark are trademarks of Silo Media L.L.C. and \
+    The Prairie name, logo, and wordmark are trademarks of Prairie Media L.L.C. and \
     are not licensed under the AGPL.
     """
 

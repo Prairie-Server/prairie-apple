@@ -627,10 +627,9 @@ struct SubtitleSearchMenu: View {
             .prairieNavigationTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Done", systemImage: "checkmark") { onDismiss() }
                     // Leaving is blocked while a download is in flight, as on
                     // tvOS (backdrop and Menu are inert then).
-                    Button("Done") { onDismiss() }
+                    Button("Done", systemImage: "checkmark") { onDismiss() }
                         .disabled(downloadingId != nil)
                 }
                 if phase == .results {

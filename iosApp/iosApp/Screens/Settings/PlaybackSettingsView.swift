@@ -146,13 +146,6 @@ struct PlaybackSettingsView: View {
             )
 
             choiceRow(
-                "Preview Next Episode",
-                .autoPlayNextPreview,
-                value: viewModel.previewNextEpisode ? "On" : "Off",
-                options: onOffChoices
-            )
-
-            choiceRow(
                 "Show Next Up",
                 .nextUpPrompt,
                 value: nextUpPromptOptions.first { $0.0 == viewModel.nextUpPromptSeconds }?.1
@@ -172,13 +165,6 @@ struct PlaybackSettingsView: View {
                 "Skip Credits",
                 .autoSkipCredits,
                 value: viewModel.skipCredits ? "On" : "Off",
-                options: onOffChoices
-            )
-
-            choiceRow(
-                "Skip Recaps",
-                .autoSkipRecap,
-                value: viewModel.skipRecaps ? "On" : "Off",
                 options: onOffChoices
             )
         } header: {
@@ -210,8 +196,6 @@ struct PlaybackSettingsView: View {
     private var resetSection: some View {
         Section {
             Button("Reset Playback Overrides", systemImage: "arrow.counterclockwise", role: .destructive) {
-                Task { await viewModel.resetPlaybackDeviceSettings() }
-            Button("Use Profile Settings", role: .destructive) {
                 showUseProfileSettingsConfirmation = true
             }
         } footer: {
