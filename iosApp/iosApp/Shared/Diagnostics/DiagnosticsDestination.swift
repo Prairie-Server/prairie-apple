@@ -84,7 +84,7 @@ extension DiagnosticsBinding {
         // evidence from crossing Prairie accounts. Persist a domain-separated
         // opaque value in binding/consent sidecars rather than the server's raw
         // account identifier.
-        let accountMaterial = "prairie-hosted-account-v1|\(serverRegistryID)|\(accountUserID)"
+        let accountMaterial = "silo-hosted-account-v1|\(serverRegistryID)|\(accountUserID)"
         let accountHash = DiagnosticsSHA256.shortHex(data: Data(accountMaterial.utf8), count: 32)
         return DiagnosticsBinding(
             serverInstanceID: Self.hostedPrefix + sourceHash,

@@ -922,7 +922,7 @@ struct DiagnosticsBundleBuilder {
     //    The collector would take them; we choose not to send them.
     //
     // 2. Keys that collide with the hosted collector's own `FORBIDDEN_KEYS`
-    //    privacy scanner (prairie-diagnostics `src/privacy.ts`). A collision does
+    //    privacy scanner (silo-diagnostics `src/privacy.ts`). A collision does
     //    *not* reject the bundle — the report still processes to `ready`, but
     //    the `privacy_fields` check fails and the report is permanently marked
     //    `privacy_flagged` in the admin UI. `network.attempt` is exactly this:
@@ -936,7 +936,7 @@ struct DiagnosticsBundleBuilder {
     //
     // Before adding a key here, normalize it and check it against
     // `FORBIDDEN_KEYS`, `FORBIDDEN_COMPACT_KEYS` and the credential/identifier
-    // segment rules in prairie-diagnostics `src/privacy.ts` — a key is forbidden
+    // segment rules in silo-diagnostics `src/privacy.ts` — a key is forbidden
     // if it equals a forbidden key, contains one as an `_`-delimited segment,
     // matches one with `_` stripped, or contains any `*_id`/`*_token`-style
     // segment. See testHostedFrozenLogsAndBreadcrumbsDropPrivatePlaybackAttributes,

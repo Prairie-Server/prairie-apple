@@ -176,7 +176,7 @@ final class DiagnosticsAttributeRegistryParityTests: XCTestCase {
     /// - The `playback` keys identify one user's specific viewing session. The
     ///   hosted collector would accept them; we choose not to send them.
     /// - `network.attempt` collides with the hosted collector's `FORBIDDEN_KEYS`
-    ///   privacy scanner (prairie-diagnostics `src/privacy.ts`). Sending it does
+    ///   privacy scanner (silo-diagnostics `src/privacy.ts`). Sending it does
     ///   not reject the bundle — the report reaches `ready` but permanently
     ///   fails the `privacy_fields` check and shows as `privacy_flagged`. Since
     ///   a routine 401-token-refresh retry emits it, forwarding it would flag

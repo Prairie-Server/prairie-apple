@@ -48,6 +48,8 @@ struct DeviceLookupResponse {
     let deviceName: String?
     let devicePlatform: String?
     let status: String?
+    var userCode: String? = nil
+    var ipAddressHint: String? = nil
     var clientPurpose: String? = nil
     var temporary: Bool? = nil
     /// The server's own spelling of the code (`4821-7730`), empty once the

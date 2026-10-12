@@ -648,13 +648,13 @@
           "key": "catalog.metadata_language_overrides",
           "scope": "profile",
           "profile_id": "p1",
-          "value": { "ja": "en", "no": "x-prairie-original" }
+          "value": { "ja": "en", "no": "x-silo-original" }
         }
       ],
       "expected": [
         {
           "key": "catalog.metadata_language_overrides",
-          "value": { "ja": "en", "no": "x-prairie-original" },
+          "value": { "ja": "en", "no": "x-silo-original" },
           "source": "profile"
         }
       ]

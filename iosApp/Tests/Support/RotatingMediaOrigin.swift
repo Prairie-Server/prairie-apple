@@ -63,7 +63,7 @@ final class RotatingMediaOrigin: @unchecked Sendable {
 
     init(bundle: Bundle) throws {
         guard let subtitleURL = bundle.url(forResource: "authored", withExtension: "ass"),
-              let fontURL = bundle.url(forResource: "PrairieASSFixture", withExtension: "ttf") else {
+              let fontURL = bundle.url(forResource: "SiloASSFixture", withExtension: "ttf") else {
             throw NSError(domain: "RotatingMediaOrigin", code: 3)
         }
         subtitle = try Data(contentsOf: subtitleURL)

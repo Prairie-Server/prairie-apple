@@ -17,7 +17,7 @@ import Foundation
 /// * ``templatedPath(for:)`` / ``templatedPath(forRawPath:)`` are the
 ///   *emission* rules. They are strictly more aggressive, because a path this
 ///   app writes into `network.path` has to pass
-///   `prairie-diagnostics/src/privacy.ts` `hasPrivatePathSegment` on the first try
+///   `silo-diagnostics/src/privacy.ts` `hasPrivatePathSegment` on the first try
 ///   — one raw id rejects the whole bundle. Everything the collector treats as
 ///   private is templated here, including cases the bundle-builder regexes
 ///   miss: unanchored/any-version UUIDs, dotted sub-parts (`12345.json`),

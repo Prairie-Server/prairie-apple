@@ -203,6 +203,9 @@ targets:
           - Support/APIv2TestStub.swift
           - Support/StubURLProtocol.swift
           - Support/OnboardingServerStub.swift
+          # Polling helpers (eventually/withRetry) used by the revised API v2
+          # and settings tests; the host bundle needs them like the app bundle.
+          - Support/Polling.swift
           - APIv2ContractTests.swift
           - APIv2MutationOutcomeTests.swift
           - CatalogActionsAPITests.swift

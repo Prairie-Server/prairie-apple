@@ -1910,7 +1910,7 @@ final class UICustomizationPreferences {
     }
 
     private static func cacheKey(for identity: HTTPRequestIdentity) -> String {
-        "prairie.uiCustomization.\(identity.serverId).\(identity.profileId).\(identity.clientFamily)"
+        "silo.uiCustomization.\(identity.serverId).\(identity.profileId).\(identity.clientFamily)"
     }
 
     private static func deleteIdentity(key: SettingKey, scope: SettingScope) -> String {
