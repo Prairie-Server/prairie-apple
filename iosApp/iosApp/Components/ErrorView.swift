@@ -98,7 +98,11 @@ struct ErrorView: View {
     }
 
     private var plan: RecoveryPlan {
-        Self.recoveryPlan(for: state, canRetry: onRetry != nil, canGoBack: resolvedOnGoBack != nil)
+        // Only read the ambient router when going back can change the plan, so
+        // a retryable error renders without one (Prairie's ViewInspector tests).
+        let goBackMatters = state.isNotFound || state.isForbidden || onRetry == nil
+        return Self.recoveryPlan(for: state, canRetry: onRetry != nil,
+                                 canGoBack: goBackMatters && resolvedOnGoBack != nil)
     }
 
     private var primaryAction: Action? {
