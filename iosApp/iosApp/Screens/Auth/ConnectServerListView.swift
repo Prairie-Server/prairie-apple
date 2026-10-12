@@ -27,29 +27,16 @@ struct ConnectServerListView: View {
 
     #if !os(tvOS)
     private var phoneBody: some View {
-        AuroraScreen(variant: .server, scrim: .soft, maxContentWidth: 520) {
+        AuroraScreen(variant: .signIn, scrim: .soft, maxContentWidth: 520) {
             PrairieWordmarkView(width: 112)
                 .frame(maxWidth: .infinity)
                 .padding(.bottom, 18)
 
-            AuroraJourneyProgress(currentStep: 1)
-                .frame(maxWidth: 330)
-                .frame(maxWidth: .infinity)
-                .padding(.bottom, 24)
-
-            VStack(spacing: 10) {
-                AuroraEyebrow(text: "Connect", centered: true)
-                Text("Choose a server")
-                    .font(.prairieTitle)
-                    .foregroundStyle(Color.auroraInk)
-                    .multilineTextAlignment(.center)
-                Text("Choose a saved server or one found on your LAN. Sign-in comes next.")
-                    .font(.prairieBody)
-                    .foregroundStyle(Color.auroraInkSecondary)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .frame(maxWidth: .infinity)
+            MarqueeHeadline(
+                title: "Choose a server",
+                lead: "Choose a saved server or one found on your LAN. Sign-in comes next.",
+                alignment: .center
+            )
             .padding(.bottom, 20)
 
             actionButtons
@@ -166,7 +153,7 @@ struct ConnectServerListView: View {
         Text(title.uppercased())
             .font(.system(size: 11, weight: .semibold, design: .monospaced))
             .tracking(1.4)
-            .foregroundStyle(Color.auroraInkTertiary)
+            .foregroundStyle(Color.auroraInk.opacity(0.40))
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.bottom, 8)
     }
@@ -190,7 +177,7 @@ struct ConnectServerListView: View {
             Spacer(minLength: 0)
             Image(systemName: "chevron.right")
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Color.auroraInkTertiary)
+                .foregroundStyle(Color.auroraInk.opacity(0.40))
         }
         .padding(16)
         .auroraGlass(cornerRadius: 16)
@@ -208,7 +195,7 @@ struct ConnectServerListView: View {
     #if os(tvOS)
     private var tvOSBody: some View {
         ZStack {
-            AuroraBackdrop(variant: .server, scrim: .soft)
+            AuroraBackdrop(variant: .signIn, scrim: .soft)
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 8) {
                     tvHero
@@ -244,13 +231,7 @@ struct ConnectServerListView: View {
 
     private var tvHero: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                PrairieWordmarkView(width: 132)
-                Spacer(minLength: 0)
-                AuroraJourneyProgress(currentStep: 1)
-                    .frame(width: 430)
-            }
-            AuroraEyebrow(text: "Connect")
+            PrairieWordmarkView(width: 132)
             Text("Choose a server")
                 .font(.system(size: 38, weight: .semibold))
                 .foregroundStyle(Color.auroraInk)

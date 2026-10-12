@@ -133,12 +133,21 @@ func offsetPrimaryMenuEditorItem(
 /// outside the reorderable list, matching the cross-client contract.
 struct InterfaceCustomizationView: View {
     @State private var preferences = UICustomizationPreferences.shared
+    @State private var titleArt = TitleArtPreferences.shared
     @State private var registry = ServerRegistry.shared
     @State private var librarySnapshot = MainTabLibrarySnapshot.cachedForCurrentAuthority()
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
+        // Resolved once per render: every row asks whether it can move, and
+        // each answer would otherwise re-resolve the whole menu.
+        let rows = visibleRows
+        let shortcuts = availableShortcuts
         List {
+            if titleArt.isOffered {
+                TitleArtSettingsSection(preferences: titleArt)
+            }
+
             if let message = preferences.capabilityMessage {
                 Section {
                     Label(message, systemImage: "server.rack")
@@ -200,19 +209,7 @@ struct InterfaceCustomizationView: View {
             )
 
             Section {
-                NavigationLink {
-                    HomeSectionsCustomizationView()
-                } label: {
-                    Label("Home Sections", systemImage: "rectangle.3.group")
-                }
-            } header: {
-                Text("Home")
-            } footer: {
-                Text("Choose which Home rows are visible and the order they appear in.")
-            }
-
-            Section {
-                ForEach(visibleRows) { row in
+                ForEach(rows) { row in
                     let item = row.item
                     HStack(spacing: 12) {
                         if row.isNestedLibrary {
@@ -239,7 +236,7 @@ struct InterfaceCustomizationView: View {
                                         .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
-                                .disabled(!canMove(item, by: -1))
+                                .disabled(!canMove(item, by: -1, in: rows))
                                 .accessibilityLabel("Move \(displayTitle(for: item)) up")
 
                                 Button {
@@ -251,7 +248,7 @@ struct InterfaceCustomizationView: View {
                                         .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
-                                .disabled(!canMove(item, by: 1))
+                                .disabled(!canMove(item, by: 1, in: rows))
                                 .accessibilityLabel("Move \(displayTitle(for: item)) down")
 
                                 Button {
@@ -279,7 +276,11 @@ struct InterfaceCustomizationView: View {
                 if isDefaultMenuApplied {
                     Text("Default menu applied. Add shortcuts to customize.")
                 } else {
+                    #if os(macOS)
+                    Text("Home is required. Use the arrows to reorder items. This menu is shared with your other devices. On this Mac the sidebar always lists every library, so pinning or removing a library here changes only those devices; the order of For You and Calendar applies here too.")
+                    #else
                     Text("Home is required. Use the arrows to reorder items. Libraries stay grouped under their media type and can only move within that group. Removing a library unpins it from your profile. Downloads (when available), Search, and Profile stay automatic.")
+                    #endif
                 }
             }
             .disabled(
@@ -287,9 +288,9 @@ struct InterfaceCustomizationView: View {
                     || preferences.primaryMenuUsesDeviceOverride
             )
 
-            if !availableShortcuts.isEmpty {
+            if !shortcuts.isEmpty {
                 Section("Available Shortcuts") {
-                    ForEach(availableShortcuts) { item in
+                    ForEach(shortcuts) { item in
                         Button {
                             addAvailableShortcut(item)
                         } label: {
@@ -302,7 +303,7 @@ struct InterfaceCustomizationView: View {
                             "Pin \(displayTitle(for: item)), "
                                 + primaryMenuShortcutTypeTitle(item, libraries: libraries)
                         )
-                        .disabled(!canEditAvailableShortcut(item))
+                        .disabled(!canEditShortcuts)
                     }
                 }
             }
@@ -323,10 +324,16 @@ struct InterfaceCustomizationView: View {
                 )
             }
         }
+        #if os(macOS)
+        .settingsListChrome()
+        #else
         .prairieGroupedListStyle()
+        #endif
         .navigationTitle("Interface")
         .task {
-            await preferences.refresh()
+            async let preferencesRefresh: Void = preferences.refresh()
+            async let titleArtRefresh: Void = titleArt.refresh()
+            _ = await (preferencesRefresh, titleArtRefresh)
         }
         .task(id: currentLibraryAuthority) {
             await refreshLibraries(for: currentLibraryAuthority)
@@ -336,8 +343,9 @@ struct InterfaceCustomizationView: View {
             let authority = currentLibraryAuthority
             Task {
                 async let preferencesRefresh: Void = preferences.refresh()
+                async let titleArtRefresh: Void = titleArt.refresh()
                 async let librariesRefresh: Void = refreshLibraries(for: authority)
-                _ = await (preferencesRefresh, librariesRefresh)
+                _ = await (preferencesRefresh, titleArtRefresh, librariesRefresh)
             }
         }
     }
@@ -413,7 +421,8 @@ struct InterfaceCustomizationView: View {
     }
 
     private var isDefaultMenuApplied: Bool {
-        visibleDestinations.count == 1 && visibleDestinations[0].isHome
+        let destinations = visibleDestinations
+        return destinations.count == 1 && destinations[0].isHome
     }
 
     private var availableShortcuts: [PrimaryMenuItem] {
@@ -480,12 +489,12 @@ struct InterfaceCustomizationView: View {
         persistVisibleDestinations(items)
     }
 
-    private func canMove(_ item: PrimaryMenuItem, by offset: Int) -> Bool {
-        offsetPrimaryMenuEditorItem(
-            visibleRows,
-            itemId: item.id,
-            by: offset
-        ) != nil
+    private func canMove(
+        _ item: PrimaryMenuItem,
+        by offset: Int,
+        in rows: [PrimaryMenuEditorRow]
+    ) -> Bool {
+        offsetPrimaryMenuEditorItem(rows, itemId: item.id, by: offset) != nil
     }
 
     private func remove(_ item: PrimaryMenuItem) {
@@ -526,9 +535,8 @@ struct InterfaceCustomizationView: View {
         persistVisibleDestinations(visibleDestinations + [item])
     }
 
-    private func canEditAvailableShortcut(_: PrimaryMenuItem) -> Bool {
-        guard preferences.allowsEditing else { return false }
-        return !preferences.primaryMenuUsesDeviceOverride
+    private var canEditShortcuts: Bool {
+        preferences.allowsEditing && !preferences.primaryMenuUsesDeviceOverride
     }
 
     private func persistVisibleDestinations(_ destinations: [PrimaryMenuItem]) {
@@ -574,133 +582,93 @@ struct InterfaceCustomizationView: View {
     }
 }
 
-/// Local profile-aware editor for the rows returned by `/home/sections`.
-/// Visibility is an explicit eye control; native List editing supplies familiar
-/// drag handles for ordering. Every change persists immediately, so returning
-/// to Home reflects it without a separate network save or page reload.
-private struct HomeSectionsCustomizationView: View {
-    @State private var preferences = HomeSectionPreferences.shared
-    @State private var sections: [ResolvedSection] = []
-    @State private var isLoading = false
-    @State private var loadFailed = false
+/// "Title Pages": whether detail pages name a title with its logo art, and
+/// whether that choice is this device's own or the profile's for every device.
+/// See `TitleArtPreferences` for the scopes each switch writes.
+private struct TitleArtSettingsSection: View {
+    let preferences: TitleArtPreferences
 
     var body: some View {
-        List {
-            Section {
-                if arrangedSections.isEmpty, isLoading {
-                    HStack {
-                        Spacer()
-                        ProgressView()
-                        Spacer()
-                    }
-                    .padding(.vertical, 16)
-                } else if arrangedSections.isEmpty {
-                    ContentUnavailableView(
-                        "No Home Sections",
-                        systemImage: loadFailed ? "wifi.exclamationmark" : "rectangle.3.group",
-                        description: Text(
-                            loadFailed
-                                ? "Prairie couldn’t refresh the Home rows. Try again when the server is reachable."
-                                : "Home has no populated rows to arrange yet."
-                        )
-                    )
-                } else {
-                    ForEach(arrangedSections) { section in
-                        sectionRow(section)
-                    }
-                    .onMove(perform: moveSections)
-                }
-            } footer: {
-                if !arrangedSections.isEmpty {
-                    Text("Open eye: shown on Home. Closed eye: hidden and dimmed here. Tap Edit to drag rows into a new order. Changes save automatically for this profile on this device.")
-                }
-            }
-        }
-        .prairieGroupedListStyle()
-        .navigationTitle("Home Sections")
-        #if os(iOS)
-        .toolbar {
-            EditButton()
-        }
-        #endif
-        .task {
-            await loadSections()
-        }
-        .refreshable {
-            await loadSections(forceRefresh: true)
-        }
-    }
-
-    private var arrangedSections: [ResolvedSection] {
-        preferences.arrangedSections(sections, includingHidden: true)
-    }
-
-    private func sectionRow(_ section: ResolvedSection) -> some View {
-        let isVisible = preferences.isVisible(section.id)
-        return HStack(spacing: 12) {
-            Button {
-                preferences.setVisible(!isVisible, sectionId: section.id)
-            } label: {
-                Image(systemName: isVisible ? "eye.fill" : "eye.slash.fill")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(isVisible ? Color.prairieOnSurface : Color.prairieSecondaryText)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(
-                isVisible ? "Hide \(section.title)" : "Show \(section.title)"
+        Section {
+            TitleArtToggleRow(
+                title: "Show Title Art",
+                subtitle: "Use logo artwork as the title when available.",
+                systemImage: "photo.artframe",
+                isOn: Binding(
+                    get: { preferences.showsTitleArt },
+                    set: { preferences.setShowTitleArt($0) }
+                )
             )
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(section.title)
-                    .font(.body.weight(.medium))
-                    .foregroundStyle(Color.prairieOnSurface)
-                    .lineLimit(1)
-
-                Text("\(section.items.count) item\(section.items.count == 1 ? "" : "s")")
-                    .font(.caption)
+            TitleArtToggleRow(
+                title: "Apply to All Devices",
+                subtitle: "Use this choice everywhere on this profile.",
+                systemImage: "laptopcomputer.and.iphone",
+                isOn: Binding(
+                    get: { preferences.appliesToAllDevices },
+                    set: { preferences.setAppliesToAllDevices($0) }
+                )
+            )
+            if preferences.appliesToAllDevices {
+                Label(
+                    "Title art is \(preferences.showsTitleArt ? "on" : "off") on every device signed into this profile. Changing it here changes it everywhere.",
+                    systemImage: "info.circle"
+                )
+                .font(.footnote)
+                .foregroundStyle(Color.prairieSecondaryText)
+            }
+            if let message = preferences.errorMessage ?? preferences.readErrorMessage {
+                Label(message, systemImage: "exclamationmark.triangle")
+                    .font(.footnote)
                     .foregroundStyle(Color.prairieSecondaryText)
             }
-
-            Spacer(minLength: 8)
+        } header: {
+            Text("Title Pages")
+        } footer: {
+            if preferences.appliesToAllDevices {
+                Text("Turn off Apply to All Devices to choose for this \(Self.deviceNoun) only.")
+            } else {
+                Text("Only affects this \(Self.deviceNoun). Your other devices keep their own setting.")
+            }
         }
-        .opacity(isVisible ? 1 : 0.42)
-        .animation(.easeInOut(duration: PrairieTheme.fastDuration), value: isVisible)
+        .disabled(!preferences.allowsEditing)
     }
 
-    private func moveSections(from source: IndexSet, to destination: Int) {
-        var ids = arrangedSections.map(\.id)
-        ids.move(fromOffsets: source, toOffset: destination)
-        preferences.setOrder(ids)
-    }
-
-    private func loadSections(forceRefresh: Bool = false) async {
-        preferences.refresh()
-
-        if let cached: SectionsResponse = ResponseCache.shared.get(CacheKey.homeSections) {
-            sections = cached.sections.filter { !$0.items.isEmpty }
+    private static var deviceNoun: String {
+        switch AppleDeviceIdentity.current.clientFamily {
+        case "tablet": return "iPad"
+        case "desktop": return "Mac"
+        case "tv": return "Apple TV"
+        default: return "iPhone"
         }
-
-        _ = forceRefresh
-        // Cached rows paint immediately; this awaited refresh remains owned by
-        // the view task so it is cancelled cleanly when the editor disappears.
-        await refreshFromServer()
     }
+}
 
-    private func refreshFromServer() async {
-        isLoading = sections.isEmpty
-        loadFailed = false
-        defer { isLoading = false }
+/// The Settings overview toggle on iPhone and iPad; a plain labeled toggle on
+/// the Mac, which has no overview row style.
+private struct TitleArtToggleRow: View {
+    let title: String
+    let subtitle: String
+    let systemImage: String
+    @Binding var isOn: Bool
 
-        do {
-            let response = try await StartupContentPrefetcher.fetchHomeSections()
-            guard !Task.isCancelled else { return }
-            sections = response.sections.filter { !$0.items.isEmpty }
-        } catch {
-            guard !Task.isCancelled else { return }
-            loadFailed = sections.isEmpty
+    var body: some View {
+        #if os(iOS)
+        SettingsOverviewToggleRow(
+            title: title,
+            subtitle: subtitle,
+            systemImage: systemImage,
+            isOn: $isOn
+        )
+        #else
+        Toggle(isOn: $isOn) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                Text(subtitle)
+                    .font(.footnote)
+                    .foregroundStyle(Color.prairieSecondaryText)
+            }
         }
+        #endif
     }
 }
 #endif

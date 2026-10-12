@@ -49,20 +49,15 @@ struct MobilePlayerGestureLayer: View {
     /// Video-gravity mode announced after a pinch; shown briefly as a toast.
     @State private var gravityToast: VideoGravity?
     @State private var gravityToastHideTask: Task<Void, Never>?
+    /// Bumped only when a pinch actually changes the gravity, so pinching
+    /// past fit or stretch shows the toast without a haptic.
+    @State private var gravityChangeCount = 0
 
     /// Width of the brightness/volume strips along each screen edge.
     private static let edgeZoneWidth: CGFloat = 88
+    /// Track height of the brightness/volume gauge.
+    private static let gaugeHeight: CGFloat = 130
 
-    /// Screen hosting the app's foreground scene. `UIScreen.main` is
-    /// deprecated on iOS 26; the player always lives in the single
-    /// foreground window scene, so resolving through the scene list is
-    /// equivalent.
-    private var activeScreen: UIScreen? {
-        UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .first { $0.activationState == .foregroundActive }?
-            .screen
-    }
     /// Fraction of the width on each side that double-taps treat as a skip
     /// zone; the middle band toggles play/pause instead.
     private static let skipZoneFraction: CGFloat = 0.35
@@ -88,6 +83,15 @@ struct MobilePlayerGestureLayer: View {
                 feedbackOverlays(in: size)
             }
         }
+        // These gestures have no button under the finger, so a light haptic
+        // confirms each one landed.
+        .sensoryFeedback(trigger: skipFlash?.id) { _, id in
+            id == nil ? nil : .impact(weight: .light)
+        }
+        .sensoryFeedback(.impact(weight: .medium), trigger: viewModel.isHoldFastForwarding) { _, holding in
+            holding
+        }
+        .sensoryFeedback(.impact(weight: .light), trigger: gravityChangeCount)
         // The controls scrim should swallow touches while the overlay is up,
         // but SwiftUI tap recognizers on an occluded sibling can still track
         // touches — rapid presses on the overlay's skip buttons registered
@@ -121,14 +125,18 @@ struct MobilePlayerGestureLayer: View {
             // revealingControls: false — the flash below is the feedback;
             // summoning the overlay would drop its scrim on top of this
             // layer and swallow the next double-tap.
+            // A refused skip (parked at end of file) shows no flash, so its
+            // haptic doesn't confirm a skip that never happened.
             if x < size.width * Self.skipZoneFraction {
                 let seconds = viewModel.skipIntervals.backward
-                viewModel.skipBackward(Double(seconds), revealingControls: false)
-                showSkipFlash(forward: false, seconds: seconds)
+                if viewModel.skipBackward(Double(seconds), revealingControls: false) {
+                    showSkipFlash(forward: false, seconds: seconds)
+                }
             } else if x > size.width * (1 - Self.skipZoneFraction) {
                 let seconds = viewModel.skipIntervals.forward
-                viewModel.skipForward(Double(seconds), revealingControls: false)
-                showSkipFlash(forward: true, seconds: seconds)
+                if viewModel.skipForward(Double(seconds), revealingControls: false) {
+                    showSkipFlash(forward: true, seconds: seconds)
+                }
             } else {
                 viewModel.togglePlayPause()
             }
@@ -142,7 +150,7 @@ struct MobilePlayerGestureLayer: View {
                     let startX = value.startLocation.x
                     if startX < Self.edgeZoneWidth {
                         activeAdjustment = .brightness
-                        dragBaseline = Double(activeScreen?.brightness ?? 0.5)
+                        dragBaseline = PlayerScreenBrightness.shared.currentLevel()
                     } else if startX > size.width - Self.edgeZoneWidth {
                         activeAdjustment = .volume
                         dragBaseline = Double(viewModel.currentUserVolume)
@@ -160,7 +168,7 @@ struct MobilePlayerGestureLayer: View {
                 gaugeHideTask?.cancel()
                 switch adjustment {
                 case .brightness:
-                    activeScreen?.brightness = fraction
+                    PlayerScreenBrightness.shared.apply(fraction)
                 case .volume:
                     viewModel.applyUserVolume(Float(fraction))
                 }
@@ -175,17 +183,21 @@ struct MobilePlayerGestureLayer: View {
     }
 
     private var videoGravityPinchGesture: some Gesture {
-        MagnificationGesture()
-            .onEnded { scale in
+        MagnifyGesture()
+            .onEnded { value in
+                let scale = value.magnification
+                let current = viewModel.settings.videoGravity
+                let gravity: VideoGravity
                 if scale > 1.08 {
-                    let gravity = nextVideoGravity(after: viewModel.settings.videoGravity)
-                    viewModel.setVideoGravity(gravity)
-                    showGravityToast(gravity)
+                    gravity = nextVideoGravity(after: current)
                 } else if scale < 0.92 {
-                    let gravity = previousVideoGravity(before: viewModel.settings.videoGravity)
-                    viewModel.setVideoGravity(gravity)
-                    showGravityToast(gravity)
+                    gravity = previousVideoGravity(before: current)
+                } else {
+                    return
                 }
+                if gravity != current { gravityChangeCount += 1 }
+                viewModel.setVideoGravity(gravity)
+                showGravityToast(gravity)
             }
     }
 
@@ -325,16 +337,14 @@ struct MobilePlayerGestureLayer: View {
 
     private func edgeGauge(for adjustment: EdgeAdjustment) -> some View {
         VStack(spacing: 8) {
-            GeometryReader { proxy in
-                ZStack(alignment: .bottom) {
-                    Capsule()
-                        .fill(Color.white.opacity(0.25))
-                    Capsule()
-                        .fill(Color.white)
-                        .frame(height: max(proxy.size.height * gaugeFraction, 6))
-                }
+            ZStack(alignment: .bottom) {
+                Capsule()
+                    .fill(Color.white.opacity(0.25))
+                Capsule()
+                    .fill(Color.white)
+                    .frame(height: max(Self.gaugeHeight * gaugeFraction, 6))
             }
-            .frame(width: 6, height: 130)
+            .frame(width: 6, height: Self.gaugeHeight)
 
             Image(systemName: adjustment == .brightness
                 ? "sun.max.fill"

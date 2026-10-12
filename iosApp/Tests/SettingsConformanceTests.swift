@@ -194,43 +194,7 @@ final class SettingsConformanceTests: XCTestCase {
     }
 
     private func fixtureData(_ fileName: String) throws -> Data {
-        try Data(contentsOf: try Self.resourceURL(fileName))
-    }
-
-    /// Locates a vendored contract file in the test bundle.
-    ///
-    /// XcodeGen adds a resource under `Tests/` as a plain file reference, which
-    /// lands flattened at the bundle root; the subdirectory candidates are the
-    /// fallback for a build that preserves the folder, matching what
-    /// `DiagnosticsContractTests` does for its own vendored schemas.
-    private static func resourceURL(_ fileName: String) throws -> URL {
-        let bundle = Bundle(for: SettingsConformanceTests.self)
-        let baseName = (fileName as NSString).deletingPathExtension
-        let ext = (fileName as NSString).pathExtension
-
-        if let flattened = bundle.url(forResource: baseName, withExtension: ext) {
-            return flattened
-        }
-        let candidates = [
-            bundle.resourceURL?
-                .appendingPathComponent("SettingsContract")
-                .appendingPathComponent(fileName),
-            bundle.resourceURL?
-                .appendingPathComponent("Fixtures")
-                .appendingPathComponent("SettingsContract")
-                .appendingPathComponent(fileName),
-        ].compactMap { $0 }
-        for candidate in candidates where FileManager.default.fileExists(atPath: candidate.path) {
-            return candidate
-        }
-
-        // A hard failure rather than a skip: a fixture that is not bundled is a
-        // gate that silently stopped running, which is the failure mode this
-        // whole suite exists to prevent.
-        throw FixtureSchemaError(
-            "settings contract resource missing from the test bundle: \(fileName) — "
-                + "check the PrairieTests resources entry in iosApp/project.yml"
-        )
+        try Data(contentsOf: bundledFixtureURL(fileName, bundleClass: Self.self))
     }
 
     private func loadManifest() throws -> SettingsContractManifest {
@@ -411,6 +375,31 @@ final class SettingsConformanceTests: XCTestCase {
                 "\(key.rawValue) has no introduced_in"
             )
             XCTAssertEqual(key.introducedIn, introducedIn, key.rawValue)
+        }
+    }
+
+    /// Object members added after their key are gated by a hand-kept revision
+    /// too. The manifest records that revision only in the definition's notes
+    /// ("Revision N adds the optional <member> property"), so the sentence is
+    /// what ties the gate to the contract.
+    func testRevisionGatedMembersMatchTheVendoredManifest() throws {
+        let definitions = try rawDefinitions()
+        let manifestRevision = try loadManifest().revision
+        let gatedKeys = SettingKey.allCases.filter { !$0.revisionGatedMembers.isEmpty }
+        XCTAssertFalse(gatedKeys.isEmpty)
+        for key in gatedKeys {
+            let definition = try XCTUnwrap(definitions[key.rawValue], key.rawValue)
+            let defaults = try XCTUnwrap(definition["default_value"] as? [String: Any], key.rawValue)
+            let notes = try XCTUnwrap(definition["notes"] as? String, key.rawValue)
+            for (member, revision) in key.revisionGatedMembers {
+                XCTAssertNotNil(defaults[member], "\(key.rawValue) default_value has no \(member)")
+                XCTAssertTrue(
+                    notes.contains("Revision \(revision) adds the optional \(member) property"),
+                    "\(key.rawValue) notes do not say revision \(revision) added \(member)"
+                )
+                XCTAssertGreaterThan(revision, key.introducedIn, "\(key.rawValue).\(member)")
+                XCTAssertLessThanOrEqual(revision, manifestRevision, "\(key.rawValue).\(member)")
+            }
         }
     }
 

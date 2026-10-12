@@ -24,6 +24,18 @@ struct TVItemDetailLoadingView: View {
 
     // MARK: - Movie / series / episode
 
+    /// An episode seed's backdrop is the episode still; spoiler protection
+    /// applies to it and to the episode description.
+    private var hidesEpisodeStill: Bool {
+        guard let state = seed?.episodeWatchState else { return false }
+        return EpisodeSpoilerPreferences.shared.settings.hidesImage(for: state, isEpisodeStill: seed?.backdropIsEpisodeStill)
+    }
+
+    private var hidesEpisodeOverview: Bool {
+        guard let state = seed?.episodeWatchState else { return false }
+        return EpisodeSpoilerPreferences.shared.settings.hidesOverview(for: state)
+    }
+
     private var cinematicLayout: some View {
         TVDetailPageSurface(backdropURL: seed?.backdropUrl) {
             VStack(alignment: .leading, spacing: 0) {
@@ -54,6 +66,7 @@ struct TVItemDetailLoadingView: View {
                         targetSize: artworkSize,
                         contentMode: .fill
                     )
+                    .episodeSpoilerBlur(hidesEpisodeStill)
                 } else {
                     Rectangle()
                         .fill(Color.white.opacity(0.035))
@@ -133,7 +146,7 @@ struct TVItemDetailLoadingView: View {
 
     @ViewBuilder
     private var loadingSynopsis: some View {
-        if let overview = nonEmpty(seed?.overview) {
+        if !hidesEpisodeOverview, let overview = nonEmpty(seed?.overview) {
             Text(overview)
                 .font(.system(size: 26))
                 .foregroundStyle(Color.white.opacity(0.72))
@@ -222,36 +235,7 @@ struct TVItemDetailLoadingView: View {
     private var audiobookBackground: some View {
         ZStack {
             Color.black
-            if let url = nonEmpty(seed?.posterUrl) {
-                AsyncImageView(
-                    url: url,
-                    thumbhash: seed?.posterThumbhash,
-                    targetSize: CGSize(width: 600, height: 600),
-                    contentMode: .fill
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipped()
-                .blur(radius: 70)
-                .opacity(0.28)
-            }
-            RadialGradient(
-                colors: [
-                    Color(red: 0.07, green: 0.25, blue: 0.235).opacity(0.9),
-                    .clear,
-                ],
-                center: UnitPoint(x: 0.22, y: 0.4),
-                startRadius: 0,
-                endRadius: 1200
-            )
-            LinearGradient(
-                colors: [
-                    Color.black.opacity(0.35),
-                    Color.black.opacity(0.72),
-                    Color.black.opacity(0.96),
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
+            TVAudiobookBackdrop(posterUrl: seed?.posterUrl, thumbhash: seed?.posterThumbhash)
         }
     }
 
@@ -284,7 +268,7 @@ struct TVItemDetailLoadingView: View {
                 cornerRadius: PrairieTheme.cornerRadius,
                 style: .continuous
             )
-            .stroke(Color.white.opacity(0.12), lineWidth: 1)
+            .stroke(Color.white.opacity(0.14), lineWidth: 1)
         }
         .shadow(color: .black.opacity(0.65), radius: 40, x: 0, y: 24)
     }
@@ -353,8 +337,8 @@ struct TVItemDetailLoadingView: View {
         if let genre = nonEmpty(seed.genre) {
             values.append(genre)
         }
-        if let runtime = seed.runtime, runtime > 0 {
-            values.append(runtimeLabel(runtime))
+        if let runtime = MediaTextFormatting.runtime(minutes: seed.runtime) {
+            values.append(runtime)
         }
         if let rating = nonEmpty(seed.contentRating) {
             values.append(rating.uppercased())
@@ -385,16 +369,6 @@ struct TVItemDetailLoadingView: View {
             return "Loading details for \(title)"
         }
         return "Loading details"
-    }
-
-    private func runtimeLabel(_ minutes: Int) -> String {
-        if minutes >= 60 {
-            let remainder = minutes % 60
-            return remainder == 0
-                ? "\(minutes / 60)h"
-                : "\(minutes / 60)h \(remainder)m"
-        }
-        return "\(minutes) min"
     }
 
     private func nonEmpty(_ value: String?) -> String? {

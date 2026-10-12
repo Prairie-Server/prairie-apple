@@ -26,11 +26,10 @@ final class AuthAndDeviceLoginModelTests: XCTestCase {
     }
 
     func testLoginRequestEncodeRoundTrip() throws {
-        let body = LoginRequest(username: "ada", password: "pw", provider: "local")
+        let body = LoginRequest(username: "ada", password: "pw")
         let dict = try encode(body)
         XCTAssertEqual(dict["username"] as? String, "ada")
         XCTAssertEqual(dict["password"] as? String, "pw")
-        XCTAssertEqual(dict["provider"] as? String, "local")
     }
 
     func testDeviceLoginStatusRawMapping() {

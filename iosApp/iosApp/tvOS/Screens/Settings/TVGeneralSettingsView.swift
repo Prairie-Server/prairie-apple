@@ -7,13 +7,14 @@ import SwiftUI
 /// `docs/tvos-focus.md`.
 struct TVGeneralSettingsPane: View {
     @State private var preferences = UICustomizationPreferences.shared
+    @State private var titleArt = TitleArtPreferences.shared
     @State private var launchPreferences = ProfileLaunchPreferences.shared
-    @State private var navPrefs = TVNavPreferences.shared
+    @State private var navPrefs = AppNavPreferences.shared
     @State private var activePicker: PickerKind?
-    @State private var showsHomeSectionsEditor = false
     @State private var showsMenuEditor = false
     @State private var registry = ServerRegistry.shared
     @State private var librarySnapshot = MainTabLibrarySnapshot.cachedForCurrentAuthority()
+    @StateObject private var advisoryAgePreference = AdvisoryAgePreferenceStore.shared
     let activeProfile: UserProfile?
     let detailFocus: FocusState<TVSettingsDetailFocus?>.Binding
     let changePairedProfile: () -> Void
@@ -44,24 +45,9 @@ struct TVGeneralSettingsPane: View {
 
             TVSettingsFooter(launchPreferences.behavior.tvDescription)
 
-            TVSettingsSectionHeader("HOME SECTIONS")
-
-            Button { showsHomeSectionsEditor = true } label: {
-                HStack(spacing: 16) {
-                    Image(systemName: "rectangle.3.group")
-                        .font(.system(size: 22, weight: .medium))
-                    Text("Home Sections")
-                        .font(.system(size: 26))
-                    Spacer(minLength: 16)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 18, weight: .semibold))
-                        .opacity(0.55)
-                }
+            if titleArt.isOffered {
+                titleArtGroup
             }
-            .buttonStyle(TVSettingsPaneRowStyle())
-            .focused(detailFocus, equals: .generalHomeSections)
-
-            TVSettingsFooter("Choose which Home rows are visible and edit the order in which they appear on this Apple TV.")
 
             if let message = preferences.capabilityMessage {
                 TVSettingsSectionHeader("SERVER SUPPORT")
@@ -80,6 +66,26 @@ struct TVGeneralSettingsPane: View {
             }
 
             TVSettingsSectionHeader("CARDS & POSTERS")
+
+            if advisoryAgePreference.isSupported {
+                TVSettingsToggleRow(
+                    title: "Show Advisory Age",
+                    isOn: advisoryAgePreference.showsAdvisoryAge
+                ) {
+                    Task {
+                        await advisoryAgePreference.setShowsAdvisoryAge(
+                            !advisoryAgePreference.showsAdvisoryAge
+                        )
+                    }
+                }
+                .focused(detailFocus, equals: .generalAdvisoryAge)
+                .disabled(advisoryAgePreference.isSaving)
+
+                TVSettingsFooter("Show a suggested minimum viewer age, such as Common Sense Media’s, on movie and show details. This does not change what the profile may watch.")
+                if let writeError = advisoryAgePreference.writeError {
+                    TVSettingsFooter(writeError)
+                }
+            }
 
             presetRow
 
@@ -158,14 +164,14 @@ struct TVGeneralSettingsPane: View {
         .fullScreenCover(item: $activePicker) { picker in
             pickerSheet(for: picker)
         }
-        .fullScreenCover(isPresented: $showsHomeSectionsEditor) {
-            TVHomeSectionsCustomizationSheet()
-        }
         .fullScreenCover(isPresented: $showsMenuEditor) {
             TVMenuCustomizationSheet(libraries: libraries)
         }
         .task {
-            await preferences.refresh()
+            async let preferencesRefresh: Void = preferences.refresh()
+            async let titleArtRefresh: Void = titleArt.refresh()
+            async let advisoryRefresh: Void = advisoryAgePreference.refresh()
+            _ = await (preferencesRefresh, titleArtRefresh, advisoryRefresh)
         }
         .task(id: currentLibraryAuthority) {
             await refreshLibraries(for: currentLibraryAuthority)
@@ -175,14 +181,49 @@ struct TVGeneralSettingsPane: View {
             let authority = currentLibraryAuthority
             Task {
                 async let preferencesRefresh: Void = preferences.refresh()
+                async let titleArtRefresh: Void = titleArt.refresh()
                 async let librariesRefresh: Void = refreshLibraries(for: authority)
-                _ = await (preferencesRefresh, librariesRefresh)
+                _ = await (preferencesRefresh, titleArtRefresh, librariesRefresh)
             }
         }
     }
 
+    /// Title art (`ui.title_art`) and its "Apply to All Devices" companion.
+    /// See `TitleArtPreferences` for the scopes each row writes.
+    @ViewBuilder
+    private var titleArtGroup: some View {
+        TVSettingsSectionHeader("TITLE PAGES")
+
+        TVSettingsToggleRow(
+            title: "Show Title Art",
+            isOn: titleArt.showsTitleArt
+        ) {
+            titleArt.setShowTitleArt(!titleArt.showsTitleArt)
+        }
+        .accessibilityHint("Use logo artwork as the title when available.")
+        .disabled(!titleArt.allowsEditing)
+
+        TVSettingsToggleRow(
+            title: "Apply to All Devices",
+            isOn: titleArt.appliesToAllDevices
+        ) {
+            titleArt.setAppliesToAllDevices(!titleArt.appliesToAllDevices)
+        }
+        .accessibilityHint("Use this choice everywhere on this profile.")
+        .disabled(!titleArt.allowsEditing)
+
+        if titleArt.appliesToAllDevices {
+            TVSettingsFooter("Title art is \(titleArt.showsTitleArt ? "on" : "off") on every device signed into this profile. Changing it here changes it everywhere. Turn off Apply to All Devices to choose for this Apple TV only.")
+        } else {
+            TVSettingsFooter("Use logo artwork as the title when available. Only affects this Apple TV. Your other devices keep their own setting.")
+        }
+        if let message = titleArt.errorMessage ?? titleArt.readErrorMessage {
+            TVSettingsFooter(message)
+        }
+    }
+
     private var visibleMenuCount: Int {
-        TVMenuCustomizationSheet.visibleItems(
+        TVPrimaryMenuProjection.visibleItems(
             in: preferences.resolvedPrimaryMenuItems(),
             libraries: libraries
         ).count
@@ -328,331 +369,6 @@ struct TVGeneralSettingsPane: View {
     private static let customPresetId = "custom"
 }
 
-/// Apple TV editor for the populated rows returned by `/home/sections`.
-/// Visibility is always available through the eye control; Edit reveals
-/// explicit remote-friendly move buttons because tvOS has no touch drag
-/// gesture. Every mutation persists immediately for the active server/profile.
-private struct TVHomeSectionsCustomizationSheet: View {
-    private enum FocusTarget: Hashable {
-        case edit
-        case done
-        case moveUp(String)
-        case moveDown(String)
-        case visibility(String)
-    }
-
-    @State private var preferences = HomeSectionPreferences.shared
-    @State private var sections: [ResolvedSection] = []
-    @State private var isLoading = false
-    @State private var loadFailed = false
-    @State private var isEditing = false
-    @State private var isClosing = false
-    @FocusState private var focusedControl: FocusTarget?
-    @Namespace private var editorFocusScope
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.resetFocus) private var resetFocus
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 28) {
-                    sectionHeader("HOME SECTIONS")
-
-                    editorControlsCard
-
-                    if arrangedSections.isEmpty, isLoading {
-                        HStack {
-                            Spacer()
-                            ProgressView()
-                                .tint(.prairieOnSurface)
-                            Spacer()
-                        }
-                        .frame(height: 160)
-                    } else if arrangedSections.isEmpty {
-                        TVSettingsFooter(
-                            loadFailed
-                                ? "Prairie couldn’t refresh the Home rows. Try again when the server is reachable."
-                                : "Home has no populated rows to arrange yet."
-                        )
-                    } else {
-                        VStack(spacing: 10) {
-                            ForEach(arrangedSections) { section in
-                                sectionRow(section)
-                            }
-                        }
-                        .focusSection()
-
-                        TVSettingsFooter(
-                            isEditing
-                                ? "Use the arrow buttons to move rows. The new order saves immediately."
-                                : "Open eye: visible on Home. Closed eye: hidden. Hidden rows leave no gap—the next visible row takes the same Home position."
-                        )
-                    }
-                }
-                .frame(maxWidth: 1120, alignment: .leading)
-                .padding(.horizontal, 72)
-                .padding(.vertical, 36)
-            }
-            .navigationTitle("Home Sections")
-            .background(Color.prairieBackground.ignoresSafeArea())
-            .task {
-                await loadSections()
-            }
-        }
-        .focusScope(editorFocusScope)
-        .focusSection()
-        .defaultFocus($focusedControl, .done, priority: .userInitiated)
-        .onAppear(perform: claimFocus)
-        .onChange(of: focusedControl) { _, target in
-            if target == nil, !isClosing {
-                claimFocus()
-            }
-        }
-        .onExitCommand(perform: close)
-        .onDisappear { isClosing = true }
-    }
-
-    private var arrangedSections: [ResolvedSection] {
-        preferences.arrangedSections(sections, includingHidden: true)
-    }
-
-    private var editorControlsCard: some View {
-        HStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Home Sections")
-                    .font(.system(size: 26, weight: .medium))
-
-                Text(isEditing ? "Move rows into your preferred order." : "Choose which rows appear on Home.")
-                    .font(.system(size: 18))
-                    .foregroundStyle(Color.prairieSecondaryText)
-            }
-
-            Spacer(minLength: 24)
-
-            Button(isEditing ? "Done Editing" : "Edit") {
-                withAnimation(.easeOut(duration: PrairieTheme.fastDuration)) {
-                    isEditing.toggle()
-                }
-            }
-            .buttonStyle(TVHomeSectionsControlButtonStyle())
-            .focused($focusedControl, equals: .edit)
-            .disabled(arrangedSections.count < 2)
-
-            Button("Done", action: close)
-                .buttonStyle(TVHomeSectionsControlButtonStyle())
-                .focused($focusedControl, equals: .done)
-        }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 16)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.prairieChromeRestingFill)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(Color.prairieChromeRestingBorder, lineWidth: 1)
-        }
-        .focusSection()
-    }
-
-    private func sectionRow(_ section: ResolvedSection) -> some View {
-        let isVisible = preferences.isVisible(section.id)
-        let index = arrangedSections.firstIndex(where: { $0.id == section.id }) ?? 0
-
-        return HStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(section.title)
-                    .font(.system(size: 26, weight: .medium))
-                    .lineLimit(1)
-
-                Text("\(section.items.count) item\(section.items.count == 1 ? "" : "s")")
-                    .font(.system(size: 18))
-                    .foregroundStyle(Color.prairieSecondaryText)
-            }
-            .opacity(isVisible ? 1 : 0.42)
-
-            Spacer(minLength: 16)
-
-            if isEditing {
-                Button {
-                    move(section, by: -1)
-                } label: {
-                    Image(systemName: "arrow.up")
-                        .frame(width: 44, height: 44)
-                }
-                .buttonStyle(TVHomeSectionsControlButtonStyle(compact: true))
-                .focused($focusedControl, equals: .moveUp(section.id))
-                .disabled(index == 0)
-                .accessibilityLabel("Move \(section.title) earlier")
-
-                Button {
-                    move(section, by: 1)
-                } label: {
-                    Image(systemName: "arrow.down")
-                        .frame(width: 44, height: 44)
-                }
-                .buttonStyle(TVHomeSectionsControlButtonStyle(compact: true))
-                .focused($focusedControl, equals: .moveDown(section.id))
-                .disabled(index == arrangedSections.count - 1)
-                .accessibilityLabel("Move \(section.title) later")
-            }
-
-            Button {
-                withAnimation(.easeOut(duration: PrairieTheme.fastDuration)) {
-                    preferences.setVisible(!isVisible, sectionId: section.id)
-                }
-            } label: {
-                Image(systemName: isVisible ? "eye" : "eye.slash")
-                    .frame(width: 44, height: 44)
-            }
-            .buttonStyle(TVHomeSectionsControlButtonStyle(compact: true))
-            .focused($focusedControl, equals: .visibility(section.id))
-            .accessibilityLabel(isVisible ? "Hide \(section.title)" : "Show \(section.title)")
-        }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.prairieChromeRestingFill)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(Color.prairieChromeRestingBorder, lineWidth: 1)
-        }
-    }
-
-    private func move(_ section: ResolvedSection, by offset: Int) {
-        var ids = arrangedSections.map(\.id)
-        guard let index = ids.firstIndex(of: section.id) else { return }
-        let target = index + offset
-        guard ids.indices.contains(target) else { return }
-        ids.swapAt(index, target)
-        let retarget: FocusTarget?
-        if target == 0 {
-            retarget = .moveDown(section.id)
-        } else if target == ids.count - 1 {
-            retarget = .moveUp(section.id)
-        } else {
-            retarget = nil
-        }
-        withAnimation(.easeOut(duration: PrairieTheme.fastDuration)) {
-            preferences.setOrder(ids)
-            if let retarget {
-                focusedControl = retarget
-            }
-        }
-        if let retarget {
-            Task { @MainActor in
-                await Task.yield()
-                guard isEditing, !isClosing else { return }
-                focusedControl = retarget
-            }
-        }
-    }
-
-    /// Claim an always-enabled control inside this presented focus scope. If
-    /// tvOS briefly clears the sheet's focus while resolving a swipe, the nil
-    /// observer above reclaims it here instead of allowing the settings rows
-    /// behind the full-screen presentation to become the active graph.
-    private func claimFocus() {
-        guard !isClosing else { return }
-        focusedControl = .done
-        Task { @MainActor in
-            await Task.yield()
-            guard !isClosing else { return }
-            resetFocus(in: editorFocusScope)
-            focusedControl = .done
-        }
-    }
-
-    private func close() {
-        guard !isClosing else { return }
-        isClosing = true
-        dismiss()
-    }
-
-    private func loadSections() async {
-        preferences.refresh()
-
-        if let cached: SectionsResponse = ResponseCache.shared.get(CacheKey.homeSections) {
-            sections = cached.sections.filter { !$0.items.isEmpty }
-        }
-
-        isLoading = sections.isEmpty
-        loadFailed = false
-        defer { isLoading = false }
-
-        do {
-            let response = try await StartupContentPrefetcher.fetchHomeSections()
-            guard !Task.isCancelled else { return }
-            sections = response.sections.filter { !$0.items.isEmpty }
-        } catch {
-            guard !Task.isCancelled else { return }
-            loadFailed = sections.isEmpty
-        }
-    }
-
-    private func sectionHeader(_ title: String) -> some View {
-        Text(title)
-            .font(.system(size: 15, weight: .semibold, design: .monospaced))
-            .tracking(2)
-            .foregroundStyle(Color.prairieSecondaryText)
-    }
-}
-
-/// Compact in-card control chrome for the Home Sections editor. The resting
-/// state keeps a dark platter and bright glyph, avoiding tvOS's default white
-/// bordered-button treatment that hid the eye until focus arrived.
-private struct TVHomeSectionsControlButtonStyle: ButtonStyle {
-    var compact = false
-
-    func makeBody(configuration: Configuration) -> some View {
-        TVHomeSectionsControlButtonBody(
-            configuration: configuration,
-            compact: compact
-        )
-    }
-}
-
-private struct TVHomeSectionsControlButtonBody: View {
-    let configuration: ButtonStyleConfiguration
-    let compact: Bool
-    @Environment(\.isFocused) private var isFocused
-    @Environment(\.isEnabled) private var isEnabled
-
-    var body: some View {
-        configuration.label
-            .font(.system(size: compact ? 24 : 20, weight: .semibold))
-            .foregroundStyle(foreground)
-            .padding(.horizontal, compact ? 0 : 22)
-            .frame(minWidth: 64, minHeight: 64)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(isFocused ? Color.prairieOnSurface : Color.prairieSurfaceElevated.opacity(0.9))
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(
-                        isFocused ? Color.clear : Color.prairieChromeRestingBorder,
-                        lineWidth: 1
-                    )
-            }
-            .scaleEffect(configuration.isPressed ? 0.97 : (isFocused ? 1.04 : 1))
-            .shadow(
-                color: isFocused ? Color.black.opacity(0.5) : .clear,
-                radius: 16,
-                y: 6
-            )
-            .focusEffectDisabled()
-            .animation(.easeOut(duration: PrairieTheme.fastDuration), value: isFocused)
-    }
-
-    private var foreground: Color {
-        guard isEnabled else { return Color.prairieSecondaryText.opacity(0.5) }
-        return isFocused ? .prairieBackground : .prairieOnSurface
-    }
-}
-
 private struct TVMenuCustomizationSheet: View {
     let libraries: [Library]
     @State private var preferences = UICustomizationPreferences.shared
@@ -684,17 +400,7 @@ private struct TVMenuCustomizationSheet: View {
                         sectionHeader("HIDDEN DESTINATIONS")
                         VStack(spacing: 10) {
                             ForEach(hiddenBuiltins) { item in
-                                Button {
-                                    persistVisibleItems(visibleItems + [item])
-                                } label: {
-                                    HStack(spacing: 18) {
-                                        Image(systemName: "plus.circle.fill")
-                                        Text("Show \(item.title)")
-                                        Spacer()
-                                    }
-                                    .font(.system(size: 26, weight: .medium))
-                                }
-                                .buttonStyle(TVSettingsPaneRowStyle())
+                                showButton(item)
                             }
                         }
                         .focusSection()
@@ -705,17 +411,7 @@ private struct TVMenuCustomizationSheet: View {
                         sectionHeader("AVAILABLE LIBRARY SHORTCUTS")
                         VStack(spacing: 10) {
                             ForEach(availableLibraryShortcuts) { item in
-                                Button {
-                                    persistVisibleItems(visibleItems + [item])
-                                } label: {
-                                    HStack(spacing: 18) {
-                                        Image(systemName: "plus.circle.fill")
-                                        Text("Show \(item.title)")
-                                        Spacer()
-                                    }
-                                    .font(.system(size: 26, weight: .medium))
-                                }
-                                .buttonStyle(TVSettingsPaneRowStyle())
+                                showButton(item)
                             }
                         }
                         .focusSection()
@@ -758,31 +454,10 @@ private struct TVMenuCustomizationSheet: View {
     }
 
     private var visibleItems: [PrimaryMenuItem] {
-        Self.visibleItems(
+        TVPrimaryMenuProjection.visibleItems(
             in: preferences.resolvedPrimaryMenuItems(),
             libraries: libraries
         )
-    }
-
-    static func visibleItems(
-        in items: [PrimaryMenuItem],
-        libraries: [Library]
-    ) -> [PrimaryMenuItem] {
-        let availableIds = Set(libraries.map(\.id))
-        func hasLibrary(_ type: TVLibraryTabType) -> Bool {
-            libraries.contains(where: { type.matches($0) })
-        }
-        return items.filter { item in
-            switch item {
-            case .builtin(.movies): return hasLibrary(.movies)
-            case .builtin(.series): return hasLibrary(.series)
-            case .builtin(.music): return hasLibrary(.music)
-            case .builtin(.audiobooks): return hasLibrary(.audiobooks)
-            case .library(let id, _): return availableIds.contains(id)
-            case .section, .collection: return false
-            case .builtin(.home), .builtin(.forYou), .builtin(.calendar): return true
-            }
-        }
     }
 
     private var familyMenuMutationsEnabled: Bool {
@@ -820,7 +495,7 @@ private struct TVMenuCustomizationSheet: View {
 
     private var builtinCandidates: [PrimaryMenuItem] {
         var items: [PrimaryMenuItem] = [.builtin(.home)]
-        for type in TVLibraryTabType.allCases where hasLibrary(type) {
+        for type in TVLibraryTabType.allCases where Self.hasLibrary(type, in: libraries) {
             let builtin: PrimaryMenuBuiltin
             switch type {
             case .movies: builtin = .movies
@@ -923,19 +598,34 @@ private struct TVMenuCustomizationSheet: View {
         preferences.setPrimaryMenuItems(result)
     }
 
-    private func hasLibrary(_ type: TVLibraryTabType) -> Bool {
+    private static func hasLibrary(_ type: TVLibraryTabType, in libraries: [Library]) -> Bool {
         libraries.contains(where: { type.matches($0) })
+    }
+
+    private func showButton(_ item: PrimaryMenuItem) -> some View {
+        Button {
+            persistVisibleItems(visibleItems + [item])
+        } label: {
+            HStack(spacing: 18) {
+                Image(systemName: "plus.circle.fill")
+                Text("Show \(item.title)")
+                Spacer()
+            }
+            .font(.system(size: 26, weight: .medium))
+        }
+        .buttonStyle(TVSettingsPaneRowStyle())
     }
 
     private func librarySort(_ lhs: Library, _ rhs: Library) -> Bool {
         (lhs.sortOrder ?? Int.max, lhs.id) < (rhs.sortOrder ?? Int.max, rhs.id)
     }
+}
 
-    private func sectionHeader(_ title: String) -> some View {
-        Text(title)
-            .font(.system(size: 15, weight: .semibold, design: .monospaced))
-            .tracking(2)
-            .foregroundStyle(Color.prairieSecondaryText)
-    }
+/// Mono caps header shared by the Home Sections and Top Menu editors.
+private func sectionHeader(_ title: String) -> some View {
+    Text(title)
+        .font(.system(size: 15, weight: .semibold, design: .monospaced))
+        .tracking(2)
+        .foregroundStyle(Color.prairieSecondaryText)
 }
 #endif

@@ -296,7 +296,7 @@ final class NetworkingPrairieGateFillTests: XCTestCase {
             }
             """.utf8)
         )
-        XCTAssertEqual(wrapped.libraries.map(\.id), [3])
+        XCTAssertEqual(LibrariesResponse(libraries: wrapped.libraries).libraries.map(\.id), [3])
         XCTAssertEqual(
             LibrariesResponse(libraries: [
                 Library(id: 9, name: "Mixed", type: "mixed", sortOrder: nil, posterUrl: nil),
@@ -721,12 +721,10 @@ final class NetworkingPrairieTokenStoreGateFillTests: XCTestCase {
 
         XCTAssertNotEqual(firstEpoch, secondEpoch)
         XCTAssertFalse(staleActivation)
-        let hasToken = await store.hasStoredProfileToken(for: serverID)
+        let hasToken = await store.getProfileToken() != nil
         XCTAssertFalse(hasToken)
         let emptyEpoch = await store.getOrCreateAccountEpoch(for: "")
         XCTAssertNil(emptyEpoch)
-        let emptyHasToken = await store.hasStoredProfileToken(for: "")
-        XCTAssertFalse(emptyHasToken)
     }
 
     func testProfileCommitIsAtomicAndLateDeactivationCannotClearReplacement() async throws {
@@ -744,7 +742,7 @@ final class NetworkingPrairieTokenStoreGateFillTests: XCTestCase {
         )
         let profileA = await store.getProfileId()
         let proofA = await store.getProfileToken()
-        let hasProof = await store.hasStoredProfileToken(for: serverID)
+        let hasProof = await store.getProfileToken() != nil
         XCTAssertTrue(activatedA)
         XCTAssertEqual(profileA, "profile-a")
         XCTAssertEqual(proofA, "proof-a")

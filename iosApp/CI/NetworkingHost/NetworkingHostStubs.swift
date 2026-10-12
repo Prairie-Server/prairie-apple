@@ -2,6 +2,7 @@ import Foundation
 
 extension Notification.Name {
     static let prairieSessionExpired = Notification.Name("prairieSessionExpired")
+    static let prairieProfileVerificationRequired = Notification.Name("prairieProfileVerificationRequired")
     static let temporaryRemoteAuthExpired = Notification.Name("temporaryRemoteAuthExpired")
 }
 
@@ -74,6 +75,7 @@ final class AICapabilities {
 final class ImageSizeCapability: @unchecked Sendable {
     static let shared = ImageSizeCapability()
     var requestQuery: [String: String] { [:] }
+    func requestQueryForImageRequest() async -> [String: String] { [:] }
     func reset() {}
     func refresh(retryFailed: Bool = true) async {}
 }
@@ -134,6 +136,9 @@ final class ConnectionMonitor {
 
     var isServerReachable: Bool { isDeviceOnline && serverStatus != .unreachable }
     var isOffline: Bool { !isDeviceOnline || serverStatus == .unreachable }
+
+    /// CI stand-in: the update-required verdict never fires in Networking tests.
+    nonisolated static func readServerUpdateRequired() async -> Bool { false }
 
     func noteServerResponded() {
         serverStatus = .reachable
@@ -230,4 +235,51 @@ struct PlaybackV3TerminalFailure: LocalizedError, Equatable {
 /// browse filters and player seeds into the host.
 enum Route: Hashable {
     case itemDetail(contentId: String, seriesContext: SeriesDetailContext? = nil)
+}
+
+/// ServerRegistry resets the on-view card translations on a server switch; the
+/// real store drives the AI coordinator from the Home UI.
+@MainActor
+final class CardDescriptionTranslation {
+    static let shared = CardDescriptionTranslation()
+    func reset() {}
+}
+
+/// DownloadModels matches legacy transfers by this key. The real delegate owns
+/// the background URLSession; the key derivation is copied verbatim.
+final class DownloadSessionDelegate {
+    static func legacyTransferKey(_ url: URL?) -> String? {
+        guard APIv2Client.isDownloadFileURL(url), let url,
+              let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let scheme = parts.scheme?.lowercased(), let host = parts.host?.lowercased() else { return nil }
+        let port = parts.port ?? (scheme == "https" ? 443 : 80)
+        return "\(scheme)://\(host):\(port)\(parts.percentEncodedPath)"
+    }
+}
+
+/// HiddenLibraryPreference defaults its request identity to the seek-interval
+/// store's; the real store is player UI state. The host has no signed-in
+/// profile (`AuthService.profileId` is nil), so there is no active identity.
+@MainActor
+final class SeekIntervalPreferences {
+    static func activeRequestIdentity() -> HTTPRequestIdentity? { nil }
+}
+
+/// The real enum (Screens/Auth/NetworkSignIn.swift) also drives the sign-in
+/// UI; the v2 client and models only need the API path, copied verbatim.
+enum NetworkSignIn {
+    static func apiPath(of provider: APIv2AuthProvider) -> String? {
+        guard provider.isNetwork else { return nil }
+        return ServerAuthPath.relative(provider.networkSignInPath, suffix: ServerAuthPath.networkSignIn,
+                                       allowsQuery: false)?.apiPath
+    }
+}
+
+/// WatchPartySocket joins the server's deployment path with this; the real
+/// policy (WatchParty/WatchPartyLobbyState.swift) pulls episode spoiler UI.
+enum WatchPartyLobbyPolicy {
+    static func basePath(_ percentEncodedPath: String) -> String {
+        percentEncodedPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            .split(separator: "/").reduce("") { $0 + "/" + $1 }
+    }
 }

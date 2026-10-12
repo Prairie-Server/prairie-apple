@@ -64,14 +64,17 @@
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Prairie uses your local network to find, set up, and control Prairie on your Apple TV.</string>
+	<string>Prairie uses your local network to find Prairie servers, and to set up and control Prairie on your Apple TV.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_prairiepair._tcp</string>
 		<string>_prairiecast._tcp</string>
+		<string>_prairie._tcp</string>
 	</array>
 	<key>PrairieBuildChannel</key>
 	<string>$(PRAIRIE_BUILD_CHANNEL)</string>
+	<key>PrairieSourceURL</key>
+	<string>$(PRAIRIE_SOURCE_URL)</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UIBackgroundModes</key>

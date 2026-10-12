@@ -56,7 +56,7 @@ iosApp/iosApp/Screens/Player/iOS/MobilePlayerControls.swift	1	Trickplay\.resolve
 
 # --- Artwork formats and width variants (PR #9, #23, #28).
 iosApp/iosApp/tvOS/Caching/ArtworkVariantURL.swift	1	static func widthVariant\(	w200/w300/w500 poster rungs
-iosApp/iosApp/tvOS/Caching/CachedAsyncImage.swift	1	ArtworkVariantURL\.candidates\(	AVIF/WebP/PNG candidate cascade
+iosApp/iosApp/Components/Images/AsyncImageView.swift	1	ArtworkVariantURL\.candidates\(	AVIF/WebP/PNG candidate cascade
 iosApp/iosApp/tvOS/Caching/ImageFormats.swift	1	X-Prairie-Image-Formats	raster capability header name
 iosApp/iosApp/Networking/HTTPClient.swift	2	ImageFormats\.apply\(to:	image-format header on API requests; lost in a sync
 iosApp/iosApp/Downloads/DownloadSessionDelegate.swift	1	ImageFormats\.apply\(to:	image-format header on downloads

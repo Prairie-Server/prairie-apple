@@ -62,7 +62,7 @@ struct ScrubPreviewBubble: View {
                     )
             } else if let chapterThumbnailURL,
                       !chapterThumbnailURL.isEmpty {
-                CachedAsyncImage(
+                AsyncImageView(
                     url: chapterThumbnailURL,
                     targetSize: CGSize(width: previewWidth, height: previewWidth * 9 / 16),
                     contentMode: .fill,
