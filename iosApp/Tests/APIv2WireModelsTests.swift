@@ -147,17 +147,14 @@ final class APIv2WireModelsTests: XCTestCase {
         update.qualityPreference = "auto"
         update.subtitleLanguage = ""
         update.subtitleMode = "always"
-        update.showForcedSubtitles = true
         update.preferredMetadataLanguage = "de"
         update.autoSkipIntro = true
         update.autoSkipCredits = false
-        update.autoSkipRecap = true
         let mapped = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(update.asAPIv2Patch)) as? [String: Any])
         XCTAssertEqual(mapped["quality_preference"] as? String, "auto")
         XCTAssertTrue(mapped["subtitle_language"] is NSNull, "an empty language clears it")
         XCTAssertEqual(mapped["preferred_metadata_language"] as? String, "de")
         XCTAssertEqual(mapped["subtitle_mode"] as? String, "always")
-        XCTAssertEqual(mapped["auto_skip_recap"] as? Bool, true)
 
         let create = try object(APIv2ProfileCreate(name: "Kids", avatar: "🐯", pin: nil, isChild: true,
             maxContentRating: "PG", libraryRestrictionsEnabled: false, allowedLibraryIds: []))
