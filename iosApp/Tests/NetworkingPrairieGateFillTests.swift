@@ -313,24 +313,20 @@ final class NetworkingPrairieGateFillTests: XCTestCase {
         let hls = LiveTVSessionStartResponse(
             sessionId: "s1",
             playbackTicket: "ticket",
-            hlsUrl: "https://live.example/index.m3u8",
-            streamUrl: nil,
-            transport: "mpegts",
-            note: nil
+            streamUrl: "https://live.example/index.m3u8",
+            transport: "mpegts"
         )
         XCTAssertTrue(hls.isHLS)
         XCTAssertEqual(hls.playableURLString, "https://live.example/index.m3u8")
 
-        let fallback = LiveTVSessionStartResponse(
+        let mpegts = LiveTVSessionStartResponse(
             sessionId: "s2",
             playbackTicket: "ticket",
-            hlsUrl: "   ",
-            streamUrl: "https://live.example/stream.ts",
-            transport: "mpegts",
-            note: nil
+            streamUrl: " https://live.example/stream.ts ",
+            transport: "mpegts"
         )
-        XCTAssertFalse(fallback.isHLS)
-        XCTAssertEqual(fallback.playableURLString, "https://live.example/stream.ts")
+        XCTAssertFalse(mpegts.isHLS)
+        XCTAssertEqual(mpegts.playableURLString, "https://live.example/stream.ts")
 
         let resolved = LiveTVURLResolver.resolve(
             "/livetv/channels/1/stream",

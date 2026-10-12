@@ -99,7 +99,7 @@ final class LiveTVChannelListViewModel {
             let all = try await api.liveTVRecordings()
             recordings = all
                 .filter { $0.status.lowercased() != "cancelled" }
-                .sorted { $0.start < $1.start }
+                .sorted { ($0.start ?? .distantFuture) < ($1.start ?? .distantFuture) }
         } catch {
             // Recordings are best-effort; channel list remains usable.
         }
@@ -120,8 +120,8 @@ final class LiveTVChannelListViewModel {
                 start: start,
                 end: end
             )
-            programs = guide.programs.sorted { $0.start < $1.start }
-            nowNextByChannel = Self.nowNextMap(programs: guide.programs, at: now)
+            programs = guide.items.sorted { $0.start < $1.start }
+            nowNextByChannel = Self.nowNextMap(programs: guide.items, at: now)
         } catch {
             // Guide is best-effort; channel list remains usable without it.
         }
