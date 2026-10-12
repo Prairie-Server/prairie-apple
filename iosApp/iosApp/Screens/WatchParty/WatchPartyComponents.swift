@@ -59,6 +59,8 @@ struct WatchPartyBackdrop: View {
     let url: String?
     var thumbhash: String? = nil
     var isPoster = false
+    /// Spoiler protection for an unwatched episode's still.
+    var hidesStill = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -68,7 +70,7 @@ struct WatchPartyBackdrop: View {
                     AsyncImageView(url: url, thumbhash: thumbhash, contentMode: .fill, placeholderStyle: .clear)
                         .frame(width: geometry.size.width, height: geometry.size.height)
                         .clipped()
-                        .blur(radius: isPoster ? 28 : 0)
+                        .blur(radius: isPoster ? 28 : (hidesStill ? EpisodeSpoilerBlur.radius : 0))
                         .opacity(isPoster ? 0.7 : 1)
                         .transition(.opacity)
                 }
@@ -114,18 +116,15 @@ struct WatchPartyBackdrop: View {
 /// The room code is the invitation. One pill, monospaced, opens the share sheet.
 struct WatchPartyCodePill: View {
     let code: String
-    var showsLabel = true
     @Environment(\.isFocused) private var isFocused
 
     var body: some View {
         HStack(spacing: WatchPartyMetrics.code * 0.5) {
             #if os(tvOS)
-            if showsLabel {
-                Text("JOIN WITH")
-                    .font(.system(size: 15, weight: .semibold))
-                    .tracking(2)
-                    .foregroundStyle(isFocused ? Color.black.opacity(0.5) : Color.prairieSecondaryText)
-            }
+            Text("JOIN WITH")
+                .font(.system(size: 15, weight: .semibold))
+                .tracking(2)
+                .foregroundStyle(isFocused ? Color.black.opacity(0.5) : Color.prairieSecondaryText)
             #endif
             Text(code)
                 .font(.system(size: WatchPartyMetrics.code, weight: .bold, design: .monospaced))
@@ -482,69 +481,21 @@ struct WatchPartyBanner: View {
     }
 }
 
-// MARK: - Picker helpers retained by the media picker
-
-/// Color the label inside the native focused control without replacing its focus effect.
-private struct WatchPartyButtonLabelModifier: ViewModifier {
-    #if os(tvOS)
-    @Environment(\.isFocused) private var isFocused
-    #endif
-
-    func body(content: Content) -> some View {
-        #if os(tvOS)
-        if isFocused {
-            content.foregroundStyle(Color.black)
-        } else {
-            content
-        }
-        #else
-        content
-        #endif
-    }
-}
-
-extension View {
-    func watchPartyButtonLabel() -> some View {
-        modifier(WatchPartyButtonLabelModifier())
-    }
-}
-
-struct WatchPartyArtworkRow: View {
-    let title: String
-    var subtitle: String?
-    var posterURL: String?
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 16) {
-            WatchPartyPoster(url: posterURL, width: posterWidth)
-            VStack(alignment: .leading, spacing: 6) {
-                Text(title).font(.headline).lineLimit(2)
-                if let subtitle, !subtitle.isEmpty {
-                    Text(subtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
-                }
-            }
-        }
-    }
-
-    private var posterWidth: CGFloat {
-        #if os(tvOS)
-        80
-        #else
-        56
-        #endif
-    }
-}
+// MARK: - Poster
 
 struct WatchPartyPoster: View {
     let url: String?
     var thumbhash: String? = nil
     let width: CGFloat
     var cornerRadius: CGFloat = 8
+    /// Spoiler protection for an unwatched episode's still.
+    var hidesStill = false
 
     var body: some View {
         Group {
             if let url, !url.isEmpty {
-                AsyncImageView(url: url, thumbhash: thumbhash, targetSize: CGSize(width: width * 2, height: width * 3), contentMode: .fill)
+                AsyncImageView(url: url, thumbhash: thumbhash, targetSize: CGSize(width: width, height: width * 1.5), contentMode: .fill)
+                    .episodeSpoilerBlur(hidesStill)
             } else {
                 Rectangle().fill(Color.prairieSurfaceElevated)
                     .overlay { Image(systemName: "film").foregroundStyle(Color.prairieSecondaryText) }
@@ -553,19 +504,6 @@ struct WatchPartyPoster: View {
         .frame(width: width, height: width * 1.5)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .accessibilityHidden(true)
-    }
-}
-
-struct WatchPartyErrorSection: View {
-    let message: String?
-    var body: some View {
-        if let message {
-            Section {
-                Label(message, systemImage: "exclamationmark.circle")
-                    .foregroundStyle(.secondary)
-                    .accessibilityIdentifier("watchParty.error")
-            }
-        }
     }
 }
 #endif

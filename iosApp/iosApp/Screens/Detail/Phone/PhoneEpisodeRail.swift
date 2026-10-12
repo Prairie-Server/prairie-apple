@@ -17,8 +17,9 @@ struct PhoneEpisodeRail: View {
     var onSetFavorite: ((String, Bool) async -> PersonalStateOutcome)? = nil
     var onSetWatchlist: ((String, Bool) async -> PersonalStateOutcome)? = nil
 
-    @State private var uiCustomization = UICustomizationPreferences.shared
+    private var uiCustomization: UICustomizationPreferences { .shared }
     @State private var visibleEpisodeId: String?
+    @State private var railWidth: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var cardWidth: CGFloat {
@@ -58,8 +59,15 @@ struct PhoneEpisodeRail: View {
             .padding(.vertical, 4)
             .phoneMediaRailBounds()
         }
-        .contentMargins(.horizontal, HorizontalMediaRailLayout.isPhone ? PrairieTheme.safePadding : 0, for: .scrollContent)
-        .scrollTargetBehavior(HorizontalMediaRailLayout.targetBehavior)
+        .contentMargins(.leading, leadingContentMargin, for: .scrollContent)
+        .contentMargins(.trailing, trailingContentMargin, for: .scrollContent)
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.size.width
+        } action: { width in
+            guard abs(width - railWidth) >= 0.5 else { return }
+            railWidth = width
+        }
+        .mediaRailScrolling()
         .scrollPosition(id: $visibleEpisodeId, anchor: HorizontalMediaRailLayout.scrollAnchor)
         .onAppear {
             visibleEpisodeId = currentContentId ?? episodes.first?.contentId
@@ -95,6 +103,43 @@ struct PhoneEpisodeRail: View {
             // its layout and is the source of the apparent vertical judder.
             onSelect(visibleEpisodeId)
         }
+    }
+}
+
+extension PhoneEpisodeRail {
+    private var leadingContentMargin: CGFloat {
+        HorizontalMediaRailLayout.isPhone ? PrairieTheme.safePadding : 0
+    }
+
+    private var trailingContentMargin: CGFloat {
+        guard HorizontalMediaRailLayout.isPhone else { return 0 }
+        guard selectsCenteredEpisode else { return leadingContentMargin }
+        return PhoneEpisodeRailLayout.selectingTrailingMargin(
+            railWidth: railWidth,
+            leadingMargin: leadingContentMargin,
+            cardWidth: cardWidth
+        )
+    }
+}
+
+/// Scroll geometry for the phone episode rail.
+enum PhoneEpisodeRailLayout {
+    /// Trailing margin that lets the last card snap to the leading edge.
+    ///
+    /// The phone rail snaps cards to its leading edge, and a rail that
+    /// selects the snapped episode selects the card there. With only the
+    /// leading margin at the end, the content runs out before the last card
+    /// reaches that edge: the rail stops with the previous card still in the
+    /// leading slot, so swiping can never select the last episode. Extending
+    /// the trailing margin to the rest of the rail's width fixes that. It
+    /// never drops below the leading margin, and stays there until the rail
+    /// has been measured.
+    static func selectingTrailingMargin(
+        railWidth: CGFloat,
+        leadingMargin: CGFloat,
+        cardWidth: CGFloat
+    ) -> CGFloat {
+        max(leadingMargin, railWidth - leadingMargin - cardWidth)
     }
 }
 
@@ -198,14 +243,24 @@ private struct PhoneEpisodeCard: View {
 
             if captionStyle.showsMetadata {
                 if let metadataLine = PhoneEpisodeFormatting.metadataLine(for: episode) {
-                    Text(metadataLine)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(Color.prairieSecondaryText)
-                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
-                        .multilineTextAlignment(.leading)
+                    HStack(spacing: 6) {
+                        Text(metadataLine)
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(Color.prairieSecondaryText)
+                            .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+                            .multilineTextAlignment(.leading)
+                        if showsMachineTranslationMarker {
+                            MachineTranslatedLabel(compact: true)
+                        }
+                    }
+                } else if showsMachineTranslationMarker {
+                    MachineTranslatedLabel(compact: true)
                 }
 
-                if let overview = episode.overview, !overview.isEmpty {
+                // A hidden description is left out; the title and metadata
+                // stay so the card still identifies the episode.
+                if !spoilers.hidesOverview(for: watchState),
+                   let overview = episode.overview, !overview.isEmpty {
                     let description = Text(overview)
                         .font(.caption)
                         .foregroundStyle(Color.prairieSecondaryText)
@@ -221,6 +276,13 @@ private struct PhoneEpisodeCard: View {
         }
         .frame(width: cardWidth, alignment: .leading)
         .contentShape(Rectangle())
+    }
+
+    /// The description shown under the title was machine-translated by AI.
+    private var showsMachineTranslationMarker: Bool {
+        !spoilers.hidesOverview(for: watchState)
+            && episode.overview?.isEmpty == false
+            && MachineTranslation.isOverviewMarked(episode.machineTranslatedFields)
     }
 
     private var titleColor: Color {
@@ -241,31 +303,35 @@ private struct PhoneEpisodeCard: View {
         PhoneEpisodeFormatting.accessibilityDescription(for: episode, isCurrent: isCurrent)
     }
 
+    private var spoilers: EpisodeSpoilerSettings {
+        EpisodeSpoilerPreferences.shared.settings
+    }
+
+    private var watchState: EpisodeWatchState {
+        EpisodeWatchState(episode.userData)
+    }
+
     private var still: some View {
         ZStack(alignment: .bottom) {
             AsyncImageView(
                 url: episode.stillUrl ?? "",
                 thumbhash: episode.stillThumbhash,
                 targetSize: CGSize(width: cardWidth, height: stillHeight),
-                contentMode: .fill
+                contentMode: .fill,
+                placeholderStyle: .artwork,
+                // The play button sits where the mark would.
+                placeholderSymbol: onPlay == nil ? ArtworkPlaceholderSymbol.television : nil
             )
             .frame(width: cardWidth, height: stillHeight)
+            .episodeSpoilerBlur(spoilers.hidesImage(for: watchState, isEpisodeStill: episode.stillIsEpisodeStill))
             .clipped()
 
             if episode.userData?.played == true {
                 Color.black.opacity(0.32)
                     .frame(width: cardWidth, height: stillHeight)
-            }
-
-            if episode.userData?.played == true {
-                VStack {
-                    HStack {
-                        Spacer()
+                    .overlay(alignment: .topTrailing) {
                         watchedBadge.padding(8)
                     }
-                    Spacer()
-                }
-                .frame(width: cardWidth, height: stillHeight)
             }
 
             if let progress = progressFraction {
@@ -302,17 +368,14 @@ private struct PhoneEpisodeCard: View {
     }
 
     private func progressBar(fraction: Double) -> some View {
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                Rectangle()
-                    .fill(Color.black.opacity(0.6))
-                    .frame(height: 3)
-                Rectangle()
-                    .fill(Color.white)
-                    .frame(width: geo.size.width * CGFloat(fraction), height: 3)
-            }
+        ZStack(alignment: .leading) {
+            Rectangle()
+                .fill(Color.black.opacity(0.6))
+            Rectangle()
+                .fill(Color.white)
+                .frame(width: cardWidth * CGFloat(fraction))
         }
-        .frame(height: 3)
+        .frame(width: cardWidth, height: 3)
     }
 
     private var progressFraction: Double? {

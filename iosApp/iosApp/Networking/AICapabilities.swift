@@ -57,10 +57,8 @@ final class AICapabilities {
     var subtitleEnabled: Bool { subtitleStatus?.enabled ?? false }
 
     /// Whether the Whisper transcribe controls + quota gauge may appear.
-    var transcribeEnabled: Bool {
-        guard let status = subtitleStatus, status.enabled else { return false }
-        return status.transcribeEnabled
-    }
+    /// Independent of translation: a server can offer transcription alone.
+    var transcribeEnabled: Bool { subtitleStatus?.transcribeEnabled ?? false }
 
     // MARK: - Lifecycle
 

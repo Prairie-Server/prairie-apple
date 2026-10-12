@@ -1,7 +1,3 @@
-//
-//  PrairieQualityPresets.swift
-//  Prairie (iOS + tvOS + macOS)
-//
 //  The quality picker's presets, as every Prairie client offers them.
 //
 //  The server stores two orthogonal values — `playback.preferred_quality` (a

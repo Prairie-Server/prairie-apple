@@ -3,9 +3,8 @@ import SwiftUI
 
 /// Shared Skyline landing layout (§6.1): an ambient backdrop, a focus
 /// marquee that passively previews the focused card, and native vertically
-/// scrolling section rows. Used by **both** Home and the library Browse tabs
-/// so the two stay pixel-identical — the only difference is the sections each
-/// feeds in.
+/// scrolling section rows. Shared by Home, library Browse, For You, and the
+/// Watch Party picker so they render identically; only the sections differ.
 ///
 /// Row-to-row movement belongs to the tvOS focus engine and the vertical
 /// scroll view. Programmatic focus is reserved for entering the page and
@@ -46,6 +45,10 @@ struct TVSkylineSectionFeed: View {
     /// The row that owns card focus or its context-menu dismissal flow. Unlike
     /// the marquee preview, this is cleared when focus moves into chrome.
     @State private var focusRestorationOwnerSectionId: String?
+    /// The card the marquee content was last built from, kept so a spoiler
+    /// settings change can rebuild it. The settings load after sign-in and
+    /// can land after Home has already seeded the marquee.
+    @State private var marqueeSource: (item: SectionItem, section: ResolvedSection)?
 
     init(
         sections: [ResolvedSection],
@@ -106,6 +109,22 @@ struct TVSkylineSectionFeed: View {
             seedMarqueeFromFirstItem()
             if let pending = pendingFocusRequest { requestEntryFocus(pending) }
         }
+        .onChange(of: sections.map(\.items)) { _, _ in
+            guard let source = marqueeSource,
+                  let section = sections.first(where: { $0.id == source.section.id }),
+                  let item = section.items.first(where: { $0.contentId == source.item.contentId }) else {
+                marqueeSource = nil
+                marqueeModel.clearSelection()
+                seedMarqueeFromFirstItem()
+                return
+            }
+            marqueeSource = (item, section)
+            marqueeModel.replaceContent(marqueeContent(for: item, in: section))
+        }
+        .onChange(of: EpisodeSpoilerPreferences.shared.settings) { _, _ in
+            guard let source = marqueeSource else { return }
+            marqueeModel.replaceContent(marqueeContent(for: source.item, in: source.section))
+        }
     }
 
     // MARK: - Rows
@@ -138,7 +157,7 @@ struct TVSkylineSectionFeed: View {
                 // its viewport uses the corrected layout frames above.
                 LazyVStack(alignment: .leading, spacing: PrairieTheme.Skyline.rowBandPreviewSpacing) {
                     ForEach(Array(sections.enumerated()), id: \.element.id) { index, section in
-                        featuredRow(section, isFirstRow: index == 0)
+                        featuredRow(section, index: index)
                             .fixedSize(horizontal: false, vertical: true)
                             .id(section.id)
                     }
@@ -164,7 +183,8 @@ struct TVSkylineSectionFeed: View {
     }
 
     @ViewBuilder
-    private func featuredRow(_ section: ResolvedSection, isFirstRow: Bool) -> some View {
+    private func featuredRow(_ section: ResolvedSection, index: Int) -> some View {
+        let isFirstRow = index == 0
         SectionRow(
             section: section,
             onItemTap: onItemTap,
@@ -195,7 +215,6 @@ struct TVSkylineSectionFeed: View {
             },
             cardWidth: PrairieTheme.Skyline.densePosterCardWidth,
             cardVerticalPadding: PrairieTheme.Skyline.rowBandCardVerticalPadding,
-            onMoveDown: nil,
             focusRestorationOwner: Binding(
                 get: { focusRestorationOwnerSectionId == section.id },
                 set: { ownsRestoration in
@@ -208,7 +227,20 @@ struct TVSkylineSectionFeed: View {
                 }
             )
         )
-        .modifier(TVSkylineArtworkVisibility())
+        .modifier(TVSkylineArtworkVisibility(onVisible: { warmRows(after: index) }))
+    }
+
+    /// Decode the leading cards of the rows below one that came into view,
+    /// so a Down press reveals painted artwork rather than thumbhashes.
+    private func warmRows(after index: Int) -> [CardArtwork] {
+        let next = sections.dropFirst(index + 1).prefix(ArtworkLookahead.rowsAhead)
+        return ArtworkLookahead.warmRows(next, items: \.items) { section, item in
+            MediaRow.cardArtwork(
+                for: item,
+                layout: SectionRow.layout(for: section),
+                cardWidth: PrairieTheme.Skyline.densePosterCardWidth
+            )
+        }
     }
 
     // MARK: - Focus
@@ -242,14 +274,21 @@ struct TVSkylineSectionFeed: View {
     }
 
     private func previewFocusedItem(_ item: SectionItem, in section: ResolvedSection) {
+        marqueeSource = (item, section)
         marqueeModel.preview(
-            TVMarqueeContent(
-                item: item,
-                rowId: section.id,
-                rowTitle: section.title,
-                isContinueWatching: section.isContinueWatchingSection
-            ),
+            marqueeContent(for: item, in: section),
             neighborBackdropURLs: neighborBackdropURLs(around: item, in: section)
+        )
+    }
+
+    private func marqueeContent(for item: SectionItem, in section: ResolvedSection) -> TVMarqueeContent {
+        TVMarqueeContent(
+            item: item,
+            rowId: section.id,
+            rowTitle: section.title,
+            isContinueWatching: section.isContinueWatchingSection,
+            isFeatured: section.isFeatured,
+            spoilers: EpisodeSpoilerPreferences.shared.settings
         )
     }
 
@@ -281,14 +320,8 @@ struct TVSkylineSectionFeed: View {
         guard marqueeModel.content == nil,
               let section = sections.first,
               let item = section.items.first else { return }
-        marqueeModel.seed(
-            TVMarqueeContent(
-                item: item,
-                rowId: section.id,
-                rowTitle: section.title,
-                isContinueWatching: section.isContinueWatchingSection
-            )
-        )
+        marqueeSource = (item, section)
+        marqueeModel.seed(marqueeContent(for: item, in: section))
     }
 
 }
@@ -296,19 +329,33 @@ struct TVSkylineSectionFeed: View {
 /// Cancel artwork work when a row leaves the viewport without removing its
 /// buttons from the native focus graph. Visibility changes only at the edge.
 private struct TVSkylineArtworkVisibility: ViewModifier {
+    /// Runs each time the row comes into view and returns the artwork it
+    /// warmed, which is cancelled when the row leaves the viewport.
+    let onVisible: () -> [CardArtwork]
     @State private var isVisible = false
+    @State private var warmed: [CardArtwork] = []
 
     func body(content: Content) -> some View {
         content
             .environment(\.tvArtworkLoadingEnabled, isVisible)
-            .onScrollVisibilityChange(threshold: 0.01) { isVisible = $0 }
+            .onScrollVisibilityChange(threshold: 0.01) { visible in
+                isVisible = visible
+                if visible {
+                    warmed = onVisible()
+                } else {
+                    // Cards already on screen keep their own requests.
+                    PosterImageCache.stopPrefetchingArtwork(warmed)
+                    warmed = []
+                }
+            }
     }
 }
 
 /// Observe preview changes at the leaves. Reading the model's properties in
 /// the feed's body makes every artwork, tint, and enrichment update rebuild
-/// the scrolling rows and their focusable cards as well.
-private struct TVSkylineBackdrop: View {
+/// the scrolling rows and their focusable cards as well. Also used by the
+/// Requests page.
+struct TVSkylineBackdrop: View {
     let model: TVFocusMarqueeModel
 
     var body: some View {
@@ -322,15 +369,59 @@ private struct TVSkylineBackdrop: View {
     }
 }
 
-private struct TVSkylineMarquee: View {
+struct TVSkylineMarquee: View {
     let model: TVFocusMarqueeModel
     let scale: TVFocusMarquee.Scale
 
+    /// How long a card must hold focus before its description is translated
+    /// on view, so rolling across a row starts no jobs.
+    private static let translationDwell: Duration = .milliseconds(1500)
+
     var body: some View {
         TVFocusMarquee(
-            content: model.content,
+            content: displayedContent,
             enrichment: model.enrichment,
             scale: scale
+        )
+        .task(id: translationRequest) {
+            // Featured cards in `auto` mode only. The marquee has no
+            // focusable controls, so `button` mode leaves the action to the
+            // detail page's More menu.
+            guard let trigger = translationRequest else { return }
+            try? await Task.sleep(for: Self.translationDwell)
+            guard !Task.isCancelled else { return }
+            CardDescriptionTranslation.shared.cardDidAppear(
+                contentId: trigger.contentId,
+                pendingLanguage: trigger.language,
+                libraryId: model.libraryId
+            )
+        }
+    }
+
+    /// The focused card with any landed translation and its status.
+    private var displayedContent: TVMarqueeContent? {
+        guard var content = model.content else { return nil }
+        guard !content.hidesSynopsis else { return content }
+        let presentation = translationPresentation(for: content)
+        content.synopsis = presentation.overview
+        content.translationStatus = presentation.status
+        return content
+    }
+
+    private var translationRequest: TVMarqueeTranslationRequest? {
+        guard let content = model.content else { return nil }
+        return content.onViewTranslationRequest(
+            pendingLanguage: translationPresentation(for: content).pendingLanguage,
+            mode: AICapabilities.shared.metadataOnView
+        )
+    }
+
+    private func translationPresentation(for content: TVMarqueeContent) -> CardDescriptionTranslation.Presentation {
+        CardDescriptionTranslation.shared.presentation(
+            contentId: content.contentId,
+            overview: content.synopsis,
+            pendingLanguage: content.pendingTranslationLanguage,
+            machineTranslatedFields: content.machineTranslatedFields
         )
     }
 }

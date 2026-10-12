@@ -290,10 +290,11 @@ final class ProfileLaunchPolicyTests: XCTestCase {
             persistenceOverride: { _ in allowsPersistence }
         )
 
+        let initial = preferences.behavior
         allowsPersistence = false
-        preferences.behavior = .askEveryLaunch
+        preferences.behavior = .afterOneHour
 
-        XCTAssertEqual(preferences.behavior, .automatic)
+        XCTAssertEqual(preferences.behavior, initial)
     }
 
     /// The profile picker reads remembered profiles on the main thread while
@@ -771,5 +772,114 @@ final class ProfileLaunchMigrationTests: XCTestCase {
         let migrated = try XCTUnwrap(defaults.data(forKey: ServerRegistry.defaultsKey))
         XCTAssertFalse(String(decoding: migrated, as: UTF8.self).contains("profileId"))
         #endif
+    }
+
+    // MARK: - TV first launch
+
+    func testFreshTVAsksWhoIsWatchingAndOffersToRemember() {
+        let tv = ProfileLaunchState.fresh(isTV: true)
+        XCTAssertEqual(tv.behavior, .askEveryLaunch)
+        XCTAssertEqual(tv.rememberOfferPending, true)
+
+        let phone = ProfileLaunchState.fresh(isTV: false)
+        XCTAssertEqual(phone.behavior, .automatic)
+        XCTAssertNil(phone.rememberOfferPending)
+    }
+
+    func testStateSavedBeforeTheOfferExistedKeepsItsBehavior() throws {
+        // State written by an earlier build has no rememberOfferPending key.
+        let saved = #"{"behavior":"automatic","rememberedByServerID":{},"selectionRequiredServerIDs":[]}"#
+        let decoded = try JSONDecoder().decode(ProfileLaunchState.self, from: Data(saved.utf8))
+        XCTAssertEqual(decoded.behavior, .automatic)
+        XCTAssertNil(decoded.rememberOfferPending)
+    }
+
+    func testRememberOfferAnswersPersistOnce() throws {
+        for remember in [true, false] {
+            let suiteName = "ProfileLaunchPolicyTests.\(UUID().uuidString)"
+            let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+            defer { suite.removePersistentDomain(forName: suiteName) }
+            let defaults = SharedDefaults(suite: suite, standard: suite)
+            let fresh = try JSONEncoder().encode(ProfileLaunchState.fresh(isTV: true))
+            defaults.set(fresh, forKey: SharedStorage.profileLaunchStateKey)
+
+            let preferences = ProfileLaunchPreferences(defaults: defaults)
+            XCTAssertTrue(preferences.isRememberOfferPending)
+            XCTAssertTrue(preferences.answerRememberOffer(remember: remember))
+
+            let restored = ProfileLaunchPreferences(defaults: defaults)
+            XCTAssertFalse(restored.isRememberOfferPending)
+            XCTAssertEqual(restored.behavior, remember ? .automatic : .askEveryLaunch)
+        }
+    }
+
+    func testChoosingABehaviorInSettingsEndsTheOffer() throws {
+        let suiteName = "ProfileLaunchPolicyTests.\(UUID().uuidString)"
+        let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { suite.removePersistentDomain(forName: suiteName) }
+        let defaults = SharedDefaults(suite: suite, standard: suite)
+        defaults.set(try JSONEncoder().encode(ProfileLaunchState.fresh(isTV: true)), forKey: SharedStorage.profileLaunchStateKey)
+
+        let preferences = ProfileLaunchPreferences(defaults: defaults)
+        preferences.behavior = .afterOneHour
+        XCTAssertFalse(preferences.isRememberOfferPending)
+        XCTAssertEqual(ProfileLaunchPreferences(defaults: defaults).behavior, .afterOneHour)
+    }
+
+    func testChoosingTheCurrentBehaviorInSettingsEndsTheOffer() throws {
+        let suiteName = "ProfileLaunchPolicyTests.\(UUID().uuidString)"
+        let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { suite.removePersistentDomain(forName: suiteName) }
+        let defaults = SharedDefaults(suite: suite, standard: suite)
+        defaults.set(try JSONEncoder().encode(ProfileLaunchState.fresh(isTV: true)), forKey: SharedStorage.profileLaunchStateKey)
+
+        let preferences = ProfileLaunchPreferences(defaults: defaults)
+        preferences.behavior = .askEveryLaunch
+        XCTAssertFalse(preferences.isRememberOfferPending)
+        XCTAssertFalse(ProfileLaunchPreferences(defaults: defaults).isRememberOfferPending)
+    }
+
+    func testLegacyMigrationThatCannotBeSavedChangesNothing() throws {
+        let serverID = "server-a"
+        let accountEpoch = "account-a"
+        let suiteName = "ProfileLaunchPolicyTests.\(UUID().uuidString)"
+        let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { suite.removePersistentDomain(forName: suiteName) }
+        let defaults = SharedDefaults(suite: suite, standard: suite)
+        defaults.set(try JSONEncoder().encode(ProfileLaunchState.fresh(isTV: true)), forKey: SharedStorage.profileLaunchStateKey)
+        var allowsPersistence = true
+        let preferences = ProfileLaunchPreferences(defaults: defaults, persistenceOverride: { _ in allowsPersistence })
+        allowsPersistence = false
+
+        XCTAssertFalse(preferences.migrateLegacyProfile(
+            profileID: "profile-a", requiresPIN: false, accountEpoch: accountEpoch, for: serverID
+        ))
+        XCTAssertNil(preferences.rememberedProfile(for: serverID))
+        XCTAssertEqual(preferences.behavior, .askEveryLaunch)
+        XCTAssertTrue(preferences.isRememberOfferPending)
+    }
+
+    func testMigratedLegacyProfileKeepsOpeningOnAFreshTVState() throws {
+        let serverID = "server-a"
+        let accountEpoch = "account-a"
+        let suiteName = "ProfileLaunchPolicyTests.\(UUID().uuidString)"
+        let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { suite.removePersistentDomain(forName: suiteName) }
+        let defaults = SharedDefaults(suite: suite, standard: suite)
+        defaults.set(try JSONEncoder().encode(ProfileLaunchState.fresh(isTV: true)), forKey: SharedStorage.profileLaunchStateKey)
+
+        let preferences = ProfileLaunchPreferences(defaults: defaults)
+        XCTAssertTrue(preferences.migrateLegacyProfile(
+            profileID: "profile-a",
+            requiresPIN: false,
+            accountEpoch: accountEpoch,
+            for: serverID
+        ))
+        XCTAssertEqual(preferences.behavior, .automatic)
+        XCTAssertFalse(preferences.isRememberOfferPending)
+        XCTAssertEqual(
+            preferences.resolution(for: serverID, accountEpoch: accountEpoch, hasStoredProfileToken: false),
+            .restore(RememberedProfile(profileID: "profile-a", requiredPINAtSelection: false, accountEpoch: accountEpoch))
+        )
     }
 }

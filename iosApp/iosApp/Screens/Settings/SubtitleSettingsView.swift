@@ -6,10 +6,7 @@ import SwiftUI
 /// the appearance block is a per-device override with a server
 /// fallback.
 struct SubtitleSettingsView: View {
-    @Bindable var viewModel: SettingsViewModel
-    /// Slider position while the user is dragging; committed (and saved
-    /// to the server) once the drag ends.
-    @State private var draftOpacity: Double?
+    let viewModel: SettingsViewModel
 
     var body: some View {
         List {
@@ -29,27 +26,20 @@ struct SubtitleSettingsView: View {
         .navigationTitle("Subtitles")
         .prairieNavigationTitleDisplayMode(.inline)
         .prairieToolbarColorSchemeDark()
-        .onChange(of: viewModel.prefs.subtitleLanguage) { _, _ in
-            Task { await viewModel.prefs.saveSubtitlePrefs() }
-        }
-        .onChange(of: viewModel.prefs.subtitleMode) { _, _ in
-            Task { await viewModel.prefs.saveSubtitlePrefs() }
-        }
-        .onChange(of: viewModel.prefs.showForcedSubtitles) { _, _ in
-            Task { await viewModel.prefs.saveSubtitlePrefs() }
-        }
-        .onChange(of: viewModel.prefs.preferredMetadataLanguage) { _, _ in
-            Task { await viewModel.prefs.saveMetadataLanguage() }
-        }
     }
 
     // MARK: - Metadata language (server-backed, AI-gated)
 
     @ViewBuilder
     private var metadataLanguageSection: some View {
-        @Bindable var prefs = viewModel.prefs
         Section {
-            Picker("Metadata Language", selection: $prefs.preferredMetadataLanguage) {
+            Picker(
+                "Metadata Language",
+                selection: Binding(
+                    get: { viewModel.prefs.preferredMetadataLanguage },
+                    set: { value in Task { await viewModel.prefs.setPreferredMetadataLanguage(value) } }
+                )
+            ) {
                 Text(
                     SettingPresentationMetadata.definitions[.catalogMetadataLanguage]?.unsetLabel
                         ?? "Library default"
@@ -59,11 +49,7 @@ struct SubtitleSettingsView: View {
                 }
             }
             .foregroundStyle(Color.prairieOnSurface)
-            #if os(macOS)
-            .pickerStyle(.menu)
-            #else
-            .pickerStyle(.navigationLink)
-            #endif
+            .settingsPickerStyle()
         } header: {
             Text("Metadata")
                 .foregroundStyle(Color.prairieSecondaryText)
@@ -79,9 +65,14 @@ struct SubtitleSettingsView: View {
 
     @ViewBuilder
     private var profileBackedSection: some View {
-        @Bindable var prefs = viewModel.prefs
         Section {
-            Picker("Language", selection: $prefs.subtitleLanguage) {
+            Picker(
+                "Language",
+                selection: Binding(
+                    get: { viewModel.prefs.subtitleLanguage },
+                    set: { value in Task { await viewModel.prefs.setSubtitleLanguage(value) } }
+                )
+            ) {
                 Text(
                     SettingPresentationMetadata.definitions[.playbackSubtitleLanguage]?.unsetLabel
                         ?? "None"
@@ -91,29 +82,27 @@ struct SubtitleSettingsView: View {
                 }
             }
             .foregroundStyle(Color.prairieOnSurface)
-            #if os(macOS)
-            .pickerStyle(.menu)
-            #else
-            .pickerStyle(.navigationLink)
-            #endif
+            .settingsPickerStyle()
 
-            Picker("Behavior", selection: $prefs.subtitleMode) {
+            Picker(
+                "Behavior",
+                selection: Binding(
+                    get: { viewModel.prefs.subtitleMode },
+                    set: { value in Task { await viewModel.prefs.setSubtitleMode(value) } }
+                )
+            ) {
                 ForEach(SubtitleMode.allCases, id: \.rawValue) { mode in
                     Text(mode.displayLabel).tag(mode.rawValue)
                 }
             }
             .foregroundStyle(Color.prairieOnSurface)
-            #if os(macOS)
-            .pickerStyle(.menu)
-            #else
-            .pickerStyle(.navigationLink)
-            #endif
+            .settingsPickerStyle()
 
             Toggle(
                 "Show Forced Subtitles",
                 isOn: Binding(
                     get: { viewModel.prefs.showForcedSubtitles == "on" },
-                    set: { viewModel.prefs.showForcedSubtitles = $0 ? "on" : "off" }
+                    set: { isOn in Task { await viewModel.prefs.setShowForcedSubtitles(isOn) } }
                 )
             )
             .foregroundStyle(Color.prairieOnSurface)
@@ -162,7 +151,7 @@ struct SubtitleSettingsView: View {
                 .foregroundStyle(Color.prairieSecondaryText)
         } footer: {
             if !manualEditingDisabled && viewModel.subtitleAppearance.isLowLegibilityRisk {
-                Text("Low contrast — dark text without a box or outline can be hard to read.")
+                Text("Low legibility — very transparent or dark text without a box or outline can be hard to read.")
                     .foregroundStyle(Color.prairieError)
             }
         }
@@ -173,9 +162,7 @@ struct SubtitleSettingsView: View {
                 "Use Device Settings",
                 isOn: Binding(
                     get: { viewModel.subtitleMatchesSystemAppearance },
-                    set: { enabled in
-                        Task { await viewModel.setSubtitleMatchesSystemAppearance(enabled) }
-                    }
+                    set: { viewModel.setSubtitleMatchesSystemAppearance($0) }
                 )
             )
             .foregroundStyle(Color.prairieOnSurface)
@@ -219,11 +206,7 @@ struct SubtitleSettingsView: View {
                 }
             }
             .foregroundStyle(Color.prairieOnSurface)
-            #if os(macOS)
-            .pickerStyle(.menu)
-            #else
-            .pickerStyle(.navigationLink)
-            #endif
+            .settingsPickerStyle()
 
             Picker("Font Family", selection: appearanceBinding(\.fontFamily)) {
                 ForEach(SubtitleFontFamilyPreset.allCases) { option in
@@ -231,17 +214,28 @@ struct SubtitleSettingsView: View {
                 }
             }
             .foregroundStyle(Color.prairieOnSurface)
-            #if os(macOS)
-            .pickerStyle(.menu)
-            #else
-            .pickerStyle(.navigationLink)
-            #endif
+            .settingsPickerStyle()
 
             ColorChoicePicker(
                 title: "Font Color",
                 colors: SubtitleAppearance.fontColors,
                 selection: appearanceBinding(\.fontColor)
             )
+
+            if viewModel.offersSubtitleTextOpacity {
+                PercentField(
+                    label: "Opacity",
+                    accessibilityLabelText: "Text Opacity",
+                    min: 1,
+                    value: viewModel.subtitleAppearance.textOpacity
+                ) { newValue in
+                    var next = viewModel.subtitleAppearance
+                    if next.textOpacity == newValue { return }
+                    next.textOpacity = newValue
+                    Task { await viewModel.setSubtitleAppearance(next) }
+                }
+                .foregroundStyle(Color.prairieOnSurface)
+            }
 
             Toggle("Text Outline", isOn: appearanceBinding(\.textOutline))
                 .foregroundStyle(Color.prairieOnSurface)
@@ -269,11 +263,7 @@ struct SubtitleSettingsView: View {
                 }
             }
             .foregroundStyle(Color.prairieOnSurface)
-            #if os(macOS)
-            .pickerStyle(.menu)
-            #else
-            .pickerStyle(.navigationLink)
-            #endif
+            .settingsPickerStyle()
 
             opacityRow
                 .disabled(viewModel.subtitleAppearance.backgroundStyle != .box)
@@ -301,11 +291,7 @@ struct SubtitleSettingsView: View {
                 }
             }
             .foregroundStyle(Color.prairieOnSurface)
-            #if os(macOS)
-            .pickerStyle(.menu)
-            #else
-            .pickerStyle(.navigationLink)
-            #endif
+            .settingsPickerStyle()
         } header: {
             Text("Layout")
                 .foregroundStyle(Color.prairieSecondaryText)
@@ -333,35 +319,18 @@ struct SubtitleSettingsView: View {
     }
 
     private var opacityRow: some View {
-        let committed = Double(viewModel.subtitleAppearance.backgroundOpacity)
-        return HStack(spacing: 12) {
-            Text("Opacity")
-                .foregroundStyle(Color.prairieOnSurface)
-            Slider(
-                value: Binding(
-                    get: { draftOpacity ?? committed },
-                    set: { draftOpacity = $0 }
-                ),
-                in: 0...100,
-                step: 5
-            ) { editing in
-                guard !editing, let value = draftOpacity else { return }
-                draftOpacity = nil
-                var next = viewModel.subtitleAppearance
-                let percent = Int(value)
-                if next.backgroundOpacity == percent { return }
-                next.backgroundOpacity = percent
-                Task { await viewModel.setSubtitleAppearance(next) }
-            }
-            .tint(.prairieOnSurface)
-            Text("\(Int(draftOpacity ?? committed))%")
-                .monospacedDigit()
-                .foregroundStyle(Color.prairieSecondaryText)
-                .frame(minWidth: 44, alignment: .trailing)
+        PercentField(
+            label: "Opacity",
+            accessibilityLabelText: "Background Opacity",
+            min: 0,
+            value: viewModel.subtitleAppearance.backgroundOpacity
+        ) { newValue in
+            var next = viewModel.subtitleAppearance
+            if next.backgroundOpacity == newValue { return }
+            next.backgroundOpacity = newValue
+            Task { await viewModel.setSubtitleAppearance(next) }
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Background Opacity")
-        .accessibilityValue("\(Int(draftOpacity ?? committed)) percent")
+        .foregroundStyle(Color.prairieOnSurface)
     }
 
     private func appearanceBinding<Value: Equatable>(
@@ -400,9 +369,8 @@ struct SubtitleSettingsView: View {
 
 // MARK: - Color choice row
 
-/// A named-color picker rendered as a standard row (navigation link on
-/// iOS, menu on macOS) so every option gets a full-size tap target,
-/// unlike the previous row of 24pt swatches.
+/// A named-color picker rendered as a standard row so every option gets a
+/// full-size tap target.
 private struct ColorChoicePicker: View {
     let title: String
     let colors: [(hex: String, label: String)]
@@ -427,11 +395,7 @@ private struct ColorChoicePicker: View {
             Text(title)
                 .foregroundStyle(Color.prairieOnSurface)
         }
-        #if os(macOS)
-        .pickerStyle(.menu)
-        #else
-        .pickerStyle(.navigationLink)
-        #endif
+        .settingsPickerStyle()
     }
 
     /// Stored hex values may differ in case from the option list.

@@ -8,6 +8,26 @@ struct ProfileLaunchState: Codable, Equatable, Sendable {
     /// the current device-user domain makes timed policies independent of
     /// whether the process survives in the background.
     var backgroundedAt: Date? = nil
+    /// Set on a fresh Apple TV: the first profile picked there is offered as
+    /// the one to open automatically. Optional so state saved by earlier
+    /// builds still decodes; nil means no offer is due.
+    var rememberOfferPending: Bool? = nil
+
+    /// The state of a device with nothing saved yet. A TV asks who's watching
+    /// until someone chooses to remember a profile; phones, tablets and Macs
+    /// reopen the last profile.
+    static func fresh(isTV: Bool) -> ProfileLaunchState {
+        guard isTV else { return ProfileLaunchState() }
+        return ProfileLaunchState(behavior: .askEveryLaunch, rememberOfferPending: true)
+    }
+
+    static var freshForCurrentDevice: ProfileLaunchState {
+        #if os(tvOS)
+        return fresh(isTV: true)
+        #else
+        return fresh(isTV: false)
+        #endif
+    }
 
     func resolution(
         for serverID: String,
@@ -48,7 +68,7 @@ struct ProfileLaunchState: Codable, Equatable, Sendable {
     static func load(from defaults: SharedDefaults) -> ProfileLaunchState {
         guard let data = defaults.data(forKey: SharedStorage.profileLaunchStateKey),
               let decoded = try? JSONDecoder().decode(ProfileLaunchState.self, from: data) else {
-            return ProfileLaunchState()
+            return freshForCurrentDevice
         }
         return decoded
     }

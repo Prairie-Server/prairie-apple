@@ -5,15 +5,20 @@ import SwiftUI
 /// interface customization.
 struct GeneralSettingsView: View {
     @State private var launchPreferences = ProfileLaunchPreferences.shared
+    @StateObject private var advisoryAgePreference = AdvisoryAgePreferenceStore.shared
 
     var body: some View {
         List {
             profileSection
+            if advisoryAgePreference.isSupported {
+                advisoryAgeSection
+            }
         }
         .settingsListChrome()
         .navigationTitle("General")
         .prairieNavigationTitleDisplayMode(.inline)
         .prairieToolbarColorSchemeDark()
+        .task { await advisoryAgePreference.refresh() }
     }
 
     private var profileSection: some View {
@@ -26,11 +31,7 @@ struct GeneralSettingsView: View {
                 }
             }
             .foregroundStyle(Color.prairieOnSurface)
-            #if os(macOS)
-            .pickerStyle(.menu)
-            #else
-            .pickerStyle(.navigationLink)
-            #endif
+            .settingsPickerStyle()
             .accessibilityValue(launchPreferences.behavior.title)
             .accessibilityHint(launchPreferences.behavior.standardDescription)
         } header: {
@@ -39,6 +40,35 @@ struct GeneralSettingsView: View {
         } footer: {
             Text(launchPreferences.behavior.standardDescription)
                 .foregroundStyle(Color.prairieSecondaryText)
+        }
+        .listRowBackground(Color.prairieGroupedCell)
+    }
+
+    private var advisoryAgeSection: some View {
+        Section {
+            Toggle(
+                "Show Advisory Age",
+                isOn: Binding(
+                    get: { advisoryAgePreference.showsAdvisoryAge },
+                    set: { value in
+                        Task { await advisoryAgePreference.setShowsAdvisoryAge(value) }
+                    }
+                )
+            )
+            .foregroundStyle(Color.prairieOnSurface)
+            .tint(.prairieSwitchOn)
+            .disabled(advisoryAgePreference.isSaving)
+        } header: {
+            Text("Ratings")
+                .foregroundStyle(Color.prairieSecondaryText)
+        } footer: {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Show a suggested minimum viewer age, such as Common Sense Media’s, on movie and show details. This does not change what the profile may watch.")
+                if let writeError = advisoryAgePreference.writeError {
+                    Text(writeError)
+                }
+            }
+            .foregroundStyle(Color.prairieSecondaryText)
         }
         .listRowBackground(Color.prairieGroupedCell)
     }
