@@ -208,11 +208,11 @@ targets:
           - Support/Polling.swift
           - APIv2ContractTests.swift
           - APIv2MutationOutcomeTests.swift
-           - CatalogActionsAPITests.swift
-           # CatalogV2Tests dropped from the host bundle: the upstream revision
-           # seeds TVItemDetailRouteSeed, whose Route type pulls app-only models
-           # (LibraryVideoScope, EpisodeWatchState) the FFmpeg-free host cannot carry.
-           - CollectionsV2Tests.swift
+          - CatalogActionsAPITests.swift
+          # CatalogV2Tests dropped from the host bundle: the upstream revision
+          # seeds TVItemDetailRouteSeed, whose Route type pulls app-only models
+          # (LibraryVideoScope, EpisodeWatchState) the FFmpeg-free host cannot carry.
+          - CollectionsV2Tests.swift
           - LibraryBrowseV2Tests.swift
           # MetadataAIV2Tests dropped from the host bundle: the upstream revision
           # drives DescriptionTranslationCoordinator, an app-only type the FFmpeg-free
