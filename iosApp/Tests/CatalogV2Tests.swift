@@ -23,9 +23,12 @@ final class CatalogV2Tests: XCTestCase {
         XCTAssertEqual(try decoder.decode(SectionItem.self, from: card).posterIsEpisodeStill, false)
         let browse = try decoder.decode(BrowseItem.self, from: card)
         XCTAssertEqual(browse.backdropIsEpisodeStill, true)
+        // Route.swift is app-layer; the PrairieNetworkingHost CI framework stubs Route.
+#if !PRAIRIE_NETWORKING_HOST
         let seed = TVItemDetailRouteSeed(browse)
         XCTAssertEqual(seed.backdropIsEpisodeStill, true)
         XCTAssertTrue(try XCTUnwrap(seed.episodeWatchState).isUnwatched)
+#endif
     }
 
     private let terminal = #"{"items":[],"page":{"has_more":false},"total":10000,"total_exact":false,"window_cursor":"window"}"#

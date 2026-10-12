@@ -31,6 +31,13 @@ final class TokenStoreSessionTests: XCTestCase {
         super.tearDown()
     }
 
+    /// The persisted profile proof for a server, read straight from the
+    /// profile-audience keychain (upstream dropped `hasStoredProfileToken`).
+    private func storedProfileProof(for serverID: String) -> String? {
+        keychain.withAudience(TokenStore.profileCredentialAudience)
+            .get(TokenStore.profileTokenKey(for: serverID))
+    }
+
     private func signedInStore(accountID: String? = "account-1") async throws -> TokenStore {
         let store = TokenStore(keychain: keychain, defaults: defaults)
         await store.switchActiveServer(serverId: serverA)
@@ -300,10 +307,7 @@ final class TokenStoreSessionTests: XCTestCase {
         let expectation = await store.captureAccountInstallationExpectation()
         try await store.installAccountSessionForServer(serverID: serverB, origin: "https://session-b.example",
             accessToken: "b-access", refreshToken: "b-refresh", accountID: "account-b", expected: expectation)
-        let hasOther = await store.hasStoredProfileToken(for: serverB)
-        XCTAssertFalse(hasOther)
-        let hasNone = await store.hasStoredProfileToken(for: "")
-        XCTAssertFalse(hasNone)
+        XCTAssertNil(storedProfileProof(for: serverB))
 
         let deletedOther = await store.deleteTokens(for: serverB)
         XCTAssertTrue(deletedOther)
@@ -339,8 +343,9 @@ final class TokenStoreSessionTests: XCTestCase {
         XCTAssertEqual(proof, "p3")
         let withoutProof = await store.activateProfile(profileID: "profile-4", profileToken: nil, expectedAccount: account)
         XCTAssertTrue(withoutProof)
-        let hasProof = await store.hasStoredProfileToken(for: serverA)
+        let hasProof = await store.getProfileToken() != nil
         XCTAssertFalse(hasProof)
+        XCTAssertNil(storedProfileProof(for: serverA))
 
         let wrongAccount = await store.deactivateProfile(expectedAccount: wrong)
         XCTAssertFalse(wrongAccount)

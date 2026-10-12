@@ -132,6 +132,10 @@ final class MetadataAIV2Tests: XCTestCase {
         XCTAssertTrue(stub.requests.isEmpty)
     }
 
+    // The translation presentation, coordinator and detail view model live in
+    // the app layer, outside the Foundation-only PrairieNetworkingHost CI
+    // framework; these run in the app test targets only.
+#if !PRAIRIE_NETWORKING_HOST
     // MARK: Machine-translated text and pending languages
 
     private static func detail(_ extra: String) throws -> ItemDetail {
@@ -364,4 +368,5 @@ final class MetadataAIV2Tests: XCTestCase {
         store.cardDidAppear(contentId: id, pendingLanguage: "de", libraryId: nil)
         try await waitUntil { self.translatePosts == 2 }
     }
+#endif
 }

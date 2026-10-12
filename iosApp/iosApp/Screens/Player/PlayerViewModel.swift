@@ -1578,7 +1578,7 @@ class PlayerViewModel {
               let track = audioTracks.first(where: { $0.trackId == selectedAudioId }) else {
             return nil
         }
-        return "\(track.displayLabel) (track \(track.trackId))"
+        return "\(track.statsLabel) (track \(track.trackId))"
     }
 
     /// Append to the on-device event log and publish it to the stats panel
@@ -6779,7 +6779,7 @@ class PlayerViewModel {
     // Aether's media-track id namespace.
 
     func selectAudio(_ track: PlayerTrack) {
-        recordPlaybackEvent("Audio: \(track.displayLabel)")
+        recordPlaybackEvent("Audio: \(track.statsLabel)")
         if activePreparedProtocolV3 != nil {
             // The server owns the switch on this path, so the track must not
             // be applied locally before its plan arrives. The selection is
@@ -9823,5 +9823,16 @@ private final class LiveSubtitleSinkAdapter: LiveSubtitleSink {
 
     func showFailureNotice(_ message: String) {
         owner?.showLiveSubtitleFailureNotice(message)
+    }
+}
+
+// MARK: - Prairie stats labels
+
+private extension PlayerTrack {
+    /// Rich one-line label for the stats panel and playback event log,
+    /// e.g. "English · 5.1 · EAC3 · Default".
+    var statsLabel: String {
+        ([languageFirstPrimaryLabel] + attributePillLabels(includeLanguage: false))
+            .joined(separator: " · ")
     }
 }

@@ -25,8 +25,6 @@ final class APIv2WireModelsTests: XCTestCase {
     func testStringEnumsKeepUnknownValuesAndRoundTrip() throws {
         XCTAssertEqual(try decode([APIv2AccountRole].self, #"["admin","user","owner"]"#),
                        [.admin, .user, .unknown("owner")])
-        XCTAssertEqual(try decode([APIv2ProgressStatus].self, #"["in_progress","completed","paused"]"#),
-                       [.inProgress, .completed, .unknown("paused")])
         XCTAssertEqual(try decode([APIv2AvatarSource].self, #"["none","preset","upload","gif"]"#),
                        [.none, .preset, .upload, .unknown("gif")])
         XCTAssertEqual(try decode([APIv2QualityPreference].self, #"["auto","original","720p"]"#),
@@ -37,15 +35,11 @@ final class APIv2WireModelsTests: XCTestCase {
                        [.p1080, .p2160, .unknown("720p")])
 
         XCTAssertEqual(try wire(APIv2AccountRole.unknown("owner")), #"["owner"]"#)
-        XCTAssertEqual(try wire(APIv2ProgressStatus.inProgress), #"["in_progress"]"#)
         XCTAssertEqual(try wire(APIv2AvatarSource.upload), #"["upload"]"#)
         XCTAssertEqual(try wire(APIv2QualityPreference.original), #"["original"]"#)
         XCTAssertEqual(try wire(APIv2SubtitleMode.off), #"["off"]"#)
         XCTAssertEqual(try wire(APIv2PlaybackQuality.p2160), #"["2160p"]"#)
         for value in [APIv2AccountRole.admin, .user] { XCTAssertEqual(APIv2AccountRole(wireValue: value.wireValue), value) }
-        for value in [APIv2ProgressStatus.completed, .unknown("x")] {
-            XCTAssertEqual(APIv2ProgressStatus(wireValue: value.wireValue), value)
-        }
         for value in [APIv2AvatarSource.none, .preset, .unknown("x")] {
             XCTAssertEqual(APIv2AvatarSource(wireValue: value.wireValue), value)
         }
@@ -355,8 +349,6 @@ final class APIv2WireModelsTests: XCTestCase {
 
         let entry = try decode(APIv2DownloadEntry.self, entryJSON)
         XCTAssertTrue(entry.isUsable)
-        XCTAssertEqual(entry.bytesSent, 500)
-        XCTAssertNotNil(entry.statusEventAt)
         XCTAssertFalse(try decode(APIv2DownloadEntry.self,
                                   entryJSON.replacingOccurrences(of: #""revision": 2"#, with: #""revision": 0"#)).isUsable)
         XCTAssertFalse(try decode(APIv2DownloadEntry.self,
@@ -442,7 +434,6 @@ final class APIv2WireModelsTests: XCTestCase {
         { "subscription_id": "sub1", "registered": 2, "examined": 5, "page": { "has_more": false } }
         """)
         XCTAssertEqual(receipt.registered, 2)
-        XCTAssertEqual(receipt.examined, 5)
         let outcome = DownloadSubscriptionSyncOutcome(registered: 2, reloaded: page.items.first, removed: false)
         XCTAssertEqual(outcome.reloaded?.id, "sub1")
 

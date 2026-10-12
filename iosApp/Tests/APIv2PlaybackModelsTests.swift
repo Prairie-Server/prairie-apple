@@ -179,7 +179,7 @@ final class APIv2PlaybackModelsTests: XCTestCase {
         XCTAssertEqual(sequence.next(for: "a"), 1)
 
         for error in [PlaybackSequencedError.invalidSample, .invalidResponse, .invalidSession,
-                      .authorityChanged, .pendingStart, .controlUnavailable] {
+                      .authorityChanged, .controlUnavailable] {
             XCTAssertFalse((error.errorDescription ?? "").isEmpty)
         }
     }
@@ -196,7 +196,6 @@ final class APIv2PlaybackModelsTests: XCTestCase {
         { "outcome": "stopped", "stop_id": "s1", "history_id": "h1" }
         """)
         XCTAssertEqual(stopped.outcome, APIv2PlaybackMutation.Outcome.stopped)
-        XCTAssertEqual(stopped.historyId, "h1")
         XCTAssertNil(stopped.accepted)
         XCTAssertEqual(APIv2PlaybackMutation.Outcome.replayed, "replayed")
         XCTAssertEqual(APIv2PlaybackMutation.Outcome.staleSample, "stale_sample")

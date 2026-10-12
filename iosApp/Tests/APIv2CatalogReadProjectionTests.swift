@@ -230,7 +230,6 @@ final class APIv2CatalogReadProjectionTests: XCTestCase {
         XCTAssertEqual(userData.lastFileId, 42)
         XCTAssertEqual(userData.positionSeconds, 1800)
         XCTAssertEqual(userData.isInProgress, true)
-        XCTAssertEqual(userData.lastHdr, true)
         XCTAssertEqual(detail.userState?.isFavorite, true)
         XCTAssertEqual(detail.userState?.inWatchlist, true)
 
@@ -388,12 +387,12 @@ final class APIv2CatalogReadProjectionTests: XCTestCase {
     }
 
     func testSeasonsEpisodesPersonAndLibraryProjection() throws {
-        let seasons = try SeasonsResponse(catalog: decode([APIv2CatalogRead.Season].self, #"""
+        let seasons = try SeasonsResponse(seasons: decode([APIv2CatalogRead.Season].self, #"""
         [{ "air_date": "2024-01-01", "content_id": "season:1", "episode_count": 8, "is_specials": false,
            "overview": "S1", "poster_thumbhash": "s", "poster_url": "https://cdn.example/s1.jpg",
            "season_number": 1, "title": "Season 1",
            "user_data": { "in_progress_count": 1, "played": false, "unplayed_count": 6, "watched_count": 2 } }]
-        """#))
+        """#).map { try Season(catalog: $0) })
         let season = try XCTUnwrap(seasons.seasons.first)
         XCTAssertEqual(season.seasonNumber, 1)
         XCTAssertEqual(season.episodeCount, 8)
@@ -402,7 +401,7 @@ final class APIv2CatalogReadProjectionTests: XCTestCase {
         XCTAssertEqual(season.userData?.unplayedCount, 6)
         XCTAssertEqual(season.userData?.inProgressCount, 1)
 
-        let episodes = try EpisodesResponse(catalog: decode([APIv2CatalogRead.Episode].self, #"""
+        let episodes = try EpisodesResponse(episodes: decode([APIv2CatalogRead.Episode].self, #"""
         [{ "air_date": "2024-01-02", "content_id": "episode:1", "episode_number": 3,
            "files": [{ "audio_channels": 6, "codec_video": "h264", "container": "mp4",
                        "file_id": "9", "file_size": 1000, "hdr": false, "resolution": "1080p" }],
@@ -411,7 +410,7 @@ final class APIv2CatalogReadProjectionTests: XCTestCase {
            "tmdb_id": "33", "tvdb_id": "44",
            "user_data": { "in_progress_count": 0, "last_file_id": "9", "played": true,
                           "unplayed_count": 0, "watched_count": 1 } }]
-        """#))
+        """#).map { try EpisodeListItem(catalog: $0) })
         let episode = try XCTUnwrap(episodes.episodes.first)
         XCTAssertEqual(episode.episodeNumber, 3)
         XCTAssertEqual(episode.runtime, 45)

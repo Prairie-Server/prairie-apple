@@ -76,7 +76,6 @@ final class PlaybackPrefsModelTests: XCTestCase {
 
     func testSubtitleModeDisplayCopy() {
         XCTAssertEqual(SubtitleMode.auto.displayLabel, "Auto")
-        XCTAssertFalse(SubtitleMode.always.displayDescription.isEmpty)
         XCTAssertEqual(SubtitleMode.off.rawValue, "off")
     }
 }

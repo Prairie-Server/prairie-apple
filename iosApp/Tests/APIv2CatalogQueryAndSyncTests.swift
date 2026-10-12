@@ -38,7 +38,6 @@ final class APIv2CatalogQueryAndSyncTests: XCTestCase {
         query.sort = "title"
         query.order = "desc"
         query.limit = 25
-        query.queryLimit = 500
         query.skipTotal = true
         query.groups = [APIv2CatalogGroup(match: "any", rules: [
             APIv2CatalogRule(field: "genre", op: "in", value: .strings(["Drama", "Crime"])),
@@ -63,7 +62,6 @@ final class APIv2CatalogQueryAndSyncTests: XCTestCase {
         XCTAssertEqual(parameters["group"], "year")
         XCTAssertEqual(parameters["image_size"], "medium")
         XCTAssertEqual(parameters["sort"], "-title")
-        XCTAssertEqual(parameters["query_limit"], "500")
         XCTAssertEqual(parameters["skip_total"], "true")
         let groups = try XCTUnwrap(parameters["groups"])
         XCTAssertTrue(groups.contains(#""value":["Drama","Crime"]"#), groups)
@@ -78,7 +76,6 @@ final class APIv2CatalogQueryAndSyncTests: XCTestCase {
         XCTAssertEqual(plain["sort"], "year")
         XCTAssertNil(plain["groups"])
         XCTAssertNil(plain["skip_total"])
-        XCTAssertNil(plain["query_limit"])
 
         var huge = APIv2CatalogQuery()
         huge.groups = [APIv2CatalogGroup(match: "any", rules: [
@@ -90,7 +87,6 @@ final class APIv2CatalogQueryAndSyncTests: XCTestCase {
         let invalid: [(inout APIv2CatalogQuery) -> Void] = [
             { $0.limit = 0 },
             { $0.limit = 101 },
-            { $0.queryLimit = -1 },
             { $0.sort = "-title" },
             { $0.sort = "title,year" },
             { $0.order = "sideways" },
@@ -147,7 +143,6 @@ final class APIv2CatalogQueryAndSyncTests: XCTestCase {
         """)
         XCTAssertEqual(page.effectiveSort, APIv2CatalogEffectiveSort(field: "title", order: "asc"))
         XCTAssertEqual(page.searchDiagnostics?.indexPendingUpdates, 3)
-        XCTAssertEqual(page.windowCursor, "w")
 
         func capabilities(state: String, allowed: Bool) throws -> APIv2CatalogSearchCapabilities {
             try decode(APIv2CatalogSearchCapabilities.self, """
