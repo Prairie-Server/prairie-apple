@@ -556,6 +556,8 @@ targets:
           - HiddenLibraryPreferenceTests.swift
           - ResponseSnapshotStoreTests.swift
           - TitleArtPreferencesTests.swift
+          # Covers the upstream Networking models those app-level suites test.
+          - NetworkingUpstreamGateFillTests.swift
       - path: Tests/Fixtures/SettingsContract/conformance.json
         buildPhase: resources
       - path: Tests/Fixtures/APIv2

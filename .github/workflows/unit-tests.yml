@@ -142,6 +142,7 @@ jobs:
             PrairieNetworkingTests/ResponseSnapshotStoreTests
             PrairieNetworkingTests/TitleArtPreferencesTests
             PrairieNetworkingTests/TitleArtWritePlanTests
+            PrairieNetworkingTests/NetworkingUpstreamGateFillTests
           )
 
           ONLY_TESTING_ARGS=()
