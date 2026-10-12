@@ -829,14 +829,36 @@ private struct MobilePlayerTimeline: View {
     /// Floating time + chapter readout pinned above the touch point while
     /// scrubbing. Presentation-only: reads the same `scrubPreviewTime` the
     /// seek machinery already maintains.
+    private var scrubTrickplayTile: TrickplayTilePreview? {
+        Trickplay.resolveTile(viewModel.trickplay, seconds: viewModel.scrubPreviewTime)
+    }
+
+    private var scrubChapterThumbnailURL: String? {
+        guard let url = viewModel.chapterThumbnailURL(at: viewModel.scrubPreviewTime),
+              !url.isEmpty else { return nil }
+        return url
+    }
+
     private var scrubPreviewBubble: some View {
         VStack(spacing: 6) {
-            if let image = viewModel.scrubPreviewImage {
+            if let tile = scrubTrickplayTile {
+                TrickplayTileImage(tile: tile, displayWidth: 176)
+                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            } else if let image = viewModel.scrubPreviewImage {
                 Image(decorative: image, scale: 1)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
                     .frame(width: 176, height: 99)
                     .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            } else if let chapterURL = scrubChapterThumbnailURL {
+                CachedAsyncImage(
+                    url: chapterURL,
+                    targetSize: CGSize(width: 176, height: 99),
+                    contentMode: .fill,
+                    placeholderStyle: .clear
+                )
+                .frame(width: 176, height: 99)
+                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
             }
             Text(PlayerTimeFormatter.formatHMS(viewModel.scrubPreviewTime))
                 .font(.system(size: 19, weight: .bold))
