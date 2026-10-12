@@ -299,4 +299,18 @@ final class PersonalStateSyncTests: XCTestCase {
             APIv2CatalogRead.CatalogItemDetail.self, from: Data(withoutProfile.utf8)))
         XCTAssertNil(anonymous.userState, "absent user_state is not read as all-false")
     }
+
+    @MainActor
+    func testDetailProjectionCarriesCommunityRatingWhenPresent() throws {
+        let body = #"{"content_id":"movie:one","type":"movie","title":"One","status":"available","genres":[],"keywords":[],"cast":[],"crew":[],"versions":[],"subtitles":[],"community_rating":{"average":4.2,"count":7}}"#
+        let detail = try ItemDetail(catalog: HTTPClient.makeJSONDecoder().decode(
+            APIv2CatalogRead.CatalogItemDetail.self, from: Data(body.utf8)))
+        XCTAssertEqual(detail.communityRating, CommunityRating(average: 4.2, count: 7))
+        XCTAssertEqual(detail.communityRating?.label, "4.2 · 7 ratings")
+
+        let withoutRating = body.replacingOccurrences(of: #","community_rating":{"average":4.2,"count":7}"#, with: "")
+        let older = try ItemDetail(catalog: HTTPClient.makeJSONDecoder().decode(
+            APIv2CatalogRead.CatalogItemDetail.self, from: Data(withoutRating.utf8)))
+        XCTAssertNil(older.communityRating, "absent community_rating decodes and stays hidden")
+    }
 }

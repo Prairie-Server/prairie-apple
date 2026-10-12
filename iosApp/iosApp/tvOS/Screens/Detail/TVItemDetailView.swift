@@ -1066,7 +1066,8 @@ struct TVItemDetailView: View {
             // would disappear the moment enrichment succeeds.
             videos: item.videos,
             extras: item.extras,
-            machineTranslatedFields: item.machineTranslatedFields
+            machineTranslatedFields: item.machineTranslatedFields,
+            communityRating: item.communityRating
         )
     }
 }

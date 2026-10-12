@@ -815,7 +815,7 @@ struct PhoneDetailHero<Actions: View, BelowOverview: View>: View {
         isCompact: Bool
     ) -> some View {
         let stackAlignment: HorizontalAlignment = textAlignment == .leading ? .leading : .center
-        let hasFacts = !metadataTokens.isEmpty || !ratingChips.isEmpty
+        let hasFacts = !metadataTokens.isEmpty || communityRatingLabel != nil || !ratingChips.isEmpty
         if hasFacts || !ratings.isEmpty {
             VStack(alignment: stackAlignment, spacing: 10) {
                 if hasFacts {
@@ -849,7 +849,7 @@ struct PhoneDetailHero<Actions: View, BelowOverview: View>: View {
     }
 
     private func metadataText(textAlignment: TextAlignment) -> some View {
-        Text(metadataTokens.joined(separator: "  ·  "))
+        metadataLine
             .prairieScaledFont(size: 14, weight: .medium, relativeTo: .subheadline)
             .foregroundStyle(Color.prairieOnSurface.opacity(0.84))
             .multilineTextAlignment(textAlignment)
@@ -877,6 +877,24 @@ struct PhoneDetailHero<Actions: View, BelowOverview: View>: View {
                 }
             }
         }
+    }
+
+    /// The text tokens, then the community rating (if any) behind a
+    /// `star.fill` symbol.
+    private var metadataLine: Text {
+        let joined = metadataTokens.joined(separator: "  ·  ")
+        guard let community = communityRatingLabel else { return Text(joined) }
+        let star = Image(systemName: "star.fill")
+        return joined.isEmpty
+            ? Text("\(star) \(community)")
+            : Text("\(joined)  ·  \(star) \(community)")
+    }
+
+    private var communityRatingLabel: String? {
+        for token in factsLine {
+            if case .community(let value) = token { return value }
+        }
+        return nil
     }
 
     private var ratingChips: [String] {

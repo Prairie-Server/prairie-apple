@@ -3,10 +3,12 @@ import Foundation
 
 /// A token in the hero's facts row. `.text` items get a middle-dot
 /// separator between them; `.chip` is an outlined uppercase pill
-/// (4K / HDR / ATMOS / CC).
+/// (4K / HDR / ATMOS / CC); `.community` renders a `star.fill` symbol + the
+/// community rating label.
 enum PhoneHeroFactToken: Hashable {
     case text(String)
     case chip(String)
+    case community(String)
 }
 
 /// Builds the eyebrow / source / facts / starring strings shown by the
@@ -60,6 +62,9 @@ enum PhoneHeroMetadata {
         if let runtimeText = MediaTextFormatting.runtime(minutes: runtime) {
             tokens.append(.text(runtimeText))
         }
+        if let community = detail.communityRating {
+            tokens.append(.community(community.label))
+        }
         tokens.append(contentsOf: qualityTokens(from: detail, version: selectedVersion))
         return tokens
     }
@@ -72,6 +77,9 @@ enum PhoneHeroMetadata {
         let count = seasons.librarySeasonCount
         if count > 0 {
             tokens.append(.text("\(count) Season\(count == 1 ? "" : "s")"))
+        }
+        if let community = detail.communityRating {
+            tokens.append(.community(community.label))
         }
         tokens.append(contentsOf: qualityTokens(from: detail))
         return tokens

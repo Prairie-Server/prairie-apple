@@ -83,6 +83,9 @@ extension ItemDetail {
         }
         self.posterIsEpisodeStill = value.posterIsEpisodeStill
         self.backdropIsEpisodeStill = value.backdropIsEpisodeStill
+        self.communityRating = try value.communityRating.map {
+            CommunityRating(average: $0.average, count: try catalogLegacyInt($0.count))
+        }
         self.posterUrl = value.posterUrl
         self.backdropUrl = value.backdropUrl
         self.logoUrl = value.logoUrl

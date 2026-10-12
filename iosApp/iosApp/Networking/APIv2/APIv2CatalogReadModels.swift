@@ -14,6 +14,7 @@ enum APIv2CatalogRead {
         let backdropThumbhash: String?
         @ArtworkURL var backdropUrl: String?
         let cast: [CastCredit]
+        let communityRating: CommunityRating?
         let contentId: String
         let contentRating: String?
         let countries: [String]?
@@ -73,6 +74,11 @@ enum APIv2CatalogRead {
         let versions: [FileVersion]
         let videos: [ItemVideoInfo]?
         let year: Int64?
+    }
+
+    struct CommunityRating: Decodable {
+        let average: Double
+        let count: Int64
     }
 
     struct Season: Decodable {
