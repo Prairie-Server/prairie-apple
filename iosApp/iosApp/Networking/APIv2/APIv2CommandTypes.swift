@@ -51,10 +51,11 @@ struct PlaybackProgressSequence: Sendable {
 }
 
 enum PlaybackSequencedError: LocalizedError {
-    case invalidSample, invalidResponse, invalidSession, authorityChanged, controlUnavailable
+    case invalidSample, invalidResponse, invalidSession, authorityChanged, pendingStart, controlUnavailable
     var errorDescription: String? {
         switch self {
         case .controlUnavailable: return "Remote playback control is not available on this server."
+        case .pendingStart: return "A previous playback start is unresolved. Retry it before starting another item."
         case .invalidSample: return "Playback progress could not be recorded."
         case .invalidResponse: return "The server returned an invalid playback response."
         case .invalidSession: return "This playback session is no longer available."

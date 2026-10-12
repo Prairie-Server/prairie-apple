@@ -7,6 +7,7 @@ struct APIv2CatalogPage: Decodable {
     let page: APIv2Page
     let total: Int
     let totalExact: Bool
+    let windowCursor: String
     let effectiveSort: APIv2CatalogEffectiveSort?
     let searchDiagnostics: APIv2CatalogSearchDiagnostics?
 }
@@ -117,16 +118,17 @@ struct APIv2CatalogQuery: Encodable, Hashable {
     var order = "asc"
     var group: String?
     var limit = 50
+    var queryLimit: Int?
     var skipTotal = false
     var imageSize: String?
 
     enum CodingKeys: String, CodingKey {
         case source, scope, sectionId, collectionId, personId, libraryId, q, type
-        case namePrefix, groups, match, sort, order, group, limit, skipTotal
+        case namePrefix, groups, match, sort, order, group, limit, queryLimit, skipTotal
     }
 
     func getParameters() throws -> [String: String] {
-        guard (1...100).contains(limit),
+        guard (1...100).contains(limit), queryLimit.map({ $0 >= 0 }) ?? true,
               sort.map({ !$0.hasPrefix("-") && !$0.contains(",") }) ?? true,
               order == "asc" || order == "desc" else { throw APIv2Error.invalidCatalogQuery }
         var query = ["source": source, "limit": String(limit)]
@@ -140,6 +142,7 @@ struct APIv2CatalogQuery: Encodable, Hashable {
             if let value { query[key] = value }
         }
         if let sort { query["sort"] = (order == "desc" ? "-" : "") + sort }
+        if let queryLimit { query["query_limit"] = String(queryLimit) }
         if skipTotal { query["skip_total"] = "true" }
         if !groups.isEmpty {
             let encoder = JSONEncoder()

@@ -11,11 +11,13 @@ struct UpdateProfileBody {
     var qualityPreference: String?
     var subtitleLanguage: String?
     var subtitleMode: String?
+    var showForcedSubtitles: Bool?
     /// Preferred metadata language (ISO 639-1; `""` = inherit the library
     /// default, sent as a clearing `null`).
     var preferredMetadataLanguage: String?
     var autoSkipIntro: Bool?
     var autoSkipCredits: Bool?
+    var autoSkipRecap: Bool?
 }
 
 struct VerifyPinRequest: Encodable {

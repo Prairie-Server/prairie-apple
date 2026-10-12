@@ -347,6 +347,7 @@ struct APIv2PlaybackMutation: Decodable, Equatable {
     let outcome: String
     let accepted: Accepted?
     let stopId: String?
+    let historyId: String?
 
     /// Progress: a newer or equal-and-identical sample was recorded, or the
     /// server already holds a newer one. Stop: this request's stop won, or an

@@ -1298,6 +1298,22 @@ struct APIv2Client: Sendable {
         }
     }
 
+    // MARK: listProgress (profile_scoped)
+
+    func listProgress(
+        status: APIv2ProgressStatus? = nil,
+        libraryId: String? = nil,
+        limit: Int? = nil,
+        cursor: String? = nil
+    ) async throws -> APIv2ProgressPage {
+        var query: [String: String] = [:]
+        if let status { query["status"] = status.wireValue }
+        if let libraryId { query["library_id"] = libraryId }
+        if let limit { query["limit"] = String(limit) }
+        if let cursor { query["cursor"] = cursor }
+        return try await requestGet("/api/v2/progress", query: query)
+    }
+
     // MARK: Internals
 
     /// Refuses relative-URL (active-session) operations while the active

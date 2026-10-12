@@ -415,6 +415,7 @@ enum APIv2CatalogRead {
         let inProgressCount: Int64
         let isInProgress: Bool?
         let lastFileId: String?
+        let lastHdr: Bool?
         let lastResolution: String?
         let played: Bool
         let positionSeconds: Double?

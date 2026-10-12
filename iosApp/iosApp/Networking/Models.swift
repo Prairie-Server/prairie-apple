@@ -1428,6 +1428,13 @@ struct EpisodesResponse: Codable {
 // MARK: - Collection Create
 
 /// `POST /api/v2/collections` body.
+// MARK: - Collection group requests
+
+/// `POST /api/v2/collections/groups` body; the server derives the slug.
+struct CreateCollectionGroupRequest: Encodable {
+    let name: String
+}
+
 struct CreateCollectionRequest: Encodable {
     let name: String
     let collectionType: String

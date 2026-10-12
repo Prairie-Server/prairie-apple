@@ -91,6 +91,24 @@ struct APIv2Impersonation: Decodable, Hashable, Sendable {
     let impersonatorUsername: String
 }
 
+enum APIv2ProgressStatus: APIv2StringEnum {
+    case inProgress
+    case completed
+    case unknown(String)
+
+    static let known: [String: Self] = ["in_progress": .inProgress, "completed": .completed]
+
+    var wireValue: String {
+        switch self {
+        case .inProgress: return "in_progress"
+        case .completed: return "completed"
+        case .unknown(let value): return value
+        }
+    }
+}
+
+/// `GET /api/v2/progress` — one page of the profile's watch progress.
+
 // MARK: Progress
 
 /// `GET /api/v2/progress` — one page of the profile's watch progress.
