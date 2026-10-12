@@ -716,6 +716,9 @@ enum TVHeroMetadata {
         if let runtime, runtime > 0 {
             tokens.append(.text(formatRuntime(runtime)))
         }
+        if let community = playbackDetail?.communityRating {
+            tokens.append(.community(community.label))
+        }
         return tokens
     }
 
