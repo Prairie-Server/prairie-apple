@@ -513,6 +513,7 @@ targets:
           - APIv2FixtureTestSupport.swift
           - Support/APIv2TestStub.swift
           - Support/StubURLProtocol.swift
+          - Support/Polling.swift
           - Support/OnboardingServerStub.swift
           - APIv2ContractTests.swift
           - APIv2MutationOutcomeTests.swift
