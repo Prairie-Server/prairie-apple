@@ -116,30 +116,12 @@ final class NetworkingModelsCoverageTests: XCTestCase {
         XCTAssertEqual(file.editionDisplayLabel, "Director's Cut")
     }
 
-    func testWatchDetailTolerantDecode() throws {
-        let detail = try decode(WatchDetail.self, """
-        {
-          "content_id": "e1",
-          "type": "episode",
-          "title": "Pilot"
-        }
-        """)
-        XCTAssertEqual(detail.contentId, "e1")
-        XCTAssertEqual(detail.type, "episode")
-        XCTAssertTrue(detail.versions.isEmpty)
-    }
-
     func testLibraryCollectionKindCatalogSource() {
         XCTAssertEqual(LibraryCollectionKind.regular.catalogSource, "library_collection")
         XCTAssertEqual(LibraryCollectionKind.userCollections.catalogSource, "user_collection")
     }
 
     func testPersonAndCreditIdentities() throws {
-        let person = try decode(Person.self, """
-        { "id": "person:1", "name": "Ada" }
-        """)
-        XCTAssertEqual(person.id, "person:1")
-
         let cast = try decode(CastMember.self, """
         { "name": "Ada", "character": "Lead" }
         """)

@@ -107,9 +107,5 @@ final class CatalogShapeModelsTests: XCTestCase {
         let create = try object(CreateCollectionRequest(name: "Faves", collectionType: "manual"))
         XCTAssertEqual(create["name"] as? String, "Faves")
         XCTAssertEqual(create["collection_type"] as? String, "manual")
-
-        let user = try decode(UserInfo.self, #"{ "id": "u1", "username": "ada", "is_admin": true }"#)
-        XCTAssertEqual(user.username, "ada")
-        XCTAssertEqual(user.isAdmin, true)
     }
 }

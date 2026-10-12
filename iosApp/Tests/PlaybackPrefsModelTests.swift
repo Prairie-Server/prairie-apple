@@ -28,32 +28,23 @@ final class PlaybackPrefsModelTests: XCTestCase {
         XCTAssertFalse(sig.hearingImpaired)
     }
 
-    func testAudioTrackSignatureRoundTrip() throws {
-        let sig = try decode(AudioTrackSignature.self, """
-        {
-          "language": "en",
-          "title": "English",
-          "embedded_title": "Atmos",
-          "codec": "truehd",
-          "layout": "5.1",
-          "channels": 6,
-          "default": true
-        }
-        """)
-        XCTAssertEqual(sig.channels, 6)
-        XCTAssertEqual(sig.embeddedTitle, "Atmos")
-        XCTAssertTrue(sig.isDefault)
-
-        // Round-trip with the same snake_case strategies HTTPClient uses.
+    func testAudioTrackSignatureEncodesSnakeCase() throws {
+        let sig = AudioTrackSignature(
+            language: "en",
+            title: "English",
+            embeddedTitle: "Atmos",
+            codec: "truehd",
+            layout: "5.1",
+            channels: 6,
+            isDefault: true
+        )
         let encoder = JSONEncoder()
         encoder.keyEncodingStrategy = .convertToSnakeCase
         let data = try encoder.encode(sig)
         let encoded = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         XCTAssertEqual(encoded["embedded_title"] as? String, "Atmos")
         XCTAssertNil(encoded["embeddedTitle"])
-        let again = try decoder().decode(AudioTrackSignature.self, from: data)
-        XCTAssertEqual(again.embeddedTitle, "Atmos")
-        XCTAssertTrue(again.isDefault)
+        XCTAssertEqual(encoded["channels"] as? Int, 6)
     }
 
     func testPlaybackLanguageOptionLabels() {

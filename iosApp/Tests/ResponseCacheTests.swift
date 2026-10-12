@@ -56,7 +56,7 @@ final class ResponseCacheTests: XCTestCase {
         XCTAssertEqual(CacheKey.browse(libraryId: nil, filterKey: "all"), "browse:v2:all:all")
         XCTAssertEqual(CacheKey.catalogFilters(libraryId: 1, includeTechnical: false), "catalogFilters:1:basic")
         XCTAssertEqual(CacheKey.tvLibrary(libraryId: 9, filterKey: "x"), "tvlibrary:v2:9:x")
-        XCTAssertEqual(CacheKey.calendarWeek("2026-01-01", filter: "all"), "calendar:2026-01-01:all")
+        XCTAssertEqual(CacheKey.calendarWeek("2026-01-01", filter: "all", timeZone: "UTC"), "calendar:2026-01-01:all:UTC")
         XCTAssertFalse(CacheKey.perProfilePrefixes.isEmpty)
     }
 }

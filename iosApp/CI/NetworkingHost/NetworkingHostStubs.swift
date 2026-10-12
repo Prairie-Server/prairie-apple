@@ -2,6 +2,7 @@ import Foundation
 
 extension Notification.Name {
     static let prairieSessionExpired = Notification.Name("prairieSessionExpired")
+    static let prairieProfileVerificationRequired = Notification.Name("prairieProfileVerificationRequired")
     static let temporaryRemoteAuthExpired = Notification.Name("temporaryRemoteAuthExpired")
 }
 
