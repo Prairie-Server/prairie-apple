@@ -40,8 +40,7 @@ struct DownloadReclaimSheet: View {
                 }
                 if !records.isEmpty {
                     ToolbarItem(placement: .primaryAction) {
-                        Button(allSelected ? "Deselect All" : "Select All", systemImage: allSelected ? "arrow.counterclockwise" : "checkmark.circle") { toggleAll() }
-                        Button(allSelected ? "Deselect All" : "Select All") { toggleAll(records) }
+                        Button(allSelected ? "Deselect All" : "Select All", systemImage: allSelected ? "arrow.counterclockwise" : "checkmark.circle") { toggleAll(records) }
                     }
                 }
             }
@@ -122,23 +121,6 @@ struct DownloadReclaimSheet: View {
                     Text("Delete \(selected.count) · Free \(DownloadFormatting.bytes(selectedBytes))")
                         .fontWeight(.bold)
                 }
-                .buttonStyle(.plain)
-                .disabled(selected.isEmpty)
-
-                Button("Not now", systemImage: "xmark") { dismiss() }
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.prairieOnSurface)
-                    .frame(maxWidth: .infinity)
-                    .frame(minHeight: 44)
-                    .background(
-                        RoundedRectangle(cornerRadius: 13, style: .continuous)
-                            .fill(Color.prairieChromeRestingFill)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                                    .stroke(Color.prairieChromeRestingBorder, lineWidth: 1)
-                            )
-                    )
-                    .buttonStyle(.plain)
                 .font(.subheadline)
                 .frame(maxWidth: .infinity)
                 .frame(minHeight: 50)

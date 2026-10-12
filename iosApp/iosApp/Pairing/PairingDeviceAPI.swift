@@ -122,9 +122,9 @@ struct PairingDeviceAPI: PairingDeviceAuthorizing {
         guard value.status == "approved" else { throw APIv2Error.incompleteAuthResponse }
     }
 
-    /// `POST /api/v2/auth/device/deny` — Quick Connect rejects a pending
-    /// device code with the chosen server's bearer. Sent once, like `approve`.
     /// `POST /api/v2/auth/device/deny` ("Not now" on the approval card).
+    /// Quick Connect rejects a pending device code with the chosen server's
+    /// bearer. Sent once, like `approve`.
     func deny(serverURL: String, bearer: String, userCode: String) async throws {
         let value: APIv2DeviceDecision = try await post(
             serverURL, "/api/v2/auth/device/deny", bearer: bearer, expectedStatus: 200,

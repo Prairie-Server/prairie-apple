@@ -114,15 +114,6 @@ struct CompanionPairingCard: View {
     private var discovery: some View {
         VStack(spacing: 0) {
             heroGlyph.padding(.bottom, 16)
-            Text("Set Up \(tv.name)")
-                .font(.prairieTitle)
-                .multilineTextAlignment(.center)
-            Text("Sign \(tv.name) in to your servers from this \(UIDevice.current.model).")
-                .font(.prairieCaption)
-                .foregroundStyle(.secondary)
-                .padding(.top, 6)
-            primaryButton("Set Up", systemImage: "gearshape") { setUp() }.padding(.top, 22)
-            tertiaryButton("Not Now", systemImage: "xmark") { dismiss() }.padding(.top, 4)
             if let server {
                 Text("Sign in \(tv.name) to \(server.displayName)?")
                     .font(.prairieTitle)
@@ -392,10 +383,6 @@ struct CompanionPairingCard: View {
     }
 
     private func cancelButton() -> some View {
-        tertiaryButton("Cancel", systemImage: "xmark") {
-            Task { [coordinator] in await coordinator?.cancel() }
-            dismiss()
-        }
         // `dismiss()` cancels the coordinator.
         tertiaryButton("Cancel") { dismiss() }
     }

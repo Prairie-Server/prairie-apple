@@ -691,27 +691,6 @@ final class ServerRegistry {
         #endif
         await httpClient.endIdentityTransition(transitionLease)
         if removesActiveServer {
-            await MainActor.run {
-                AICapabilities.shared.reset()
-                ImageSizeCapability.shared.reset()
-                WatchPartySession.shared.leave(forgetRecent: true)
-                RequestsFeatureStore.shared.reset()
-                LiveTVFeatureStore.shared.reset()
-                CurrentProfileStore.shared.reset()
-                SubtitleProvidersStore.shared.reset()
-                RequestsEventBus.shared.reset()
-                // Same rationale as `switchTo`: the fallback server may
-                // already be signed in, with no auth-state change to
-                // trigger the usual probe.
-                Task { await RequestsFeatureStore.shared.refresh() }
-                Task { await LiveTVFeatureStore.shared.refresh() }
-                Task { await CurrentProfileStore.shared.refresh() }
-                Task { await ImageSizeCapability.shared.refresh() }
-                Task { await SubtitleProvidersStore.shared.refresh() }
-                #if os(iOS) || os(tvOS)
-                if WatchPartyEntry.isEnabled { Task { await WatchPartySession.shared.refreshCapabilities() } }
-                #endif
-            }
             // The fallback server may already be signed in, with no
             // auth-state change to trigger the usual probes.
             await refreshFeaturesAfterServerSwitch()

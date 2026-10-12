@@ -940,35 +940,6 @@ struct FileVersion: Codable, Identifiable, Hashable {
         self.effectiveAudioTrackIndex = effectiveAudioTrackIndex
         self.effectiveAudioLanguage = effectiveAudioLanguage
     }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        fileId = try c.decode(Int.self, forKey: .fileId)
-        fileName = try c.decodeIfPresent(String.self, forKey: .fileName)
-        resolution = try c.decodeIfPresent(String.self, forKey: .resolution)
-        codecVideo = try c.decodeIfPresent(String.self, forKey: .codecVideo)
-        codecAudio = try c.decodeIfPresent(String.self, forKey: .codecAudio)
-        hdr = try c.decodeIfPresent(Bool.self, forKey: .hdr)
-        container = try c.decodeIfPresent(String.self, forKey: .container)
-        fileSize = try c.decodeIfPresent(Int64.self, forKey: .fileSize)
-        duration = try c.decodeIfPresent(Double.self, forKey: .duration)
-        bitrate = try c.decodeIfPresent(Int.self, forKey: .bitrate)
-        videoTracks = try c.decodeIfPresent([VideoTrack].self, forKey: .videoTracks)
-        audioTracks = try c.decodeIfPresent([AudioTrack].self, forKey: .audioTracks)
-        subtitleTracks = try c.decodeIfPresent([SubtitleTrack].self, forKey: .subtitleTracks)
-        chapters = try c.decodeIfPresent([VersionChapter].self, forKey: .chapters)
-        trickplay = try c.decodeIfPresent(VersionTrickplay.self, forKey: .trickplay)
-        intro = try c.decodeIfPresent(TimeRange.self, forKey: .intro)
-        credits = try c.decodeIfPresent(TimeRange.self, forKey: .credits)
-        presentationKind = try c.decodeIfPresent(String.self, forKey: .presentationKind)
-        presentationGroupKey = try c.decodeIfPresent(String.self, forKey: .presentationGroupKey)
-        presentationPartIndex = try c.decodeIfPresent(Int.self, forKey: .presentationPartIndex)
-        presentationPartTotal = try c.decodeIfPresent(Int.self, forKey: .presentationPartTotal)
-        editionRaw = try c.decodeIfPresent(String.self, forKey: .editionRaw)
-        editionKey = try c.decodeIfPresent(String.self, forKey: .editionKey)
-        effectiveAudioTrackIndex = try c.decodeIfPresent(Int.self, forKey: .effectiveAudioTrackIndex)
-        effectiveAudioLanguage = try c.decodeIfPresent(String.self, forKey: .effectiveAudioLanguage)
-    }
 }
 
 struct PlaybackVariant: Codable, Hashable {
