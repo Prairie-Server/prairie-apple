@@ -36,6 +36,8 @@ struct TVMovieDetailView: View {
     let onSelectSubtitleTrack: (Int?) -> Void
     let onToggleFavorite: () -> Void
     let onToggleWatchlist: () -> Void
+    /// Sets (1-5) or clears (nil) the viewer's star rating.
+    var onSetRating: (Int?) -> Void = { _ in }
     let onToggleWatched: () -> Void
     let onPersonTap: (String) -> Void
     let onNavigateToItem: (String) -> Void
@@ -158,6 +160,8 @@ struct TVMovieDetailView: View {
             rowFocused: $actionRowFocused,
             stabilizesFocusMotion: true,
             primaryButtonWidth: 340,
+            userRating: detail.userRating,
+            onSetRating: onSetRating,
             playbackSelectors: {
                 TVPlaybackActionSelectors(
                     versions: availableVersions,

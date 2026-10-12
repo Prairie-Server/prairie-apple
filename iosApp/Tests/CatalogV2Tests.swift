@@ -277,6 +277,20 @@ final class CatalogV2Tests: XCTestCase {
         }
     }
 
+    func testUserRatingPutsTheStarsAndDeleteClearsThem() async throws {
+        let (api, tokens) = try await client()
+        let authValue = await tokens.captureOrdinaryRequestAuth()
+        let auth = try XCTUnwrap(authValue)
+        stub.reply(204, "")
+        try await api.setUserRating(id: "movie:one", rating: 4, auth: auth)
+        try await api.setUserRating(id: "movie:one", rating: nil, auth: auth)
+
+        XCTAssertEqual(stub.methods, ["PUT", "DELETE"])
+        XCTAssertEqual(stub.requestedPaths, ["/api/v2/ratings/movie:one", "/api/v2/ratings/movie:one"])
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(stub.requests[0].body)) as? [String: Any])
+        XCTAssertEqual(body["rating"] as? Int, 4)
+    }
+
     func testMembershipMutationFailuresAreTypedAndSentOnce() async throws {
         let (api, tokens) = try await client()
         let authValue = await tokens.captureOrdinaryRequestAuth()

@@ -227,6 +227,8 @@ struct TVSeriesDetailView: View {
     let onSelectNextUpSubtitleTrack: (Int?) -> Void
     let onToggleFavorite: () -> Void
     let onToggleWatchlist: () -> Void
+    /// Sets (1-5) or clears (nil) the viewer's star rating.
+    var onSetRating: (Int?) -> Void = { _ in }
     let onToggleSeriesWatched: () -> Void
     let onToggleSeasonWatched: () -> Void
     let onPersonTap: (String) -> Void
@@ -526,6 +528,8 @@ struct TVSeriesDetailView: View {
             isPlaybackLoading: isLoadingEpisodes && playbackEpisode == nil,
             allowsInitialPlayFocus: !userNavigated,
             tracksInitialFocusNavigation: true,
+            userRating: detail.userRating,
+            onSetRating: onSetRating,
             playbackSelectors: {
                 // Keep all three triggers mounted while a newly focused
                 // episode's playback detail loads. They disable themselves

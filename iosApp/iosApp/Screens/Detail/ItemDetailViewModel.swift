@@ -686,7 +686,8 @@ class ItemDetailViewModel {
                 videos: item.videos,
                 extras: item.extras,
                 machineTranslatedFields: item.machineTranslatedFields,
-                communityRating: item.communityRating
+                communityRating: item.communityRating,
+                userRating: item.userRating
             )
     }
 
@@ -1528,6 +1529,32 @@ class ItemDetailViewModel {
             ResponseCache.shared.remove(CacheKey.itemUserState(contentId))
             personalStateNotice = PersonalStateNotice(outcome)
         }
+    }
+
+    /// Sets (1-5) or clears (nil) the viewer's star rating, optimistically,
+    /// reverting on failure. A confirmed write re-reads the detail so the
+    /// community rating, which the server hides below its minimum count,
+    /// appears, updates or disappears with it.
+    func setUserRating(_ rating: Int?) async {
+        guard let contentId = detail?.contentId, detail?.userRating != rating else { return }
+        let previous = detail?.userRating
+        detail?.userRating = rating
+        let owner = await currentPersonalStateOwner()
+        let outcome = await PersonalStateSync.outcome {
+            guard let owner else { throw HTTPError.requestIdentityChanged }
+            try await PrairieAPI.shared.apiV2Client.setUserRating(id: contentId, rating: rating, auth: owner)
+        }
+        guard detail?.contentId == contentId else { return }
+        guard outcome == .applied else {
+            if detail?.userRating == rating { detail?.userRating = previous }
+            personalStateNotice = PersonalStateNotice(outcome)
+            return
+        }
+        ResponseCache.shared.remove(CacheKey.itemDetail(contentId, libraryId: libraryId))
+        guard let fresh = try? await PrairieAPI.shared.itemDetail(contentId: contentId, libraryId: libraryId),
+              detail?.contentId == contentId else { return }
+        detail?.communityRating = fresh.communityRating
+        detail?.userRating = fresh.userRating
     }
 
     /// Mark the detail item (and, for series/seasons, its leaf episodes)

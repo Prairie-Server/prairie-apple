@@ -538,6 +538,8 @@ struct ItemDetail: Codable {
     /// never send it; either way the detail hides it. `var` with a default
     /// for the same memberwise-initializer reason as `videos`.
     var communityRating: CommunityRating? = nil
+    /// The viewer's own 1–5 star rating (`user_rating`); nil when unrated.
+    var userRating: Int? = nil
 }
 
 extension ItemDetail {

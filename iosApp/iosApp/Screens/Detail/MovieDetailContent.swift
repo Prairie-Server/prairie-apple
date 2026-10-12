@@ -22,6 +22,8 @@ struct MovieDetailContent<BelowOverview: View>: View {
     let onSelectSubtitleTrack: (Int?) -> Void
     let onToggleFavorite: () -> Void
     let onToggleWatchlist: () -> Void
+    /// Sets (1-5) or clears (nil) the viewer's star rating.
+    var onSetRating: (Int?) -> Void = { _ in }
     let onToggleWatched: () -> Void
     let onPersonTap: (String) -> Void
     let onNavigateToItem: (String) -> Void
@@ -163,6 +165,10 @@ struct MovieDetailContent<BelowOverview: View>: View {
                         ? "Remove from Watchlist" : "Add to Watchlist",
                     action: onToggleWatchlist
                 )
+                PhoneLabeledMenu(icon: UserRatingChoice.icon(detail.userRating),
+                                 label: UserRatingChoice.caption(detail.userRating)) {
+                    UserRatingMenuItems(rating: detail.userRating, onSet: onSetRating)
+                }
                 PhoneLabeledAction(
                     icon: "checkmark.circle",
                     iconActive: "checkmark.circle.fill",
