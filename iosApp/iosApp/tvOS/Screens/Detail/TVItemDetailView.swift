@@ -1006,7 +1006,8 @@ struct TVItemDetailView: View {
                 // them, so they must be carried across or the trailers rail
                 // would disappear the moment enrichment succeeds.
                 videos: item.videos,
-                extras: item.extras
+                extras: item.extras,
+                communityRating: item.communityRating
             )
         } catch {
             return nil

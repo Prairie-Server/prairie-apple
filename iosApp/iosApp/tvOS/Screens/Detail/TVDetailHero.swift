@@ -408,6 +408,16 @@ struct TVDetailHero<Actions: View, BelowSynopsis: View>: View {
                     .font(.system(size: 22, weight: .medium))
                     .foregroundColor(Color.white.opacity(0.88))
             }
+        case .community(let value):
+            HStack(spacing: 6) {
+                Image(systemName: "star.fill")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundColor(Color.white.opacity(0.88))
+                Text(value)
+                    .font(.system(size: 24, weight: .medium))
+                    .foregroundColor(Color.white.opacity(0.88))
+            }
+            .accessibilityElement(children: .combine)
         case .chip(let value):
             Text(value)
                 .font(.system(size: 16, weight: .heavy))
@@ -600,6 +610,8 @@ enum TVHeroFactToken: Hashable {
     case text(String)
     case rating(String)
     case chip(String)
+    /// Community star rating label, rendered after a `star.fill` symbol.
+    case community(String)
 }
 
 // MARK: - Metadata builders
@@ -669,6 +681,9 @@ enum TVHeroMetadata {
         ), runtime > 0 {
             tokens.append(.text(formatRuntime(runtime)))
         }
+        if let community = detail.communityRating {
+            tokens.append(.community(community.label))
+        }
         return tokens
     }
 
@@ -679,6 +694,9 @@ enum TVHeroMetadata {
         }
         if let count = detail.seasonCount, count > 0 {
             tokens.append(.text("\(count) Season\(count == 1 ? "" : "s")"))
+        }
+        if let community = detail.communityRating {
+            tokens.append(.community(community.label))
         }
         return tokens
     }

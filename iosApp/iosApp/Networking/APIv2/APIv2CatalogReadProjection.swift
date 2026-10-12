@@ -75,6 +75,9 @@ extension ItemDetail {
         self.userState = value.userState.map {
             MediaItemUserState(played: $0.played, isFavorite: $0.isFavorite, inWatchlist: $0.inWatchlist)
         }
+        self.communityRating = try value.communityRating.map {
+            CommunityRating(average: $0.average, count: try catalogLegacyInt($0.count))
+        }
         self.posterUrl = value.posterUrl
         self.backdropUrl = value.backdropUrl
         self.logoUrl = value.logoUrl

@@ -523,7 +523,7 @@ struct PhoneDetailHero<Actions: View, BelowOverview: View>: View {
         alignment: Alignment,
         textAlignment: TextAlignment
     ) -> some View {
-        if !metadataTokens.isEmpty || ratingChip != nil {
+        if !metadataTokens.isEmpty || communityRatingLabel != nil || ratingChip != nil {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 8) {
                     metadataText(textAlignment: textAlignment)
@@ -541,7 +541,7 @@ struct PhoneDetailHero<Actions: View, BelowOverview: View>: View {
     }
 
     private func metadataText(textAlignment: TextAlignment) -> some View {
-        Text(metadataTokens.joined(separator: "  ·  "))
+        metadataLine
             .font(.system(size: 14, weight: .medium))
             .foregroundStyle(Color.prairieOnSurface.opacity(0.84))
             .multilineTextAlignment(textAlignment)
@@ -563,6 +563,24 @@ struct PhoneDetailHero<Actions: View, BelowOverview: View>: View {
                         .stroke(Color.prairieOnSurface.opacity(0.55), lineWidth: 1)
                 )
         }
+    }
+
+    /// The text tokens, then the community rating (if any) behind a
+    /// `star.fill` symbol so it reads apart from the IMDb "★" token.
+    private var metadataLine: Text {
+        let joined = metadataTokens.joined(separator: "  ·  ")
+        guard let community = communityRatingLabel else { return Text(joined) }
+        let star = Image(systemName: "star.fill")
+        return joined.isEmpty
+            ? Text("\(star) \(community)")
+            : Text("\(joined)  ·  \(star) \(community)")
+    }
+
+    private var communityRatingLabel: String? {
+        for token in factsLine {
+            if case .community(let value) = token { return value }
+        }
+        return nil
     }
 
     private var metadataTokens: [String] {

@@ -515,11 +515,27 @@ struct ItemDetail: Codable {
     /// read (`user_state`); absent without a profile. `var` with a default
     /// for the same memberwise-initializer reason as `videos`.
     var userState: MediaItemUserState? = nil
+    /// Mean of every profile's 1–5 star rating (`community_rating`). The
+    /// server omits it below its minimum rating count, and older servers
+    /// never send it; either way the detail hides it. `var` with a default
+    /// for the same memberwise-initializer reason as `videos`.
+    var communityRating: CommunityRating? = nil
 }
 
 extension ItemDetail {
     var isAudiobook: Bool {
         audiobook != nil || PrairieMediaType.isAudiobook(type)
+    }
+}
+
+/// Server-wide star rating aggregate for a title.
+struct CommunityRating: Codable, Hashable {
+    let average: Double
+    let count: Int
+
+    /// "4.2 · 7 ratings" — shown after a `star.fill` symbol.
+    var label: String {
+        String(format: "%.1f", average) + " · \(count) rating" + (count == 1 ? "" : "s")
     }
 }
 

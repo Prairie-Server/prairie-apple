@@ -14,6 +14,7 @@ enum APIv2CatalogRead {
         @ArtworkURL var backdropUrl: String?
         let badges: [String]?
         let cast: [CastCredit]
+        let communityRating: CommunityRating?
         let contentId: String
         let contentRating: String?
         let countries: [String]?
@@ -91,6 +92,11 @@ enum APIv2CatalogRead {
         let workId: String?
         let workTitle: String?
         let year: Int64?
+    }
+
+    struct CommunityRating: Decodable {
+        let average: Double
+        let count: Int64
     }
 
     struct Season: Decodable {
