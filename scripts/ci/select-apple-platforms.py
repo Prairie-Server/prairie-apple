@@ -30,7 +30,7 @@ PROJECT = "iosApp/project.yml"
 BUILD_INPUTS_SHA256 = "b1ca8e854dd986f2a7eb7ebf0c72fc1814d8659618aba53d6f597a0c6faed83e"
 SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
 ROOT_DOCUMENTATION = frozenset({"README.md", "CONTRIBUTING.md", "AGENTS.md", "SECURITY.md", "CHANGELOG.md"})
-# These 223 existing Swift inputs belong exclusively to the mobile test targets.
+# These 260 existing Swift inputs belong exclusively to the mobile test targets.
 # Refresh their ownership review after any other tracked input changes. Both Git
 # trees must retain every other path, mode and blob from the reviewed graph.
 TEST_SOURCE_OWNERSHIP = "scripts/ci/apple-test-source-ownership.json"

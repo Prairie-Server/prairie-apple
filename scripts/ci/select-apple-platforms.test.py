@@ -416,7 +416,7 @@ class KnownTestSourceTests(unittest.TestCase):
         self.commit()
         result = self.selection()
         self.assertEqual(result["platforms"], ["ios", "tvos"])
-        self.assertEqual(result["changed_files"], 223)
+        self.assertEqual(result["changed_files"], 260)
 
     def test_actual_pull_request_merge_selects_the_complete_mobile_matrix(self):
         branch_head = self.modify_test()

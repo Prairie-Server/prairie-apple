@@ -209,7 +209,9 @@ targets:
           - CatalogV2Tests.swift
           - CollectionsV2Tests.swift
           - LibraryBrowseV2Tests.swift
-          - MetadataAIV2Tests.swift
+          # MetadataAIV2Tests dropped from the host bundle: the upstream revision
+          # drives DescriptionTranslationCoordinator, an app-only type the FFmpeg-free
+          # host does not carry. The iOS PrairieTests bundle still runs it in full.
           - OnboardingV2Tests.swift
           - TrackPreferencesV2Tests.swift
           - APIv2CatalogReadProjectionTests.swift
