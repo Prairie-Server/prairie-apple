@@ -691,7 +691,7 @@ struct CrewMember: Codable, Identifiable, Hashable {
     var id: String { "\(personId ?? name)-\(job ?? "")" }
 }
 
-struct Person: Identifiable, Hashable {
+struct Person: Codable, Identifiable, Hashable {
     let id: String
     let name: String
     let bio: String?
@@ -1120,7 +1120,7 @@ struct LeafItemUserData: Codable, Hashable {
 
 // MARK: - Playback
 
-struct PlaybackSessionResponse {
+struct PlaybackSessionResponse: Codable {
     let sessionId: String
     let userId: Int?
     let profileId: String?
@@ -1216,7 +1216,7 @@ struct SubtitleUrl: Codable, Identifiable, Hashable {
 
 // MARK: - Watch Detail
 
-struct WatchDetail {
+struct WatchDetail: Codable {
     let contentId: String
     let type: String
     let title: String
@@ -1413,13 +1413,13 @@ struct LibraryCollectionsResponse {
 
 // MARK: - Seasons / Episodes
 
-struct SeasonsResponse {
+struct SeasonsResponse: Codable {
     let seasons: [Season]
 
     init(seasons: [Season]) { self.seasons = seasons }
 }
 
-struct EpisodesResponse {
+struct EpisodesResponse: Codable {
     let episodes: [EpisodeListItem]
 
     init(episodes: [EpisodeListItem]) { self.episodes = episodes }
@@ -1445,7 +1445,7 @@ struct UserInfo: Sendable {
 
 /// The personal-collections page as the screen caches it
 /// (`CacheKey.collections`), built from ``APIv2PersonalCollections``.
-struct CollectionsResponse {
+struct CollectionsResponse: Codable {
     let collections: [UserCollection]?
     let groups: [CollectionGroup]?
 

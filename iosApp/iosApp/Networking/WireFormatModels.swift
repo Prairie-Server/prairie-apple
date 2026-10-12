@@ -30,7 +30,7 @@ struct VerifyPinResponse: Decodable {
 /// The new-profile form's values. `APIv2Client.createHouseholdProfile`
 /// turns it into the `POST /api/v2/profiles` body (`APIv2ProfileCreate`),
 /// sending the library IDs as strings.
-struct CreateProfileRequestBody {
+struct CreateProfileRequestBody: Codable {
     let name: String
     let avatar: String?
     let pin: String?

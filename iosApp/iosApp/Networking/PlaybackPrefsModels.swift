@@ -51,7 +51,7 @@ struct SubtitleTrackSignature: Codable, Hashable, Sendable {
 /// Audio counterpart to `SubtitleTrackSignature`. Layout + channels let
 /// the server prefer "5.1 English Atmos" over "stereo English commentary"
 /// across episodes.
-struct AudioTrackSignature: Encodable, Hashable, Sendable {
+struct AudioTrackSignature: Codable, Hashable, Sendable {
     let language: String?
     let title: String?
     let embeddedTitle: String?
@@ -197,6 +197,14 @@ enum SubtitleMode: String, CaseIterable, Codable, Hashable {
         case .auto:   return "Auto"
         case .always: return "Always"
         case .off:    return "Off"
+        }
+    }
+
+    var displayDescription: String {
+        switch self {
+        case .auto:   return "Show subtitles only when audio language doesn't match your spoken language."
+        case .always: return "Always show subtitles when available."
+        case .off:    return "Never show subtitles."
         }
     }
 }
