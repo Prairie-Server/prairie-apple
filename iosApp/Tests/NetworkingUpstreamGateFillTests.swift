@@ -270,6 +270,11 @@ final class NetworkingUpstreamGateFillTests: XCTestCase {
         XCTAssertEqual(DeviceLoginPoller.classify(URLError(.notConnectedToInternet)), .transient)
     }
 
+    private func devicePoll(_ status: String, pollAfter: Int) -> APIv2DevicePoll {
+        APIv2DevicePoll(status: status, pollAfter: pollAfter, tokens: nil, profileId: "", profileToken: "",
+                        temporary: false, sessionExpiresAt: nil)
+    }
+
     /// Answers polls from a script, one entry per call.
     private final class PollScript {
         var answers: [Result<APIv2DevicePoll, any Error>]
@@ -291,8 +296,8 @@ final class NetworkingUpstreamGateFillTests: XCTestCase {
     func testDeviceLoginPollerRetriesTransientFailuresUntilApproved() async throws {
         let script = PollScript([
             .failure(URLError(.notConnectedToInternet)),
-            .success(APIv2DevicePoll(status: "pending", pollAfter: 3)),
-            .success(APIv2DevicePoll(status: "approved", pollAfter: 0)),
+            .success(devicePoll("pending", pollAfter: 3)),
+            .success(devicePoll("approved", pollAfter: 0)),
         ])
         let answer = try await awaitApproval(script)
         XCTAssertEqual(answer.status, "approved")
@@ -305,7 +310,7 @@ final class NetworkingUpstreamGateFillTests: XCTestCase {
         ]
         for (status, failure) in endings {
             do {
-                _ = try await awaitApproval(PollScript([.success(APIv2DevicePoll(status: status, pollAfter: 1))]))
+                _ = try await awaitApproval(PollScript([.success(devicePoll(status, pollAfter: 1))]))
                 XCTFail("\(status) should end the wait")
             } catch let error as DeviceLoginPoller.Failure {
                 XCTAssertEqual(error, failure)
@@ -313,7 +318,7 @@ final class NetworkingUpstreamGateFillTests: XCTestCase {
         }
 
         do {
-            _ = try await awaitApproval(PollScript([.success(APIv2DevicePoll(status: "mystery", pollAfter: 1))]))
+            _ = try await awaitApproval(PollScript([.success(devicePoll("mystery", pollAfter: 1))]))
             XCTFail("an unknown status should end the wait")
         } catch APIv2Error.incompleteAuthResponse {
         }
@@ -335,7 +340,7 @@ final class NetworkingUpstreamGateFillTests: XCTestCase {
 
     func testDeviceLoginPollerExpiresWhenTheCodeRunsOut() async throws {
         var clock = 0.0
-        let script = PollScript([.success(APIv2DevicePoll(status: "pending", pollAfter: 0))])
+        let script = PollScript([.success(devicePoll("pending", pollAfter: 0))])
         do {
             _ = try await awaitApproval(script, interval: 0, expiresIn: 15) {
                 defer { clock += 10 }
