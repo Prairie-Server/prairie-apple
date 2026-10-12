@@ -513,6 +513,34 @@ final class SettingValuesAPITests: XCTestCase {
         }
     }
 
+    func testProfileScopedTransportRefusesAnIdentityThatIsNoLongerCurrent() async throws {
+        routeSettingsServer()
+        let transport = PrairieProfileScopedSettingTransport(api: await makeStubbedAPI())
+        let stale = HTTPRequestIdentity(
+            serverId: "server-a",
+            serverURL: "http://settings-test.invalid/",
+            profileId: "a-profile-that-was-switched-away",
+            clientFamily: AppleDeviceIdentity.current.clientFamily
+        )
+
+        guard case .failed = await transport.contractCapabilities(requestIdentity: stale) else {
+            return XCTFail("a probe for a replaced profile must not report an answer")
+        }
+        do {
+            _ = try await transport.effectiveValues(keys: [], requestIdentity: stale)
+            XCTFail("a read for a replaced profile must fail")
+        } catch {}
+        do {
+            try await transport.putProfileValue(
+                key: .catalogHideUnwatchedEpisodeImages,
+                value: .bool(true),
+                requestIdentity: stale
+            )
+            XCTFail("a write for a replaced profile must fail")
+        } catch {}
+        XCTAssertTrue(stub.requests.isEmpty, "no request may be sent for a replaced profile")
+    }
+
     func testCapturedSettingsRequestRefusesToFollowANewActiveIdentity() async throws {
         routeSettingsServer()
         let suiteName = "settings-identity-race-\(UUID().uuidString)"
