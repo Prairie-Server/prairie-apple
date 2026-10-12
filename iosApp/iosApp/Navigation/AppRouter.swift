@@ -291,6 +291,7 @@ final class AppRouter {
     }
 
     var presentedLivePlayer: LivePlayerPresentation?
+
     /// Present a Live TV stream from a started session. Callers must have
     /// already started the session; dismiss releases it via `LiveTVPlayerView`.
     func presentLivePlayer(
@@ -305,6 +306,8 @@ final class AppRouter {
             title: title,
             isHLS: isHLS
         )
+    }
+
     /// The iOS detail sheet that owns a newly presented player; nil elsewhere.
     private var currentDetailPresentationID: UUID? {
         #if os(iOS)

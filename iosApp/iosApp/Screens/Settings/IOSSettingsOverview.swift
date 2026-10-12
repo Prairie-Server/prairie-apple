@@ -212,20 +212,22 @@ struct IOSSettingsOverview: View {
     /// account already has a provider identity.
     private var accountSignInSection: some View {
         Section("Account") {
-                AccountSignInView(model: accountSignIn)
             NavigationLink {
+                AccountSignInView(model: accountSignIn)
             } label: {
                 SettingsOverviewRow(
                     title: "Sign-in",
                     subtitle: "Connect or disconnect your sign-in provider",
                     systemImage: "person.badge.key.fill",
                     value: accountSignIn.identities.first?.providerName
-            .accessibilityIdentifier("settings.accountSignIn")
-    private var matchesAccountSignIn: Bool {
-        accountSignIn.showsEntry && matches("sign-in", "sign in", "account", "provider", "sso", "single sign-on", "connect")
                 )
             }
+            .accessibilityIdentifier("settings.accountSignIn")
         }
+    }
+
+    private var matchesAccountSignIn: Bool {
+        accountSignIn.showsEntry && matches("sign-in", "sign in", "account", "provider", "sso", "single sign-on", "connect")
     }
 
     private var connectionSection: some View {
@@ -422,11 +424,10 @@ struct IOSSettingsOverview: View {
         matches(
             "about",
             "version",
-            versionString,
+            SettingsViewModel.versionString,
             "update",
             "changelog",
             "release",
-            SettingsViewModel.versionString,
             "privacy",
             "policy",
             "information",

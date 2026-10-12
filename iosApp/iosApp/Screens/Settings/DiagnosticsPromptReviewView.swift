@@ -17,21 +17,6 @@ struct DiagnosticsPromptReviewView: View {
                 }
                 .disabled(model.isWorking)
 
-                Button("Always Send", systemImage: "paperplane.circle.fill") {
-                    showAlwaysConfirmation = true
-                }
-                .disabled(model.isWorking)
-                .confirmationDialog(
-                    "Always Send Crash Reports?",
-                    isPresented: $showAlwaysConfirmation,
-                    titleVisibility: .visible
-                ) {
-                    Button("Always Send") {
-                        Task { await model.sendPrompt(always: true) }
-                    }
-                    Button("Cancel", role: .cancel) {}
-                } message: {
-                    Text("These reports and future crash reports for this server account will be sent automatically.")
                 DiagnosticsAlwaysSendButton(
                     model: model,
                     message: "These reports and future crash reports for this server account will be sent automatically."

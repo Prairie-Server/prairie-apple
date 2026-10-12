@@ -366,25 +366,10 @@ struct ContentView: View {
                 #if os(iOS) || os(tvOS)
                 await diagnosticsModel.handleForeground()
                 #endif
-                await hydrateOverlayPrefs(phase: "session_hydrate")
-                // Hydrate AI capabilities on a cold relaunch into a restored
-                // session — `selectProfile` only refreshes on a fresh sign-in,
-                // so without this the metadata-language / on-view-translate
-                // features stay hidden until a profile switch. Idempotent and
-                // failure-tolerant, so double-calling with `selectProfile` is safe.
-                await AICapabilities.shared.refresh()
-                // Same cold-relaunch reasoning: without this, a restored
-                // session on tvOS would request default-size images until
-                // the next profile switch.
-                await ImageSizeCapability.shared.refresh()
-                await RequestsFeatureStore.shared.refresh()
-                await LiveTVFeatureStore.shared.refresh()
-                await SubtitleProvidersStore.shared.refresh()
-                await CurrentProfileStore.shared.refresh()
-                await uiCustomization.refresh()
-                await SeekIntervalPreferences.shared.refresh()
+                await refreshSessionStores()
                 #if os(iOS)
                 await ApplePushRegistrationCoordinator.shared.prepareForAuthenticatedProfile()
+                #endif
                 #if !os(tvOS)
                 // Drain a queued Downloads link as soon as the capability is
                 // known. The reconciliation and sync that follow inside
@@ -396,31 +381,8 @@ struct ContentView: View {
                     isDownloadCapabilityHydrated = true
                     drainPendingDeepLinkIfReady()
                 }
-                await refreshSessionStores()
+                #endif
             }
-        }
-        // Work that can prompt the user, or that competes with the first
-        // screen for bandwidth, waits until the splash has lifted.
-        .task(id: isAuthenticatedAppVisible) {
-            guard isAuthenticatedAppVisible else { return }
-            #if os(iOS) || os(tvOS)
-            await diagnosticsModel.handleForeground()
-            #endif
-            #if os(iOS)
-            // Doesn't wait for the permission alert, so it can't delay onAppActive.
-            await ApplePushRegistrationCoordinator.shared.prepareForAuthenticatedProfile()
-            #if !os(tvOS)
-            // Drain a queued Downloads link as soon as the capability is
-            // known. The reconciliation and sync that follow inside
-            // onAppActive() can take several network round-trips on a slow
-            // server and must not hold a notification tap hostage.
-            await DownloadManager.shared.onAppActive {
-                guard !Task.isCancelled,
-                      router.authState == .authenticated else { return }
-                isDownloadCapabilityHydrated = true
-                drainPendingDeepLinkIfReady()
-            }
-            #endif
         }
         // Work that can prompt the user, or that competes with the first
         // screen for bandwidth, waits until the splash has lifted.
@@ -551,50 +513,6 @@ struct ContentView: View {
             if newPhase == .background {
                 isReturningFromBackground = true
                 markProfileAwayStartIfNeeded()
-            } else if newPhase == .active,
-                      router.authState == .authenticated {
-                if keepsProfileActiveInBackground {
-                    launchPreferences.clearBackgroundedAt()
-                } else if launchPreferences.requiresSelectionAfterBackground() {
-                    Task { await applyProfileReturnPolicy() }
-                    return
-                } else {
-                }
-            }
-
-            // Cover the transient-failure case Codex flagged on #41:
-            // initial overlay hydration runs once in the auth-state
-            // task above. If that fetch transiently failed and the
-            // user never opens overlay settings, the admin kill
-            // switch and baseline stay stale until app restart.
-            // Foreground transitions are a natural opportunity to
-            // retry — `hydrateIfNeeded()` is a no-op when the
-            // previous hydration succeeded, so this costs nothing in
-            // the happy path.
-            guard newPhase == .active,
-                  router.authState == .authenticated else { return }
-            #if os(tvOS)
-            Task {
-                await ExitSentinel.shared.captureLeftoverIfNeeded()
-                await diagnosticsModel.handleForeground()
-            #elseif os(iOS)
-            Task { await diagnosticsModel.handleForeground() }
-            #endif
-            Task { await hydrateOverlayPrefs(phase: "foreground_refresh") }
-            // Same rationale as overlay hydration above: a transiently-failed
-            // capability probe (or one skipped on a cold restore) gets a
-            // natural retry on foreground. `refresh()` is idempotent, so the
-            // happy path costs nothing.
-            Task { await AICapabilities.shared.refresh() }
-            Task { await ImageSizeCapability.shared.refresh() }
-            Task { await RequestsFeatureStore.shared.refresh() }
-            Task { await LiveTVFeatureStore.shared.refresh() }
-            Task { await SubtitleProvidersStore.shared.refresh() }
-            Task { await uiCustomization.refresh() }
-            Task { await SeekIntervalPreferences.shared.refresh() }
-            #if os(iOS)
-                await ApplePushRegistrationCoordinator.shared.prepareForAuthenticatedProfile()
-                await ApplePushRegistrationCoordinator.shared.registerCurrentDeviceTokenIfPossible()
                 return
             }
             // The first activation of a cold launch happens under the splash,
@@ -656,7 +574,8 @@ struct ContentView: View {
         async let customization: Void = uiCustomization.refresh()
         async let seek: Void = SeekIntervalPreferences.shared.refresh()
         async let spoilers: Void = EpisodeSpoilerPreferences.shared.refresh()
-        _ = await (overlay, ai, imageSize, requests, shuffle, subtitles, profile, customization, seek, spoilers)
+        async let liveTV: Void = LiveTVFeatureStore.shared.refresh()
+        _ = await (overlay, ai, imageSize, requests, shuffle, subtitles, profile, customization, seek, spoilers, liveTV)
     }
 
     @MainActor
