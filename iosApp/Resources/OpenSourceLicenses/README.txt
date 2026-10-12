@@ -14,7 +14,6 @@ AetherEngine
   diagnostics, and playback recovery)
   License: GNU LGPL version 3 with the upstream Apple Store / DRM exception
   Source (modified, as built): https://github.com/Prairie-Server/AetherEngine/tree/fa70ab5bd2b0e17fdca5b6f19258e98331852778
-  Source (modified, as built): https://github.com/Silo-Server/AetherEngine/tree/fa70ab5bd2b0e17fdca5b6f19258e98331852778
   Upstream base: https://github.com/superuser404notfound/AetherEngine/tree/dd1d5f885cd5da65a6641e42f5cd6ba341c6a05c
   Rebuild: the Package.swift and source tree at that revision
 
@@ -48,7 +47,7 @@ FFmpegBuild and embedded media frameworks
   commit IDs; the dereferenced commits recorded here pin the exact sources if
   those tags ever move.
 
-LibTrueHD / truehd (formerly SiloObjectAudio)
+LibTrueHD / truehd (formerly PrairieObjectAudio)
   Revision: 7ac6b379cb5d77ff5f424bc9daa17131b044a962 (release 2.0.0)
   License: MIT for the C API, framer, and build and verification scripts
   (LibTrueHD-MIT.txt)

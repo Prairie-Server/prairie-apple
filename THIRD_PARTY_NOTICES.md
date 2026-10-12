@@ -17,12 +17,9 @@ The authoritative dependency lock is
 
 | Component | Exact revision | Shipped form | License |
 | --- | --- | --- | --- |
-| AetherEngine 7.13.0 + Silo subtitle, HLS authorization, TrueHD Atmos and playback recovery patches | `b1e4879e6a41477ebef3b68e8d9f65239d1ba80b` | Swift package target linked into each host app | LGPL-3.0-only with AetherEngine's Apple Store / DRM exception |
-| FFmpegBuild 3.4.0 | `9ee46ba4fb533e35efa6492eb1a903ca4f8058fc` | Nine separately embedded dynamic frameworks | See the component table below |
-| SiloObjectAudio 1.0.0 | `645b91c072fafb60146151fd5127f8ff0ca38b6f` | Static `SiloObjectAudio.xcframework` linked through AetherEngine | Apache-2.0; embedded `truehd` and `oamd` crates are Apache-2.0 |
 | AetherEngine 7.28.3 + Prairie subtitle, HLS authorization, TrueHD Atmos and playback recovery patches | `fa70ab5bd2b0e17fdca5b6f19258e98331852778` | Swift package target linked into each host app | LGPL-3.0-only with AetherEngine's Apple Store / DRM exception |
 | FFmpegBuild 3.6.0 | `fda08325455bc12c112b5b82d014b98fa0fee0be` | Nine separately embedded dynamic frameworks | See the component table below |
-| LibTrueHD 2.0.0 (formerly SiloObjectAudio) | `7ac6b379cb5d77ff5f424bc9daa17131b044a962` | Static `TrueHD.xcframework` linked through AetherEngine | MIT; embedded `truehd` and `oamd` crates are Apache-2.0 |
+| LibTrueHD 2.0.0 (formerly PrairieObjectAudio) | `7ac6b379cb5d77ff5f424bc9daa17131b044a962` | Static `TrueHD.xcframework` linked through AetherEngine | MIT; embedded `truehd` and `oamd` crates are Apache-2.0 |
 | LibDovi 2.1.0 | `0d7cce1d6836a30d13a3a2326e50a153af53f014` | Static `Dovi.xcframework` linked through AetherEngine | MIT packaging; embedded libdovi is MIT |
 | Nuke and NukeUI 13.2.0 | `30f7a7e72e0607d304fbf69c799474bd5fb6d1ce` | Swift package targets linked into each host app | MIT |
 
@@ -37,9 +34,6 @@ included here.
 Copyright (C) 2026 Vincent Herbst.
 
 AetherEngine is licensed under GNU LGPL version 3 with its upstream Apple
-Store / DRM exception. Prairie builds the fork revision published by the Silo
-project: upstream release `7.13.0` plus Silo patches for complete native
-subtitle renditions, source
 Store / DRM exception. Prairie builds a published fork revision: upstream release
 `7.28.3`, through upstream commit `dd1d5f88`, plus Prairie patches for complete native subtitle renditions, source
 timing after a media reanchor, ASS subtitle routing, and refreshable authorization
@@ -52,18 +46,11 @@ published under the LGPL at the exact source revision below. The bundled
 acknowledgements include AetherEngine's complete license and exception plus
 the GNU GPL version 3 text incorporated by LGPLv3.
 
-- Exact source: <https://github.com/Silo-Server/AetherEngine/tree/fa70ab5bd2b0e17fdca5b6f19258e98331852778>
-  (engine pull requests: <https://github.com/Silo-Server/AetherEngine/pull/2>,
-  <https://github.com/Silo-Server/AetherEngine/pull/6>)
-- Upstream base: <https://github.com/superuser404notfound/AetherEngine/tree/7.13.0>
 - Exact source: <https://github.com/Prairie-Server/AetherEngine/tree/fa70ab5bd2b0e17fdca5b6f19258e98331852778>
   (engine pull requests: <https://github.com/Prairie-Server/AetherEngine/pull/2>,
   <https://github.com/Prairie-Server/AetherEngine/pull/6>,
   <https://github.com/Prairie-Server/AetherEngine/pull/16>,
   <https://github.com/Prairie-Server/AetherEngine/pull/17>)
-  <https://github.com/Silo-Server/AetherEngine/pull/6>,
-  <https://github.com/Silo-Server/AetherEngine/pull/16>,
-  <https://github.com/Silo-Server/AetherEngine/pull/17>)
 - Upstream base: <https://github.com/superuser404notfound/AetherEngine/tree/dd1d5f885cd5da65a6641e42f5cd6ba341c6a05c>
 - Rebuild input: `Package.swift` and the source tree at that revision
 - Bundled texts: `AetherEngine-LGPL-3.0-App-Store-Exception.txt`,
@@ -164,8 +151,8 @@ embedded crate.
 
 ## LibTrueHD and truehd
 
-LibTrueHD is the object-audio decoder library Silo wrote as SiloObjectAudio. In
-October 2026 Silo transferred it to AetherEngine's maintainer, who renamed it for
+LibTrueHD is the object-audio decoder library Prairie wrote as PrairieObjectAudio. In
+October 2026 Prairie transferred it to AetherEngine's maintainer, who renamed it for
 release 2.0.0. Its C API, access-unit framer, and build and verification scripts are
 MIT licensed, Copyright (c) 2026 Quick104, with packaging changes since 2.0.0
 Copyright (c) 2026 Vincent Herbst. Its static `TrueHD.xcframework` contains the

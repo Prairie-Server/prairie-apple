@@ -102,7 +102,6 @@ final class PrairieControlClient {
     /// parks in `.waiting` indefinitely, so without a deadline a reconnect
     /// attempt — and the "Reconnecting…" bar — would never finish.
     private static let connectTimeout: Duration = .seconds(6)
-    private static let persistedTargetKey = "silocontrol.lastTarget"
     /// How long a launch waits for the TV's hello before treating the TV as
     /// too old for a profile handoff. The hello normally arrives right after
     /// connect, long before a launch.
@@ -110,7 +109,7 @@ final class PrairieControlClient {
     /// How long a launch waits for each of the TV's handoff replies. Identity
     /// probing on the TV can precede its challenge.
     private static let handoffReplyWait: Duration = .seconds(30)
-    private static let persistedTargetKey = "prairiecontrol.lastTarget"
+    private static let persistedTargetKey = "silocontrol.lastTarget"
     private static let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "org.prairieserver.prairie",
         category: "control.client"

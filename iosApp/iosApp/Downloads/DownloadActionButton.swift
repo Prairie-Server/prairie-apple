@@ -81,8 +81,6 @@ struct DownloadActionButton: View {
                 isPresented: $confirmingCancel,
                 titleVisibility: .visible
             ) {
-                Button("Discard Download", systemImage: "trash", role: .destructive, action: cancel)
-                Button("Keep Download", systemImage: "checkmark", role: .cancel) {}
                 Button("Discard Download", role: .destructive, action: delete)
                 Button("Keep Download", role: .cancel) {}
             }
@@ -101,9 +99,6 @@ struct DownloadActionButton: View {
                     Button("Choose Options…", systemImage: "slider.horizontal.3") { showOptions = true }
                 }
                 Button("Cancel", systemImage: "xmark", role: .cancel) {}
-                Button("Download Anyway", action: startWithDefaults)
-                Button("Choose Options…") { showOptions = true }
-                Button("Cancel", role: .cancel) {}
             } message: {
                 Text("\(largeDownloadWarning ?? "This download is large.") Download anyway?")
             }
