@@ -547,16 +547,14 @@ targets:
           - SharedKeychainCheckedReadTests.swift
           - WatchPartyAPITests.swift
           # Upstream's new Networking modules and their logic tests, wired into
-          # the thin host so the 95% gate covers the merged surface.
+          # the thin host so the 95% gate covers the merged surface. The
+          # ExternalSignIn, NetworkSignIn, ServerBranding, ServerDiscovery,
+          # ShuffleV2 and SubtitleSync suites drive app view models
+          # (LoginViewModel, AppRouter, PlayerViewModel…) and run in the app
+          # test bundles only.
           - AdvisoryAgePreferenceStoreTests.swift
-          - ExternalSignInTests.swift
           - HiddenLibraryPreferenceTests.swift
-          - NetworkSignInTests.swift
           - ResponseSnapshotStoreTests.swift
-          - ServerBrandingTests.swift
-          - ServerDiscoveryTests.swift
-          - ShuffleV2Tests.swift
-          - SubtitleSyncTests.swift
           - TitleArtPreferencesTests.swift
       - path: Tests/Fixtures/SettingsContract/conformance.json
         buildPhase: resources
