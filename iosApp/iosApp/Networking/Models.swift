@@ -1106,6 +1106,7 @@ struct LeafItemUserData: Codable, Hashable {
     let durationSeconds: Double?
     let lastFileId: Int?
     let lastResolution: String?
+    let lastHdr: Bool?
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -1115,6 +1116,7 @@ struct LeafItemUserData: Codable, Hashable {
         durationSeconds = try c.decodeIfPresent(Double.self, forKey: .durationSeconds)
         lastFileId = try c.decodeIfPresent(Int.self, forKey: .lastFileId)
         lastResolution = try c.decodeIfPresent(String.self, forKey: .lastResolution)
+        lastHdr = try c.decodeIfPresent(Bool.self, forKey: .lastHdr)
     }
 }
 
@@ -1435,6 +1437,11 @@ struct CreateCollectionGroupRequest: Encodable {
     let name: String
 }
 
+/// `PATCH /api/v2/collections/groups/{id}` body.
+struct UpdateCollectionGroupRequest: Encodable {
+    let name: String
+}
+
 struct CreateCollectionRequest: Encodable {
     let name: String
     let collectionType: String
@@ -1442,7 +1449,7 @@ struct CreateCollectionRequest: Encodable {
 
 // MARK: - User Info
 
-struct UserInfo: Sendable {
+struct UserInfo: Codable, Sendable {
     let id: String?
     let username: String
     let isAdmin: Bool?

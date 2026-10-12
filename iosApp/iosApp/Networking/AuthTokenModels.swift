@@ -5,7 +5,7 @@ import Foundation
 struct LoginRequest: Encodable {
     let username: String
     let password: String
-}
+    let provider: String? = nil}
 
 /// Body for POST /api/v2/auth/refresh (`RefreshSessionInputBody`).
 struct RefreshRequest: Encodable {

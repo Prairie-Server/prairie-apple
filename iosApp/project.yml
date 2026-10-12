@@ -115,6 +115,9 @@ targets:
       - path: iosApp/Screens/Profiles/ProfileLaunchPreferences.swift
       - path: iosApp/Navigation/UICustomizationPreferences.swift
       - path: iosApp/Navigation/TabRouter.swift
+      # CatalogV2Tests (host bundle) seeds item-detail routes; the fork keeps
+      # Route.swift in the host sources.
+      - path: iosApp/Navigation/Route.swift
       - path: iosApp/Navigation/AppNavPreferences.swift
       - path: iosApp/Control/tvOS/RemotePlaybackIdentityManager.swift
       - path: iosApp/Screens/Player/PlayerTrack.swift

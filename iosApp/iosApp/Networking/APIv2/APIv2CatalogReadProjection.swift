@@ -502,6 +502,18 @@ extension AudiobookRelatedItem {
     }
 }
 
+extension SeasonsResponse {
+    init(catalog items: [APIv2CatalogRead.Season]) throws {
+        seasons = try items.map { try Season(catalog: $0) }
+    }
+}
+
+extension EpisodesResponse {
+    init(catalog items: [APIv2CatalogRead.Episode]) throws {
+        episodes = try items.map { try EpisodeListItem(catalog: $0) }
+    }
+}
+
 extension Library {
     init(v2 value: APIv2UserLibrary) throws {
         self.init(id: try catalogLegacyID(value.id), name: value.name, type: value.type,
