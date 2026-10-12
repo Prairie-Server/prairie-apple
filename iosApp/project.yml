@@ -450,6 +450,7 @@ targets:
       - path: iosApp/WatchParty/WatchPartyInvitation.swift
       - path: iosApp/WatchParty/WatchPartySocket.swift
       - path: iosApp/Shared/PrairieURLScheme.swift
+      - path: iosApp/Components/Ratings/DisplayRating.swift
       - path: CI/NetworkingHost
     settings:
       base:

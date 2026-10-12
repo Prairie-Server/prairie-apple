@@ -135,6 +135,9 @@ final class ConnectionMonitor {
     var isServerReachable: Bool { isDeviceOnline && serverStatus != .unreachable }
     var isOffline: Bool { !isDeviceOnline || serverStatus == .unreachable }
 
+    /// CI stand-in: the update-required verdict never fires in Networking tests.
+    nonisolated static func readServerUpdateRequired() async -> Bool { false }
+
     func noteServerResponded() {
         serverStatus = .reachable
     }
