@@ -1131,7 +1131,7 @@ final class UICustomizationPreferencesTests: XCTestCase {
             UserDefaults().removePersistentDomain(forName: standardName)
         }
 
-        let cacheKey = "prairie.uiCustomization.server.profile.mobile"
+        let cacheKey = "silo.uiCustomization.server.profile.mobile"
         let item: [String: Any] = [
             "type": "collection",
             "collection_id": "featured:2026",
@@ -1228,7 +1228,7 @@ final class UICustomizationPreferencesTests: XCTestCase {
         let preferences = UICustomizationPreferences(
             defaults: SharedDefaults(suite: suite, standard: standard),
             transport: transport,
-            cacheKey: { "prairie.uiCustomization.server.profile.mobile" },
+            cacheKey: { "silo.uiCustomization.server.profile.mobile" },
             requestIdentity: { testRequestIdentity(family: "mobile") },
             initialCapabilityState: .supported
         )
@@ -1388,7 +1388,7 @@ final class UICustomizationPreferencesTests: XCTestCase {
         let preferences = UICustomizationPreferences(
             defaults: SharedDefaults(suite: suite, standard: standard),
             transport: transport,
-            cacheKey: { "prairie.uiCustomization.server.profile.tv" },
+            cacheKey: { "silo.uiCustomization.server.profile.tv" },
             requestIdentity: { testRequestIdentity(family: "tv") },
             initialCapabilityState: .supported
         )
@@ -1436,7 +1436,7 @@ final class UICustomizationPreferencesTests: XCTestCase {
         }
 
         let defaults = SharedDefaults(suite: suite, standard: standard)
-        let cacheKey = "prairie.uiCustomization.server.profile.tv"
+        let cacheKey = "silo.uiCustomization.server.profile.tv"
         let failedLibrary = Library(
             id: 7,
             name: "Failed Library",
@@ -1504,7 +1504,7 @@ final class UICustomizationPreferencesTests: XCTestCase {
         let preferences = UICustomizationPreferences(
             defaults: SharedDefaults(suite: suite, standard: standard),
             transport: transport,
-            cacheKey: { "prairie.uiCustomization.server.profile.tv" },
+            cacheKey: { "silo.uiCustomization.server.profile.tv" },
             requestIdentity: { testRequestIdentity(family: "tv") },
             initialCapabilityState: .supported
         )
@@ -1734,7 +1734,7 @@ final class UICustomizationPreferencesTests: XCTestCase {
         let preferences = UICustomizationPreferences(
             defaults: SharedDefaults(suite: suite, standard: standard),
             transport: transport,
-            cacheKey: { "prairie.uiCustomization.server.profile.tv" },
+            cacheKey: { "silo.uiCustomization.server.profile.tv" },
             requestIdentity: { testRequestIdentity(family: "tv") },
             initialCapabilityState: .supported
         )
@@ -1788,7 +1788,7 @@ final class UICustomizationPreferencesTests: XCTestCase {
         let preferences = UICustomizationPreferences(
             defaults: SharedDefaults(suite: suite, standard: standard),
             transport: transport,
-            cacheKey: { "prairie.uiCustomization.server.profile.tv" },
+            cacheKey: { "silo.uiCustomization.server.profile.tv" },
             requestIdentity: { testRequestIdentity(family: "tv") },
             initialCapabilityState: .supported
         )
@@ -1839,7 +1839,7 @@ final class UICustomizationPreferencesTests: XCTestCase {
         let preferences = UICustomizationPreferences(
             defaults: SharedDefaults(suite: suite, standard: standard),
             transport: transport,
-            cacheKey: { "prairie.uiCustomization.server.profile.tv" },
+            cacheKey: { "silo.uiCustomization.server.profile.tv" },
             requestIdentity: { testRequestIdentity(family: "tv") },
             initialCapabilityState: .supported
         )
@@ -1890,7 +1890,7 @@ final class UICustomizationPreferencesTests: XCTestCase {
         }
 
         let defaults = SharedDefaults(suite: suite, standard: standard)
-        let cacheKey = "prairie.uiCustomization.server.profile.tv"
+        let cacheKey = "silo.uiCustomization.server.profile.tv"
         let first = PrimaryMenuItem.library(libraryId: 7, label: "First")
         let second = PrimaryMenuItem.library(libraryId: 8, label: "Second")
         let offlineTransport = FakeUICustomizationTransport(rows: try menuAndShortcutRows())
@@ -2208,7 +2208,7 @@ final class UICustomizationPreferencesTests: XCTestCase {
             UserDefaults().removePersistentDomain(forName: standardName)
         }
 
-        let cacheKey = "prairie.uiCustomization.server.profile.mobile"
+        let cacheKey = "silo.uiCustomization.server.profile.mobile"
         let shortcutItems: [[String: Any]] = (1...256).map { libraryId in
             [
                 "type": "library",
@@ -2283,7 +2283,7 @@ final class UICustomizationPreferencesTests: XCTestCase {
         let preferences = UICustomizationPreferences(
             defaults: SharedDefaults(suite: suite, standard: standard),
             transport: transport,
-            cacheKey: { "prairie.uiCustomization.server.profile.tv" },
+            cacheKey: { "silo.uiCustomization.server.profile.tv" },
             requestIdentity: { testRequestIdentity(family: "tv") },
             initialCapabilityState: .supported
         )
@@ -2315,7 +2315,7 @@ final class UICustomizationPreferencesTests: XCTestCase {
             UserDefaults().removePersistentDomain(forName: standardName)
         }
 
-        let cacheKey = "prairie.uiCustomization.server.profile.mobile"
+        let cacheKey = "silo.uiCustomization.server.profile.mobile"
         let menuItems: [[String: Any]] = [
             ["type": "builtin", "destination": "home"],
         ] + (1...63).map { libraryId in
@@ -2373,7 +2373,7 @@ final class UICustomizationPreferencesTests: XCTestCase {
             UserDefaults().removePersistentDomain(forName: standardName)
         }
 
-        let cacheKey = "prairie.uiCustomization.server.profile.tv"
+        let cacheKey = "silo.uiCustomization.server.profile.tv"
         let defaults = SharedDefaults(suite: suite, standard: standard)
         // Fixed responses rather than rows: neither carries the card key.
         func response(shortcutCount: Int) throws -> EffectiveSettingValuesResponse {
@@ -3255,7 +3255,7 @@ final class UICustomizationPreferencesTests: XCTestCase {
             UserDefaults().removePersistentDomain(forName: standardName)
         }
 
-        let cacheKey = "prairie.uiCustomization.server.profile.tv"
+        let cacheKey = "silo.uiCustomization.server.profile.tv"
         let defaults = SharedDefaults(suite: suite, standard: standard)
         let transport = FakeUICustomizationTransport(
             rows: try deviceOverrideRows(),
@@ -3323,7 +3323,7 @@ final class UICustomizationPreferencesTests: XCTestCase {
             UserDefaults().removePersistentDomain(forName: standardName)
         }
 
-        let cacheKey = "prairie.uiCustomization.server.profile.tv"
+        let cacheKey = "silo.uiCustomization.server.profile.tv"
         let defaults = SharedDefaults(suite: suite, standard: standard)
         let transport = FakeUICustomizationTransport(
             rows: try deviceOverrideRows(),
@@ -3718,7 +3718,7 @@ final class UICustomizationPreferencesTests: XCTestCase {
             revision: SettingKey.revision
         )
         let defaults = SharedDefaults(suite: suite, standard: standard)
-        let cacheKey = "prairie.uiCustomization.server.profile.mobile"
+        let cacheKey = "silo.uiCustomization.server.profile.mobile"
         let online = UICustomizationPreferences(
             defaults: defaults,
             transport: FakeUICustomizationTransport(effectiveResponse: response),
@@ -3817,7 +3817,7 @@ private func testRequestIdentity(for cacheKey: String) -> HTTPRequestIdentity {
 }
 
 private func testCacheKey(for identity: HTTPRequestIdentity) -> String {
-    "prairie.uiCustomization.\(identity.serverId).\(identity.profileId).\(identity.clientFamily)"
+    "silo.uiCustomization.\(identity.serverId).\(identity.profileId).\(identity.clientFamily)"
 }
 
 private final class MutableRequestIdentity: @unchecked Sendable {
