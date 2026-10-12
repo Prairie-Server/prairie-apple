@@ -194,7 +194,7 @@ final class NetworkingModelsCoverageTests: XCTestCase {
     }
 
     func testLibrariesObjectShape() throws {
-        let libraries = try decode(LibrariesResponse.self, """
+        let decoded = try decode(LibrariesResponse.self, """
         {
           "libraries": [
             { "id": 1, "name": "Movies", "type": "movies" },
@@ -202,7 +202,9 @@ final class NetworkingModelsCoverageTests: XCTestCase {
           ]
         }
         """)
-        XCTAssertEqual(libraries.libraries.map(\.id), [1])
+        // Upstream moved the supported-type filter out of Decodable; the
+        // memberwise init still applies it.
+        XCTAssertEqual(LibrariesResponse(libraries: decoded.libraries).libraries.map(\.id), [1])
     }
 
     func testEpisodeListItemAndTimeRange() throws {

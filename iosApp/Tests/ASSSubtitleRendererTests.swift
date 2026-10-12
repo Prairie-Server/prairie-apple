@@ -114,7 +114,7 @@ final class ASSSubtitleRendererTests: XCTestCase {
     func testAttachedFontActuallyShapesTheRenderedGlyph() throws {
         let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "SiloASSFixture", withExtension: "ttf"))
         let font = FontAttachment(filename: "fixture.ttf", mimeType: "font/ttf", data: try Data(contentsOf: url))
-        let cues = [cue(1, ["0,0,Default,,0,0,0,,{\\an7\\pos(20,30)\\fnPrairie ASS Fixture}X"], start: 0, end: 2)]
+        let cues = [cue(1, ["0,0,Default,,0,0,0,,{\\an7\\pos(20,30)\\fnSilo ASS Fixture}X"], start: 0, end: 2)]
         let renderer = ASSSubtitleRenderer()
         _ = try renderer.update(header: header, fonts: [font], cues: cues, window: everything)
         let attached = frame(renderer.render(time: 1, canvas: canvas, force: true))

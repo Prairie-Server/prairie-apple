@@ -296,7 +296,7 @@ final class NetworkingPrairieGateFillTests: XCTestCase {
             }
             """.utf8)
         )
-        XCTAssertEqual(wrapped.libraries.map(\.id), [3])
+        XCTAssertEqual(LibrariesResponse(libraries: wrapped.libraries).libraries.map(\.id), [3])
         XCTAssertEqual(
             LibrariesResponse(libraries: [
                 Library(id: 9, name: "Mixed", type: "mixed", sortOrder: nil, posterUrl: nil),
