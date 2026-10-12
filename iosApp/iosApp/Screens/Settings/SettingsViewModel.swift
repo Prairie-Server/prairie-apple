@@ -57,11 +57,6 @@ final class SettingsViewModel {
         set { PlayerSettings.shared.setAutoPlayNextEpisode(newValue) }
     }
 
-    var previewNextEpisode: Bool {
-        get { PlayerSettings.shared.autoPlayNextPreview }
-        set { PlayerSettings.shared.setAutoPlayNextPreview(newValue) }
-    }
-
     var nextUpPromptSeconds: Int {
         get { PlayerSettings.shared.nextUpPromptSeconds }
         set { PlayerSettings.shared.setNextUpPromptSeconds(newValue) }
@@ -75,11 +70,6 @@ final class SettingsViewModel {
     var skipCredits: Bool {
         get { PlayerSettings.shared.autoSkipCredits }
         set { PlayerSettings.shared.setAutoSkipCredits(newValue) }
-    }
-
-    var skipRecaps: Bool {
-        get { PlayerSettings.shared.autoSkipRecap }
-        set { PlayerSettings.shared.setAutoSkipRecap(newValue) }
     }
 
     /// The player settings the HDR rows edit. Injectable so a test can drive
@@ -412,9 +402,7 @@ final class SettingsViewModel {
         case .audioLanguage: return preferredAudioLanguage
         case .introSkipMode: return introSkipMode.wireValue
         case .autoSkipCredits: return skipCredits ? Self.onTag : Self.offTag
-        case .autoSkipRecap: return skipRecaps ? Self.onTag : Self.offTag
         case .autoPlayNext: return autoPlayNext ? Self.onTag : Self.offTag
-        case .autoPlayNextPreview: return previewNextEpisode ? Self.onTag : Self.offTag
         case .nextUpPrompt: return String(nextUpPromptSeconds)
         }
     }
@@ -441,12 +429,8 @@ final class SettingsViewModel {
             introSkipMode = mode
         case .autoSkipCredits:
             skipCredits = tag == Self.onTag
-        case .autoSkipRecap:
-            skipRecaps = tag == Self.onTag
         case .autoPlayNext:
             autoPlayNext = tag == Self.onTag
-        case .autoPlayNextPreview:
-            previewNextEpisode = tag == Self.onTag
         case .nextUpPrompt:
             guard let seconds = Int(tag) else { return }
             nextUpPromptSeconds = seconds

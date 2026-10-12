@@ -145,7 +145,7 @@ an issue useful.
 ## License & Trademarks
 
 Prairie Apple is licensed under `AGPL-3.0-or-later` with an additional
-permission under AGPL section 7, inherited from upstream Prairie Apple, allowing
+permission under AGPL section 7, inherited from upstream Silo Apple, allowing
 distribution through the Apple App Store and TestFlight despite those platforms' signing, DRM, and
 redistribution terms. See [LICENSE](LICENSE) and
 [APPSTORE-EXCEPTION.md](APPSTORE-EXCEPTION.md).

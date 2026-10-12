@@ -38,7 +38,7 @@ final class ProfileAndQualitySettingsTests: XCTestCase {
         XCTAssertEqual(
             PlaybackLanguageOption.languageIdentity("Original"),
             // The settings contract's wire tag, not branding: keep upstream's spelling.
-            PlaybackLanguageOption.languageIdentity("X-Prairie-Original")
+            PlaybackLanguageOption.languageIdentity("X-Silo-Original")
         )
     }
 
