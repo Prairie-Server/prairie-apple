@@ -172,6 +172,9 @@ class ItemDetailViewModel {
     /// mutation. Without this, a slow entry load can overwrite an optimistic
     /// button tap and put the stale pair back into `ResponseCache`.
     private var userStateMutationGeneration = 0
+    /// Bumped by every rating change, so an older rating's refresh cannot
+    /// publish over a newer one.
+    private var userRatingMutationGeneration = 0
     /// Bumped by every watched change to this page's item, so an older
     /// toggle's response cannot reassert or roll back over a newer one.
     private var watchedToggleGeneration = 0
@@ -1537,6 +1540,8 @@ class ItemDetailViewModel {
     /// appears, updates or disappears with it.
     func setUserRating(_ rating: Int?) async {
         guard let contentId = detail?.contentId, detail?.userRating != rating else { return }
+        userRatingMutationGeneration += 1
+        let ratingGeneration = userRatingMutationGeneration
         let previous = detail?.userRating
         detail?.userRating = rating
         let owner = await currentPersonalStateOwner()
@@ -1551,8 +1556,9 @@ class ItemDetailViewModel {
             return
         }
         ResponseCache.shared.remove(CacheKey.itemDetail(contentId, libraryId: libraryId))
-        guard let fresh = try? await PrairieAPI.shared.itemDetail(contentId: contentId, libraryId: libraryId),
-              detail?.contentId == contentId else { return }
+        guard ratingGeneration == userRatingMutationGeneration,
+              let fresh = try? await PrairieAPI.shared.itemDetail(contentId: contentId, libraryId: libraryId),
+              detail?.contentId == contentId, ratingGeneration == userRatingMutationGeneration else { return }
         detail?.communityRating = fresh.communityRating
         detail?.userRating = fresh.userRating
     }
