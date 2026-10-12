@@ -1,5 +1,6 @@
 import Foundation
 import OSLog
+import Synchronization
 
 @Observable
 final class ProfileLaunchPreferences {
@@ -13,15 +14,12 @@ final class ProfileLaunchPreferences {
     private let defaults: SharedDefaults
     private let persistenceOverride: ((ProfileLaunchState) -> Bool)?
     /// SwiftUI reads this state on the main thread while `AuthService`
-    /// updates it from profile-switch tasks, so every access holds `lock`.
-    @ObservationIgnored private let lock = NSLock()
-    @ObservationIgnored private var storedState: ProfileLaunchState
+    /// updates it from profile-switch tasks, so every access takes the lock.
+    @ObservationIgnored private let storedState: Mutex<ProfileLaunchState>
 
     var state: ProfileLaunchState {
         access(keyPath: \.state)
-        lock.lock()
-        defer { lock.unlock() }
-        return storedState
+        return storedState.withLock { $0 }
     }
 
     init(
@@ -31,7 +29,7 @@ final class ProfileLaunchPreferences {
         self.defaults = defaults
         self.persistenceOverride = persistenceOverride
         let state = ProfileLaunchState.load(from: defaults)
-        self.storedState = state
+        self.storedState = Mutex(state)
         _ = persist(state)
     }
 
@@ -39,9 +37,11 @@ final class ProfileLaunchPreferences {
         get { state.behavior }
         set {
             update { state in
-                guard state.behavior != newValue else { return }
+                guard state.behavior != newValue || state.rememberOfferPending != nil else { return }
                 let previousState = state
                 state.behavior = newValue
+                // Choosing a behavior in Settings answers the TV's offer.
+                state.rememberOfferPending = nil
                 if newValue == .automatic {
                     state.backgroundedAt = nil
                 }
@@ -58,6 +58,32 @@ final class ProfileLaunchPreferences {
         set {
             guard let behavior = ProfileLaunchBehavior(rawValue: newValue) else { return }
             self.behavior = behavior
+        }
+    }
+
+    /// Whether the next profile picked should be offered as the one this TV
+    /// opens automatically.
+    var isRememberOfferPending: Bool {
+        state.rememberOfferPending == true
+    }
+
+    /// Answers the TV's one-time offer: `remember` opens the picked profile
+    /// automatically from now on (Automatic); otherwise the TV keeps asking.
+    @discardableResult
+    func answerRememberOffer(remember: Bool) -> Bool {
+        update { state in
+            guard state.rememberOfferPending == true else { return true }
+            let previousState = state
+            state.rememberOfferPending = nil
+            if remember {
+                state.behavior = .automatic
+                state.backgroundedAt = nil
+            }
+            guard persist(state) else {
+                state = previousState
+                return false
+            }
+            return true
         }
     }
 
@@ -196,25 +222,40 @@ final class ProfileLaunchPreferences {
               !accountEpoch.isEmpty else {
             return false
         }
-        return remember(
-            profileID: profileID,
-            requiresPIN: requiresPIN,
-            accountEpoch: accountEpoch,
-            for: serverID
-        )
+        return update { state in
+            let previousState = state
+            state.rememberedByServerID[serverID] = RememberedProfile(
+                profileID: profileID,
+                requiredPINAtSelection: requiresPIN,
+                accountEpoch: accountEpoch
+            )
+            state.selectionRequiredServerIDs.remove(serverID)
+            state.backgroundedAt = nil
+            // A device that remembered a profile before launch state was
+            // saved is not fresh: it keeps opening that profile. Saved with
+            // the profile, so the two cannot disagree after a failed write.
+            if state.rememberOfferPending == true {
+                state.behavior = .automatic
+                state.rememberOfferPending = nil
+            }
+            guard persist(state) else {
+                state = previousState
+                return false
+            }
+            return true
+        }
     }
 
-    /// Applies `change` to a copy of the state under `lock`, so each
-    /// mutation, its persistence, and any rollback happen as one step.
-    /// Observers are notified after unlocking so they can read `state`.
+    /// Applies `change` to the state under the lock, so each mutation, its
+    /// persistence, and any rollback happen as one step. Observers are
+    /// notified after unlocking so they can read `state`.
     private func update<Result>(_ change: (inout ProfileLaunchState) -> Result) -> Result {
-        lock.lock()
-        let previousState = storedState
-        var state = previousState
-        let result = change(&state)
-        storedState = state
-        lock.unlock()
-        if state != previousState {
+        let (result, changed) = storedState.withLock { state in
+            let previousState = state
+            let result = change(&state)
+            return (result, state != previousState)
+        }
+        if changed {
             withMutation(keyPath: \.state) {}
         }
         return result

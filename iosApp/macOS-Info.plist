@@ -16,6 +16,17 @@
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>org.prairieserver.prairie.auth-callback</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>org.prairieserver.prairie</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSApplicationCategoryType</key>
@@ -25,11 +36,19 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_prairie._tcp</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Prairie uses your local network to find Prairie servers.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>
 	<true/>
 	<key>PrairieBuildChannel</key>
 	<string>$(PRAIRIE_BUILD_CHANNEL)</string>
+	<key>PrairieSourceURL</key>
+	<string>$(PRAIRIE_SOURCE_URL)</string>
 </dict>
 </plist>

@@ -86,23 +86,6 @@ final class ProfilesV2Tests: XCTestCase {
         }
     }
 
-    /// `LibrariesResponse` is now only the cache shape; the v1 bare-array
-    /// wire form is no longer accepted.
-    func testLibrariesResponseRoundTripsOnlyItsCacheShape() throws {
-        let cached = LibrariesResponse(libraries: [
-            Library(id: 3, name: "Series", type: "series", sortOrder: 1, posterUrl: nil),
-        ])
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        let encoder = JSONEncoder()
-        encoder.keyEncodingStrategy = .convertToSnakeCase
-
-        let decoded = try decoder.decode(LibrariesResponse.self, from: encoder.encode(cached))
-        XCTAssertEqual(decoded.libraries, cached.libraries)
-        XCTAssertThrowsError(try decoder.decode(
-            LibrariesResponse.self, from: Data(#"[{"id":1,"name":"Movies","type":"movies"}]"#.utf8)))
-    }
-
     // MARK: Profiles
 
     func testListProfilesReadsTheV2Collection() async throws {
@@ -139,6 +122,27 @@ final class ProfilesV2Tests: XCTestCase {
             XCTFail("A PIN the server rejected must throw")
         } catch ProfileTransitionError.incorrectPIN {
             XCTAssertNil(ErrorState(ProfileTransitionError.incorrectPIN).statusCode)
+        }
+    }
+
+    func testLockedOutPINReportsTheWaitFromRetryAfter() async throws {
+        let api = try await api()
+        let lockout = Self.problem("rate_limited", status: 429, detail: "Too many incorrect PINs.")
+        for (headers, message) in [
+            (["Retry-After": "241"], "Too many incorrect PINs. Try again in 5 minutes."),
+            (["Retry-After": "60"], "Too many incorrect PINs. Try again in 1 minute."),
+            ([:], "Too many incorrect PINs. Try again later."),
+            (["Retry-After": "1e300"], "Too many incorrect PINs. Try again later."),
+            (["Retry-After": "inf"], "Too many incorrect PINs. Try again later."),
+        ] {
+            stub.reply(429, lockout, headers: headers)
+            do {
+                _ = try await api.verifyProfileSelection(profileId: "p-2", pin: "0000")
+                XCTFail("A locked-out profile must throw")
+            } catch let error as ProfileTransitionError {
+                guard case .pinLockedOut = error else { return XCTFail("\(error)") }
+                XCTAssertEqual(error.localizedDescription, message)
+            }
         }
     }
 

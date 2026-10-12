@@ -2,7 +2,7 @@
 import SwiftUI
 
 struct PrairieControlModeButton: View {
-    @Bindable var controller: PrairieControlClient
+    let controller: PrairieControlClient
     let onChooseTarget: () -> Void
 
     var body: some View {
@@ -15,7 +15,7 @@ struct PrairieControlModeButton: View {
                     Label("Choose TV", systemImage: "tv")
                 }
                 Divider()
-                Button(role: .destructive) { controller.turnOffControlMode() } label: {
+                Button(role: .destructive) { controller.disconnect() } label: {
                     Label("Turn Off Control Mode", systemImage: "tv.slash")
                 }
             } label: {

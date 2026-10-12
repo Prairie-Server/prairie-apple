@@ -43,10 +43,12 @@ struct PhoneTrailersRail: View {
                     )
                 }
             }
-            .padding(.horizontal, PrairieTheme.safePadding)
+            .scrollTargetLayout()
             .padding(.vertical, 4)
             .phoneMediaRailBounds()
         }
+        .contentMargins(.horizontal, PrairieTheme.safePadding, for: .scrollContent)
+        .mediaRailScrolling()
     }
 }
 
@@ -102,29 +104,34 @@ private struct PhoneTrailerCard: View {
     let thumbnailCornerRadius: CGFloat
     let onSelect: () -> Void
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     var body: some View {
         Button(action: onSelect) {
             VStack(alignment: .leading, spacing: 8) {
                 thumbnail
                 VStack(alignment: .leading, spacing: 4) {
                     Text(kindLabel)
-                        .font(.system(size: 10, weight: .bold))
+                        .prairieScaledFont(size: 10, weight: .bold, relativeTo: .caption2)
                         .tracking(1.0)
                         .foregroundColor(.prairieOnSurface.opacity(0.55))
 
                     Text(entry.title)
-                        .font(.system(size: 14, weight: .semibold))
+                        .prairieScaledFont(size: 14, weight: .semibold, relativeTo: .subheadline)
                         .foregroundColor(.prairieOnSurface.opacity(0.92))
-                        .lineLimit(2)
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
                         .multilineTextAlignment(.leading)
 
                     if let durationLabel {
                         Text(durationLabel)
-                            .font(.system(size: 12, weight: .medium))
+                            .prairieScaledFont(size: 12, weight: .medium, relativeTo: .caption)
                             .foregroundColor(.prairieSecondaryText)
                             .lineLimit(1)
                     }
                 }
+                // The card keeps the episode rail's fixed width, so past AX3 a
+                // single word such as "FEATURETTE" would no longer fit a line.
+                .dynamicTypeSize(...DynamicTypeSize.accessibility3)
             }
             .frame(width: cardWidth, alignment: .leading)
             .contentShape(Rectangle())

@@ -49,24 +49,15 @@ struct TVPlayerInfoHUD: View {
         }
     }
 
-    /// Tabs shown for the current session. Info + Video are always available;
-    /// Audio / Subtitles / Chapters disappear when the stream has none of
-    /// those — Infuse hides rather than disables, which keeps the bar tidy.
+    /// Tabs shown for the current session. Info, Stats and Video are always
+    /// available; Audio / Subtitles / Chapters are hidden (not disabled) when
+    /// the stream has none of those.
     ///
-    /// Subtitles also appear when the stream has *no* tracks but the server
-    /// can still produce them: AI (ASR transcription, or translating an
-    /// existing text track), or a provider search. Without this, a file with
-    /// no subtitles would hide the Subtitles tab entirely — and with it the
-    /// only entry point to "AI Subtitles…" / "Search Subtitles…", which is
-    /// exactly the case where they are most useful. Uses the same
-    /// `hasActionableSource` probe the pane gates its AI row on.
-    ///
-    /// The search term is deliberately the **enabled** predicate, not the
-    /// visible one: a row that can't be acted on must never be the sole
-    /// reason its tab exists, or a track-less file on a server with no
-    /// providers would open a Subtitles tab containing one greyed-out row.
-    /// When the tab is present for another reason, the disabled row still
-    /// renders inside it and explains itself.
+    /// Subtitles also appears when the stream has no tracks but the server can
+    /// still produce them (AI transcription or translation, or a provider
+    /// search), because the tab is the only entry point to those actions. The
+    /// search term uses the *enabled* predicate, not the visible one, so a
+    /// greyed-out row is never the sole reason the tab exists.
     private var availableTabs: [Tab] {
         var tabs: [Tab] = [.info, .stats, .video]
         if !viewModel.audioTracks.isEmpty { tabs.append(.audio) }
@@ -96,23 +87,9 @@ struct TVPlayerInfoHUD: View {
                 focusedTab = activeTab
             }
         }
-        // The tab set is not static for the lifetime of the HUD: the subtitle
-        // provider probe is async and fails open, so on a track-less,
-        // non-AI session the Subtitles tab starts present (optimistic
-        // `isAvailable`) and can drop out mid-session when the server answers
-        // "no providers". If that happens while Subtitles is the active tab,
-        // repairing only in `onAppear` would leave the panel rendering a pane
-        // whose pill — and whose focus owner — no longer exists, which on
-        // tvOS means focus can land nowhere at all (docs/tvos-focus.md).
-        //
-        // Repair-on-change rather than pinning `activeTab` into
-        // `availableTabs`: keeping the active tab mounted unconditionally
-        // would make the tab set depend on state this handler writes (a
-        // derived-state feedback loop, the hazard this codebase has been
-        // bitten by), it would defeat the `onAppear` repair entirely, and
-        // because `TVPlayerControls` remembers `activeHUDTab` across HUD
-        // presentations it would strand a Subtitles pill holding nothing but
-        // a greyed-out row for the rest of the session.
+        // Re-check on change: the provider probe can remove the Subtitles tab
+        // mid-session; if it was active, move to the first available tab so
+        // focus always has a target.
         .onChange(of: availableTabs) { _, _ in
             repairActiveTabIfUnavailable()
         }
@@ -522,6 +499,8 @@ private struct HUDSettingRow: View {
     var detail: String? = nil
     var colorHex: String? = nil
     var systemImage: String? = nil
+    /// Off for rows that act in place rather than open a picker or menu.
+    var showsChevron = true
     let action: () -> Void
 
     var body: some View {
@@ -532,7 +511,7 @@ private struct HUDSettingRow: View {
                 detail: detail,
                 colorHex: colorHex,
                 systemImage: systemImage,
-                showsChevron: true
+                showsChevron: showsChevron
             )
         }
         .buttonStyle(HUDRowButtonStyle())
@@ -687,9 +666,7 @@ private struct InfoPane: View {
                     ForEach(streamRows, id: \.0) { row in
                         LabelValueRow(label: row.0, value: row.1)
                     }
-                    if let chapter = currentChapterTitle {
-                        LabelValueRow(label: "Chapter", value: chapter)
-                    }
+                    InfoCurrentChapterRow(viewModel: viewModel)
                 }
                 }
                 Color.clear.frame(height: 0).id(Self.bottomAnchor)
@@ -730,6 +707,18 @@ private struct InfoPane: View {
             rows.append(("Subtitles", "Off"))
         }
         return rows
+    }
+}
+
+/// Reads `currentTime` in its own body so the rest of the Info pane doesn't
+/// re-render on every playback clock tick.
+private struct InfoCurrentChapterRow: View {
+    let viewModel: PlayerViewModel
+
+    var body: some View {
+        if let chapter = currentChapterTitle {
+            LabelValueRow(label: "Chapter", value: chapter)
+        }
     }
 
     private var currentChapterTitle: String? {
@@ -982,6 +971,12 @@ private struct HUDDropdownOption: Identifiable, Hashable {
 }
 
 private enum HUDPickerOptions {
+    static let subtitleSizes: [HUDDropdownOption] =
+        SubtitleFontSizePreset.allCases.map { .init(id: $0.rawValue, label: $0.label) }
+
+    static let subtitlePositions: [HUDDropdownOption] =
+        SubtitlePositionPreset.allCases.map { .init(id: $0.rawValue, label: $0.label) }
+
     static func boolLabel(_ value: Bool) -> String {
         value ? "On" : "Off"
     }
@@ -1126,20 +1121,9 @@ private struct ColorSwatch: View {
 
     var body: some View {
         Circle()
-            .fill(swiftUIColor(from: hex))
+            .fill(Color(hex: hex))
             .frame(width: 18, height: 18)
             .overlay(Circle().stroke(Color.white.opacity(0.45), lineWidth: 1))
-    }
-
-    private func swiftUIColor(from hex: String) -> Color {
-        let trimmed = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
-        guard trimmed.count == 6, let value = UInt32(trimmed, radix: 16) else {
-            return .white
-        }
-        let r = Double((value >> 16) & 0xFF) / 255.0
-        let g = Double((value >> 8) & 0xFF) / 255.0
-        let b = Double(value & 0xFF) / 255.0
-        return Color(red: r, green: g, blue: b)
     }
 }
 
@@ -1158,6 +1142,7 @@ private struct SubtitleAppearanceDialog: View {
         case font
         case size
         case textColor
+        case textOpacity
         case outlineToggle
         case outlineColor
         case backgroundColor
@@ -1205,7 +1190,7 @@ private struct SubtitleAppearanceDialog: View {
                                     selection: viewModel.settings.subtitleAppearance.backgroundStyle.rawValue,
                                     onSelect: { value in
                                         if let style = SubtitleBackgroundStylePreset(rawValue: value) {
-                                            updateAppearance {
+                                            viewModel.updateSubtitleAppearance {
                                                 $0.backgroundStyle = style
                                                 if style == .box && $0.backgroundOpacity == 0 {
                                                     $0.backgroundOpacity = SubtitleAppearance.default.backgroundOpacity
@@ -1231,7 +1216,7 @@ private struct SubtitleAppearanceDialog: View {
                                     selection: viewModel.settings.subtitleAppearance.fontFamily.rawValue,
                                     onSelect: { value in
                                         if let font = SubtitleFontFamilyPreset(rawValue: value) {
-                                            updateAppearance { $0.fontFamily = font }
+                                            viewModel.updateSubtitleAppearance { $0.fontFamily = font }
                                         }
                                     }
                                 )
@@ -1248,11 +1233,11 @@ private struct SubtitleAppearanceDialog: View {
                                 for: .size,
                                 HUDPickerPresentation(
                                     title: "Subtitle Size",
-                                    options: Self.sizeOptions,
+                                    options: HUDPickerOptions.subtitleSizes,
                                     selection: viewModel.settings.subtitleAppearance.fontSize.rawValue,
                                     onSelect: { value in
                                         if let size = SubtitleFontSizePreset(rawValue: value) {
-                                            updateAppearance { $0.fontSize = size }
+                                            viewModel.updateSubtitleAppearance { $0.fontSize = size }
                                         }
                                     }
                                 )
@@ -1273,7 +1258,7 @@ private struct SubtitleAppearanceDialog: View {
                                     options: Self.fontColorOptions,
                                     selection: viewModel.settings.subtitleAppearance.fontColor,
                                     onSelect: { value in
-                                        updateAppearance { $0.fontColor = value }
+                                        viewModel.updateSubtitleAppearance { $0.fontColor = value }
                                     }
                                 )
                             )
@@ -1281,11 +1266,34 @@ private struct SubtitleAppearanceDialog: View {
                         .focused($focusedField, equals: .textColor)
                         .id(Field.textColor)
 
+                        if viewModel.settings.offersSubtitleTextOpacity {
+                            HUDSettingRow(label: "Text Opacity", value: textOpacityLabel) {
+                                presentPicker(
+                                    for: .textOpacity,
+                                    HUDPickerPresentation(
+                                        title: "Text Opacity",
+                                        options: Self.opacityOptions(
+                                            current: viewModel.settings.subtitleAppearance.textOpacity,
+                                            lowest: 25
+                                        ),
+                                        selection: String(viewModel.settings.subtitleAppearance.textOpacity),
+                                        onSelect: { value in
+                                            if let opacity = Int(value) {
+                                                viewModel.updateSubtitleAppearance { $0.textOpacity = opacity }
+                                            }
+                                        }
+                                    )
+                                )
+                            }
+                            .focused($focusedField, equals: .textOpacity)
+                            .id(Field.textOpacity)
+                        }
+
                         HUDToggleRow(
                             label: "Text outline",
                             isOn: viewModel.settings.subtitleAppearance.textOutline
                         ) { enabled in
-                            updateAppearance { $0.textOutline = enabled }
+                            viewModel.updateSubtitleAppearance { $0.textOutline = enabled }
                         }
                         .focused($focusedField, equals: .outlineToggle)
                         .id(Field.outlineToggle)
@@ -1307,7 +1315,7 @@ private struct SubtitleAppearanceDialog: View {
                                     selection: viewModel.settings.subtitleAppearance.textOutlineColor,
                                     onSelect: { value in
                                         // Picking a color turns the outline on.
-                                        updateAppearance {
+                                        viewModel.updateSubtitleAppearance {
                                             $0.textOutlineColor = value
                                             $0.textOutline = true
                                         }
@@ -1335,7 +1343,7 @@ private struct SubtitleAppearanceDialog: View {
                                     selection: viewModel.settings.subtitleAppearance.backgroundColor,
                                     onSelect: { value in
                                         // Picking a color switches the style to Box.
-                                        updateAppearance {
+                                        viewModel.updateSubtitleAppearance {
                                             $0.backgroundColor = value
                                             $0.backgroundStyle = .box
                                             if $0.backgroundOpacity == 0 {
@@ -1354,11 +1362,14 @@ private struct SubtitleAppearanceDialog: View {
                                 for: .opacity,
                                 HUDPickerPresentation(
                                     title: "Background Opacity",
-                                    options: Self.opacityOptions,
+                                    options: Self.opacityOptions(
+                                        current: viewModel.settings.subtitleAppearance.backgroundOpacity,
+                                        lowest: 0
+                                    ),
                                     selection: String(viewModel.settings.subtitleAppearance.backgroundOpacity),
                                     onSelect: { value in
                                         if let opacity = Int(value) {
-                                            updateAppearance {
+                                            viewModel.updateSubtitleAppearance {
                                                 $0.backgroundOpacity = opacity
                                                 if opacity > 0 {
                                                     $0.backgroundStyle = .box
@@ -1380,11 +1391,11 @@ private struct SubtitleAppearanceDialog: View {
                                 for: .position,
                                 HUDPickerPresentation(
                                     title: "Subtitle Position",
-                                    options: Self.positionOptions,
+                                    options: HUDPickerOptions.subtitlePositions,
                                     selection: viewModel.settings.subtitleAppearance.position.rawValue,
                                     onSelect: { value in
                                         if let position = SubtitlePositionPreset(rawValue: value) {
-                                            updateAppearance { $0.position = position }
+                                            viewModel.updateSubtitleAppearance { $0.position = position }
                                         }
                                     }
                                 )
@@ -1450,18 +1461,16 @@ private struct SubtitleAppearanceDialog: View {
         }
     }
 
-    private func updateAppearance(_ mutate: @escaping (inout SubtitleAppearance) -> Void) {
-        var next = viewModel.settings.subtitleAppearance
-        mutate(&next)
-        Task { await viewModel.setSubtitleAppearance(next) }
-    }
-
     private var opacityLabel: String {
         guard viewModel.settings.subtitleAppearance.backgroundStyle == .box,
               viewModel.settings.subtitleAppearance.backgroundOpacity > 0 else {
             return "Off"
         }
         return "\(viewModel.settings.subtitleAppearance.backgroundOpacity)%"
+    }
+
+    private var textOpacityLabel: String {
+        "\(viewModel.settings.subtitleAppearance.textOpacity)%"
     }
 
     private func label(for id: String, in options: [HUDDropdownOption]) -> String {
@@ -1474,14 +1483,13 @@ private struct SubtitleAppearanceDialog: View {
     private static let fontFamilyOptions: [HUDDropdownOption] =
         SubtitleFontFamilyPreset.allCases.map { .init(id: $0.rawValue, label: $0.label) }
 
-    private static let sizeOptions: [HUDDropdownOption] =
-        SubtitleFontSizePreset.allCases.map { .init(id: $0.rawValue, label: $0.label) }
-
-    private static let positionOptions: [HUDDropdownOption] =
-        SubtitlePositionPreset.allCases.map { .init(id: $0.rawValue, label: $0.label) }
-
-    private static let opacityOptions: [HUDDropdownOption] =
-        stride(from: 0, through: 100, by: 25).map { .init(id: String($0), label: $0 == 0 ? "Off" : "\($0)%") }
+    /// 25-point steps from `lowest`, plus the current value when another
+    /// client stored one between them. Text opacity starts at 25 (the schema's
+    /// floor is 1, which is invisible); background opacity starts at Off.
+    private static func opacityOptions(current: Int, lowest: Int) -> [HUDDropdownOption] {
+        SubtitleAppearance.opacityPickerValues(current: current, lowest: lowest, step: 25)
+            .map { .init(id: String($0), label: $0 == 0 ? "Off" : "\($0)%") }
+    }
 
     private static let fontColorOptions: [HUDDropdownOption] =
         SubtitleAppearance.fontColors.map { .init(id: $0.hex, label: $0.label, colorHex: $0.hex) }
@@ -1589,6 +1597,8 @@ private struct SubtitlesPane: View {
     private enum Option: Hashable {
         case translate
         case search
+        case syncTiming
+        case resetTiming
         case delay
         case save
         case size
@@ -1647,6 +1657,20 @@ private struct SubtitlesPane: View {
             overlayActive = presented
         }
         .onDisappear { overlayActive = false }
+        .onAppear { viewModel.refreshSubtitleSync() }
+        // A refusal (403) swaps the Sync row for its unfocusable variant, and
+        // a reset removes the Reset row; hand focus to a neighbour then.
+        .onChange(of: timingFocusTargets) { _, targets in
+            guard let focused = focusedOption, focused == .syncTiming || focused == .resetTiming,
+                  !targets.contains(focused) else { return }
+            if let neighbour = targets.first {
+                focusedOption = neighbour
+            } else if viewModel.backendCapabilities.supportsSubtitleDelay {
+                focusedOption = .delay
+            } else {
+                entryTrackFocused = true
+            }
+        }
         .onChange(of: showSubtitleSearchMenu) { _, presented in
             if !presented {
                 // Restore after the HUD becomes visible and focusable again.
@@ -1697,12 +1721,6 @@ private struct SubtitlesPane: View {
         return "\(appearance.backgroundStyle.label), \(appearance.fontSize.label), \(appearance.position.label)"
     }
 
-    private func setAppearance(_ mutate: @escaping (inout SubtitleAppearance) -> Void) {
-        var next = viewModel.settings.subtitleAppearance
-        mutate(&next)
-        Task { await viewModel.setSubtitleAppearance(next) }
-    }
-
     private func presentPicker(for option: Option, _ presentation: HUDPickerPresentation) {
         pickerReturnField = option
         activePicker = presentation
@@ -1721,12 +1739,6 @@ private struct SubtitlesPane: View {
         focusedOption = .appearance
     }
 
-    private static let sizeOptions: [HUDDropdownOption] =
-        SubtitleFontSizePreset.allCases.map { .init(id: $0.rawValue, label: $0.label) }
-
-    private static let positionOptions: [HUDDropdownOption] =
-        SubtitlePositionPreset.allCases.map { .init(id: $0.rawValue, label: $0.label) }
-
     @ViewBuilder
     private var trackRows: some View {
         ScrollView(showsIndicators: false) {
@@ -1743,8 +1755,8 @@ private struct SubtitlesPane: View {
                 .focused($entryTrackFocused)
                 ForEach(viewModel.orderedSubtitleTracks) { track in
                     HUDTrackRow(
-                        name: track.primaryLabel,
-                        attributes: track.attributesLabel,
+                        name: track.languageFirstPrimaryLabel,
+                        attributes: attributes(for: track),
                         isSelected: viewModel.selectedSubtitleId == track.trackId
                     ) {
                         viewModel.selectSubtitle(track)
@@ -1770,8 +1782,8 @@ private struct SubtitlesPane: View {
                     }
                     ForEach(viewModel.availableSecondarySubtitleTracks) { track in
                         HUDTrackRow(
-                            name: track.primaryLabel,
-                            attributes: track.attributesLabel,
+                            name: track.languageFirstPrimaryLabel,
+                            attributes: track.languageFirstAttributesLabel,
                             isSelected: viewModel.selectedSecondarySubtitleId == track.trackId,
                             isDisabled: track.trackId == viewModel.selectedSubtitleId
                         ) {
@@ -1781,6 +1793,119 @@ private struct SubtitlesPane: View {
                 }
             }
         }
+    }
+
+    /// The track's attributes, followed by its sync status when it can be
+    /// synced ("Syncing… 40%", "Synced −3.0 s").
+    private func attributes(for track: PlayerTrack) -> String? {
+        let parts = [track.languageFirstAttributesLabel, viewModel.subtitleSyncStatus(for: track)].compactMap { $0 }.filter { !$0.isEmpty }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// The selected track's sync entry, when timing actions apply.
+    private var selectedTiming: (key: String, entry: SubtitleSyncModel.Entry, canSync: Bool)? {
+        let sync = viewModel.subtitleSync
+        guard let key = viewModel.selectedSubtitleSyncKey, let entry = sync.entry(for: key),
+              sync.showsTimingControls(entry) else { return nil }
+        return (key, entry, sync.canSync(entry))
+    }
+
+    /// The timing rows that can hold focus right now.
+    private var timingFocusTargets: [Option] {
+        guard let timing = selectedTiming, !timing.entry.isForbidden else { return [] }
+        var targets: [Option] = []
+        if timing.canSync { targets.append(.syncTiming) }
+        if timing.entry.canReset { targets.append(.resetTiming) }
+        return targets
+    }
+
+    /// "Sync to Audio" and "Reset Timing" for the selected track, stored or a
+    /// file next to the media, with a running sync's progress and the last
+    /// result. Rows stay enabled while a request runs, so focus never lands
+    /// on a row that just went inert; a press during a running job does
+    /// nothing. The progress and the note under the rows never take focus.
+    @ViewBuilder
+    private var timingRows: some View {
+        if let timing = selectedTiming {
+            let entry = timing.entry
+            let sync = viewModel.subtitleSync
+            if entry.isForbidden {
+                HUDSettingRow(
+                    label: "Sync to Audio",
+                    value: "",
+                    detail: sync.forbiddenMessage,
+                    systemImage: "waveform",
+                    showsChevron: false,
+                    action: {}
+                )
+                .disabled(true)
+                .opacity(0.35)
+                .id(Option.syncTiming)
+            } else {
+                // An unsupported format keeps its explanation in the note
+                // below, but no action that could never run.
+                if timing.canSync {
+                    HUDSettingRow(
+                        label: entry.isInProgress ? "Syncing…" : "Sync to Audio",
+                        value: "",
+                        systemImage: "waveform",
+                        showsChevron: false
+                    ) {
+                        guard !entry.isBusy, !entry.isInProgress else { return }
+                        Task { await sync.requestSync(key: timing.key) }
+                    }
+                    .focused($focusedOption, equals: .syncTiming)
+                    .id(Option.syncTiming)
+                }
+                if let job = entry.job, job.isInProgress {
+                    VStack(alignment: .leading, spacing: 6) {
+                        SubtitleSyncProgressBar(percent: SubtitleSyncLabel.percent(job) ?? 0)
+                        if let phase = SubtitleSyncLabel.phase(job) {
+                            Text(phase)
+                                .font(.system(size: 17))
+                                .foregroundStyle(.white.opacity(0.55))
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .accessibilityElement(children: .combine)
+                }
+                if entry.canReset {
+                    HUDSettingRow(
+                        label: "Reset Timing",
+                        value: "",
+                        systemImage: "arrow.uturn.backward",
+                        showsChevron: false
+                    ) {
+                        guard !entry.isBusy, !entry.isInProgress else { return }
+                        Task { await sync.resetTiming(key: timing.key) }
+                    }
+                    .focused($focusedOption, equals: .resetTiming)
+                    .id(Option.resetTiming)
+                }
+                if let note = timingNote(entry, canSync: timing.canSync) {
+                    Text(note.text)
+                        .font(.system(size: 17))
+                        .foregroundStyle(note.color)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 14)
+                        .padding(.top, 4)
+                        .padding(.bottom, 10)
+                }
+            }
+        }
+    }
+
+    /// The line under the timing rows: the last action's error, the last
+    /// result, or what "Sync to Audio" does.
+    private func timingNote(_ entry: SubtitleSyncModel.Entry, canSync: Bool) -> (text: String, color: Color)? {
+        if let error = entry.error { return (error, Color(red: 1, green: 0.55, blue: 0.55)) }
+        if let result = entry.result {
+            return (result.text, result.isWarning ? Color.prairieWarning.opacity(0.9) : .white.opacity(0.55))
+        }
+        if canSync, !entry.isInProgress { return (entry.actionNote, .white.opacity(0.45)) }
+        return nil
     }
 
     @ViewBuilder
@@ -1844,6 +1969,7 @@ private struct SubtitlesPane: View {
                     .id(Option.search)
                 }
             }
+            timingRows
             if viewModel.backendCapabilities.supportsSubtitleDelay {
                 HUDSettingRow(label: "Delay", value: delayText) {
                     presentPicker(
@@ -1887,11 +2013,11 @@ private struct SubtitlesPane: View {
                         for: .size,
                         HUDPickerPresentation(
                             title: "Subtitle Size",
-                            options: Self.sizeOptions,
+                            options: HUDPickerOptions.subtitleSizes,
                             selection: viewModel.settings.subtitleAppearance.fontSize.rawValue,
                             onSelect: { value in
                                 if let size = SubtitleFontSizePreset(rawValue: value) {
-                                    setAppearance { $0.fontSize = size }
+                                    viewModel.updateSubtitleAppearance { $0.fontSize = size }
                                 }
                             }
                         )
@@ -1907,11 +2033,11 @@ private struct SubtitlesPane: View {
                         for: .position,
                         HUDPickerPresentation(
                             title: "Subtitle Position",
-                            options: Self.positionOptions,
+                            options: HUDPickerOptions.subtitlePositions,
                             selection: viewModel.settings.subtitleAppearance.position.rawValue,
                             onSelect: { value in
                                 if let position = SubtitlePositionPreset(rawValue: value) {
-                                    setAppearance { $0.position = position }
+                                    viewModel.updateSubtitleAppearance { $0.position = position }
                                 }
                             }
                         )
@@ -1943,9 +2069,9 @@ private struct ChaptersPane: View {
     let viewModel: PlayerViewModel
     let onSelect: () -> Void
 
-    private var currentIndex: Int? {
-        viewModel.chapters.lastIndex(where: { $0.time <= viewModel.currentTime })
-    }
+    /// Updated by `CurrentChapterIndexReader` only when the chapter changes,
+    /// so the list doesn't re-render on every playback clock tick.
+    @State private var currentIndex: Int?
 
     var body: some View {
         PaneColumn("Chapters") {
@@ -1966,6 +2092,25 @@ private struct ChaptersPane: View {
             }
         }
         .focusSection()
+        .background {
+            CurrentChapterIndexReader(viewModel: viewModel, index: $currentIndex)
+        }
+    }
+}
+
+/// Non-focusable reader that observes `currentTime` in its own body and
+/// forwards the current chapter index only when it changes.
+private struct CurrentChapterIndexReader: View {
+    let viewModel: PlayerViewModel
+    @Binding var index: Int?
+
+    var body: some View {
+        let current = viewModel.chapters.lastIndex(where: { $0.time <= viewModel.currentTime })
+        Color.clear
+            .accessibilityHidden(true)
+            .onChange(of: current, initial: true) { _, newValue in
+                index = newValue
+            }
     }
 }
 

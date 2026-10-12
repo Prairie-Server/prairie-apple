@@ -25,16 +25,24 @@ public struct SettingPresentation: Hashable, Sendable {
 
 /// Every setting the contract defines.
 public enum SettingKey: String, CaseIterable, Sendable {
+    /// Blur unwatched episode images
+    case catalogHideUnwatchedEpisodeImages = "catalog.hide_unwatched_episode_images"
+    /// Hide unwatched episode descriptions
+    case catalogHideUnwatchedEpisodeOverviews = "catalog.hide_unwatched_episode_overviews"
     /// Metadata language
     case catalogMetadataLanguage = "catalog.metadata_language"
     /// Metadata language exceptions
     case catalogMetadataLanguageOverrides = "catalog.metadata_language_overrides"
+    /// Show advisory age
+    case catalogShowAdvisoryAge = "catalog.show_advisory_age"
     /// Download quality
     case downloadsDefaultQuality = "downloads.default_quality"
     /// Keep watched downloads
     case downloadsKeepWatched = "downloads.keep_watched"
     /// Download over Wi-Fi only
     case downloadsWifiOnly = "downloads.wifi_only"
+    /// Hide watched items from Home
+    case homeHideWatchedItems = "home.hide_watched_items"
     /// Primary menu
     case navPrimaryMenu = "nav.primary_menu"
     /// Navigation shortcuts
@@ -105,6 +113,8 @@ public enum SettingKey: String, CaseIterable, Sendable {
     case playerVideoSkipBackSeconds = "player.video_skip_back_seconds"
     /// Video fast-forward interval
     case playerVideoSkipForwardSeconds = "player.video_skip_forward_seconds"
+    /// Request titles I add to my watchlist
+    case requestsWatchlistAutoRequest = "requests.watchlist_auto_request"
     /// Search scope
     case searchMediaScope = "search.media_scope"
     /// Match device caption settings
@@ -145,17 +155,27 @@ public enum SettingKey: String, CaseIterable, Sendable {
     case uiTextWeight = "ui.text_weight"
     /// Theme
     case uiTheme = "ui.theme"
+    /// Theme music
+    case uiThemeMusicEnabled = "ui.theme_music_enabled"
+    /// Loop theme music
+    case uiThemeMusicLoop = "ui.theme_music_loop"
     /// Time format
     case uiTimeFormat = "ui.time_format"
+    /// Show title art
+    case uiTitleArt = "ui.title_art"
 }
 
 public extension SettingKey {
-    static let revision = 9
+    static let revision = 17
 
     /// Keys the server stores. The rest never leave the device.
     static let remote: [SettingKey] = [
+        .catalogHideUnwatchedEpisodeImages,
+        .catalogHideUnwatchedEpisodeOverviews,
         .catalogMetadataLanguage,
         .catalogMetadataLanguageOverrides,
+        .catalogShowAdvisoryAge,
+        .homeHideWatchedItems,
         .navPrimaryMenu,
         .navShortcuts,
         .playbackAudioLanguage,
@@ -187,6 +207,7 @@ public extension SettingKey {
         .playerVideoGravity,
         .playerVideoSkipBackSeconds,
         .playerVideoSkipForwardSeconds,
+        .requestsWatchlistAutoRequest,
         .searchMediaScope,
         .uiCardOverlays,
         .uiCardOverlaysEnabled,
@@ -206,7 +227,10 @@ public extension SettingKey {
         .uiTextScale,
         .uiTextWeight,
         .uiTheme,
+        .uiThemeMusicEnabled,
+        .uiThemeMusicLoop,
         .uiTimeFormat,
+        .uiTitleArt,
     ]
 
     static let clientLocal: [SettingKey] = [
@@ -225,6 +249,9 @@ public extension SettingKey {
     /// at write time, so editing either would rewrite the other.
     static let deprecated: Set<SettingKey> = [
         .playbackAutoSkipIntro,
+        .uiCustomCss,
+        .uiCustomThemeVars,
+        .uiTheme,
     ]
 }
 

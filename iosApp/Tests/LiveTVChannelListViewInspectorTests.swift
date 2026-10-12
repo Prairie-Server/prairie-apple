@@ -41,10 +41,12 @@ final class LiveTVChannelListViewInspectorTests: XCTestCase {
                 state: .failed(ErrorState(statusCode: nil, message: "Tuner offline"))
             )
         ))
-        let error = try view.inspect().find(viewWithAccessibilityIdentifier: "livetv-error")
-        XCTAssertNotNil(error)
-        let message = try view.inspect().find(text: "Tuner offline")
-        XCTAssertEqual(try message.string(), "Tuner offline")
+        // ErrorView reads the ambient AppRouter in its body, and ViewInspector
+        // does not propagate the Observable environment into that child, so
+        // assert on the view value instead of descending into its body.
+        let error = try view.inspect().find(ErrorView.self)
+        XCTAssertEqual(try error.accessibilityIdentifier(), "livetv-error")
+        XCTAssertEqual(try error.actualView().state.message, "Tuner offline")
     }
 
     func testPopulatedListOpensOnTheGuideWithEveryTab() throws {

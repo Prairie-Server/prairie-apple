@@ -3,26 +3,26 @@ Prairie Open-Source Acknowledgements
 
 This Prairie build includes the components listed below. Their complete license
 texts are bundled beside this file and are available from Settings > About >
-Open Source Licenses.
+Acknowledgements.
 
 AetherEngine
-  Revision: b1e4879e6a41477ebef3b68e8d9f65239d1ba80b (upstream release
-  7.13.0 plus Silo patches for subtitle renditions,
+  Revision: 87f8574083f96e7d5f3a9cfe07bb2525f708cd4c (upstream release
+  7.28.3, through upstream commit dd1d5f88, plus Prairie patches for subtitle renditions,
   source timing, primary ASS routing with normalized secondary/PiP text,
   refreshable authorization for native HLS, sidecar subtitles and fonts,
-  TrueHD Atmos object rendering to Apple Positional Audio, and
-  paused-item recovery)
+  dense subtitle catch-up, TrueHD Atmos object rendering to Apple Positional
+  Audio with its diagnostics, and playback recovery)
   License: GNU LGPL version 3 with the upstream Apple Store / DRM exception
-  Source (modified, as built): https://github.com/Silo-Server/AetherEngine/tree/b1e4879e6a41477ebef3b68e8d9f65239d1ba80b
-  Upstream base: https://github.com/superuser404notfound/AetherEngine/tree/7.13.0
+  Source (modified, as built): https://github.com/Silo-Server/AetherEngine/tree/87f8574083f96e7d5f3a9cfe07bb2525f708cd4c
+  Upstream base: https://github.com/superuser404notfound/AetherEngine/tree/dd1d5f885cd5da65a6641e42f5cd6ba341c6a05c
   Rebuild: the Package.swift and source tree at that revision
 
 FFmpegBuild and embedded media frameworks
-  Revision: 9ee46ba4fb533e35efa6492eb1a903ca4f8058fc (release 3.4.0)
-  Source and rebuild script: https://github.com/superuser404notfound/FFmpegBuild/tree/9ee46ba4fb533e35efa6492eb1a903ca4f8058fc
+  Revision: fda08325455bc12c112b5b82d014b98fa0fee0be (release 3.6.0)
+  Source and rebuild script: https://github.com/superuser404notfound/FFmpegBuild/tree/fda08325455bc12c112b5b82d014b98fa0fee0be
 
   Components built by that revision:
-  - FFmpeg n8.1.2, currently 38b88335f99e76ed89ff3c93f877fdefce736c13:
+  - FFmpeg n8.1.3, currently 1041abdc962f4cc4f394aa8de9dc5236c0c3b9e7:
     LGPL-2.1-or-later
   - dav1d 1.5.4, currently 54706fc6bc0cdecab7e9593974a4039cc038fca7:
     BSD-2-Clause
@@ -41,19 +41,22 @@ FFmpegBuild and embedded media frameworks
   AetherLibswresample, AetherLibswscale, AetherLibavfilter, AetherLibdav1d,
   AetherLibzimg, and AetherLibzvbi.
 
-  "Currently" records the tags' dereferenced values observed on 2026-09-04.
+  "Currently" records the tags' dereferenced values observed on 2026-09-04
+  (FFmpeg n8.1.3 on 2026-10-09).
   FFmpegBuild's script records tag names rather than immutable upstream
   commit IDs; the dereferenced commits recorded here pin the exact sources if
   those tags ever move.
 
-SiloObjectAudio / truehd
-  Revision: 645b91c072fafb60146151fd5127f8ff0ca38b6f (release 1.0.0)
-  License: Apache License 2.0 (SiloObjectAudio-Apache-2.0.txt, with its NOTICE)
-  Source and rebuild script: https://github.com/Silo-Server/SiloObjectAudio/tree/645b91c072fafb60146151fd5127f8ff0ca38b6f
+LibTrueHD / truehd (formerly SiloObjectAudio)
+  Revision: 7ac6b379cb5d77ff5f424bc9daa17131b044a962 (release 2.0.0)
+  License: MIT for the C API, framer, and build and verification scripts
+  (LibTrueHD-MIT.txt)
+  Source and rebuild script: https://github.com/superuser404notfound/LibTrueHD/tree/7ac6b379cb5d77ff5f424bc9daa17131b044a962
   Embeds the truehd crate from https://github.com/truehdd/truehdd
   (Apache-2.0), commit 45eff984e3e5ab0cf36a47d12148b1628c38bda4, the oamd crate
   0.1.0 from crates.io (https://github.com/truehdd/oamd, Apache-2.0), and the
   Rust standard library and crates listed in its NOTICE (MIT or Apache-2.0).
+  The NOTICE and the Apache License 2.0 are in truehd-Apache-2.0.txt.
 
 LibDovi / libdovi
   Packaging revision: 0d7cce1d6836a30d13a3a2326e50a153af53f014
@@ -122,6 +125,9 @@ SwiftAssRenderer, SwiftLibass, and local ASS rendering
   https://github.com/Prairie-Server/prairie-apple/releases
   Tagged builds place the archive on their release; manually dispatched
   TestFlight builds use a source-<app-commit> release. The TestFlight build's
-  What to Test notes include the exact archive URL. No original release
-  signing keys are needed to rebuild for a simulator; physical-device builds
-  use the recipient's signing identity.
+  What to Test notes include the exact archive URL. Builds from the release
+  and sideload workflows also show it at the top of these acknowledgements
+  and behind Settings > About > Source Code on iPhone and iPad; other builds
+  link the repository. No original release signing keys are needed to
+  rebuild for a simulator; physical-device builds use the recipient's
+  signing identity.

@@ -100,7 +100,6 @@ enum AetherAuthenticationRecoveryPolicy {
 struct AetherLoadSpec {
     enum ValidationError: Error, Equatable {
         case invalidStreamURL(String)
-        case unsupportedDelivery(String)
         case invalidAudioTrackIndex(Int)
         case invalidSubtitleArtifactURL(String)
         case unsupportedSubtitleTimingOrigin(origin: Double, timelineOffset: Double)
@@ -140,14 +139,9 @@ struct AetherLoadSpec {
     /// but resolves directly to its container stream, without an external slot.
     let embeddedSubtitleAlias: (appTrackID: Int64, streamIndex: Int)?
 
-    /// The bridge this app assumes for codecs Aether cannot stream-copy, when
-    /// a caller does not name one.
-    ///
-    /// Deliberately not Aether's own `.surroundCompat` default: the engine this
-    /// player replaced always bridged TrueHD and DTS-HD MA losslessly, so
-    /// inheriting the lossy default would quietly downgrade shipped behavior —
-    /// which is exactly what happened before this parameter existed. The user
-    /// setting overrides it; see `PlayerSettings.losslessAudioEnabled`.
+    /// The bridge for codecs Aether cannot stream-copy, when a caller does not
+    /// name one. Lossless rather than Aether's `.surroundCompat` default;
+    /// `PlayerSettings.losslessAudioEnabled` overrides it.
     static let defaultAudioBridgeMode: AudioBridgeMode = .lossless
 
     /// The deinterlacer used when a caller does not name one.
@@ -161,6 +155,26 @@ struct AetherLoadSpec {
     /// The hardware deinterlacer's cadence when a caller does not name one.
     /// Also Aether's own default; see `PlayerSettings.deinterlaceFieldRate`.
     static let defaultDeinterlaceFieldRate: DeinterlaceFieldRate = .field
+
+    /// The Dolby Vision layer a load presents, from the per-device Dolby
+    /// Vision setting (which is only offered while HDR is on). The setting
+    /// also shapes the capabilities sent to the server, but an original file
+    /// is opened here, so Aether has to be told too: with it off, a Profile
+    /// 7 / 8.1 / 8.4 source plays as its HDR10 / HLG base layer and the TV is
+    /// asked for HDR10 / HLG, not Dolby Vision. A Profile 5 source has no
+    /// base layer and stays Dolby Vision.
+    static func dolbyVisionHandling(hdrEnabled: Bool, dolbyVisionEnabled: Bool) -> DolbyVisionHandling {
+        hdrEnabled && dolbyVisionEnabled ? .automatic : .baseLayerOnly
+    }
+
+    /// Resolve a download manifest's audio ordinal (`selected_audio_track_index`,
+    /// a position among the delivered file's audio streams) to the stream id
+    /// Aether selects by. Nil when the ordinal is outside the probed file, so
+    /// the load falls back to the file's default track.
+    static func offlineAudioStreamIndex(manifestOrdinal: Int, probedTrackIDs: [Int]) -> Int32? {
+        guard probedTrackIDs.indices.contains(manifestOrdinal) else { return nil }
+        return Int32(exactly: probedTrackIDs[manifestOrdinal])
+    }
 
     @MainActor
     init(
@@ -176,6 +190,7 @@ struct AetherLoadSpec {
         objectAudioRendering: ObjectAudioRendering = .off,
         deinterlaceMode: DeinterlaceMode = Self.defaultDeinterlaceMode,
         deinterlaceFieldRate: DeinterlaceFieldRate = Self.defaultDeinterlaceFieldRate,
+        dolbyVisionHandling: DolbyVisionHandling = .automatic,
         panelIsInHDRMode: Bool? = nil
     ) throws {
         guard offlineURL.isFileURL else {
@@ -214,6 +229,7 @@ struct AetherLoadSpec {
             SubtitleTrackIdSpace.makeSidecarTrackId(urlIndex: sidecar.index)
         }
         options = LoadOptions(
+            dolbyVisionHandling: dolbyVisionHandling,
             panelIsInHDRMode: panelIsInHDRMode ?? AetherDisplayContext.panelIsInHDRMode,
             audioBridgeMode: audioBridgeMode,
             objectAudioRendering: objectAudioRendering,
@@ -246,6 +262,7 @@ struct AetherLoadSpec {
         objectAudioRendering: ObjectAudioRendering = .off,
         deinterlaceMode: DeinterlaceMode = Self.defaultDeinterlaceMode,
         deinterlaceFieldRate: DeinterlaceFieldRate = Self.defaultDeinterlaceFieldRate,
+        dolbyVisionHandling: DolbyVisionHandling = .automatic,
         panelIsInHDRMode: Bool? = nil
     ) throws {
         guard ["http", "https", "file"].contains(directURL.scheme?.lowercased() ?? "") else {
@@ -295,6 +312,7 @@ struct AetherLoadSpec {
         }
         options = LoadOptions(
             httpHeaders: headers,
+            dolbyVisionHandling: dolbyVisionHandling,
             panelIsInHDRMode: panelIsInHDRMode ?? AetherDisplayContext.panelIsInHDRMode,
             audioBridgeMode: audioBridgeMode,
             objectAudioRendering: objectAudioRendering,
@@ -331,6 +349,7 @@ struct AetherLoadSpec {
         objectAudioRendering: ObjectAudioRendering = .off,
         deinterlaceMode: DeinterlaceMode = Self.defaultDeinterlaceMode,
         deinterlaceFieldRate: DeinterlaceFieldRate = Self.defaultDeinterlaceFieldRate,
+        dolbyVisionHandling: DolbyVisionHandling = .automatic,
         resumeSourcePosition: Double? = nil,
         panelIsInHDRMode: Bool? = nil
     ) throws {
@@ -426,7 +445,17 @@ struct AetherLoadSpec {
         self.delivery = plan.delivery
         self.sourceURL = sourceURL
         self.timeline = timeline
-        if let resumeSourcePosition, resumeSourcePosition.isFinite {
+        if plan.delivery == PlaybackProtocolV3.PlanDelivery.remuxProgressive {
+            // A progressive remux is one chunked response the reader cannot
+            // rewind. Aether answers a non-zero start by seeking and flushing
+            // what it probed, then fails re-reading the first sample, so the
+            // stream never plays. Starting at byte zero replays the copied
+            // pre-roll (the keyframe before the requested position) instead;
+            // the timeline offset still maps the clock to the source position.
+            // Remove once Aether skips that seek on a forward-only source
+            // (docs/aether-forward-only-resume.md).
+            aetherStartPosition = 0
+        } else if let resumeSourcePosition, resumeSourcePosition.isFinite {
             aetherStartPosition = timeline.playerPosition(
                 forSourceTime: max(0, resumeSourcePosition)
             )
@@ -463,10 +492,11 @@ struct AetherLoadSpec {
             PlaybackProtocolV3.PlanDelivery.remuxHLS,
             PlaybackProtocolV3.PlanDelivery.transcodeHLS,
         ].contains(plan.delivery)
-        options = LoadOptions(
+        var loadOptions = LoadOptions(
             httpHeaders: effectiveHeaders,
             httpRequestAuthorization: isServerHLS && plan.effectiveRecipe.videoCodec != nil
                 ? requestAuthorization : nil,
+            dolbyVisionHandling: dolbyVisionHandling,
             matchContentEnabled: matchContentEnabled,
             panelIsInHDRMode: panelIsInHDRMode ?? AetherDisplayContext.panelIsInHDRMode,
             audioBridgeMode: audioBridgeMode,
@@ -488,6 +518,17 @@ struct AetherLoadSpec {
             deinterlaceMode: deinterlaceMode,
             deinterlaceFieldRate: deinterlaceFieldRate
         )
+        if plan.delivery == PlaybackProtocolV3.PlanDelivery.remuxProgressive,
+           let sourceDuration = plan.source.durationSeconds,
+           sourceDuration > timeline.timelineOffsetSeconds {
+            // A progressive remux is fragmented, so the container reports
+            // only its first fragment (a few seconds). Aether then treats the
+            // session as parked at end of media, and the next play() rewinds
+            // to zero: a seek this stream cannot serve, which ends playback.
+            // Declare what remains of the runtime on the engine's axis.
+            loadOptions.declaredDurationSeconds = sourceDuration - timeline.timelineOffsetSeconds
+        }
+        options = loadOptions
     }
 
     private static func resolveSidecarURL(_ value: String, relativeTo mediaURL: URL) -> URL? {
@@ -566,6 +607,14 @@ enum AetherObjectAudioPolicy {
         return .apac(layout)
     }
 
+    /// `apac 7.1.4` or `off`, for the diagnostics line.
+    static func diagnosticName(_ rendering: ObjectAudioRendering) -> String {
+        switch rendering {
+        case .off: return "off"
+        case .apac(let layout): return "apac \(layout.rawValue)"
+        }
+    }
+
     #if os(tvOS)
     /// Apple TV's HDMI output as tvOS reports it. The Atmos route to a receiver
     /// or soundbar is Dolby MAT, which tvOS reports as `.dolbyAtmos`.
@@ -574,6 +623,20 @@ enum AetherObjectAudioPolicy {
         case .dolbyAtmos, .spatialAudio: return .atmos
         case .monoStereo, .surround, .dolbyAudio: return .channelsOnly
         default: return .unknown
+        }
+    }
+
+    /// The mode's own name for the diagnostics line, so a report shows what
+    /// tvOS said rather than only what Prairie made of it.
+    static func renderingModeName(_ mode: AVAudioSession.RenderingMode) -> String {
+        switch mode {
+        case .notApplicable: return "notApplicable"
+        case .monoStereo: return "monoStereo"
+        case .surround: return "surround"
+        case .spatialAudio: return "spatialAudio"
+        case .dolbyAudio: return "dolbyAudio"
+        case .dolbyAtmos: return "dolbyAtmos"
+        @unknown default: return "raw\(mode.rawValue)"
         }
     }
     #endif

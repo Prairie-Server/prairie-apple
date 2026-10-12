@@ -101,29 +101,6 @@ final class NetworkingGateBoostTests: XCTestCase {
         }
         """)
         XCTAssertTrue(audiobook.isAudiobook)
-
-        let seasons = try decode(SeasonsResponse.self, "{}")
-        XCTAssertTrue(seasons.seasons.isEmpty)
-        let episodes = try decode(EpisodesResponse.self, "{}")
-        XCTAssertTrue(episodes.episodes.isEmpty)
-    }
-
-    // MARK: - WireFormat profile bodies
-
-    func testUpdateAndCreateProfileBodiesEncodeSnakeCase() throws {
-        let create = CreateProfileRequestBody(
-            name: "Kids",
-            avatar: "🐯",
-            pin: "1234",
-            isChild: true,
-            maxContentRating: nil,
-            libraryRestrictionsEnabled: false,
-            allowedLibraryIds: []
-        )
-        let createDict = try encodeSnake(create)
-        XCTAssertEqual(createDict["name"] as? String, "Kids")
-        XCTAssertEqual(createDict["is_child"] as? Bool, true)
-        XCTAssertEqual(createDict["pin"] as? String, "1234")
     }
 
     // MARK: - Playback prefs + device login helpers
@@ -196,21 +173,6 @@ final class NetworkingGateBoostTests: XCTestCase {
     }
 
     func testPlaybackSessionAndCollectionsModelGaps() throws {
-        let session = try decode(PlaybackSessionResponse.self, """
-        {
-          "session_id": "sess-1",
-          "play_method": "direct",
-          "stream_url": "https://ex/stream",
-          "subtitle_urls": [
-            { "index": 1, "language": "en", "url": "https://ex/sub.vtt" }
-          ]
-        }
-        """)
-        XCTAssertEqual(session.sessionId, "sess-1")
-        XCTAssertEqual(session.position, 0)
-        XCTAssertEqual(session.timelineOffsetSeconds, 0)
-        XCTAssertEqual(session.subtitleUrls?.first?.id, 1)
-
         let memberwise = MediaItemUserState(played: true, isFavorite: true, inWatchlist: false)
         XCTAssertTrue(memberwise.played)
         XCTAssertTrue(memberwise.isFavorite)
@@ -228,11 +190,6 @@ final class NetworkingGateBoostTests: XCTestCase {
         let collections = CollectionsResponse(collections: [], groups: nil)
         XCTAssertEqual(collections.collections?.count, 0)
         XCTAssertNil(collections.groups)
-
-        let decodedCollections = try decode(CollectionsResponse.self, """
-        { "collections": [], "groups": [] }
-        """)
-        XCTAssertEqual(decodedCollections.collections?.count, 0)
 
         var body = UpdateUserCollectionGroupBody(groupId: "g1")
         var encoded = try encodeSnake(body)

@@ -3,7 +3,7 @@ import SwiftUI
 
 struct PrairieControlTargetPickerView: View {
     let request: PrairieControlPlaybackRequest?
-    @Bindable var controller: PrairieControlClient
+    let controller: PrairieControlClient
 
     @State private var browser = PrairieControlBrowser()
     @State private var searchTimedOut = false
