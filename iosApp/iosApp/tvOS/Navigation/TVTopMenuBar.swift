@@ -91,7 +91,7 @@ enum TVRootDestination: Hashable {
     static func == (lhs: TVRootDestination, rhs: TVRootDestination) -> Bool {
         switch (lhs, rhs) {
         case (.home, .home), (.recommendations, .recommendations), (.calendar, .calendar),
-             (.liveTV, .liveTV):
+             (.liveTV, .liveTV),
              (.requests, .requests):
             return true
         case (.libraryType(let lhsType), .libraryType(let rhsType)):
@@ -118,8 +118,9 @@ enum TVRootDestination: Hashable {
         case .calendar:
             hasher.combine(4)
         case .liveTV:
-        case .requests:
             hasher.combine(5)
+        case .requests:
+            hasher.combine(6)
         }
     }
 
@@ -493,8 +494,7 @@ struct TVTopMenuBar: View {
             return TVLibraryMenuRootKind.directShortcut.hasSectionCascade ? .root(root) : nil
         case .recommendations:
             return .root(root)
-        case .home, .calendar, .liveTV:
-        case .home, .calendar, .requests:
+        case .home, .calendar, .liveTV, .requests:
             return nil
         }
     }
@@ -507,8 +507,7 @@ struct TVTopMenuBar: View {
             return "Rest to choose a section"
         case .recommendations:
             return "Rest to choose Watchlist, Favorites, or Recommendations"
-        case .home, .calendar, .liveTV:
-        case .home, .calendar, .requests:
+        case .home, .calendar, .liveTV, .requests:
             return ""
         }
     }

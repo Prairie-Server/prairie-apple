@@ -197,16 +197,6 @@ final class TVLibraryGridViewModel {
         // Keep one bounded window around the visible rows. Visible cells still
         // request their own resized image through the same coalescing
         // pipeline; the warmed decode only lets that first frame paint.
-        let urls = items[safe: range].prefix(48)
-            .compactMap { $0.posterUrl }
-            .map { ArtworkVariantURL.preferred($0) }
-            .compactMap { URL(string: $0) }
-        let desiredURLs = Set(urls)
-        let staleURLs = prefetchedPosterURLs.subtracting(desiredURLs)
-        let newURLs = urls.filter { !prefetchedPosterURLs.contains($0) }
-        prefetchedPosterURLs = desiredURLs
-        posterPrefetcher.stopPrefetching(with: staleURLs.map(PosterImageCache.cardWarmRequest(for:)))
-        posterPrefetcher.startPrefetching(with: newURLs.map(PosterImageCache.cardWarmRequest(for:)))
         let desired = items[safe: range].prefix(48).compactMap { item -> CardArtwork? in
             guard let url = item.posterUrl, !url.isEmpty else { return nil }
             // `TVCatalogGrid` draws audiobook covers square.

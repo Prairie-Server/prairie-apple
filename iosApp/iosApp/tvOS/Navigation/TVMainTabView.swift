@@ -502,9 +502,12 @@ struct TVMainTabView: View {
             LiveTVChannelListView(
                 viewModel: LiveTVChannelListViewModel(),
                 focusRequest: contentFocusRequest,
+                onTopMenuFocusRequest: { focusTopMenuIfVisible() }
+            )
         case .requests:
             TVRequestsPage(
                 mode: .hub,
+                focusRequest: contentFocusRequest,
                 isTopMenuFocused: menuOwnsFocus,
                 onTopMenuFocusRequest: { focusTopMenuIfVisible() }
             )
@@ -574,8 +577,7 @@ struct TVMainTabView: View {
             switch root {
             case .libraryType, .libraryShortcut, .recommendations:
                 return .root(root)
-            case .home, .calendar, .liveTV:
-            case .home, .calendar, .requests:
+            case .home, .calendar, .liveTV, .requests:
                 return nil
             }
         }
@@ -701,8 +703,7 @@ struct TVMainTabView: View {
                 )
             case .recommendations:
                 forYouPanel(isActive: isActive)
-            case .home, .calendar, .liveTV:
-            case .home, .calendar, .requests:
+            case .home, .calendar, .liveTV, .requests:
                 EmptyView()
             }
         case .profile:
@@ -1034,41 +1035,15 @@ struct TVMainTabView: View {
     /// fixed outside this list, which keeps their focus anchors stable while
     /// the user rearranges content tabs.
     private var visibleRoots: [TVRootDestination] {
-        var roots: [TVRootDestination] = []
-        for item in uiCustomization.resolvedPrimaryMenuItems(availableLibraries: libraries) {
-            let root: TVRootDestination?
-            switch item {
-            case .builtin(.home): root = .home
-            case .builtin(.movies): root = availableRoot(for: .movies)
-            case .builtin(.series): root = availableRoot(for: .series)
-            case .builtin(.music): root = availableRoot(for: .music)
-            case .builtin(.audiobooks):
-                root = navPrefs.showAudiobooks ? availableRoot(for: .audiobooks) : nil
-            case .builtin(.forYou): root = .recommendations
-            case .builtin(.calendar): root = .calendar
-            case .library(let libraryId, let label):
-                root = libraries.contains(where: {
-                    $0.id == libraryId && (navPrefs.showAudiobooks || !$0.isAudiobookLibrary)
-                })
-                    ? .libraryShortcut(libraryId: libraryId, label: label)
-                    : nil
-            case .section, .collection:
-                // The contract can carry these for web and future clients.
-                // Apple TV currently has a stable root route only for whole
-                // libraries, so unsupported shortcuts stay stored but hidden.
-                root = nil
-            }
-            if let root, !roots.contains(root) { roots.append(root) }
-        }
-        if !roots.contains(.home) { roots.insert(.home, at: 0) }
-        // Prairie: surface Live TV only when the channel probe found at
-        // least one enabled channel (mirrors Downloads gating on iOS).
-        if LiveTVFeatureStore.shared.isEnabled, !roots.contains(.liveTV) {
-            roots.append(.liveTV)
         var roots = TVPrimaryMenuProjection.roots(
             for: uiCustomization.resolvedPrimaryMenuItems(),
             libraries: libraries
         )
+        // Prairie: surface Live TV only when the channel probe found at
+        // least one enabled channel (mirrors Downloads gating on iOS).
+        if LiveTVFeatureStore.shared.isEnabled, !roots.contains(.liveTV) {
+            roots.append(.liveTV)
+        }
         // Requests is a server capability, not a customizable menu item: it
         // trails the content tabs whenever the server has it enabled.
         if RequestsFeatureStore.shared.isEnabled { roots.append(.requests) }

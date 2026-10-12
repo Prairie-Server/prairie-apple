@@ -262,8 +262,6 @@ private struct MacPlayerScreen: View {
                 .frame(maxWidth: 520)
 
             HStack(spacing: 12) {
-                Button("Retry", systemImage: "arrow.clockwise") {
-                    viewModel.retry()
                 if viewModel.errorIsRetryable {
                     Button(viewModel.retryButtonTitle) {
                         viewModel.retry()

@@ -54,8 +54,6 @@
 	</dict>
 	<key>NSBonjourServices</key>
 	<array>
-		<string>_silopair._tcp</string>
-		<string>_silocast._tcp</string>
 		<string>_prairiepair._tcp</string>
 		<string>_prairiecast._tcp</string>
 		<string>_prairie._tcp</string>

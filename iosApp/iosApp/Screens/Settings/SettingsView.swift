@@ -268,11 +268,14 @@ struct SettingsView: View {
                     Text("Latest version")
                         .foregroundStyle(Color.prairieOnSurface)
                 }
+            }
             if let changelogURL = viewModel.appUpdateStatus.changelogURL {
                 Link("Changelog", destination: changelogURL)
+            }
             if let releaseURL = viewModel.appUpdateStatus.releaseURL {
                 Link("View update", destination: releaseURL)
-            Link("Privacy Policy", destination: PrairieLegalLinks.privacyPolicy)
+            }
+
             externalLink("Privacy Policy", systemImage: "hand.raised.fill", PrairieLegalLinks.privacyPolicy)
 
             NavigationLink {

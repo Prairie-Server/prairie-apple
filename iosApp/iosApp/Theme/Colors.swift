@@ -5,7 +5,6 @@ extension Color {
     //
     // Mirrors prairie-server Phase 3 / prairie-smarttv tokens:
     // deep slate surfaces + amber wheat accent (#e0a84a).
-    // MARK: - Core Palette (OLED dark)
 
     /// Deep slate background (#141820)
     static let prairieBackground = Color(hex: "#141820")
@@ -50,12 +49,12 @@ extension Color {
 
     /// Storage-breakdown series color (Prairie sky).
     static let prairieBrandBlue = Color(hex: "#38BDF8")
+
     /// Storage-breakdown movies color (Prairie rose).
     static let prairieBrandRed = Color(hex: "#FB7185")
+
     /// Deep blue field behind the mark on the app icon.
     static let prairieIconField = Color(hex: "#010D9F")
-    /// Muted/secondary text — primary at 60% opacity (#99EDEDED)
-    static let prairieSecondaryText = Color(hex: "#99EDEDED")
 
     /// Error red (#B00020)
     static let prairieError = Color(hex: "#B00020")
