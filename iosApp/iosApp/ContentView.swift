@@ -367,6 +367,9 @@ struct ContentView: View {
                 await diagnosticsModel.handleForeground()
                 #endif
                 await refreshSessionStores()
+                // Prairie: Live TV availability is probed on session hydrate too;
+                // upstream's shared refresher does not cover the fork's store.
+                await LiveTVFeatureStore.shared.refresh()
                 #if os(iOS)
                 await ApplePushRegistrationCoordinator.shared.prepareForAuthenticatedProfile()
                 #endif
@@ -574,8 +577,7 @@ struct ContentView: View {
         async let customization: Void = uiCustomization.refresh()
         async let seek: Void = SeekIntervalPreferences.shared.refresh()
         async let spoilers: Void = EpisodeSpoilerPreferences.shared.refresh()
-        async let liveTV: Void = LiveTVFeatureStore.shared.refresh()
-        _ = await (overlay, ai, imageSize, requests, shuffle, subtitles, profile, customization, seek, spoilers, liveTV)
+        _ = await (overlay, ai, imageSize, requests, shuffle, subtitles, profile, customization, seek, spoilers)
     }
 
     @MainActor
@@ -1099,6 +1101,9 @@ struct ContentView: View {
         // instead of every foreground paying for a request.
         AdvisoryAgePreferenceStore.shared.markStale()
         Task { await refreshSessionStores(overlayPhase: "foreground_refresh") }
+        // Prairie: re-probe Live TV on foreground as on launch; the shared
+        // refresher does not cover the fork's store.
+        Task { await LiveTVFeatureStore.shared.refresh() }
         #if os(iOS)
         Task {
             await ApplePushRegistrationCoordinator.shared.prepareForAuthenticatedProfile()
