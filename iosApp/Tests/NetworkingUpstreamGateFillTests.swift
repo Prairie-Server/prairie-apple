@@ -529,6 +529,40 @@ final class NetworkingUpstreamGateFillTests: XCTestCase {
         XCTAssertNil([EpisodeListItem]().preferredResumeEpisode())
     }
 
+    func testSeasonsSortSpecialsFirstThenNumberTitleAndId() throws {
+        let sorted = try decode([Season].self, """
+        [{"content_id":"b","season_number":2,"title":"B","poster_url":"/p.jpg"},
+         {"content_id":"a2","season_number":2,"title":"A","poster_url":"/p.jpg"},
+         {"content_id":"a1","season_number":2,"title":"A","poster_url":"/p.jpg"},
+         {"content_id":"one","season_number":1,"poster_url":"/p.jpg"},
+         {"content_id":"sp","season_number":0,"is_specials":true,"poster_url":"/p.jpg"}]
+        """).sortedForDisplay()
+        XCTAssertEqual(sorted.map(\.contentId), ["sp", "one", "a1", "a2", "b"])
+    }
+
+    // MARK: - Snapshots and shuffle gating
+
+    func testSnapshotStoreKeepsOnlyTheNewestSnapshotsPerScope() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NetworkingUpstreamGateFill-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let scope = ResponseSnapshotStore.Scope(serverId: "server-a", profileId: "adult")
+        let extra = 2
+        for libraryId in 0..<(ResponseSnapshotStore.maxSnapshotsPerScope + extra) {
+            ResponseSnapshotStore.store(SectionsResponse(sections: []), forKey: CacheKey.librarySections(libraryId),
+                                        scope: scope, in: root)
+        }
+        // load runs on the store's serial queue, after every write and trim.
+        XCTAssertEqual(ResponseSnapshotStore.load(scope: scope, in: root).count,
+                       ResponseSnapshotStore.maxSnapshotsPerScope)
+    }
+
+    func testShuffleIsNotOfferedBeforeTheCapabilityIsProbed() {
+        let store = ShuffleFeatureStore()
+        XCTAssertNil(store.capability)
+        XCTAssertFalse(store.supports(.library))
+    }
+
     // MARK: - Settings values
 
     func testRevisionGatedSettingMembers() {
