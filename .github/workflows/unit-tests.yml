@@ -136,6 +136,19 @@ jobs:
             PrairieNetworkingTests/SharedDefaultsTests
             PrairieNetworkingTests/SharedKeychainCheckedReadTests
             PrairieNetworkingTests/WatchPartyAPITests
+            # Upstream's new Networking modules and their logic tests.
+            PrairieNetworkingTests/AdvisoryAgePreferenceStoreTests
+            PrairieNetworkingTests/ExternalSignInTests
+            PrairieNetworkingTests/HiddenLibraryPreferenceTests
+            PrairieNetworkingTests/NetworkSignInTests
+            PrairieNetworkingTests/ResponseSnapshotStoreTests
+            PrairieNetworkingTests/ServerBrandingTests
+            PrairieNetworkingTests/ServerSetupRoutingTests
+            PrairieNetworkingTests/ServerDiscoveryTests
+            PrairieNetworkingTests/ShuffleV2Tests
+            PrairieNetworkingTests/SubtitleSyncTests
+            PrairieNetworkingTests/TitleArtPreferencesTests
+            PrairieNetworkingTests/TitleArtWritePlanTests
           )
 
           ONLY_TESTING_ARGS=()

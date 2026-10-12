@@ -546,6 +546,18 @@ targets:
           - SharedDefaultsTests.swift
           - SharedKeychainCheckedReadTests.swift
           - WatchPartyAPITests.swift
+          # Upstream's new Networking modules and their logic tests, wired into
+          # the thin host so the 95% gate covers the merged surface.
+          - AdvisoryAgePreferenceStoreTests.swift
+          - ExternalSignInTests.swift
+          - HiddenLibraryPreferenceTests.swift
+          - NetworkSignInTests.swift
+          - ResponseSnapshotStoreTests.swift
+          - ServerBrandingTests.swift
+          - ServerDiscoveryTests.swift
+          - ShuffleV2Tests.swift
+          - SubtitleSyncTests.swift
+          - TitleArtPreferencesTests.swift
       - path: Tests/Fixtures/SettingsContract/conformance.json
         buildPhase: resources
       - path: Tests/Fixtures/APIv2
