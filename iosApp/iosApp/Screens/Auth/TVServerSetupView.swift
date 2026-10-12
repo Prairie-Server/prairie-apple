@@ -1,13 +1,6 @@
 #if os(tvOS)
 import SwiftUI
 
-/// Manual server URL entry (+ phone handoff) on tvOS. Reached from the
-/// first-run connect list via **Add manually**. The screen advertises on the
-/// LAN the moment it appears, so a nearby iPhone can set this TV up hands-off.
-/// Two paths sit side by side: a live "Set up with iPhone" status card and a
-/// fully functional manual-entry card (the emphasized, default-focused path).
-/// When a phone connects, the same screen swaps *in place* to the pairing
-/// panel — no cover, so nothing ever bleeds through behind it.
 /// First-run server setup on tvOS. The screen advertises on the LAN the
 /// moment it appears, so the lead path is a nearby phone or tablet setting this TV up
 /// with nothing to type. Typing the address is one button away. When a phone

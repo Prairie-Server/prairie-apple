@@ -1,11 +1,6 @@
 import SwiftUI
 
 #if !os(tvOS)
-/// Manual server URL entry. Reached from the first-run connect list via
-/// **Add manually** (or from Settings → Servers). A single centered glass
-/// form — no phone-pairing card, because on iPhone the phone *is* the
-/// companion (the pairing card auto-overlays from `ContentView` when a TV
-/// is nearby). Protocol + port stay tucked under "Advanced options".
 /// First screen when no server is configured: the address field over the
 /// brand light, recent servers below it, and protocol and port under
 /// "Advanced options". On iPhone the phone *is* the companion, so there is no

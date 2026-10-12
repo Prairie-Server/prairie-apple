@@ -381,10 +381,6 @@ class PlayerViewModel {
     /// Aether's public telemetry. The scrubber omits its buffered layer when
     /// the active route cannot report a comparable value.
     var bufferedAheadSeconds: Double = 0
-    var playbackStats: PlaybackStats = .empty
-    /// Prairie: rolling log of recent player events for stats for nerds.
-    /// Survives item changes so a failure stays readable after teardown.
-    @ObservationIgnored private var playbackEventLog = PlaybackEventLog()
     /// End of the buffered range as a fraction of `duration`, clamped to 0...1.
     var bufferedEndFraction: Double {
         guard duration > 0 else { return 0 }
@@ -409,6 +405,9 @@ class PlayerViewModel {
     private var cachedPlaybackStats: (revision: UInt64, stats: PlaybackStats)?
     @ObservationIgnored
     private var playbackStatsRevisedAt: Date = .distantPast
+    /// Prairie: rolling log of recent player events for stats for nerds.
+    /// Survives item changes so a failure stays readable after teardown.
+    @ObservationIgnored private var playbackEventLog = PlaybackEventLog()
     var showNextUpScreen = false
     /// A Next Up load keeps its preview until the successor's own startup
     /// milestone. Repeated actions cannot reload it or expand an unready frame.
@@ -1537,6 +1536,7 @@ class PlayerViewModel {
     private var statsQualityLabel: String? {
         qualityOptions.first(where: { $0.id == activeQualityId })?.label ?? activeQualityId
     }
+
     /// Selected audio track, e.g. `English · 5.1 · EAC3 · default (track 2)`.
     private var statsAudioTrackLabel: String? {
         guard let selectedAudioId,
@@ -1544,11 +1544,15 @@ class PlayerViewModel {
             return nil
         }
         return "\(track.displayLabel) (track \(track.trackId))"
+    }
+
     /// Append to the on-device event log and publish it to the stats panel
     /// without waiting for the next throttled refresh.
     private func recordPlaybackEvent(_ message: String, kind: PlaybackEventLog.Kind = .info) {
         playbackEventLog.record(message, kind: kind)
-        playbackStats.recentEvents = playbackEventLog.entries
+        playbackStatsRevision &+= 1
+    }
+
     @MainActor
     private func handleAetherControllerEvent(_ event: AetherPlaybackController.ControllerEvent) {
         guard !isDisposed else { return }
@@ -1556,11 +1560,8 @@ class PlayerViewModel {
         case .systemMediaChanged:
             syncNowPlayingDestination()
             refreshPlaybackStats(force: true)
-        case .externalPlaybackChanged(let supported, let active):
-            if active != isExternalPlaybackActive {
-                recordPlaybackEvent(active ? "External playback on" : "External playback off")
-            }
         case .externalPlaybackChanged(let supported):
+            recordPlaybackEvent(supported ? "External playback on" : "External playback off")
             supportsExternalPlayback = supported
             refreshPlaybackStats(force: true)
         }
@@ -1570,12 +1571,6 @@ class PlayerViewModel {
     /// stats panels. Clock ticks (`force == false`) invalidate at most about
     /// once a second.
     private func refreshPlaybackStats(force: Bool = false) {
-        guard let spec = aetherPlaybackController.activeSpec else {
-            playbackStats = .empty
-            playbackStats.recentEvents = playbackEventLog.entries
-            bufferedAheadSeconds = 0
-            return
-        }
         let buffered = aetherPlaybackController.activeSpec == nil
             ? 0
             : max(0, aetherPlaybackController.engine.liveTelemetry?.forwardBufferSeconds ?? 0)
@@ -1612,19 +1607,12 @@ class PlayerViewModel {
             quality: statsQualityLabel,
             audioTrack: statsAudioTrackLabel
         )
-        let snapshot = AetherPlaybackStatsSnapshot(
-            engine: aetherPlaybackController.engine
-        )
-        var projected = AetherPlaybackStatsProjection.make(
-            snapshot: snapshot,
-            source: source,
-            sampledAt: sampledAt
-        projected.recentEvents = playbackEventLog.entries
-        playbackStats = projected
-        bufferedAheadSeconds = max(0, projected.bufferedAheadSeconds ?? 0)
-        return AetherPlaybackStatsProjection.make(
+        var stats = AetherPlaybackStatsProjection.make(
             snapshot: AetherPlaybackStatsSnapshot(engine: aetherPlaybackController.engine),
             source: source
+        )
+        stats.recentEvents = playbackEventLog.entries
+        return stats
     }
 
     private func handleAetherFailure(_ failure: PlaybackErrorInfo) {
@@ -1747,8 +1735,8 @@ class PlayerViewModel {
     private func handleAetherStartupMilestone(epoch: AetherPlaybackController.LoadEpoch) {
         guard startedAetherLoadEpoch != epoch else { return }
         startedAetherLoadEpoch = epoch
-        recordPlaybackEvent(isAudioOnlyAetherLoad ? "Audio started" : "First frame")
         viewingHasPlayed = true
+        recordPlaybackEvent(isAudioOnlyAetherLoad ? "Audio started" : "First frame")
         handleFileLoaded()
         if let playing = lastLoadRequest?.contentId, shuffleState != nil {
             shuffleState?.markPlayed(playing)

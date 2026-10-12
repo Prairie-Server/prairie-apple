@@ -214,12 +214,6 @@ struct TVLoginView: View {
                 .focused($focusedField, equals: .usePassword)
             }
 
-                Button {
-                    router.resetToServerSetup()
-                } label: {
-                    Label("Use another server", systemImage: "server.rack")
-                }
-                .buttonStyle(AuroraGhostButtonStyle())
             Button("Change server") { changeServer() }
                 .buttonStyle(.marquee(.plain, fullWidth: false))
                 .focused($focusedField, equals: .changeServer)
@@ -392,10 +386,6 @@ struct TVLoginView: View {
                 Button {
                     submitPassword()
                 } label: {
-                    Label(
-                        loginVM.isLoading ? "Signing in…" : "Sign in",
-                        systemImage: "rectangle.portrait.and.arrow.right"
-                    )
                     Text(isSigningIn ? "Signing in…" : "Sign in")
                 }
                 .buttonStyle(.marquee(.primary, fullWidth: false, isLoading: isSigningIn))
@@ -413,12 +403,6 @@ struct TVLoginView: View {
                     .disabled(isSubmittingPassword || isSubmittingNetwork)
                 }
 
-                    Button {
-                        router.resetToServerSetup()
-                    } label: {
-                        Label("Use another server", systemImage: "server.rack")
-                    }
-                    .buttonStyle(AuroraGhostButtonStyle())
                 Button("Change server") { changeServer() }
                     .buttonStyle(.marquee(.plain, fullWidth: false))
                     .focused($focusedField, equals: .changeServer)
