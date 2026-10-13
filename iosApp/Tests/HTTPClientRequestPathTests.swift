@@ -13,9 +13,8 @@ final class HTTPClientRequestPathTests: XCTestCase {
             "/api/v2",
             HTTPClient.refreshPath,
             ConnectionMonitor.healthPath,
-            // Prairie: Live TV's v1 routes.
-            "/api/v1/livetv/channels",
-            "api/v1/livetv/sessions/abc",
+            "/api/v2/livetv/channels",
+            "api/v2/livetv/sessions/abc",
         ] {
             XCTAssertTrue(HTTPClient.isPrairieServerPath(path), path)
         }
@@ -25,8 +24,9 @@ final class HTTPClientRequestPathTests: XCTestCase {
         for path in [
             "/api/v1/items/abc",
             "/api/v1/health/extra",
-            "/api/v1/livetv",
-            "/api/v1/livetvx/channels",
+            // Live TV moved to /api/v2; only its media URLs stay on v1.
+            "/api/v1/livetv/channels",
+            "/api/v1/livetv/sessions/abc/heartbeat",
             "/api/v2x/items",
             "/api/v3/items",
             "/health",

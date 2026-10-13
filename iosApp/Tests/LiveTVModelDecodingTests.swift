@@ -83,10 +83,10 @@ final class LiveTVModelDecodingTests: XCTestCase {
         XCTAssertEqual(channel.displayName, "9.2")
     }
 
-    func testChannelsResponseDecode() throws {
-        let response = try decode(LiveTVChannelsResponse.self, """
+    func testChannelsItemsEnvelopeDecodeToleratesMissingFields() throws {
+        let response = try decode(LiveTVItemsResponse<LiveTVChannel>.self, """
         {
-          "channels": [
+          "items": [
             {
               "id": "a",
               "tuner_id": "t",
@@ -96,97 +96,114 @@ final class LiveTVModelDecodingTests: XCTestCase {
               "logo_url": "",
               "hd": false,
               "enabled": true,
-              "stream_url": "",
               "guide_station_id": ""
-            }
+            },
+            { "id": "b", "future_field": 1 }
           ]
         }
         """)
-        XCTAssertEqual(response.channels.count, 1)
-        XCTAssertEqual(response.channels[0].id, "a")
+        XCTAssertEqual(response.items.map(\.id), ["a", "b"])
+        XCTAssertEqual(response.items[1].number, "")
+        XCTAssertTrue(response.items[1].enabled)
+        XCTAssertEqual(try decode(LiveTVItemsResponse<LiveTVChannel>.self, "{}").items.count, 0)
     }
 
-    func testGuideProgramAndSessionStartDecode() throws {
-        let program = try decode(LiveTVProgram.self, """
+    func testGuideItemsEnvelopeAndProgramDecode() throws {
+        let guide = try decode(LiveTVGuideResponse.self, """
         {
-          "id": "prog-1",
-          "channel_id": "ch-1",
-          "series_id": "series-1",
+          "items": [
+            {
+              "id": "prog-1",
+              "channel_id": "ch-1",
+              "series_id": "series-1",
+              "start": "2026-07-25T18:00:00Z",
+              "stop": "2026-07-25T19:00:00Z",
+              "title": "Evening News",
+              "subtitle": "Late edition",
+              "description": "Local news",
+              "season": 1,
+              "episode": 12,
+              "genres": ["News"],
+              "image_url": "",
+              "is_new": true,
+              "is_live": false
+            },
+            {
+              "id": "prog-2",
+              "channel_id": "ch-1",
+              "start": "2026-07-25T19:00:00Z",
+              "stop": "2026-07-25T20:00:00Z"
+            }
+          ],
           "start": "2026-07-25T18:00:00Z",
-          "stop": "2026-07-25T19:00:00Z",
-          "title": "Evening News",
-          "subtitle": "Late edition",
-          "description": "Local news",
-          "season": 1,
-          "episode": 12,
-          "genres": ["News"],
-          "image_url": "",
-          "is_new": true,
-          "is_live": false
+          "end": "2026-07-26T06:00:00Z"
         }
         """)
+        XCTAssertEqual(guide.items.count, 2)
+        XCTAssertNotNil(guide.start)
+        let program = guide.items[0]
         XCTAssertEqual(program.id, "prog-1")
         XCTAssertEqual(program.channelId, "ch-1")
         XCTAssertEqual(program.displayTitle, "Evening News")
         XCTAssertEqual(program.season, 1)
         XCTAssertEqual(program.episode, 12)
         XCTAssertTrue(program.isNew)
+        XCTAssertEqual(guide.items[1].displayTitle, "Untitled")
+        XCTAssertEqual(guide.items[1].genres, [])
+    }
 
+    func testSessionStartDecodesV2StreamURL() throws {
         let session = try decode(LiveTVSessionStartResponse.self, """
         {
           "session_id": "sess-1",
+          "channel_id": "ch-1",
           "playback_ticket": "ticket-1",
-          "hls_url": "https://server.test/livetv/sess-1/index.m3u8",
-          "stream_url": "http://hdhr/auto/v4.1",
+          "stream_url": "/api/v1/livetv/live-hls/ticket-1/index.m3u8?st=abc",
           "transport": "hls",
-          "note": "transcoding"
+          "note": "transcoding",
+          "status": "active",
+          "created_at": "2026-07-25T18:00:00Z",
+          "stale_after_seconds": 90
         }
         """)
         XCTAssertEqual(session.sessionId, "sess-1")
+        XCTAssertEqual(session.channelId, "ch-1")
         XCTAssertEqual(session.playbackTicket, "ticket-1")
-        XCTAssertEqual(session.playableURLString, "https://server.test/livetv/sess-1/index.m3u8")
+        XCTAssertEqual(session.playableURLString, "/api/v1/livetv/live-hls/ticket-1/index.m3u8?st=abc")
         XCTAssertTrue(session.isHLS)
-        XCTAssertEqual(session.transport, "hls")
         XCTAssertEqual(session.note, "transcoding")
+        XCTAssertEqual(session.staleAfterSeconds, 90)
     }
 
-    func testSessionStartMpegtsTransportAndPlayableURLFallback() throws {
+    func testSessionStartMpegtsTransport() throws {
         let session = try decode(LiveTVSessionStartResponse.self, """
         {
           "session_id": "sess-2",
-          "playback_ticket": "ticket-2",
-          "hls_url": "",
           "stream_url": "/api/v1/livetv/sessions/sess-2/stream",
           "transport": "mpegts"
         }
         """)
         XCTAssertEqual(session.playableURLString, "/api/v1/livetv/sessions/sess-2/stream")
         XCTAssertFalse(session.isHLS)
+        XCTAssertNil(session.playbackTicket)
     }
 
-    func testSessionStartMpegtsTransportWithLiveHlsBridgeIsHLS() throws {
-        let session = try decode(LiveTVSessionStartResponse.self, """
-        {
-          "session_id": "sess-bridge",
-          "playback_ticket": "ticket-bridge",
-          "hls_url": "/api/v1/livetv/live-hls/ticket-bridge/index.m3u8",
-          "stream_url": "/api/v1/livetv/sessions/sess-bridge/stream",
-          "transport": "mpegts"
-        }
-        """)
-        XCTAssertTrue(session.isHLS)
+    func testSessionStartWithoutStreamURLIsNotPlayable() throws {
+        let session = try decode(LiveTVSessionStartResponse.self, #"{"session_id": "sess-3"}"#)
+        XCTAssertEqual(session.playableURLString, "")
     }
 
-    func testSessionStartInfersHLSFromManifestSuffix() throws {
-        let session = try decode(LiveTVSessionStartResponse.self, """
-        {
-          "session_id": "sess-3",
-          "playback_ticket": "ticket-3",
-          "hls_url": "/api/v1/livetv/sessions/sess-3/index.m3u8",
-          "stream_url": "/api/v1/livetv/sessions/sess-3/index.m3u8"
-        }
-        """)
-        XCTAssertTrue(session.isHLS)
+    func testSessionStartBodyNestsClientCapabilities() throws {
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        let data = try encoder.encode(LiveTVSessionStartInput(clientCapabilities: .avPlayer))
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let caps = try XCTUnwrap(object["client_capabilities"] as? [String: Any])
+        XCTAssertEqual(caps["codecs_video"] as? [String], ["h264", "hevc"])
+        XCTAssertEqual(caps["codecs_audio"] as? [String], ["aac", "ac3", "eac3"])
+        XCTAssertEqual(caps["max_audio_channels"] as? Int, 6)
+        XCTAssertNotNil(caps["audio_passthrough_codecs"])
+        XCTAssertNotNil(caps["max_resolution"])
     }
 
     func testLiveTVURLResolverResolvesRelativeAPIPaths() {
@@ -277,6 +294,29 @@ final class LiveTVModelDecodingTests: XCTestCase {
         XCTAssertEqual(recording.id, "rec-1")
         XCTAssertEqual(recording.status, "scheduled")
         XCTAssertEqual(recording.title, "Movie Night")
+        XCTAssertNotNil(recording.start)
+    }
+
+    func testRecordingsItemsEnvelopeToleratesMissingWindow() throws {
+        let response = try decode(LiveTVItemsResponse<LiveTVRecording>.self, """
+        {
+          "items": [
+            {
+              "id": "rec-2",
+              "channel_id": "ch-1",
+              "profile_id": "p-1",
+              "status": "failed",
+              "title": "News",
+              "last_error": "tuner busy"
+            }
+          ]
+        }
+        """)
+        let recording = try XCTUnwrap(response.items.first)
+        XCTAssertNil(recording.start)
+        XCTAssertNil(recording.stop)
+        XCTAssertEqual(recording.profileId, "p-1")
+        XCTAssertEqual(recording.lastError, "tuner busy")
     }
 
     func testScheduleRecordingInputEncodesProgramOnly() throws {

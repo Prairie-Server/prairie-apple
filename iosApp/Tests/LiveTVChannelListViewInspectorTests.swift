@@ -60,7 +60,6 @@ final class LiveTVChannelListViewInspectorTests: XCTestCase {
             logoUrl: "",
             hd: true,
             enabled: true,
-            streamUrl: "",
             guideStationId: ""
         )
         let view = host(LiveTVChannelListView(

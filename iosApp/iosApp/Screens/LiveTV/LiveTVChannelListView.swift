@@ -444,7 +444,9 @@ struct LiveTVChannelListView: View {
         let formatter = DateFormatter()
         formatter.timeStyle = .short
         formatter.dateStyle = .short
-        return "\(formatter.string(from: recording.start)) – \(formatter.string(from: recording.stop))"
+        let start = recording.start.map(formatter.string(from:)) ?? "?"
+        let stop = recording.stop.map(formatter.string(from:)) ?? "?"
+        return "\(start) – \(stop)"
     }
 
     @ViewBuilder
