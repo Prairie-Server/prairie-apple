@@ -615,7 +615,16 @@ struct APIv2Client: Sendable {
         try await setMembership(method: included ? "PUT" : "DELETE", collection: "watchlist", id: id, auth: auth)
     }
 
-    private func setMembership(method: String, collection: String, id: String,
+    /// `PUT /api/v2/ratings/{item_id}` with `{"rating": n}` (1-5), or
+    /// `DELETE` when `rating` is nil to clear it.
+    func setUserRating(id: String, rating: Int?, auth: CapturedOrdinaryRequestAuth) async throws {
+        if let rating, !(1...5).contains(rating) { throw APIv2Error.httpStatus(422) }
+        let body = try rating.map { try JSONSerialization.data(withJSONObject: ["rating": $0]) }
+        try await setMembership(method: rating == nil ? "DELETE" : "PUT", collection: "ratings", id: id,
+                                body: body, auth: auth)
+    }
+
+    private func setMembership(method: String, collection: String, id: String, body: Data? = nil,
                                auth: CapturedOrdinaryRequestAuth) async throws {
         try await gate()
         guard let profile = auth.profileId, !profile.isEmpty,
@@ -627,7 +636,7 @@ struct APIv2Client: Sendable {
         let raw = try await tokenStore.withOwnerFence(auth) {
             try await mapErrors {
                 try await http.requestData(method: method, path: "/api/v2/\(collection)/\(try catalogPathSegment(id))",
-                    requestIdentity: identity, expectedAccount: auth.account, expectedAuth: auth)
+                    body: body, requestIdentity: identity, expectedAccount: auth.account, expectedAuth: auth)
             }
         }
         try Task.checkCancellation()

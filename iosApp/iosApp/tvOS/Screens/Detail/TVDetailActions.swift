@@ -427,6 +427,7 @@ struct TVDetailActionRow<PlaybackSelectors: View, MoreMenu: View>: View {
         case startOver
         case playbackSelectors
         case watchlist
+        case rating
         case more
     }
 
@@ -454,6 +455,9 @@ struct TVDetailActionRow<PlaybackSelectors: View, MoreMenu: View>: View {
     var isPlaybackLoading = false
     var allowsInitialPlayFocus = true
     var tracksInitialFocusNavigation = false
+    /// The viewer's star rating; the Rating button shows only with `onSetRating`.
+    var userRating: Int? = nil
+    var onSetRating: ((Int?) -> Void)? = nil
     @ViewBuilder let playbackSelectors: () -> PlaybackSelectors
     @ViewBuilder let moreMenu: () -> MoreMenu
 
@@ -515,6 +519,19 @@ struct TVDetailActionRow<PlaybackSelectors: View, MoreMenu: View>: View {
                 action: onToggleWatchlist
             )
             .focused($focusedAction, equals: .watchlist)
+
+            if let onSetRating {
+                TVCircleMenuButton(
+                    icon: UserRatingChoice.icon(userRating),
+                    title: "Rating",
+                    accessibilityLabel: UserRatingChoice.accessibilityLabel(userRating),
+                    stabilizesFocusMotion: stabilizesFocusMotion,
+                    menuTitle: UserRatingChoice.caption(userRating),
+                    items: { UserRatingChoice.popoverItems(userRating) },
+                    onSelect: { onSetRating(UserRatingChoice.rating(for: $0)) }
+                )
+                .focused($focusedAction, equals: .rating)
+            }
 
             moreMenu()
                 .focused($focusedAction, equals: .more)

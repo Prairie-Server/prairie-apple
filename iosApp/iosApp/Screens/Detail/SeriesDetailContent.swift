@@ -41,6 +41,8 @@ struct SeriesDetailContent<BelowOverview: View>: View {
     let onSelectNextUpSubtitleTrack: (Int?) -> Void
     let onToggleFavorite: () -> Void
     let onToggleWatchlist: () -> Void
+    /// Sets (1-5) or clears (nil) the viewer's star rating.
+    var onSetRating: (Int?) -> Void = { _ in }
     let onToggleWatched: () -> Void
     let onSetSeasonWatched: (Season, Bool) async -> PersonalStateOutcome
     let onSetEpisodeWatched: (EpisodeListItem, Bool) async -> PersonalStateOutcome
@@ -246,6 +248,10 @@ struct SeriesDetailContent<BelowOverview: View>: View {
                         ? "Remove from Watchlist" : "Add to Watchlist",
                     action: onToggleWatchlist
                 )
+                PhoneLabeledMenu(icon: UserRatingChoice.icon(detail.userRating),
+                                 label: UserRatingChoice.caption(detail.userRating)) {
+                    UserRatingMenuItems(rating: detail.userRating, onSet: onSetRating)
+                }
                 PhoneLabeledAction(
                     icon: "checkmark.circle",
                     iconActive: "checkmark.circle.fill",

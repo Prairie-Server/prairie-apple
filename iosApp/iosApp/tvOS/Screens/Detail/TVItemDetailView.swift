@@ -424,6 +424,7 @@ struct TVItemDetailView: View {
                 },
                 onToggleFavorite: { Task { await viewModel.toggleFavorite() } },
                 onToggleWatchlist: { Task { await viewModel.toggleWatchlist() } },
+                onSetRating: { rating in Task { await viewModel.setUserRating(rating) } },
                 onToggleSeriesWatched: { Task { await viewModel.toggleWatched() } },
                 onToggleSeasonWatched: { Task { await viewModel.toggleSelectedSeasonWatched() } },
                 onPersonTap: { personId in
@@ -554,6 +555,7 @@ struct TVItemDetailView: View {
                 },
                 onToggleFavorite: { Task { await viewModel.toggleFavorite() } },
                 onToggleWatchlist: { Task { await viewModel.toggleWatchlist() } },
+                onSetRating: { rating in Task { await viewModel.setUserRating(rating) } },
                 onToggleWatched: { Task { await viewModel.toggleWatched() } },
                 onPersonTap: { personId in
                     if !personId.isEmpty {
@@ -1067,7 +1069,8 @@ struct TVItemDetailView: View {
             videos: item.videos,
             extras: item.extras,
             machineTranslatedFields: item.machineTranslatedFields,
-            communityRating: item.communityRating
+            communityRating: item.communityRating,
+            userRating: item.userRating
         )
     }
 }

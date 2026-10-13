@@ -762,6 +762,7 @@ private struct ItemDetailPhoneContent: View {
                 },
                 onToggleFavorite: { Task { await viewModel.toggleFavorite() } },
                 onToggleWatchlist: { Task { await viewModel.toggleWatchlist() } },
+                onSetRating: { rating in Task { await viewModel.setUserRating(rating) } },
                 onToggleWatched: { Task { await viewModel.toggleWatched() } },
                 onSetSeasonWatched: { season, played in
                     await viewModel.setSeasonWatched(season, played: played)
@@ -857,6 +858,7 @@ private struct ItemDetailPhoneContent: View {
                 },
                 onToggleFavorite: { Task { await viewModel.toggleFavorite() } },
                 onToggleWatchlist: { Task { await viewModel.toggleWatchlist() } },
+                onSetRating: { rating in Task { await viewModel.setUserRating(rating) } },
                 onToggleWatched: { Task { await viewModel.toggleWatched() } },
                 onPersonTap: { openPerson($0) },
                 onNavigateToItem: { openItem($0) },
