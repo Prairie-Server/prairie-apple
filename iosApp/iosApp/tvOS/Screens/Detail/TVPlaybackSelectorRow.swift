@@ -272,27 +272,4 @@ struct TVPlaybackSelectionSummary: Equatable {
     }
 }
 
-private extension DetailPlaybackFormatting.SubtitleAutoContext {
-    /// The "Auto" subtitle preview context for the selected version and audio
-    /// track.
-    init(
-        version: FileVersion?,
-        selectedAudioTrackIndex: Int?,
-        preferredLanguage: String?,
-        mode: String?,
-        signature: SubtitleTrackSignature?,
-        showForced: Bool
-    ) {
-        self.init(
-            preferredLanguage: preferredLanguage,
-            mode: mode,
-            signature: signature,
-            audioLanguage: DetailPlaybackFormatting.resolvedAudioLanguage(
-                version: version,
-                selectedAudioTrackIndex: selectedAudioTrackIndex
-            ),
-            showForced: showForced
-        )
-    }
-}
 #endif

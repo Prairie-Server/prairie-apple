@@ -115,7 +115,6 @@ struct MediaCard: View {
     #if !os(tvOS)
     @Environment(AppRouter.self) private var router
     @Environment(\.browseLibraryId) private var browseLibraryId
-    @Environment(\.itemDetailBrowseSource) private var detailBrowseSource
     #endif
 
     private var uiCustomization: UICustomizationPreferences { .shared }
@@ -198,11 +197,7 @@ struct MediaCard: View {
                             resumeContext: seriesContext
                         )
                     } else {
-                        router.presentItemDetail(
-                            contentId: contentId,
-                            libraryId: browseLibraryId,
-                            browseSource: detailBrowseSource
-                        )
+                        router.presentItemDetail(contentId: contentId, libraryId: browseLibraryId)
                     }
                 } label: {
                     cardContent
@@ -441,7 +436,7 @@ struct MediaCard: View {
 
 #if os(tvOS)
 /// Wraps a poster inside a `.card` button so the image gets the native focus
-/// lift/parallax, and renders a title + year below that bolds/brightens on focus.
+/// lift/parallax, and renders a title + year below that highlights on focus.
 private struct FocusableMediaCard<Content: View>: View {
     let title: String
     let year: Int?
@@ -482,7 +477,7 @@ private struct FocusableMediaCard<Content: View>: View {
         itemId: String?,
         standaloneFocused: FocusState<Bool>.Binding?
     ) -> some View {
-        VStack(alignment: .leading, spacing: 22) {
+        VStack(alignment: .leading, spacing: tvMediaCardCaptionSpacing) {
             mediaButton(
                 focusedItemId: focusedItemId,
                 itemId: itemId,
@@ -579,6 +574,8 @@ private struct FocusableMediaCard<Content: View>: View {
     }
 }
 
+private let tvMediaCardCaptionSpacing: CGFloat = 22
+
 /// Only cards outside a managed row need their own focus state. Keeping this
 /// dynamic property out of row cards avoids invalidating their full button
 /// and context-menu bodies when the shared focus environment changes.
@@ -592,7 +589,7 @@ private struct TVStandaloneCardFocus<Content: View>: View {
 }
 
 /// Only the caption reads focus. The native card button owns its lift and
-/// parallax without rebuilding its artwork and menu when a caption brightens.
+/// parallax without rebuilding its artwork and menu when a caption highlights.
 private struct TVMediaCardCaption: View {
     let title: String
     let secondLine: String?
@@ -611,21 +608,15 @@ private struct TVMediaCardCaption: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
                 .font(.prairiePosterTitle)
-                .foregroundStyle(
-                    isFocused
-                        ? Color.prairieOnSurface
-                        : Color.prairieOnSurface.opacity(0.85)
-                )
                 .lineLimit(1)
                 .truncationMode(.tail)
+                .tvCardTitleFocus(isFocused: isFocused)
                 .frame(width: cardWidth, alignment: .leading)
-                .clipped()
-                .animation(.easeOut(duration: 0.15), value: isFocused)
 
             if showsMetadata, let secondLine {
                 Text(secondLine)
                     .font(.prairiePosterMetadata)
-                    .foregroundStyle(Color.prairieSecondaryText)
+                    .tvCardSubtitleFocus(isFocused: isFocused)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(width: cardWidth, alignment: .leading)
@@ -633,6 +624,7 @@ private struct TVMediaCardCaption: View {
             }
         }
         .frame(width: cardWidth, alignment: .leading)
+        .tvCardCaptionFocus(isFocused: isFocused, spacing: tvMediaCardCaptionSpacing)
     }
 }
 

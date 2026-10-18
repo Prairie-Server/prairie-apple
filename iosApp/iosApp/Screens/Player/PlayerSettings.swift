@@ -127,8 +127,10 @@ enum DeinterlaceFieldRatePreference: String, CaseIterable {
 }
 
 extension SettingKey {
-    /// The device-scoped settings this client syncs. Generated contract keys,
-    /// so every key this client sends is one the server's manifest declares.
+    /// The settings this client syncs. Generated contract keys, so every key
+    /// this client sends is one the server's manifest declares. Most are
+    /// saved for this device; subtitle appearance and timing are saved for
+    /// the profile unless this device keeps its own.
     ///
     /// Also the order a flush sends them in: `playback.preferred_quality`
     /// precedes `playback.max_bitrate_kbps` so the two axes of one compound
@@ -150,15 +152,40 @@ extension SettingKey {
         .playerVideoGravity,
         .playerOrientationMode,
     ]
+
+    /// Profile settings the player follows but has no Apple setting for.
+    /// `playback.auto_skip_recap` is set from the profile, for example on the
+    /// web, so the player never writes or migrates it. The web can still give
+    /// this device its own value, which "Use Profile Settings" clears like any
+    /// other.
+    static let playerFollowedSettings: [SettingKey] = [.playbackAutoSkipRecap]
+
+    /// What a player refresh reads: the synced keys plus the followed ones.
+    static let playerReadSettings: [SettingKey] = playerDeviceSettings + playerFollowedSettings
+
+    /// The cellular quality pair (iPhone and iPad), resolution first like the
+    /// main pair. Kept out of ``playerReadSettings``: the pair arrived in
+    /// manifest revision 20, and a batch fails as a whole on a key the server
+    /// does not define, so it is read in a batch of its own once the server
+    /// reports that revision. Written at the same scope as the main pair.
+    static let playerCellularQualitySettings: [SettingKey] = [
+        .playbackCellularPreferredQuality,
+        .playbackCellularMaxBitrateKbps,
+    ]
 }
 
 /// A Playback setting the profile can hold as well as this device, so the
-/// device can either keep its own value or go back to the profile's. Quality
-/// is one setting stored as two keys, and the two are only ever cleared
-/// together: clearing one axis would mix the profile's cap with this device's
-/// resolution, a pair nobody chose.
+/// device can either keep its own value or go back to the profile's.
+///
+/// The main quality is two settings, one per picker, as on the web: a device
+/// can keep its own resolution and still follow the profile's bitrate cap.
+/// The cellular quality is one preset stored as two keys, written and cleared
+/// together.
 enum ProfileBackedPlaybackSetting: CaseIterable {
-    case quality
+    case resolution
+    case maxBitrate
+    /// iPhone and iPad only; see ``PlayerSettings/offersCellularQuality``.
+    case cellularQuality
     case audioLanguage
     case introSkipMode
     case autoSkipCredits
@@ -167,7 +194,9 @@ enum ProfileBackedPlaybackSetting: CaseIterable {
 
     var keys: [SettingKey] {
         switch self {
-        case .quality: return [.playbackPreferredQuality, .playbackMaxBitrateKbps]
+        case .resolution: return [.playbackPreferredQuality]
+        case .maxBitrate: return [.playbackMaxBitrateKbps]
+        case .cellularQuality: return SettingKey.playerCellularQualitySettings
         case .audioLanguage: return [.playbackAudioLanguage]
         case .introSkipMode: return [.playbackIntroSkipMode]
         case .autoSkipCredits: return [.playbackAutoSkipCredits]
@@ -185,9 +214,12 @@ private extension SettingKey {
     // contract fails to compile here.
     static var preferredQuality: SettingKey { .playbackPreferredQuality }
     static var maxBitrateKbps: SettingKey { .playbackMaxBitrateKbps }
+    static var cellularPreferredQuality: SettingKey { .playbackCellularPreferredQuality }
+    static var cellularMaxBitrateKbps: SettingKey { .playbackCellularMaxBitrateKbps }
     static var audioLanguage: SettingKey { .playbackAudioLanguage }
     static var introSkipMode: SettingKey { .playbackIntroSkipMode }
     static var autoSkipCredits: SettingKey { .playbackAutoSkipCredits }
+    static var autoSkipRecap: SettingKey { .playbackAutoSkipRecap }
     static var autoPlayNext: SettingKey { .playbackAutoPlayNext }
     static var nextUpPromptSeconds: SettingKey { .playbackNextUpPromptSeconds }
     static var subtitleAppearance: SettingKey { .playbackSubtitleAppearance }
@@ -270,12 +302,76 @@ final class PlayerSettings {
         )
     }
 
-    /// A user-facing label for the stored pair, preset or not.
+    /// A user-facing label for the stored pair, in the terms of the two
+    /// pickers that set it ("1080p at 10 Mbps") rather than a preset name.
     var preferredQualityLabel: String {
-        PrairieQualityPresets.describe(
+        PrairieQualityPresets.describeAxes(
             resolution: preferredQualityResolution,
             bitrateKbps: maxBitrateKbps
         )
+    }
+
+    /// Whether this platform offers the cellular quality pair. iPhone and
+    /// iPad only: an Apple TV or a Mac is not on mobile data, and the
+    /// contract lists only the phone platforms for the two keys.
+    static var offersCellularQuality: Bool {
+        #if os(iOS)
+        true
+        #else
+        false
+        #endif
+    }
+
+    /// The contract default for the cellular pair: the 720p preset.
+    /// `SettingsConformanceTests` pins it to the vendored manifest.
+    static let defaultCellularQuality = AppleQualityAxes(resolution: "720p", bitrateKbps: 2_000)
+
+    /// The resolution half of the cellular pair, a member of
+    /// `playback.cellular_preferred_quality`.
+    ///
+    /// Playback uses this pair instead of the main one on mobile data, a
+    /// hotspot, or in Low Data Mode. On a server older than manifest revision
+    /// 20 the pair is kept on this device only, and still applied.
+    private(set) var cellularQualityResolution: String {
+        didSet {
+            guard !isLoadingCache else { return }
+            defaults.set(cellularQualityResolution, forKey: Self.cacheKey(Keys.cellularPreferredQuality))
+        }
+    }
+
+    /// The bandwidth half of the cellular pair; nil is uncapped.
+    private(set) var cellularMaxBitrateKbps: Int? {
+        didSet {
+            guard !isLoadingCache else { return }
+            // Unlike the main cap, an absent value is the contract default
+            // (2000 kbps), so uncapped is stored as 0.
+            defaults.set(cellularMaxBitrateKbps ?? 0, forKey: Self.cacheKey(Keys.cellularMaxBitrateKbps))
+        }
+    }
+
+    var cellularQualityAxes: AppleQualityAxes {
+        AppleQualityAxes(resolution: cellularQualityResolution, bitrateKbps: cellularMaxBitrateKbps)
+    }
+
+    /// The shared preset the cellular pair corresponds to, or nil for a pair
+    /// no preset covers (set through the API or by another client).
+    var currentCellularQualityPreset: PrairieQualityPreset? {
+        PrairieQualityPresets.preset(resolution: cellularQualityResolution, bitrateKbps: cellularMaxBitrateKbps)
+    }
+
+    /// A user-facing label for the cellular pair, preset or not.
+    var cellularQualityLabel: String {
+        PrairieQualityPresets.describe(resolution: cellularQualityResolution, bitrateKbps: cellularMaxBitrateKbps)
+    }
+
+    /// The pair playback asks for on the current connection: the cellular
+    /// pair on a metered one (see ``PlaybackNetworkPath``), the main pair
+    /// otherwise.
+    func playbackQualityAxes(onMeteredNetwork: Bool) -> AppleQualityAxes {
+        guard onMeteredNetwork, Self.offersCellularQuality else {
+            return AppleQualityAxes(resolution: preferredQualityResolution, bitrateKbps: maxBitrateKbps)
+        }
+        return cellularQualityAxes
     }
 
     private(set) var audioLanguage: String {
@@ -305,6 +401,15 @@ final class PlayerSettings {
         didSet {
             guard !isLoadingCache else { return }
             defaults.set(autoSkipCredits, forKey: Self.cacheKey(Keys.autoSkipCredits))
+        }
+    }
+
+    /// `playback.auto_skip_recap`, followed from the effective settings read.
+    /// Read only: Apple has no player setting for it.
+    private(set) var autoSkipRecap: Bool {
+        didSet {
+            guard !isLoadingCache else { return }
+            defaults.set(autoSkipRecap, forKey: Self.cacheKey(Keys.autoSkipRecap))
         }
     }
 
@@ -428,19 +533,20 @@ final class PlayerSettings {
         }
     }
 
-    private(set) var subtitleAppearance: SubtitleAppearance {
+    /// This device's own appearance (`profile_device`), used while
+    /// ``subtitleUsesDeviceAppearanceOverride`` is on.
+    private(set) var deviceSubtitleAppearance: SubtitleAppearance {
         didSet {
             guard !isLoadingCache else { return }
             defaults.set(
-                subtitleAppearance.sanitized().jsonString,
+                deviceSubtitleAppearance.sanitized().jsonString,
                 forKey: Self.cacheKey(Keys.subtitleAppearance)
             )
         }
     }
 
-    /// Server/profile fallback used while this device's custom appearance
-    /// override is off. Kept separate so refreshing the effective value does
-    /// not destroy the user's locally cached custom style.
+    /// The profile's appearance (or the contract default), which every device
+    /// of the profile uses unless it keeps its own.
     private var inheritedSubtitleAppearance: SubtitleAppearance {
         didSet {
             guard !isLoadingCache else { return }
@@ -480,12 +586,22 @@ final class PlayerSettings {
     var subtitleSystemAppearance: SubtitleAppearance = SystemCaptionAppearance.current()
     var subtitleSystemSelectionPreferences = SystemCaptionSelectionPreferences.current()
 
+    /// The Prairie appearance in effect on this device: its own while the
+    /// device override is on, otherwise the profile's. Every appearance editor
+    /// starts from this, so an edit never starts from a stale device copy.
+    var subtitleAppearance: SubtitleAppearance {
+        subtitleUsesDeviceAppearanceOverride ? deviceSubtitleAppearance : inheritedSubtitleAppearance
+    }
+
     /// The appearance the player should actually render with.
     var effectiveSubtitleAppearance: SubtitleAppearance {
-        if subtitleMatchesSystemAppearance { return subtitleSystemAppearance }
-        return subtitleUsesDeviceAppearanceOverride
-            ? subtitleAppearance
-            : inheritedSubtitleAppearance
+        subtitleMatchesSystemAppearance ? subtitleSystemAppearance : subtitleAppearance
+    }
+
+    /// Where a subtitle display edit (appearance or timing) is saved: this
+    /// device only while its override is on, otherwise the profile.
+    var subtitleDisplayWriteScope: PlayerSettingWriteScope {
+        subtitleUsesDeviceAppearanceOverride ? .profileDevice : .profile
     }
 
     private(set) var subtitleSyncMs: Int {
@@ -561,6 +677,10 @@ final class PlayerSettings {
     /// retry schedule and the held changes; see PlayerSettingsFlusher.swift.
     private let flusher: PlayerSettingsFlusher
 
+    /// The active settings scope, as ``currentScopeIdentifier`` reports it.
+    /// Injectable so tests can change scope while a read is in flight.
+    @ObservationIgnored private let scopeIdentifier: () -> String?
+
     /// Device settings whose latest change ran out of automatic retries. The
     /// change stays on this device and is not sent again until the user
     /// retries or discards it (owner decision D4).
@@ -576,19 +696,25 @@ final class PlayerSettings {
     /// network).
     init(
         defaults: UserDefaults = .standard,
-        flusher: PlayerSettingsFlusher = PlayerSettingsFlusher()
+        flusher: PlayerSettingsFlusher = PlayerSettingsFlusher(),
+        scopeIdentifier: @escaping () -> String? = { PlayerSettings.currentScopeIdentifier }
     ) {
         self.defaults = defaults
         self.flusher = flusher
+        self.scopeIdentifier = scopeIdentifier
         // No `register(defaults:)`: every read below supplies its own
         // fallback, and a registered value is indistinguishable from a stored
         // one. The legacy import must only see values this device stored.
 
         preferredQualityResolution = Self.cachedQualityResolution(defaults)
         maxBitrateKbps = Self.cachedMaxBitrateKbps(defaults)
+        let cellular = Self.cachedCellularQuality(defaults)
+        cellularQualityResolution = cellular.resolution
+        cellularMaxBitrateKbps = cellular.bitrateKbps
         audioLanguage = defaults.string(forKey: Self.cacheKey(Keys.audioLanguage)) ?? ""
         introSkipMode = Self.cachedIntroSkipMode(defaults)
         autoSkipCredits = Self.cachedBool(defaults, key: Keys.autoSkipCredits, defaultValue: false)
+        autoSkipRecap = Self.cachedBool(defaults, key: Keys.autoSkipRecap, defaultValue: false)
         hdrEnabled = Self.cachedBool(defaults, key: Keys.hdrEnabled, defaultValue: true)
         dolbyVisionEnabled = Self.cachedBool(defaults, key: Keys.dolbyVisionEnabled, defaultValue: true)
         seekCacheEnabled = Self.cachedBool(
@@ -614,7 +740,7 @@ final class PlayerSettings {
             key: Keys.trueHDAtmosEnabled,
             defaultValue: true
         )
-        subtitleAppearance = SubtitleAppearance.decode(from: defaults.string(forKey: Self.cacheKey(Keys.subtitleAppearance)))
+        deviceSubtitleAppearance = SubtitleAppearance.decode(from: defaults.string(forKey: Self.cacheKey(Keys.subtitleAppearance)))
         inheritedSubtitleAppearance = SubtitleAppearance.decode(
             from: defaults.string(forKey: Self.cacheKey(Keys.inheritedSubtitleAppearance))
         )
@@ -705,7 +831,7 @@ final class PlayerSettings {
         // with a guess — including through the pending-writes flush below.
         // The same scope keeps its revision, so a refresh that fails offline
         // does not hold every later subtitle appearance write.
-        let refreshScopeID = Self.currentScopeIdentifier ?? ""
+        let refreshScopeID = scopeIdentifier() ?? ""
         if refreshScopeID != manifestRevisionScopeID {
             flusher.forgetManifestRevision()
             knownManifestRevision = nil
@@ -727,17 +853,24 @@ final class PlayerSettings {
         flusher.restorePendingWrites()
         await flushPendingDeviceSettings()
 
-        let scopeID = Self.currentScopeIdentifier
+        let scopeID = scopeIdentifier()
 
         do {
-            let response = try await flusher.effectiveValues(keys: SettingKey.playerDeviceSettings)
+            let response = try await flusher.effectiveValues(keys: SettingKey.playerReadSettings)
             knownManifestRevision = flusher.knownManifestRevision
             // The read goes to whichever scope is active when it is sent. If the
             // scope changed while this refresh awaited, the revision belongs to
             // that other scope, so it is not kept for this one.
-            let scopeUnchanged = (Self.currentScopeIdentifier ?? "") == refreshScopeID
+            let scopeUnchanged = (scopeIdentifier() ?? "") == refreshScopeID
             manifestRevisionScopeID = knownManifestRevision != nil && scopeUnchanged ? refreshScopeID : nil
-            let effectiveByKey = response.byKey
+            var effectiveByKey = response.byKey
+            // A failed cellular read keeps this device's values for the pair.
+            let cellular = (try? await cellularQualityValues(atRevision: response.revision)) ?? [:]
+            // Applying caches under the scope active now. If it changed while
+            // either read awaited, neither response belongs to it, so nothing
+            // is adopted; that scope's own refresh paints its values.
+            guard (scopeIdentifier() ?? "") == refreshScopeID else { return .unavailable }
+            effectiveByKey.merge(cellular) { _, cellularValue in cellularValue }
             applyEffectiveSettings(overlayingUnsettledValues(on: effectiveByKey))
 
             if let scopeID, !isMigrationComplete(for: scopeID) {
@@ -759,6 +892,11 @@ final class PlayerSettings {
             if flusher.hasRevisionGatedWrites {
                 await flushPendingDeviceSettings()
             }
+            if await clearLeftoverDeviceSubtitleOffsetIfNeeded(scopeID: refreshScopeID) {
+                // Repaint with the offset this device now inherits. The clear
+                // is decided once per scope, so this does not recurse again.
+                await refreshFromServer()
+            }
             return .refreshed
         } catch SettingsAPIError.serverUpgradeRequired {
             return .serverUpgradeRequired
@@ -768,23 +906,56 @@ final class PlayerSettings {
         }
     }
 
-    /// Set the quality from a shared preset — the settings screens' entry
-    /// point, on every platform and in the web and Android clients.
-    func setQualityPreset(_ preset: PrairieQualityPreset) {
-        setQualityAxes(resolution: preset.resolution, bitrateKbps: preset.bitrateKbps)
+    /// The cellular pair's rows, or none when this platform does not offer the
+    /// pair or the server predates it. A missing row keeps this device's own
+    /// value (see ``applyEffectiveSettings(_:)``). Read in its own batch, since
+    /// a server rejects a batch that names a key it does not know.
+    @MainActor
+    private func cellularQualityValues(atRevision revision: Int) async throws -> [SettingKey: EffectiveSettingValue] {
+        let keys = SettingKey.playerCellularQualitySettings
+        guard Self.offersCellularQuality,
+              keys.allSatisfy({ $0.isServed(atRevision: revision) }) else {
+            return [:]
+        }
+        return try await flusher.effectiveValues(keys: keys).byKey.filter { keys.contains($0.key) }
     }
 
-    /// Store one (resolution, bitrate) pair as the contract's two keys.
-    ///
-    /// Both axes are always written, never just the one that changed: the two
-    /// resolve independently, so leaving a stale cap behind would keep
-    /// throttling a tier the user just widened. Uncapped is an explicit JSON
-    /// null rather than an omitted write for the same reason.
-    private func setQualityAxes(resolution: String, bitrateKbps: Int?) {
+    /// Set the quality from a shared preset; the settings screens set each
+    /// axis on its own. A preset names both axes, so both are written:
+    /// leaving a stale cap behind would keep throttling a tier the user just
+    /// widened, which is also why uncapped is an explicit JSON null.
+    func setQualityPreset(_ preset: PrairieQualityPreset) {
+        setQualityResolution(preset.resolution)
+        setMaxBitrateKbps(preset.bitrateKbps)
+    }
+
+    /// The Resolution picker: writes only `playback.preferred_quality`, so the
+    /// bitrate cap keeps following wherever it comes from (this device's own
+    /// value or the profile's), as on the web.
+    func setQualityResolution(_ resolution: String) {
         preferredQualityResolution = PrairieQualityPresets.normalizeResolution(resolution)
-        maxBitrateKbps = bitrateKbps.flatMap { $0 > 0 ? $0 : nil }
         enqueueDeviceValue(.preferredQuality, value: .string(preferredQualityResolution))
+    }
+
+    /// The Maximum Bitrate picker: writes only `playback.max_bitrate_kbps`.
+    /// "No limit" (nil) is an explicit JSON null, so it holds over a cap the
+    /// profile sets; "Use Profile Setting" is the way back to that cap.
+    func setMaxBitrateKbps(_ bitrateKbps: Int?) {
+        maxBitrateKbps = bitrateKbps.flatMap { $0 > 0 ? $0 : nil }
         enqueueDeviceValue(.maxBitrateKbps, value: maxBitrateKbps.map { .int($0) } ?? .null)
+    }
+
+    /// Set the cellular pair from a shared preset. Saved at the same scope as
+    /// the main pair; against a server older than revision 20 the flusher
+    /// keeps it on this device until the server serves the keys.
+    func setCellularQualityPreset(_ preset: PrairieQualityPreset) {
+        cellularQualityResolution = PrairieQualityPresets.normalizeResolution(preset.resolution)
+        cellularMaxBitrateKbps = preset.bitrateKbps.flatMap { $0 > 0 ? $0 : nil }
+        enqueueDeviceValue(.cellularPreferredQuality, value: .string(cellularQualityResolution))
+        enqueueDeviceValue(
+            .cellularMaxBitrateKbps,
+            value: cellularMaxBitrateKbps.map { .int($0) } ?? .null
+        )
     }
 
     /// The empty string is "no preference", which is not a value this device
@@ -895,21 +1066,38 @@ final class PlayerSettings {
         enqueueDeviceValue(.orientationMode, value: .string(mode.rawValue))
     }
 
+    /// Saved like the appearance: for the profile, unless this device keeps
+    /// its own subtitle display settings. A server older than manifest
+    /// revision 19 only stores the offset per device, so there it stays a
+    /// device value; while the revision is unknown the flusher decides at send
+    /// time.
     func setSubtitleSyncMs(_ milliseconds: Int) {
         subtitleSyncMs = max(-10000, min(milliseconds, 10000))
-        enqueueDeviceValue(.subtitleSyncMs, value: .int(subtitleSyncMs))
+        let value = SettingJSONValue.int(subtitleSyncMs)
+        if subtitleDisplayWriteScope == .profileDevice || !serverAcceptsProfileScope(for: .subtitleSyncMs) {
+            enqueueDeviceValue(.subtitleSyncMs, value: value)
+        } else {
+            enqueueProfileValue(.subtitleSyncMs, value: value)
+        }
     }
 
-    /// Applies a device appearance edit and queues it for the server; the
-    /// flusher's debounce sends it. `setSubtitleAppearance(_:)` is this plus an
+    /// Applies an appearance edit and queues it for the server; the flusher's
+    /// debounce sends it. `setSubtitleAppearance(_:)` is this plus an
     /// immediate flush.
+    ///
+    /// Saved for the profile, so it follows the profile to every device,
+    /// unless this device keeps its own appearance (the device override is
+    /// on), in which case only this device's value changes.
     func stageSubtitleAppearance(_ appearance: SubtitleAppearance) {
         let sanitized = appearance.sanitized()
-        subtitleAppearance = sanitized
-        subtitleUsesDeviceAppearanceOverride = true
         // A manual edit takes over from the system-matching source.
         subtitleMatchesSystemAppearance = false
-        enqueueSubtitleAppearance(sanitized)
+        if subtitleUsesDeviceAppearanceOverride {
+            deviceSubtitleAppearance = sanitized
+        } else {
+            inheritedSubtitleAppearance = sanitized
+        }
+        enqueueSubtitleAppearance(sanitized, scope: subtitleDisplayWriteScope)
     }
 
     @MainActor
@@ -930,19 +1118,106 @@ final class PlayerSettings {
         subtitleMatchesSystemAppearance = enabled
     }
 
+    /// Turn this device's own subtitle display settings on or off.
+    ///
+    /// On: the device keeps a copy of the appearance on screen now, and later
+    /// appearance and timing edits change only this device. Off: this
+    /// device's own values are deleted so the profile's apply again.
     @MainActor
     func setSubtitleDeviceOverrideEnabled(_ enabled: Bool) async {
         guard enabled != subtitleUsesDeviceAppearanceOverride else { return }
-        subtitleUsesDeviceAppearanceOverride = enabled
         if enabled {
-            enqueueSubtitleAppearance(subtitleAppearance.sanitized())
+            // Start from what is on screen, not from a device copy cached by
+            // an earlier override, so turning this on changes nothing visible.
+            let current = inheritedSubtitleAppearance.sanitized()
+            deviceSubtitleAppearance = current
+            subtitleUsesDeviceAppearanceOverride = true
+            enqueueSubtitleAppearance(current, scope: .profileDevice)
             await flushPendingDeviceSettings()
             return
         }
 
+        subtitleUsesDeviceAppearanceOverride = false
+        var cleared: [SettingKey] = [.subtitleAppearance]
+        // The device's own offset goes too, but only where the profile can
+        // hold one: on an older server the device value is the only offset.
+        // Before the revision is known (an offline launch) the flusher makes
+        // that call once a read reports it. Sent whether or not
+        // ``deviceOverriddenKeys`` lists it, for the reason
+        // ``enqueueProfileValue(_:value:)`` gives; no device offset is success.
+        let clearsOffset = serverAcceptsProfileScope(for: .subtitleSyncMs)
+        if clearsOffset {
+            cleared.append(.subtitleSyncMs)
+        }
+        // A first refresh for this scope must not import these keys straight
+        // back as device values.
+        if let scopeID = scopeIdentifier() {
+            retireMigration(of: cleared, for: scopeID)
+        }
         enqueueDeviceClear(.subtitleAppearance)
+        if clearsOffset {
+            deviceOverriddenKeys.remove(.subtitleSyncMs)
+            flusher.enqueueDelete(.subtitleSyncMs, onlyWhereProfileScoped: true)
+        }
         await flushPendingDeviceSettings()
         await refreshFromServer()
+    }
+
+    /// Clear a subtitle offset an older build left on this device, once per
+    /// settings scope. Those builds saved every Delay change as this device's
+    /// own value without turning the device override on, so on a server that
+    /// stores the offset per profile it kept hiding the profile's offset while
+    /// the screen said the profile's applied. A device that keeps its own
+    /// subtitle settings (the override is on) keeps its offset.
+    ///
+    /// Decided only from a read of a revision 19 or later server for this
+    /// scope. The clear goes through the journal like any other, so a failed
+    /// request is retried, and a newer offset edit replaces it. Returns true
+    /// when the clear reached the server.
+    @MainActor
+    private func clearLeftoverDeviceSubtitleOffsetIfNeeded(scopeID: String) async -> Bool {
+        let doneKey = Self.leftoverSubtitleOffsetClearKey(for: scopeID)
+        guard !defaults.bool(forKey: doneKey),
+              (scopeIdentifier() ?? "") == scopeID,
+              manifestRevisionScopeID == scopeID,
+              let knownManifestRevision,
+              SettingKey.subtitleSyncMs.acceptsProfileScope(atRevision: knownManifestRevision) else {
+            return false
+        }
+        // The one-time import may still push this device's legacy values;
+        // decide after it has run.
+        if let currentScope = scopeIdentifier(), !isMigrationComplete(for: currentScope) {
+            return false
+        }
+        // A timing write still owed can be an older build's device offset
+        // that lands later; decide once it has settled.
+        guard !flusher.unsettledKeys.contains(.subtitleSyncMs) else {
+            return false
+        }
+        defaults.set(true, forKey: doneKey)
+        guard !subtitleUsesDeviceAppearanceOverride,
+              deviceOverriddenKeys.contains(.subtitleSyncMs) else {
+            return false
+        }
+        // Gated on the revision when sent, like the override switch's clear:
+        // a retry after a relaunch must not delete the only offset a server
+        // rolled back below revision 19 keeps.
+        deviceOverriddenKeys.remove(.subtitleSyncMs)
+        flusher.enqueueDelete(.subtitleSyncMs, onlyWhereProfileScoped: true)
+        await flushPendingDeviceSettings()
+        return !flusher.unsettledKeys.contains(.subtitleSyncMs)
+    }
+
+    private static func leftoverSubtitleOffsetClearKey(for scopeID: String) -> String {
+        "player.leftoverDeviceSubtitleOffsetCleared.\(scopeID)"
+    }
+
+    /// Whether the server is known to reject `key` at `profile` scope. An
+    /// unknown revision counts as accepting: the flusher holds the write until
+    /// the revision is known and falls back to the device row then.
+    private func serverAcceptsProfileScope(for key: SettingKey) -> Bool {
+        guard let knownManifestRevision else { return true }
+        return key.acceptsProfileScope(atRevision: knownManifestRevision)
     }
 
     /// Whether this device holds its own value for `setting`, rather than
@@ -952,19 +1227,23 @@ final class PlayerSettings {
         setting.keys.contains { deviceOverriddenKeys.contains($0) }
     }
 
-    /// How many settings "Use Profile Settings" would change: each synced
-    /// setting this device holds its own value for (quality's two keys count
-    /// once), plus each device-only preference away from its default.
+    /// How many settings "Use Profile Settings" would change: each setting
+    /// this device holds its own value for (the cellular pair's two keys
+    /// count once), plus each device-only preference away from its default.
     var deviceChangedSettingCount: Int {
-        let synced = Set(deviceOverriddenKeys.map { $0 == .maxBitrateKbps ? .preferredQuality : $0 })
-        return synced.count + changedDeviceLocalPreferenceCount
+        let overridden = Set(deviceOverriddenKeys.map {
+            $0 == .cellularMaxBitrateKbps ? .cellularPreferredQuality : $0
+        })
+        return overridden.count + changedDeviceLocalPreferenceCount
     }
 
     /// Whether "Use Profile Settings" would reset something the profile has
     /// no value for — a device-only synced key or a local preference — which
     /// goes back to its default rather than to a profile value.
     var deviceChangesIncludeDeviceOnlySettings: Bool {
-        let profileBacked = Set(ProfileBackedPlaybackSetting.allCases.flatMap(\.keys))
+        let profileBacked = Set(
+            ProfileBackedPlaybackSetting.allCases.flatMap(\.keys) + SettingKey.playerFollowedSettings
+        )
         return changedDeviceLocalPreferenceCount > 0
             || deviceOverriddenKeys.contains { !profileBacked.contains($0) }
     }
@@ -994,20 +1273,50 @@ final class PlayerSettings {
         // one-time import would then push the cached value of the very key
         // just cleared straight back as a device override, so these keys are
         // retired from it. The rest of the scope's import stays pending.
-        if let scopeID = Self.currentScopeIdentifier {
+        if let scopeID = scopeIdentifier() {
             retireMigration(of: setting.keys, for: scopeID)
         }
         for key in setting.keys {
             enqueueDeviceClear(key)
         }
+        if setting == .cellularQuality {
+            resetCellularQualityWhereNotServed()
+        }
         await flushPendingDeviceSettings()
         await refreshFromServer()
+    }
+
+    /// A server older than revision 20 has no profile value for the cellular
+    /// pair to read back, so clearing this device's value leaves the contract
+    /// default. A newer server's refresh paints the profile's value instead.
+    private func resetCellularQualityWhereNotServed() {
+        guard let knownManifestRevision,
+              knownManifestRevision < SettingKey.cellularQualityRevision else { return }
+        cellularQualityResolution = Self.defaultCellularQuality.resolution
+        cellularMaxBitrateKbps = Self.defaultCellularQuality.bitrateKbps
     }
 
     /// Queue this device's own value for `key`.
     private func enqueueDeviceValue(_ key: SettingKey, value: SettingJSONValue) {
         deviceOverriddenKeys.insert(key)
         flusher.enqueue(key, value: value)
+    }
+
+    /// Queue the profile's value for `key`. A value this device holds for the
+    /// key would keep hiding it here, so that is deleted in the same write.
+    ///
+    /// Always, not only when ``deviceOverriddenKeys`` lists the key: that set
+    /// is only as fresh as the last refresh, and an edit made before one (an
+    /// offline launch, a reinstall) cannot see a device value already on the
+    /// server. The flusher treats "no device value" as success.
+    private func enqueueProfileValue(_ key: SettingKey, value: SettingJSONValue) {
+        deviceOverriddenKeys.remove(key)
+        // An unfinished one-time import must not later bring back this
+        // device's older cached value as a device value over this edit.
+        if let scopeID = scopeIdentifier() {
+            retireMigration(of: [key], for: scopeID)
+        }
+        flusher.enqueue(key, value: value, scope: .profile, clearingDeviceValue: true)
     }
 
     /// Queue clearing this device's own value for `key`, so it inherits again.
@@ -1039,7 +1348,7 @@ final class PlayerSettings {
 
     @MainActor
     func resetAllDeviceSettings() async {
-        let resetScopeID = Self.currentScopeIdentifier
+        let resetScopeID = scopeIdentifier()
         // The device-local preferences have no canonical row to delete, so the
         // DELETE loop below cannot reach them and the refresh that follows
         // re-adopts whatever this device still has cached. Restore them here
@@ -1054,8 +1363,14 @@ final class PlayerSettings {
         if let resetScopeID {
             markMigrationComplete(for: resetScopeID)
         }
-        for key in SettingKey.playerDeviceSettings {
+        for key in SettingKey.playerReadSettings {
             enqueueDeviceClear(key)
+        }
+        if Self.offersCellularQuality {
+            for key in SettingKey.playerCellularQualitySettings {
+                enqueueDeviceClear(key)
+            }
+            resetCellularQualityWhereNotServed()
         }
         await flushPendingDeviceSettings()
         if await refreshFromServer() == .serverUpgradeRequired {
@@ -1065,7 +1380,7 @@ final class PlayerSettings {
             // not repaint a different profile's live state. An ordinary
             // offline failure keeps the cached values instead.
             cacheContractDefaults(for: resetScopeID)
-            if Self.currentScopeIdentifier == resetScopeID {
+            if scopeIdentifier() == resetScopeID {
                 applyCachedSettingsForCurrentScope()
             }
         }
@@ -1094,13 +1409,16 @@ final class PlayerSettings {
         on effectiveByKey: [SettingKey: EffectiveSettingValue]
     ) -> [SettingKey: EffectiveSettingValue] {
         var merged = effectiveByKey
-        for (key, value) in flusher.unsettledValues() {
+        for (key, unsettled) in flusher.unsettledScopedValues() {
+            // Painted at the scope it is being written to, so a pending
+            // profile edit does not read as this device's own value.
+            let scope = unsettled.scope.settingScope
             merged[key] = EffectiveSettingValue(
                 key: key.rawValue,
-                value: value,
-                source: .scope(.profileDevice),
+                value: unsettled.value,
+                source: .scope(scope),
                 suggestedValues: effectiveByKey[key]?.suggestedValues,
-                scope: .profileDevice
+                scope: scope
             )
         }
         return merged
@@ -1113,17 +1431,23 @@ final class PlayerSettings {
     /// a held key on this device is the discarded value itself, so dropping
     /// the hold would leave playback using that value with nothing saying it
     /// is unsaved. The hold stays until the server can be reached. Returns
-    /// false when the discard did not happen for that reason.
+    /// false when the discard did not happen for that reason. The cellular
+    /// pair is read too, where the server has it, so a discarded cellular
+    /// edit is repainted like any other; if only that read fails, the holds
+    /// stay too.
+    ///
+    /// Each read answers for the scope (server and profile) active when it is
+    /// sent, so a scope change while either awaits also returns false:
+    /// nothing is discarded or applied under the new scope.
     @discardableResult
     @MainActor
     func discardHeldDeviceSettingChanges() async -> Bool {
+        let discardScopeID = scopeIdentifier()
+        let response: EffectiveSettingValuesResponse
         do {
-            let response = try await flusher.effectiveValues(keys: SettingKey.playerDeviceSettings)
-            knownManifestRevision = flusher.knownManifestRevision
-            flusher.discardHeldChanges()
-            applyEffectiveSettings(overlayingUnsettledValues(on: response.byKey))
-            return true
+            response = try await flusher.effectiveValues(keys: SettingKey.playerReadSettings)
         } catch SettingsAPIError.serverUpgradeRequired {
+            guard scopeIdentifier() == discardScopeID else { return false }
             // The server stores no settings for this device at all, so the
             // local value is the only one there is.
             flusher.discardHeldChanges()
@@ -1131,6 +1455,17 @@ final class PlayerSettings {
         } catch {
             return false
         }
+        guard scopeIdentifier() == discardScopeID else { return false }
+        knownManifestRevision = flusher.knownManifestRevision
+        guard let cellular = try? await cellularQualityValues(atRevision: response.revision),
+              scopeIdentifier() == discardScopeID else {
+            return false
+        }
+        flusher.discardHeldChanges()
+        applyEffectiveSettings(overlayingUnsettledValues(
+            on: response.byKey.merging(cellular) { _, cellularValue in cellularValue }
+        ))
+        return true
     }
 
     /// Send the held device setting changes again with a fresh retry budget.
@@ -1163,14 +1498,17 @@ final class PlayerSettings {
     /// keys (`fontSize`, `backgroundOpacity`) reach the server verbatim.
     /// Members an older server does not know are removed by the flusher at
     /// send time, not here (see ``SettingKey/revisionGatedMembers``).
-    private func enqueueSubtitleAppearance(_ appearance: SubtitleAppearance) {
+    private func enqueueSubtitleAppearance(_ appearance: SubtitleAppearance, scope: PlayerSettingWriteScope) {
         guard let value = try? SettingJSONValue.encoding(appearance) else {
             // Unreachable for a struct of scalars, and dropping the write is
             // the right failure: the server would reject a value that cannot
             // be encoded, and the local value is already applied.
             return
         }
-        enqueueDeviceValue(.subtitleAppearance, value: value)
+        switch scope {
+        case .profile: enqueueProfileValue(.subtitleAppearance, value: value)
+        case .profileDevice: enqueueDeviceValue(.subtitleAppearance, value: value)
+        }
     }
 
     /// Adopt a batched resolution from the server.
@@ -1193,6 +1531,16 @@ final class PlayerSettings {
         maxBitrateKbps = effectiveByKey[.maxBitrateKbps]?.value.intValue.flatMap {
             $0 > 0 ? $0 : nil
         }
+        // The cellular pair has rows only when its own read ran (see
+        // ``cellularQualityValues(atRevision:)``) or a change is still owed.
+        // Without one this device keeps its value, which is the only copy on
+        // a server older than revision 20.
+        if let entry = effectiveByKey[.cellularPreferredQuality] {
+            cellularQualityResolution = PrairieQualityPresets.normalizeResolution(entry.value.stringValue)
+        }
+        if let entry = effectiveByKey[.cellularMaxBitrateKbps] {
+            cellularMaxBitrateKbps = entry.value.intValue.flatMap { $0 > 0 ? $0 : nil }
+        }
         // A nullable language tag: JSON null is "no preference", which this
         // client spells as the empty string.
         audioLanguage = effectiveByKey[.audioLanguage]?.value.stringValue ?? ""
@@ -1201,6 +1549,7 @@ final class PlayerSettings {
             wireValue: effectiveByKey[.introSkipMode]?.value.stringValue
         ) ?? .default
         autoSkipCredits = effectiveBool(.autoSkipCredits, in: effectiveByKey, default: false)
+        autoSkipRecap = effectiveBool(.autoSkipRecap, in: effectiveByKey, default: false)
         autoPlayNextEpisode = effectiveBool(.autoPlayNext, in: effectiveByKey, default: true)
         nextUpPromptSeconds = Self.clampNextUpPromptSeconds(
             effectiveByKey[.nextUpPromptSeconds]?.value.intValue ?? 30
@@ -1225,11 +1574,14 @@ final class PlayerSettings {
         // A clear still on its way has not reached the server, whose answer
         // therefore still shows the device value being removed.
         let clearing = flusher.unsettledClears
+        // A cellular key with no row keeps what this device last knew, like
+        // its value above.
+        let unreadCellular = Set(SettingKey.playerCellularQualitySettings).subtracting(effectiveByKey.keys)
         deviceOverriddenKeys = Set(
             effectiveByKey.compactMap { key, entry in
                 entry.scope == .profileDevice && !clearing.contains(key) ? key : nil
             }
-        )
+        ).union(deviceOverriddenKeys.intersection(unreadCellular))
     }
 
     /// Split the resolved appearance between the device override and the
@@ -1242,6 +1594,14 @@ final class PlayerSettings {
             return
         }
         let hasDeviceOverride = entry.scope == .profileDevice
+        if hasDeviceOverride && flusher.unsettledClears.contains(.subtitleAppearance) {
+            // The answer still shows the device value a clear on its way is
+            // removing, and says nothing about the profile's. The override
+            // stays off, so the next edit goes to the profile as the user
+            // chose rather than back onto this device.
+            subtitleUsesDeviceAppearanceOverride = false
+            return
+        }
         subtitleUsesDeviceAppearanceOverride = hasDeviceOverride
         // A stored appearance is a sparse override the schema merges over the
         // contract default, and SubtitleAppearance's decoder already fills each
@@ -1249,7 +1609,7 @@ final class PlayerSettings {
         // rather than resetting the properties it omits.
         let appearance = ((try? entry.value.decoded(as: SubtitleAppearance.self)) ?? .default).sanitized()
         if hasDeviceOverride {
-            subtitleAppearance = appearance
+            deviceSubtitleAppearance = appearance
         } else {
             inheritedSubtitleAppearance = appearance
         }
@@ -1389,9 +1749,13 @@ final class PlayerSettings {
         defer { isLoadingCache = false }
         preferredQualityResolution = Self.cachedQualityResolution(defaults)
         maxBitrateKbps = Self.cachedMaxBitrateKbps(defaults)
+        let cellular = Self.cachedCellularQuality(defaults)
+        cellularQualityResolution = cellular.resolution
+        cellularMaxBitrateKbps = cellular.bitrateKbps
         audioLanguage = defaults.string(forKey: Self.cacheKey(Keys.audioLanguage)) ?? ""
         introSkipMode = Self.cachedIntroSkipMode(defaults)
         autoSkipCredits = Self.cachedBool(defaults, key: Keys.autoSkipCredits, defaultValue: false)
+        autoSkipRecap = Self.cachedBool(defaults, key: Keys.autoSkipRecap, defaultValue: false)
         autoPlayNextEpisode = Self.cachedBool(
             defaults,
             key: Keys.autoPlayNextEpisode,
@@ -1446,7 +1810,7 @@ final class PlayerSettings {
             key: Keys.subtitleMatchesSystemAppearance,
             defaultValue: false
         )
-        subtitleAppearance = SubtitleAppearance.decode(from: defaults.string(forKey: Self.cacheKey(Keys.subtitleAppearance)))
+        deviceSubtitleAppearance = SubtitleAppearance.decode(from: defaults.string(forKey: Self.cacheKey(Keys.subtitleAppearance)))
         inheritedSubtitleAppearance = SubtitleAppearance.decode(
             from: defaults.string(forKey: Self.cacheKey(Keys.inheritedSubtitleAppearance))
         )
@@ -1578,10 +1942,14 @@ final class PlayerSettings {
 
         defaults.set("auto", forKey: key(Keys.preferredQuality))
         defaults.removeObject(forKey: key(Keys.maxBitrateKbps))
+        // Absent is the cellular pair's contract default.
+        defaults.removeObject(forKey: key(Keys.cellularPreferredQuality))
+        defaults.removeObject(forKey: key(Keys.cellularMaxBitrateKbps))
         defaults.set("", forKey: key(Keys.audioLanguage))
         defaults.set(false, forKey: key(Keys.autoSkipIntro))
         defaults.set(IntroSkipMode.default.wireValue, forKey: key(Keys.introSkipMode))
         defaults.set(false, forKey: key(Keys.autoSkipCredits))
+        defaults.set(false, forKey: key(Keys.autoSkipRecap))
         defaults.set(true, forKey: key(Keys.autoPlayNextEpisode))
         defaults.set(30, forKey: key(Keys.nextUpPromptSeconds))
         defaults.set(true, forKey: key(Keys.hdrEnabled))
@@ -1655,6 +2023,19 @@ final class PlayerSettings {
         guard defaults.object(forKey: cacheKey(Keys.maxBitrateKbps)) != nil else { return nil }
         let stored = defaults.integer(forKey: cacheKey(Keys.maxBitrateKbps))
         return stored > 0 ? stored : nil
+    }
+
+    /// The cached cellular pair, or the contract default for a half never
+    /// stored. A stored bitrate of 0 is uncapped (see ``cellularMaxBitrateKbps``).
+    private static func cachedCellularQuality(_ defaults: UserDefaults) -> AppleQualityAxes {
+        let resolution = defaults.string(forKey: cacheKey(Keys.cellularPreferredQuality))
+            .map { PrairieQualityPresets.normalizeResolution($0) }
+            ?? defaultCellularQuality.resolution
+        let bitrateKey = cacheKey(Keys.cellularMaxBitrateKbps)
+        let bitrate = defaults.object(forKey: bitrateKey) == nil
+            ? defaultCellularQuality.bitrateKbps
+            : defaults.integer(forKey: bitrateKey)
+        return AppleQualityAxes(resolution: resolution, bitrateKbps: bitrate.flatMap { $0 > 0 ? $0 : nil })
     }
 
     /// The cached mode, or — on a device that has only ever cached the
@@ -1749,10 +2130,13 @@ final class PlayerSettings {
     private enum Keys {
         static let preferredQuality = "preferredQuality"
         static let maxBitrateKbps = "playback.maxBitrateKbps"
+        static let cellularPreferredQuality = "playback.cellularPreferredQuality"
+        static let cellularMaxBitrateKbps = "playback.cellularMaxBitrateKbps"
         static let audioLanguage = "preferredAudioLanguage"
         static let autoSkipIntro = "skipIntros"
         static let introSkipMode = "player.introSkipMode"
         static let autoSkipCredits = "skipCredits"
+        static let autoSkipRecap = "player.autoSkipRecap"
         static let hdrEnabled = "player.hdrEnabled"
         static let dolbyVisionEnabled = "player.dolbyVisionEnabled"
         static let seekCacheEnabled = "player.seekCacheEnabled"

@@ -57,6 +57,20 @@ struct ServerEntry: Codable, Identifiable, Equatable, Hashable {
         self.verifiedServerId = ServerIdentity.usable(verifiedServerId)
     }
 
+    /// This entry under `existing`'s id and URL.
+    fileprivate func keepingIdentity(of existing: ServerEntry) -> ServerEntry {
+        guard existing.id != id else { return self }
+        var copy = ServerEntry(
+            id: existing.id,
+            url: existing.url,
+            fetchedName: fetchedName,
+            lastUsedAt: lastUsedAt,
+            verifiedServerId: verifiedServerId
+        )
+        copy.legacyProfileId = legacyProfileId
+        return copy
+    }
+
     private enum CodingKeys: String, CodingKey {
         case id
         case url
@@ -171,6 +185,10 @@ final class ServerRegistry {
     private let tokenStore: TokenStore
     private let httpClient: HTTPClient
     private let persistenceOverride: (([ServerEntry], String?) -> Bool)?
+    /// Turns the server's push registration off (`ApplePushRegistrationCoordinator.unregister`).
+    private let unregisterPush: @Sendable (String) async -> Void
+    /// Turns it back on after a removal that did not happen (`ApplePushRegistrationCoordinator.restore`).
+    private let restorePush: @Sendable (String) async -> Void
 
     init(
         defaults: SharedDefaults = .shared,
@@ -178,7 +196,17 @@ final class ServerRegistry {
         launchPreferences: ProfileLaunchPreferences = .shared,
         persistenceOverride: (([ServerEntry], String?) -> Bool)? = nil,
         tokenStore: TokenStore = .shared,
-        httpClient: HTTPClient = .shared
+        httpClient: HTTPClient = .shared,
+        unregisterPush: @escaping @Sendable (String) async -> Void = { serverID in
+            #if os(iOS)
+            await ApplePushRegistrationCoordinator.shared.unregister(serverID: serverID)
+            #endif
+        },
+        restorePush: @escaping @Sendable (String) async -> Void = { serverID in
+            #if os(iOS)
+            await ApplePushRegistrationCoordinator.shared.restore(serverID: serverID)
+            #endif
+        }
     ) {
         self.defaults = defaults
         self.keychain = keychain
@@ -186,6 +214,8 @@ final class ServerRegistry {
         self.persistenceOverride = persistenceOverride
         self.tokenStore = tokenStore
         self.httpClient = httpClient
+        self.unregisterPush = unregisterPush
+        self.restorePush = restorePush
         Self.adoptLegacyDefaultsKeys(defaults)
         load()
         migrateLegacyIfNeeded()
@@ -228,9 +258,13 @@ final class ServerRegistry {
     func addOrUpdate(_ entry: ServerEntry, preservingProfile: Bool = true) -> ServerEntry? {
         let previousEntries = entries
         var merged = entry
-        let existingIndex = entries.firstIndex(where: { $0.id == entry.id })
+        let existingIndex = index(matching: entry.id)
         if let existingIndex {
             let existing = entries[existingIndex]
+            // A saved entry for the same origin keeps its id and URL, which
+            // key its credentials and settings, even when this one differs
+            // only in scheme or host case.
+            merged = entry.keepingIdentity(of: existing)
             if merged.fetchedName == nil || merged.fetchedName?.isEmpty == true {
                 merged.fetchedName = existing.fetchedName
             }
@@ -265,9 +299,20 @@ final class ServerRegistry {
             reason: isExistingEntry ? "updatedExisting" : "addedNew"
         )
         if !preservingProfile {
-            launchPreferences.clearRememberedProfile(for: entry.id)
+            launchPreferences.clearRememberedProfile(for: merged.id)
         }
         return merged
+    }
+
+    /// The saved entry for `serverId`'s origin: an exact id, else one whose
+    /// scheme and host differ only in case (or that spells out a default port).
+    func entry(matching serverId: String) -> ServerEntry? {
+        index(matching: serverId).map { entries[$0] }
+    }
+
+    private func index(matching serverId: String) -> Int? {
+        entries.firstIndex(where: { $0.id == serverId })
+            ?? entries.firstIndex(where: { Self.serverIdsMatch($0.id, serverId) })
     }
 
     @discardableResult
@@ -503,6 +548,22 @@ final class ServerRegistry {
         serverId: String,
         resolveFallbackProfile: Bool = false
     ) async -> Bool {
+        // Only a device that can still authenticate can tell the server to
+        // stop pushing, so this runs before the credentials are deleted. A
+        // removal that then fails leaves the server saved and signed in, so
+        // its pushes are turned back on.
+        let turnsPushOff = entries.contains(where: { $0.id == serverId })
+        if turnsPushOff {
+            await unregisterPush(serverId)
+        }
+        let removed = await removeEntry(serverId: serverId, resolveFallbackProfile: resolveFallbackProfile)
+        if turnsPushOff, !removed {
+            await restorePush(serverId)
+        }
+        return removed
+    }
+
+    private func removeEntry(serverId: String, resolveFallbackProfile: Bool) async -> Bool {
         guard let transitionLease = await httpClient.beginIdentityTransition() else {
             recordRegistryEvent(
                 phase: "removeServer",

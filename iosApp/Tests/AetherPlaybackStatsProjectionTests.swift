@@ -143,6 +143,53 @@ final class AetherPlaybackStatsProjectionTests: XCTestCase {
         }
     }
 
+    /// Aether reports SDR on an Apple TV it can't prove left SDR, though it
+    /// sent the HDR stream; the label names what was sent, unconfirmed.
+    func testUnprovenAppleTVShowsTheSentRangeAsUnconfirmed() {
+        let dolbyVisionTV = DisplayCapabilities(
+            supportsHDR: true, supportsDolbyVision: true, supportsHDR10: true, supportsHLG: true)
+        let hdr10TV = DisplayCapabilities(
+            supportsHDR: true, supportsDolbyVision: false, supportsHDR10: true, supportsHLG: true)
+        let sdrTV = DisplayCapabilities(
+            supportsHDR: false, supportsDolbyVision: false, supportsHDR10: false, supportsHLG: false)
+        let cases: [(VideoRoute, VideoFormat, Int?, String?, DisplayCapabilities?, String)] = [
+            (.loopback, .dolbyVision, 7, "smpte2084", dolbyVisionTV,
+             "Dolby Vision Profile 7 → Profile 8.1 (unconfirmed)"),
+            (.remoteBypass, .hdr10, nil, "smpte2084", dolbyVisionTV, "HDR10 (unconfirmed)"),
+            (.loopback, .dolbyVision, 7, "smpte2084", hdr10TV, "Dolby Vision Profile 7 → HDR10 (unconfirmed)"),
+            (.loopback, .dolbyVision, 8, "arib-std-b67", hdr10TV, "Dolby Vision Profile 8 → HLG (unconfirmed)"),
+            (.loopback, .dolbyVision, 8, "bt709", hdr10TV, "Dolby Vision Profile 8 → SDR"),
+            (.loopback, .dolbyVision, 8, "bt709", dolbyVisionTV, "Dolby Vision Profile 8 → SDR"),
+            (.loopback, .dolbyVision, 7, "smpte2084", sdrTV, "Dolby Vision Profile 7 → SDR"),
+            (.loopback, .dolbyVision, 7, "smpte2084", nil, "Dolby Vision Profile 7 → SDR"),
+            (.software, .dolbyVision, 7, "smpte2084", dolbyVisionTV, "Dolby Vision Profile 7 → SDR"),
+        ]
+        for (route, sourceFormat, profile, transfer, display, expected) in cases {
+            let stats = AetherPlaybackStatsProjection.make(
+                snapshot: AetherPlaybackStatsSnapshot(
+                    route: route,
+                    phase: .playing,
+                    sourceVideoFormat: sourceFormat,
+                    outputVideoFormat: .sdr,
+                    sourceDVProfile: profile,
+                    dolbyVisionConversion: profile == 7 ? .profile7ToProfile81 : nil,
+                    sourceVideoTransfer: transfer,
+                    tvDisplay: display,
+                    sourceVideoWidth: 3840,
+                    sourceVideoHeight: 2160
+                ),
+                source: AetherPlaybackStatsSourceMetadata(
+                    sourceURL: nil,
+                    delivery: "original_http",
+                    container: "mkv",
+                    playbackRate: 1
+                )
+            )
+
+            XCTAssertEqual(stats.dynamicRange, expected, "\(route) \(profile.map(String.init) ?? "-") \(transfer ?? "-")")
+        }
+    }
+
     func testRouteAsymmetricTelemetryDoesNotInventForwardBuffer() {
         let telemetry = LiveTelemetry(
             instantBitrateMbps: nil,

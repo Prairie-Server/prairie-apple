@@ -47,7 +47,7 @@ struct CalendarView: View {
         #if os(tvOS)
         ZStack(alignment: .top) {
             TVRootHeroBackdrop(
-                tintColor: .prairieBackground,
+                tints: .flat(.prairieBackground),
                 artworkURL: nil,
                 artworkThumbhash: nil,
                 isVisible: false
@@ -133,6 +133,7 @@ struct CalendarView: View {
                     onSignOut: { router.signOutAndReset() }
                 )
             }
+            .clearsWindowControls()
 
             CalendarWeekStrip(
                 week: viewModel.week,

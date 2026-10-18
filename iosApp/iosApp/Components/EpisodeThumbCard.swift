@@ -42,7 +42,6 @@ struct EpisodeThumbCard: View {
     #endif
     #if !os(tvOS)
     @Environment(AppRouter.self) private var router
-    @Environment(\.itemDetailBrowseSource) private var detailBrowseSource
     #endif
 
     private var cardWidth: CGFloat { Self.artworkSize(baseWidth: baseCardWidth).width }
@@ -56,6 +55,8 @@ struct EpisodeThumbCard: View {
     }
 
     #if os(tvOS)
+    private static let captionSpacing: CGFloat = 14
+
     @FocusState private var standaloneFocused: Bool
 
     private var isFocused: Bool {
@@ -70,29 +71,23 @@ struct EpisodeThumbCard: View {
 
     private var cardBody: some View {
         #if os(tvOS)
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: Self.captionSpacing) {
             thumbnailButton
 
             if uiCustomization.cardPresentation.caption.showsTitle {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(displayTitle)
                         .font(.prairiePosterTitle)
-                        .foregroundStyle(
-                            isFocused
-                                ? Color.prairieOnSurface
-                                : Color.prairieOnSurface.opacity(0.85)
-                        )
                         .lineLimit(1)
                         .truncationMode(.tail)
+                        .tvCardTitleFocus(isFocused: isFocused)
                         .frame(width: cardWidth, alignment: .leading)
-                        .clipped()
-                        .animation(.easeOut(duration: 0.15), value: isFocused)
 
                     if uiCustomization.cardPresentation.caption.showsMetadata,
                        let subtitle = subtitleLine {
                         Text(subtitle)
                             .font(.prairiePosterMetadata)
-                            .foregroundStyle(Color.prairieSecondaryText)
+                            .tvCardSubtitleFocus(isFocused: isFocused)
                             .lineLimit(1)
                             .truncationMode(.tail)
                             .frame(width: cardWidth, alignment: .leading)
@@ -100,6 +95,7 @@ struct EpisodeThumbCard: View {
                     }
                 }
                 .frame(width: cardWidth, alignment: .leading)
+                .tvCardCaptionFocus(isFocused: isFocused, spacing: Self.captionSpacing)
             }
         }
         .frame(width: cardWidth)
@@ -134,11 +130,7 @@ struct EpisodeThumbCard: View {
             if usesProvidedTapAction {
                 action()
             } else {
-                router.presentItemDetail(
-                    contentId: item.contentId,
-                    libraryId: browseLibraryId,
-                    browseSource: detailBrowseSource
-                )
+                router.presentItemDetail(contentId: item.contentId, libraryId: browseLibraryId)
             }
         } label: {
             VStack(alignment: .leading, spacing: 6) {

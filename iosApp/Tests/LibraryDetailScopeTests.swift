@@ -202,13 +202,23 @@ final class LibraryDetailScopeTests: XCTestCase {
         XCTAssertEqual(recovery.libraryId, 7)
     }
 
+    @MainActor
+    func testAutoplayIntoOnDeckPickClearsScope() throws {
+        let model = PlayerViewModel(libraryId: 7)
+        defer { model.cleanup() }
+        model.loadAndPlay(contentId: "finale", startFromBeginning: false)
+        let global = try JSONDecoder().decode(SectionItem.self, from: Data(
+            #"{"contentId":"other-library-movie","type":"movie","title":"Other movie"}"#.utf8))
+        model.nextUpEpisode = PlayerNextUpEpisode(onDeckItem: PlayerOnDeckItem(item: global))
+        model.playNextEpisodeNow()
+        XCTAssertNil(model.libraryId)
+    }
+
     #if os(iOS)
     @MainActor
-    func testSheetKeepsLibraryWhenPagingAndGlobalNavigationClearsIt() throws {
+    func testSheetKeepsLibraryAndGlobalNavigationClearsIt() throws {
         let router = AppRouter()
-        let source = ItemDetailBrowseSource(originID: "library", contentIDs: ["one", "two"])
-        router.presentItemDetail(contentId: "one", libraryId: 7, browseSource: source)
-        router.selectPresentedItemDetail(contentId: "two")
+        router.presentItemDetail(contentId: "two", libraryId: 7)
         XCTAssertEqual(router.presentedItemDetail?.contentId, "two")
         XCTAssertEqual(router.presentedItemDetail?.libraryId, 7)
         router.dismissItemDetail()

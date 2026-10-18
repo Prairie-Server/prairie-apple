@@ -6,20 +6,20 @@ texts are bundled beside this file and are available from Settings > About >
 Acknowledgements.
 
 AetherEngine
-  Revision: 87f8574083f96e7d5f3a9cfe07bb2525f708cd4c (upstream release
-  7.28.3, through upstream commit dd1d5f88, plus Prairie patches for subtitle renditions,
+  Revision: b0712217abb7399aeb21f875bcc7c26e7af92fd8 (upstream release
+  7.36.0, through upstream commit 74c81b3c, plus Prairie patches for subtitle renditions,
   source timing, primary ASS routing with normalized secondary/PiP text,
   refreshable authorization for native HLS, sidecar subtitles and fonts,
-  dense subtitle catch-up, TrueHD Atmos object rendering to Apple Positional
-  Audio with its diagnostics, and playback recovery)
+  dense subtitle catch-up, audio-switch tracking, playback recovery, and
+  resuming forward-only sources)
   License: GNU LGPL version 3 with the upstream Apple Store / DRM exception
-  Source (modified, as built): https://github.com/Silo-Server/AetherEngine/tree/87f8574083f96e7d5f3a9cfe07bb2525f708cd4c
-  Upstream base: https://github.com/superuser404notfound/AetherEngine/tree/dd1d5f885cd5da65a6641e42f5cd6ba341c6a05c
+  Source (modified, as built): https://github.com/Silo-Server/AetherEngine/tree/b0712217abb7399aeb21f875bcc7c26e7af92fd8
+  Upstream base: https://github.com/superuser404notfound/AetherEngine/tree/74c81b3c5a0047e1b0229805c20562910367b0e5
   Rebuild: the Package.swift and source tree at that revision
 
 FFmpegBuild and embedded media frameworks
-  Revision: fda08325455bc12c112b5b82d014b98fa0fee0be (release 3.6.0)
-  Source and rebuild script: https://github.com/superuser404notfound/FFmpegBuild/tree/fda08325455bc12c112b5b82d014b98fa0fee0be
+  Revision: 013c48bd4d3073428f31cade039ec4ed958d0ceb (release 3.7.1)
+  Source and rebuild script: https://github.com/superuser404notfound/FFmpegBuild/tree/013c48bd4d3073428f31cade039ec4ed958d0ceb
 
   Components built by that revision:
   - FFmpeg n8.1.3, currently 1041abdc962f4cc4f394aa8de9dc5236c0c3b9e7:
@@ -48,15 +48,26 @@ FFmpegBuild and embedded media frameworks
   those tags ever move.
 
 LibTrueHD / truehd (formerly SiloObjectAudio)
-  Revision: 7ac6b379cb5d77ff5f424bc9daa17131b044a962 (release 2.0.0)
+  Revision: 577de495184254e2c660ebfd6ce3f7d97f45899d (release 2.3.0)
   License: MIT for the C API, framer, and build and verification scripts
   (LibTrueHD-MIT.txt)
-  Source and rebuild script: https://github.com/superuser404notfound/LibTrueHD/tree/7ac6b379cb5d77ff5f424bc9daa17131b044a962
-  Embeds the truehd crate from https://github.com/truehdd/truehdd
-  (Apache-2.0), commit 45eff984e3e5ab0cf36a47d12148b1628c38bda4, the oamd crate
+  Source and rebuild script: https://github.com/superuser404notfound/LibTrueHD/tree/577de495184254e2c660ebfd6ce3f7d97f45899d
+  Embeds the truehd crate from the truehdd project (Apache-2.0), built from
+  https://github.com/superuser404notfound/truehdd at commit
+  5c8b880405946e7ff1aee884cf9988415fe2c3a9 (upstream 02d29cd0 with harletty's
+  decoder performance changes), the oamd crate
   0.1.0 from crates.io (https://github.com/truehdd/oamd, Apache-2.0), and the
   Rust standard library and crates listed in its NOTICE (MIT or Apache-2.0).
   The NOTICE and the Apache License 2.0 are in truehd-Apache-2.0.txt.
+
+LibDTSX / dca
+  Revision: 9906f8fe9b72eb4d79a85754adbba6fa52cfe7b2 (release 1.0.1)
+  License: Apache-2.0 (LibDTSX-Apache-2.0.txt, with its NOTICE)
+  Source and rebuild script: https://github.com/superuser404notfound/LibDTSX/tree/9906f8fe9b72eb4d79a85754adbba6fa52cfe7b2
+  Embeds, unmodified, the dca crate 0.8.0 from
+  https://github.com/harletty/harletty-bridge (Apache-2.0), commit
+  a717bae441b116485f0254603dc20a6ede65d8c6, and the Rust standard library and
+  crates listed in its NOTICE (MIT or Apache-2.0).
 
 LibDovi / libdovi
   Packaging revision: 0d7cce1d6836a30d13a3a2326e50a153af53f014
@@ -123,8 +134,9 @@ SwiftAssRenderer, SwiftLibass, and local ASS rendering
   manifest, and instructions for rebuilding with a modified library are
   published as Prairie-source-<app-commit>.tar.gz at:
   https://github.com/Prairie-Server/prairie-apple/releases
-  Tagged builds place the archive on their release; manually dispatched
-  TestFlight builds use a source-<app-commit> release. The TestFlight build's
+  Each TestFlight build places the archive on its vX.Y.Z-beta.<build>
+  release (earlier builds used a source-<app-commit> release), and each
+  sideload build on its own release. The TestFlight build's
   What to Test notes include the exact archive URL. Builds from the release
   and sideload workflows also show it at the top of these acknowledgements
   and behind Settings > About > Source Code on iPhone and iPad; other builds

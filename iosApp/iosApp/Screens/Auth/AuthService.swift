@@ -20,6 +20,10 @@ final class AuthService: @unchecked Sendable {
     private let tokenStore: TokenStore
     private let sessionPersistence: AccountSessionPersistence
     private let purgeDiagnostics: @Sendable (String) async -> Bool
+    /// Turns the server's push registration off (`ApplePushRegistrationCoordinator.unregister`).
+    private let unregisterPush: @Sendable (String) async -> Void
+    /// Turns it back on after a sign-out that did not happen (`ApplePushRegistrationCoordinator.restore`).
+    private let restorePush: @Sendable (String) async -> Void
 
     enum SignOutAuthorization: Equatable, Sendable {
         case allowed(account: RefreshAccountIdentity?)
@@ -58,6 +62,16 @@ final class AuthService: @unchecked Sendable {
             #else
             return true
             #endif
+        },
+        unregisterPush: @escaping @Sendable (String) async -> Void = { serverID in
+            #if os(iOS)
+            await ApplePushRegistrationCoordinator.shared.unregister(serverID: serverID)
+            #endif
+        },
+        restorePush: @escaping @Sendable (String) async -> Void = { serverID in
+            #if os(iOS)
+            await ApplePushRegistrationCoordinator.shared.restore(serverID: serverID)
+            #endif
         }
     ) {
         self.serverIdentityResolver = serverIdentityResolver
@@ -71,6 +85,8 @@ final class AuthService: @unchecked Sendable {
         self.defaults = defaults
         self.sessionPersistence = sessionPersistence
         self.purgeDiagnostics = purgeDiagnostics
+        self.unregisterPush = unregisterPush
+        self.restorePush = restorePush
     }
 
     /// Runs the v2 contract probe for `serverId` and records the verdict.
@@ -173,18 +189,19 @@ final class AuthService: @unchecked Sendable {
             lastUsedAt: Date(),
             verifiedServerId: verifiedServerId
         )
-        guard serverRegistry.addOrUpdate(entry) != nil else {
+        // A saved entry for the same origin keeps its own id.
+        guard let saved = serverRegistry.addOrUpdate(entry) else {
             throw ServerRegistryError.persistenceFailed
         }
-        if serverRegistry.activeServerId != id {
-            guard await serverRegistry.switchTo(serverId: id) else {
+        if serverRegistry.activeServerId != saved.id {
+            guard await serverRegistry.switchTo(serverId: saved.id) else {
                 throw ServerRegistryError.persistenceFailed
             }
         }
         // Now that the candidate is the active server, establish the v2
         // contract verdict the pilot gate reads. Recorded after the switch so
         // a candidate that is not committed never touches the active verdict.
-        await recordContractVerdict(serverId: id, serverURL: normalized)
+        await recordContractVerdict(serverId: saved.id, serverURL: saved.url)
         try Task.checkCancellation()
 
         return status
@@ -834,12 +851,21 @@ final class AuthService: @unchecked Sendable {
         guard case .allowed(let account) = Self.signOutAuthorization(
             activeServerId: serverID, capturedAuth: capturedAuth
         ) else { return .refused }
-        guard let lease = await httpClient.beginIdentityTransition() else { return .refused }
+        // Only a device that can still authenticate can tell the server to
+        // stop pushing, so this runs before the credentials are cleared. A
+        // refused sign-out keeps the server signed in, so its pushes are
+        // turned back on.
+        if let serverID { await unregisterPush(serverID) }
+        guard let lease = await httpClient.beginIdentityTransition() else {
+            if let serverID { await restorePush(serverID) }
+            return .refused
+        }
         await httpClient.cancelInFlightRequests()
         guard !Task.isCancelled,
               serverRegistry.activeServerId == serverID,
               await tokenStore.refreshAccountIdentity() == account else {
             await httpClient.endIdentityTransition(lease)
+            if let serverID { await restorePush(serverID) }
             return .refused
         }
         #if os(iOS) || os(tvOS)

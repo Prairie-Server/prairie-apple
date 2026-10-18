@@ -64,10 +64,12 @@ struct PlayerSettingsSheet: View {
 
     private var videoSection: some View {
         Section {
-            NavigationLink {
-                qualityPage
-            } label: {
-                LabeledContent("Quality", value: activeQualityLabel)
+            if viewModel.hasQualityChoice {
+                NavigationLink {
+                    qualityPage
+                } label: {
+                    LabeledContent("Quality", value: activeQualityLabel)
+                }
             }
 
             Picker("Aspect", selection: Binding(
@@ -108,7 +110,7 @@ struct PlayerSettingsSheet: View {
                                 }
                             }
                             Spacer()
-                            if option.id == viewModel.activeQualityId {
+                            if option.id == viewModel.highlightedQualityOptionId {
                                 Image(systemName: "checkmark")
                                     .fontWeight(.semibold)
                                     .foregroundStyle(.tint)
@@ -116,6 +118,7 @@ struct PlayerSettingsSheet: View {
                         }
                         .contentShape(Rectangle())
                     }
+                    .disabled(viewModel.isQualitySwitching)
                 }
             } footer: {
                 if viewModel.isQualitySwitching {
@@ -196,7 +199,7 @@ struct PlayerSettingsSheet: View {
                 ))
                 .tint(.prairieSwitchOn)
 
-                Toggle("Save for this device and profile", isOn: Binding(
+                Toggle("Only on this device", isOn: Binding(
                     get: { viewModel.settings.subtitleUsesDeviceAppearanceOverride },
                     set: { enabled in
                         Task { await viewModel.setSubtitleDeviceOverrideEnabled(enabled) }

@@ -180,38 +180,43 @@ enum DetailPlaybackFormatting {
     }
 
     /// Language of the track that `audioValueLabel` would display, used to
-    /// feed the subtitle auto-resolver (Auto mode hides subs when the audio
-    /// is already in the preferred subtitle language).
+    /// feed the subtitle auto-resolver. Resolved as the start request does
+    /// (`PlaybackSessionBridge.startAudioLanguage`), so an unlabelled track
+    /// reads as the server's effective audio language here too and the Auto
+    /// preview names the track playback starts on.
     static func resolvedAudioLanguage(
         version: FileVersion?,
         selectedAudioTrackIndex: Int?
     ) -> String? {
-        guard let version,
-              let ordinal = resolvedAudioOrdinal(
-                  version: version,
-                  selectedAudioTrackIndex: selectedAudioTrackIndex
-              ),
-              let track = version.audioTracks?[safe: ordinal] else {
-            return nil
-        }
-        return track.language
+        PlaybackSessionBridge.startAudioLanguage(
+            version: version,
+            audioOrdinal: resolvedAudioOrdinal(
+                version: version,
+                selectedAudioTrackIndex: selectedAudioTrackIndex
+            )
+        )
     }
 
     static func audioTitle(_ track: AudioTrack, ordinal: Int) -> String {
-        if let language = languageDisplayName(track.language) { return language }
-        if let title = usefulAudioTitle(track) { return title }
-        return "Track \(ordinal + 1)"
+        TrackLabels.name(
+            language: track.language,
+            meaningfulTitle: usefulAudioTitle(track),
+            fallback: "Track \(ordinal + 1)"
+        )
     }
 
     static func audioDetail(_ track: AudioTrack, ordinal: Int, version: FileVersion?) -> String {
         var tokens: [String] = []
-        if let title = usefulAudioTitle(track), title != audioTitle(track, ordinal: ordinal) {
+        let layout = compactAudioLayout(track)
+        // A title of "Atmos" says nothing a layout of "Atmos" doesn't.
+        if let title = TrackLabels.qualifier(usefulAudioTitle(track), name: audioTitle(track, ordinal: ordinal)),
+           title.caseInsensitiveCompare(layout ?? "") != .orderedSame {
             tokens.append(title)
         }
         if let codec = normalizedAudioCodec(track.codec) {
             tokens.append(codec)
         }
-        if let layout = compactAudioLayout(track) {
+        if let layout {
             tokens.append(layout)
         }
         if track.isDefault == true {
@@ -239,20 +244,45 @@ enum DetailPlaybackFormatting {
     /// version's track list. Returns the ffmpeg stream index to
     /// pre-select, `-1` for "Off", or nil when nothing points at a
     /// track in this file ("Auto" — the player's resolver decides).
+    ///
+    /// A server mode of "off" (the profile's, or a series Off) with "show
+    /// forced subtitles" on is not an explicit Off: playback starts on the
+    /// forced track in the audio language, as it does on every other entry
+    /// path and on web. So it returns nil and lets the player's
+    /// resolver pick that track. The mode wins over a stored signature, as it
+    /// does in the resolver.
     static func serverPreferredSubtitleIndex(
         version: FileVersion?,
         signature: SubtitleTrackSignature?,
-        mode: String?
+        mode: String?,
+        showForced: Bool
     ) -> Int? {
+        if SubtitleMode(rawValue: mode ?? "") == .off {
+            return showForced ? nil : -1
+        }
         if let signature,
            let tracks = version?.subtitleTracks,
            let match = bestSignatureMatch(signature, in: tracks) {
             return match.selectionIndex
         }
-        if SubtitleMode(rawValue: mode ?? "") == .off {
-            return -1
-        }
         return nil
+    }
+
+    /// Whether a subtitle picked in the detail selector survives the page
+    /// reloading, as it does when the viewer returns from the player. Off and
+    /// Auto always do. A track index belongs to one file, so a track pick
+    /// stays only while the reloaded page shows the file it was picked on and
+    /// that file still offers it. Matches tvOS, whose selector state outlives
+    /// the player.
+    static func keepsManualSubtitlePick(
+        _ index: Int?,
+        pickedFileId: Int?,
+        reloadedFileId: Int?,
+        isAvailable: (Int) -> Bool
+    ) -> Bool {
+        guard let index, index >= 0 else { return true }
+        guard let pickedFileId, pickedFileId == reloadedFileId else { return false }
+        return isAvailable(index)
     }
 
     /// A server-remembered track is useful for reflecting the server policy
@@ -263,13 +293,15 @@ enum DetailPlaybackFormatting {
         version: FileVersion?,
         signature: SubtitleTrackSignature?,
         mode: String?,
+        showForced: Bool,
         usesDeviceSettings: Bool
     ) -> Int? {
         guard !usesDeviceSettings else { return nil }
         return serverPreferredSubtitleIndex(
             version: version,
             signature: signature,
-            mode: mode
+            mode: mode,
+            showForced: showForced
         )
     }
 
@@ -321,11 +353,11 @@ enum DetailPlaybackFormatting {
     /// Preview the track the player's `SubtitleAutoResolver` would auto-select
     /// for the "Auto" (no explicit override) case, applied to the detail
     /// payload's `SubtitleTrack` list. Returns nil when Auto resolves to no
-    /// subtitles (mode off, no preference, or audio already in the preferred
-    /// language). Runs the resolver itself, with the inputs the detail page can
-    /// supply, over the candidates the start request resolves (V3 combined
-    /// order, externals first), so the preview names the track playback starts
-    /// on. The returned ordinal stays the catalog offset so "Track N" labels
+    /// subtitles (mode off with no forced track in the audio language, no
+    /// preference, or audio already in the preferred language). Runs the
+    /// resolver itself, with the inputs the detail page can supply, over the
+    /// candidates the start request resolves (V3 combined order, externals
+    /// first), so the preview names the track playback starts on. The returned ordinal stays the catalog offset so "Track N" labels
     /// match subtitleOptions. An embedded row with no index is FFmpeg stream 0
     /// (the wire omits a zero index), so it stays selectable.
     private static func autoResolvedSubtitle(
@@ -384,7 +416,7 @@ enum DetailPlaybackFormatting {
             return SubtitleOption(
                 selectionIndex: index,
                 title: subtitleTitle(track, ordinal: ordinal),
-                detail: subtitleDetail(track, isSelectable: isSelectable),
+                detail: subtitleDetail(track, ordinal: ordinal, isSelectable: isSelectable),
                 isSelected: index != nil && selectedSubtitleTrackIndex == index,
                 isSelectable: isSelectable,
                 stableId: "\(ordinal)|\(track.id)"
@@ -438,14 +470,16 @@ enum DetailPlaybackFormatting {
     }
 
     static func subtitleTitle(_ track: SubtitleTrack, ordinal: Int) -> String {
-        if let language = languageDisplayName(track.language) { return language }
-        if let title = meaningfulSubtitleTitle(track) { return title }
-        return "Track \(ordinal + 1)"
+        TrackLabels.name(
+            language: track.language,
+            meaningfulTitle: meaningfulSubtitleTitle(track),
+            fallback: "Track \(ordinal + 1)"
+        )
     }
 
-    static func subtitleDetail(_ track: SubtitleTrack, isSelectable: Bool) -> String {
+    static func subtitleDetail(_ track: SubtitleTrack, ordinal: Int, isSelectable: Bool) -> String {
         var tokens: [String] = []
-        if let title = meaningfulSubtitleTitle(track) {
+        if let title = TrackLabels.qualifier(meaningfulSubtitleTitle(track), name: subtitleTitle(track, ordinal: ordinal)) {
             tokens.append(title)
         }
         if let codec = normalizedSubtitleCodec(track.codec) {
@@ -497,29 +531,11 @@ enum DetailPlaybackFormatting {
     }
 
     static func normalizedAudioCodec(_ codec: String?) -> String? {
-        guard let codec = codec?.lowercased(), !codec.isEmpty else { return nil }
-        if codec.contains("eac3") || codec.contains("e-ac-3") || codec.contains("ec-3") {
-            return "EAC3"
-        }
-        if codec.contains("ac3") || codec.contains("ac-3") { return "AC3" }
-        if codec.contains("aac") { return "AAC" }
-        if codec.contains("mp3") { return "MP3" }
-        if codec.contains("truehd") { return "TrueHD" }
-        if codec.contains("dts") { return "DTS" }
-        if codec.contains("flac") { return "FLAC" }
-        return codec.uppercased()
+        TrackLabels.audioCodec(codec)
     }
 
     static func normalizedSubtitleCodec(_ codec: String?) -> String? {
-        guard let codec = codec?.lowercased(), !codec.isEmpty else { return nil }
-        if codec == "srt" || codec.contains("subrip") { return "SRT" }
-        if codec.contains("ass") { return "ASS" }
-        if codec.contains("ssa") { return "SSA" }
-        if codec == "vtt" || codec.contains("webvtt") { return "WebVTT" }
-        if codec == "sup" || codec.contains("pgs") || codec.contains("hdmv") { return "PGS" }
-        if codec.contains("dvd") || codec.contains("vobsub") { return "VobSub" }
-        if codec.contains("mov_text") || codec.contains("tx3g") { return "TX3G" }
-        return codec.uppercased()
+        TrackLabels.subtitleCodec(codec)
     }
 
     private static let fileSizeFormatter: ByteCountFormatter = {
@@ -536,22 +552,7 @@ enum DetailPlaybackFormatting {
     }
 
     private static func compactAudioLayout(_ track: AudioTrack) -> String? {
-        if let layout = nonEmpty(track.channelLayout) {
-            let lowered = layout.lowercased()
-            if lowered.contains("atmos") { return "Atmos" }
-            if lowered.contains("7.1") { return "7.1" }
-            if lowered.contains("5.1") { return "5.1" }
-            if lowered.contains("stereo") { return "Stereo" }
-            return layout
-        }
-        switch track.channels {
-        case 1: return "Mono"
-        case 2: return "Stereo"
-        case 6: return "5.1"
-        case 8: return "7.1"
-        case let channels?: return "\(channels)ch"
-        case nil: return nil
-        }
+        TrackLabels.audioLayout(channelLayout: track.channelLayout, channels: track.channels)
     }
 
     private static func subtitleType(_ track: SubtitleTrack) -> String? {
@@ -566,8 +567,13 @@ enum DetailPlaybackFormatting {
             if lowered.contains("forced") {
                 return "Forced"
             }
-            if !isRedundantSubtitleTitle(title, track: track) {
-                return displayTitle(title)
+            if let meaningful = TrackLabels.subtitleTitle(
+                title,
+                language: track.language,
+                codec: track.codec,
+                showsHearingImpaired: isHearingImpaired(track)
+            ) {
+                return meaningful
             }
         }
         if track.forced == true {
@@ -580,35 +586,16 @@ enum DetailPlaybackFormatting {
     }
 
     private static func usefulAudioTitle(_ track: AudioTrack) -> String? {
-        guard let title = nonEmpty(track.title) ?? nonEmpty(track.embeddedTitle) else { return nil }
-        let lowered = title.lowercased()
-        let technicalTerms = [
-            "atsc",
-            "a/52",
-            "ac-3",
-            "e-ac-3",
-            "eac3",
-            "truehd",
-            "dts",
-            "aac",
-            "flac",
-        ]
-        if technicalTerms.contains(where: { lowered.contains($0) }) {
-            return nil
-        }
-        return displayTitle(title)
+        TrackLabels.audioTitle(nonEmpty(track.title) ?? nonEmpty(track.embeddedTitle), language: track.language)
     }
 
     private static func meaningfulSubtitleTitle(_ track: SubtitleTrack) -> String? {
-        guard let title = nonEmpty(track.title) ?? nonEmpty(track.embeddedTitle),
-              !isRedundantSubtitleTitle(title, track: track) else {
-            return nil
-        }
-        let lowered = title.lowercased()
-        if lowered == "forced" || ["sdh", "cc", "hi", "hearing impaired"].contains(lowered) {
-            return nil
-        }
-        return displayTitle(title)
+        TrackLabels.subtitleTitle(
+            nonEmpty(track.title) ?? nonEmpty(track.embeddedTitle),
+            language: track.language,
+            codec: track.codec,
+            showsHearingImpaired: isHearingImpaired(track)
+        )
     }
 
     private static func isHearingImpaired(_ track: SubtitleTrack) -> Bool {
@@ -632,55 +619,8 @@ enum DetailPlaybackFormatting {
             || lowered.contains("hearing impaired")
     }
 
-    private static func isRedundantSubtitleTitle(_ title: String, track: SubtitleTrack) -> Bool {
-        let lowered = title.lowercased()
-        let language = languageDisplayName(track.language)?.lowercased()
-        let languageCode = nonEmpty(track.language)?.lowercased()
-        if lowered == "subtitle" || lowered == "subtitles" {
-            return true
-        }
-        if let language, lowered == language {
-            return true
-        }
-        if let languageCode, lowered == languageCode {
-            return true
-        }
-        if let codec = normalizedSubtitleCodec(track.codec)?.lowercased(),
-           lowered == codec || lowered == track.codec?.lowercased() {
-            return true
-        }
-        return false
-    }
-
-    private static func displayTitle(_ title: String) -> String {
-        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        switch trimmed.lowercased() {
-        case "sdh": return "SDH"
-        case "cc": return "CC"
-        case "srt", "subrip": return "SubRip"
-        case "webvtt", "vtt": return "WebVTT"
-        default: return trimmed
-        }
-    }
-
     private static func languageDisplayName(_ value: String?) -> String? {
-        guard let value = nonEmpty(value) else { return nil }
-        let primary = value
-            .lowercased()
-            .replacingOccurrences(of: "_", with: "-")
-            .split(separator: "-").first.map(String.init) ?? ""
-        // A token longer than a 3-letter ISO tag is already a spelled-out
-        // name (e.g. free-text metadata); show it as-is.
-        if primary.count > 3 {
-            return value.capitalized
-        }
-        // Share the canonical ISO 639 folding + English display-name table
-        // with the track-ordering core so the detail page's grouping and
-        // its row labels never disagree on a language.
-        if let key = SubtitleDisplayOrder.canonicalLanguageKey(value) {
-            return SubtitleDisplayOrder.languageDisplayName(key)
-        }
-        return value.uppercased()
+        TrackLabels.languageName(value)
     }
 
     private static func normalizedFileName(_ value: String?) -> String? {
@@ -701,5 +641,29 @@ enum DetailPlaybackFormatting {
 private extension Array {
     subscript(safe index: Index) -> Element? {
         indices.contains(index) ? self[index] : nil
+    }
+}
+
+extension DetailPlaybackFormatting.SubtitleAutoContext {
+    /// The "Auto" subtitle preview context for the selected version and audio
+    /// track.
+    init(
+        version: FileVersion?,
+        selectedAudioTrackIndex: Int?,
+        preferredLanguage: String?,
+        mode: String?,
+        signature: SubtitleTrackSignature?,
+        showForced: Bool
+    ) {
+        self.init(
+            preferredLanguage: preferredLanguage,
+            mode: mode,
+            signature: signature,
+            audioLanguage: DetailPlaybackFormatting.resolvedAudioLanguage(
+                version: version,
+                selectedAudioTrackIndex: selectedAudioTrackIndex
+            ),
+            showForced: showForced
+        )
     }
 }

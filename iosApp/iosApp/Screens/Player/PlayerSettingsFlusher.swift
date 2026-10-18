@@ -2,10 +2,11 @@
 //  PlayerSettingsFlusher.swift
 //  Prairie (iOS + tvOS + macOS)
 //
-//  Debounced, retried writer for device-scoped player settings (PUT/DELETE
-//  `/api/v2/settings/values/{key}` at `profile_device`). One pending value per
-//  key; transient failures retry on a bounded backoff, then the key is held
-//  until the user retries or discards it.
+//  Debounced, retried writer for the player's synced settings (PUT/DELETE
+//  `/api/v2/settings/values/{key}`). Most writes target `profile_device`; the
+//  subtitle display settings write `profile` so they follow the profile to
+//  every device. One pending value per key; transient failures retry on a
+//  bounded backoff, then the key is held until the user retries or discards it.
 //
 //  The writes are `natural_idempotent`: each one names the desired value of
 //  one row, so sending it again converges instead of applying twice. There
@@ -30,15 +31,40 @@ import UIKit
 import AppKit
 #endif
 
+/// The scopes the player's settings queue writes to.
+///
+/// Narrower than ``SettingScope`` on purpose: the queue only ever writes the
+/// signed-in profile's own row or this device's row for it, and a closed
+/// raw-value enum keeps the persisted journal format a plain string.
+enum PlayerSettingWriteScope: String, Codable, Sendable {
+    /// The profile's value, which every device of the profile inherits.
+    case profile
+    /// This device's own value for the profile, which wins on this device.
+    case profileDevice = "profile_device"
+
+    var identity: SettingScopeIdentity {
+        switch self {
+        case .profile: return .profile
+        case .profileDevice: return .profileDevice
+        }
+    }
+
+    var settingScope: SettingScope { identity.scope }
+}
+
 /// The subset of the canonical settings API the player's settings need.
 ///
 /// A protocol rather than a direct ``PrairieAPI`` reference so the queueing,
-/// debounce and retry behaviour can be exercised without a network. The scope
-/// is baked in at `profile_device`, the only scope this client writes.
+/// debounce and retry behaviour can be exercised without a network.
 protocol PlayerSettingsTransport: AnyObject, Sendable {
     func effectiveValues(keys: [SettingKey]) async throws -> EffectiveSettingValuesResponse
-    func putValue(key: SettingKey, value: SettingJSONValue, profileId: String?) async throws
-    func deleteValue(key: SettingKey, profileId: String?) async throws
+    func putValue(
+        key: SettingKey,
+        scope: PlayerSettingWriteScope,
+        value: SettingJSONValue,
+        profileId: String?
+    ) async throws
+    func deleteValue(key: SettingKey, scope: PlayerSettingWriteScope, profileId: String?) async throws
 }
 
 /// The production transport: the canonical endpoints on ``PrairieAPI``.
@@ -53,16 +79,21 @@ final class PrairiePlayerSettingsTransport: PlayerSettingsTransport {
         try await api.getEffectiveValues(keys: keys)
     }
 
-    func putValue(key: SettingKey, value: SettingJSONValue, profileId: String?) async throws {
-        try await api.putValue(key: key, scope: .profileDevice, value: value, profileId: profileId)
+    func putValue(
+        key: SettingKey,
+        scope: PlayerSettingWriteScope,
+        value: SettingJSONValue,
+        profileId: String?
+    ) async throws {
+        try await api.putValue(key: key, scope: scope.identity, value: value, profileId: profileId)
     }
 
-    func deleteValue(key: SettingKey, profileId: String?) async throws {
-        try await api.deleteValue(key: key, scope: .profileDevice, profileId: profileId)
+    func deleteValue(key: SettingKey, scope: PlayerSettingWriteScope, profileId: String?) async throws {
+        try await api.deleteValue(key: key, scope: scope.identity, profileId: profileId)
     }
 }
 
-/// One queued device-scoped write: the latest desired state of one key.
+/// One queued write: the latest desired state of one key.
 ///
 /// `Codable` because the queue outlives the process — see
 /// ``PlayerSettingsWriteJournal``. Entries written by earlier builds also
@@ -75,6 +106,39 @@ struct PendingSettingWrite: Equatable, Codable {
     }
 
     let operation: Operation
+
+    /// The scope the operation targets. Entries journaled by builds that only
+    /// wrote `profile_device` decode as that scope.
+    let scope: PlayerSettingWriteScope
+
+    /// For a `profile` set: also delete this device's own value once the
+    /// profile value is stored, so an older device value does not keep hiding
+    /// the profile value on the device the user just edited it on.
+    let clearsDeviceValue: Bool
+
+    /// For a clear of this device's value: wanted only where the server
+    /// stores the key per profile (``SettingKey/profileScopeRevision``). On an
+    /// older server the device value is the only one, so there the clear
+    /// settles without being sent. Waits while the revision is unknown.
+    let onlyWhereProfileScoped: Bool
+
+    /// For an ``onlyWhereProfileScoped`` clear: the device value a set it
+    /// replaced had not stored yet. Where the clear does not apply, that
+    /// value is still this device's latest edit, so it is sent instead.
+    let fallbackDeviceValue: SettingJSONValue?
+
+    /// For an operation on this device's value: a profile value that a write
+    /// this one replaced had not stored yet. The queue keeps one operation per
+    /// key, so turning the device override on before a profile edit reached
+    /// the server (inside the debounce window, or offline) would otherwise
+    /// drop that edit from the profile. Sent at `profile` scope first.
+    let owedProfileValue: SettingJSONValue?
+
+    /// For a clear of this device's value left over from a profile write: the
+    /// profile value that write stored, which the clear exposes once it lands.
+    /// Painted over a refresh meanwhile, never sent, and not part of the
+    /// desired state.
+    let storedProfileValue: SettingJSONValue?
 
     /// The (server, profile, device) identity this operation belongs to.
     /// Nil is retained for in-memory/test journals with no scoped identity;
@@ -98,12 +162,24 @@ struct PendingSettingWrite: Equatable, Codable {
 
     init(
         operation: Operation,
+        scope: PlayerSettingWriteScope = .profileDevice,
+        clearsDeviceValue: Bool = false,
+        onlyWhereProfileScoped: Bool = false,
+        fallbackDeviceValue: SettingJSONValue? = nil,
+        owedProfileValue: SettingJSONValue? = nil,
+        storedProfileValue: SettingJSONValue? = nil,
         scopeIdentifier: String? = nil,
         profileId: String? = nil,
         failedAttempts: Int = 0,
         isHeld: Bool = false
     ) {
         self.operation = operation
+        self.scope = scope
+        self.clearsDeviceValue = scope == .profile && clearsDeviceValue
+        self.onlyWhereProfileScoped = scope == .profileDevice && operation == .delete && onlyWhereProfileScoped
+        self.fallbackDeviceValue = self.onlyWhereProfileScoped ? fallbackDeviceValue : nil
+        self.owedProfileValue = scope == .profileDevice ? owedProfileValue : nil
+        self.storedProfileValue = scope == .profileDevice && operation == .delete ? storedProfileValue : nil
         self.scopeIdentifier = scopeIdentifier
         self.profileId = profileId
         self.failedAttempts = failedAttempts
@@ -111,22 +187,74 @@ struct PendingSettingWrite: Equatable, Codable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case operation, scopeIdentifier, profileId, failedAttempts, isHeld
+        case operation, scope, clearsDeviceValue, onlyWhereProfileScoped, fallbackDeviceValue, owedProfileValue, storedProfileValue
+        case scopeIdentifier, profileId, failedAttempts, isHeld
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         operation = try container.decode(Operation.self, forKey: .operation)
+        scope = try container.decodeIfPresent(PlayerSettingWriteScope.self, forKey: .scope) ?? .profileDevice
+        clearsDeviceValue = try container.decodeIfPresent(Bool.self, forKey: .clearsDeviceValue) ?? false
+        onlyWhereProfileScoped = try container.decodeIfPresent(Bool.self, forKey: .onlyWhereProfileScoped) ?? false
+        fallbackDeviceValue = try container.decodeIfPresent(SettingJSONValue.self, forKey: .fallbackDeviceValue)
+        owedProfileValue = try container.decodeIfPresent(SettingJSONValue.self, forKey: .owedProfileValue)
+        storedProfileValue = try container.decodeIfPresent(SettingJSONValue.self, forKey: .storedProfileValue)
         scopeIdentifier = try container.decodeIfPresent(String.self, forKey: .scopeIdentifier)
         profileId = try container.decodeIfPresent(String.self, forKey: .profileId)
         failedAttempts = try container.decodeIfPresent(Int.self, forKey: .failedAttempts) ?? 0
         isHeld = try container.decodeIfPresent(Bool.self, forKey: .isHeld) ?? false
     }
 
+    /// Whether `other` asks the server for the same end state, ignoring retry
+    /// bookkeeping.
+    func hasSameDesiredState(as other: PendingSettingWrite) -> Bool {
+        operation == other.operation && scope == other.scope && clearsDeviceValue == other.clearsDeviceValue
+            && onlyWhereProfileScoped == other.onlyWhereProfileScoped
+            && fallbackDeviceValue == other.fallbackDeviceValue
+            && owedProfileValue == other.owedProfileValue
+    }
+
+    /// This write once the profile value it owed has been stored.
+    func droppingOwedProfileValue() -> PendingSettingWrite {
+        PendingSettingWrite(
+            operation: operation,
+            scope: scope,
+            clearsDeviceValue: clearsDeviceValue,
+            onlyWhereProfileScoped: onlyWhereProfileScoped,
+            fallbackDeviceValue: fallbackDeviceValue,
+            storedProfileValue: storedProfileValue,
+            scopeIdentifier: scopeIdentifier,
+            profileId: profileId,
+            failedAttempts: failedAttempts,
+            isHeld: isHeld
+        )
+    }
+
+    /// What a profile write that clears this device's value still owes once
+    /// it stored `profileValue`: the clear alone.
+    func remainingDeviceClear(exposing profileValue: SettingJSONValue) -> PendingSettingWrite {
+        PendingSettingWrite(
+            operation: .delete,
+            scope: .profileDevice,
+            storedProfileValue: profileValue,
+            scopeIdentifier: scopeIdentifier,
+            profileId: profileId,
+            failedAttempts: failedAttempts,
+            isHeld: isHeld
+        )
+    }
+
     func bound(to scopeIdentifier: String?, profileId: String?) -> PendingSettingWrite {
         guard self.scopeIdentifier == nil || self.profileId == nil else { return self }
         return PendingSettingWrite(
             operation: operation,
+            scope: scope,
+            clearsDeviceValue: clearsDeviceValue,
+            onlyWhereProfileScoped: onlyWhereProfileScoped,
+            fallbackDeviceValue: fallbackDeviceValue,
+            owedProfileValue: owedProfileValue,
+            storedProfileValue: storedProfileValue,
             scopeIdentifier: self.scopeIdentifier ?? scopeIdentifier,
             profileId: self.profileId ?? profileId,
             failedAttempts: failedAttempts,
@@ -160,6 +288,16 @@ protocol PlayerSettingsWriteJournal: AnyObject, Sendable {
     /// newer, different write to the same key; a newer write of the same
     /// value is already true on the server.
     func retire(_ key: SettingKey, matching write: PendingSettingWrite)
+    /// Record that `write` stored `profileValue`, in the partition it was
+    /// captured from: the entry becomes `remainder` (removed when nil) if it is
+    /// still `write`, matched like ``retire(_:matching:)``; a newer entry that
+    /// carries the same value as owed drops it, since it is stored now.
+    func acknowledge(
+        _ key: SettingKey,
+        storing profileValue: SettingJSONValue,
+        matching write: PendingSettingWrite,
+        leaving remainder: PendingSettingWrite?
+    )
 }
 
 extension PlayerSettingsWriteJournal {
@@ -243,18 +381,53 @@ final class UserDefaultsSettingsWriteJournal: PlayerSettingsWriteJournal, @unche
     }
 
     func retire(_ key: SettingKey, matching write: PendingSettingWrite) {
-        guard let storageKey = storageKey(for: write.scopeIdentifier),
+        update(key, in: write.scopeIdentifier) { persisted in
+            persisted.hasSameDesiredState(as: write) ? .remove : .keep
+        }
+    }
+
+    func acknowledge(
+        _ key: SettingKey,
+        storing profileValue: SettingJSONValue,
+        matching write: PendingSettingWrite,
+        leaving remainder: PendingSettingWrite?
+    ) {
+        update(key, in: write.scopeIdentifier) { persisted in
+            if persisted.hasSameDesiredState(as: write) {
+                return remainder.map(EntryChange.replace) ?? .remove
+            }
+            if persisted.owedProfileValue == profileValue {
+                return .replace(persisted.droppingOwedProfileValue())
+            }
+            return .keep
+        }
+    }
+
+    private enum EntryChange {
+        case keep
+        case remove
+        case replace(PendingSettingWrite)
+    }
+
+    /// Rewrite `key`'s entry in one partition, as `change` decides from it.
+    private func update(
+        _ key: SettingKey,
+        in scopeIdentifier: String?,
+        _ change: (PendingSettingWrite) -> EntryChange
+    ) {
+        guard let storageKey = storageKey(for: scopeIdentifier),
               let data = defaults.data(forKey: storageKey) else {
             return
         }
         do {
             var stored = try SettingsWireCoding.makeDecoder()
                 .decode([String: PendingSettingWrite].self, from: data)
-            guard let persisted = stored[key.rawValue],
-                  persisted.operation == write.operation else {
-                return
+            guard let persisted = stored[key.rawValue] else { return }
+            switch change(persisted) {
+            case .keep: return
+            case .remove: stored.removeValue(forKey: key.rawValue)
+            case .replace(let next): stored[key.rawValue] = next
             }
-            stored.removeValue(forKey: key.rawValue)
             guard !stored.isEmpty else {
                 defaults.removeObject(forKey: storageKey)
                 return
@@ -265,7 +438,7 @@ final class UserDefaultsSettingsWriteJournal: PlayerSettingsWriteJournal, @unche
             defaults.set(updated, forKey: storageKey)
         } catch {
             Self.logger.warning(
-                "could not retire an acknowledged settings write: \(String(describing: error), privacy: .public)"
+                "could not update an acknowledged settings write: \(String(describing: error), privacy: .public)"
             )
         }
     }
@@ -333,6 +506,14 @@ final class PlayerSettingsFlusher: @unchecked Sendable {
     /// death between the request leaving and its response arriving would lose a
     /// write that is in neither place.
     private var inFlight: [SettingKey: PendingSettingWrite] = [:]
+    /// Ops the running drain has failed and re-queues when it finishes, unless
+    /// a newer op for the key replaces them. In neither `pending` nor
+    /// `inFlight` until then, yet still owed: the journal has to keep them, and
+    /// an op queued meanwhile has to inherit what they still owe.
+    private var failedInDrain: [SettingKey: PendingSettingWrite] = [:]
+    /// Keys whose owed profile value the running drain had refused, reported
+    /// once when it finishes whatever happens to the rest of their write.
+    private var refusedInDrain: Set<SettingKey> = []
     private var debounceTask: Task<Void, Never>?
     /// Bumped every time the debounce window is re-armed, so a waking timer can
     /// tell whether it is still the current one before it retires the
@@ -502,9 +683,26 @@ final class PlayerSettingsFlusher: @unchecked Sendable {
     var hasRevisionGatedWrites: Bool {
         lock.withLock {
             pending.contains { key, write in
-                guard !write.isHeld, write.failedAttempts == 0, case .set = write.operation else { return false }
-                return !key.revisionGatedMembers.isEmpty
+                guard !write.isHeld, write.failedAttempts == 0 else { return false }
+                return Self.waitsForManifestRevision(key, write)
             }
+        }
+    }
+
+    /// Whether sending `write` depends on the server's manifest revision.
+    private static func waitsForManifestRevision(_ key: SettingKey, _ write: PendingSettingWrite) -> Bool {
+        if key.isNewerThanMinimumServer {
+            return true
+        }
+        if write.owedProfileValue != nil, !key.revisionGatedMembers.isEmpty || key.profileScopeRevision != nil {
+            return true
+        }
+        switch write.operation {
+        case .set:
+            return !key.revisionGatedMembers.isEmpty
+                || (write.scope == .profile && key.profileScopeRevision != nil)
+        case .delete:
+            return write.onlyWhereProfileScoped && key.profileScopeRevision != nil
         }
     }
 
@@ -609,21 +807,42 @@ final class PlayerSettingsFlusher: @unchecked Sendable {
     }
 
     /// Values this device has not yet got onto the server — queued, in flight
-    /// or held — for the active partition. A refresh paints these over the
-    /// server's answer, which does not have them yet. Clears are not listed:
-    /// the value a clear exposes is only known once it lands.
-    func unsettledValues() -> [SettingKey: SettingJSONValue] {
+    /// or held — for the active partition, with the scope each lands at. A
+    /// refresh paints these over the server's answer, which does not have
+    /// them yet, so a pending profile value reads as the profile's rather than
+    /// as this device's own. Clears are not listed: the value a clear exposes
+    /// is only known once it lands.
+    func unsettledScopedValues() -> [SettingKey: (value: SettingJSONValue, scope: PlayerSettingWriteScope)] {
         lock.withLock {
-            var values: [SettingKey: SettingJSONValue] = [:]
-            for (key, write) in inFlight where write.scopeIdentifier == activeJournalScope {
-                if case .set(let value) = write.operation { values[key] = value }
+            var values: [SettingKey: (value: SettingJSONValue, scope: PlayerSettingWriteScope)] = [:]
+            // Whether a profile value for `key` reaches the profile, as far as
+            // the known revision says; send() makes the same call.
+            func reachesProfile(_ key: SettingKey) -> Bool {
+                manifestRevision.map { key.acceptsProfileScope(atRevision: $0) } ?? true
             }
-            for (key, write) in pending {
+            func paint(_ key: SettingKey, _ write: PendingSettingWrite) {
                 if case .set(let value) = write.operation {
-                    values[key] = value
+                    // A server that stores the key only per device gets the
+                    // profile write on this device's row.
+                    let scope = write.scope == .profile && !reachesProfile(key) ? .profileDevice : write.scope
+                    values[key] = (value, scope)
+                } else if let fallback = write.fallbackDeviceValue, let manifestRevision,
+                          !key.acceptsProfileScope(atRevision: manifestRevision) {
+                    // This server keeps the device edit rather than the clear.
+                    values[key] = (fallback, .profileDevice)
+                } else if let stored = write.storedProfileValue {
+                    // The clear exposes the profile value already stored.
+                    values[key] = (stored, .profile)
+                } else if let owed = write.owedProfileValue, reachesProfile(key) {
+                    // Clearing this device's value exposes the profile's,
+                    // which is the value still owed to it.
+                    values[key] = (owed, .profile)
                 } else {
                     values.removeValue(forKey: key)
                 }
+            }
+            for (key, write) in unsettledLocked() {
+                paint(key, write)
             }
             return values
         }
@@ -635,12 +854,16 @@ final class PlayerSettingsFlusher: @unchecked Sendable {
     /// answer as this device still holding its own value.
     var unsettledClears: Set<SettingKey> {
         lock.withLock {
-            var keys: Set<SettingKey> = []
-            for (key, write) in inFlight where write.scopeIdentifier == activeJournalScope {
-                if case .delete = write.operation { keys.insert(key) }
+            // A clear meant only for a server that stores the key per profile
+            // removes nothing from an older one.
+            func clears(_ key: SettingKey, _ write: PendingSettingWrite) -> Bool {
+                guard case .delete = write.operation else { return false }
+                guard write.onlyWhereProfileScoped, let manifestRevision else { return true }
+                return key.acceptsProfileScope(atRevision: manifestRevision)
             }
-            for (key, write) in pending {
-                if case .delete = write.operation {
+            var keys: Set<SettingKey> = []
+            for (key, write) in unsettledLocked() {
+                if clears(key, write) {
                     keys.insert(key)
                 } else {
                     keys.remove(key)
@@ -652,9 +875,23 @@ final class PlayerSettingsFlusher: @unchecked Sendable {
 
     /// Keys with any change still owed to the server, clears included.
     var unsettledKeys: Set<SettingKey> {
-        lock.withLock {
-            Set(pending.keys).union(inFlight.filter { $0.value.scopeIdentifier == activeJournalScope }.keys)
+        lock.withLock { Set(unsettledLocked().map(\.key)) }
+    }
+
+    /// Every op still owed for the active partition, oldest first, so a later
+    /// entry for a key is the newer one: failed earlier in the running drain,
+    /// then being sent, then queued. Caller must hold `lock`.
+    private func unsettledLocked() -> [(key: SettingKey, write: PendingSettingWrite)] {
+        var entries: [(key: SettingKey, write: PendingSettingWrite)] = []
+        for draining in [failedInDrain, inFlight] {
+            for (key, write) in draining where write.scopeIdentifier == activeJournalScope {
+                entries.append((key, write))
+            }
         }
+        for (key, write) in pending {
+            entries.append((key, write))
+        }
+        return entries
     }
 
     /// "Discard held change": forget every held change for the active
@@ -673,11 +910,10 @@ final class PlayerSettingsFlusher: @unchecked Sendable {
     func retryHeldChanges() async {
         lock.withLock {
             for (key, write) in pending where write.isHeld {
-                pending[key] = PendingSettingWrite(
-                    operation: write.operation,
-                    scopeIdentifier: write.scopeIdentifier,
-                    profileId: write.profileId
-                )
+                var retried = write
+                retried.failedAttempts = 0
+                retried.isHeld = false
+                pending[key] = retried
             }
             persistLocked()
         }
@@ -697,45 +933,103 @@ final class PlayerSettingsFlusher: @unchecked Sendable {
 
     // MARK: - Queueing
 
-    /// Queue one device-scoped write, restarting the debounce window.
-    func enqueue(_ key: SettingKey, value: SettingJSONValue) {
-        schedule(key) { existing, scopeIdentifier, profileId in
-            // The identical value already queued is the same desired state, so
-            // the pending op (and its retry count) stands. A held one does
-            // not: setting it again is the user asking for another try.
-            if case .set(let queued) = existing?.operation, queued == value, existing?.isHeld == false {
-                return existing
+    /// Queue one write, restarting the debounce window.
+    ///
+    /// `clearingDeviceValue` applies to a `profile` write only: once the
+    /// profile value is stored, this device's own value is deleted too. A
+    /// newer profile write replacing one that still owes that clear, or a
+    /// queued clear of the device value, keeps it, or a quick second edit
+    /// would leave the old device value in place.
+    func enqueue(
+        _ key: SettingKey,
+        value: SettingJSONValue,
+        scope: PlayerSettingWriteScope = .profileDevice,
+        clearingDeviceValue: Bool = false
+    ) {
+        schedule(key) { existing, draining, scopeIdentifier, profileId in
+            // A clear of this device's value, queued or being sent, is owed
+            // too: a profile edit right after turning the device override off
+            // must not replace the clear, or settle while a failed clear is
+            // dropped, and leave the device value in place.
+            let owedClear = [existing, draining].contains {
+                ($0?.scope == .profile && $0?.clearsDeviceValue == true)
+                    || ($0?.operation == .delete && $0?.scope == .profileDevice)
             }
-            return PendingSettingWrite(
+            let next = PendingSettingWrite(
                 operation: .set(value),
+                scope: scope,
+                clearsDeviceValue: clearingDeviceValue || owedClear,
+                owedProfileValue: Self.owedProfileValue(existing ?? draining),
                 scopeIdentifier: scopeIdentifier,
                 profileId: profileId
             )
+            // The identical value already queued is the same desired state, so
+            // the pending op (and its retry count) stands. A held one does
+            // not: setting it again is the user asking for another try.
+            if let existing, !existing.isHeld, existing.hasSameDesiredState(as: next) {
+                return existing
+            }
+            return next
         }
     }
 
     /// Queue clearing this device's value, so the setting inherits again.
-    func enqueueDelete(_ key: SettingKey) {
-        schedule(key) { existing, scopeIdentifier, profileId in
-            if case .delete = existing?.operation, existing?.isHeld == false {
-                return existing
+    /// The queue never deletes the profile's own value.
+    ///
+    /// `onlyWhereProfileScoped`: the clear is wanted only if the server
+    /// stores `key` per profile, which may not be known yet; see
+    /// ``PendingSettingWrite/onlyWhereProfileScoped``.
+    func enqueueDelete(_ key: SettingKey, onlyWhereProfileScoped: Bool = false) {
+        schedule(key) { existing, draining, scopeIdentifier, profileId in
+            // A device edit this clear replaces is kept for a server where
+            // the clear does not apply, or it would be lost there.
+            let replaced = existing ?? draining
+            var fallback = replaced?.fallbackDeviceValue
+            if replaced?.scope == .profileDevice, case .set(let value) = replaced?.operation {
+                fallback = value
             }
-            return PendingSettingWrite(
+            let next = PendingSettingWrite(
                 operation: .delete,
+                scope: .profileDevice,
+                onlyWhereProfileScoped: onlyWhereProfileScoped,
+                fallbackDeviceValue: fallback,
+                owedProfileValue: Self.owedProfileValue(existing ?? draining),
                 scopeIdentifier: scopeIdentifier,
                 profileId: profileId
             )
+            if let existing, !existing.isHeld, existing.hasSameDesiredState(as: next) {
+                return existing
+            }
+            return next
         }
     }
 
+    /// The profile value `replaced` has not stored yet, which an operation on
+    /// this device's value replacing it must carry (a profile write carrying
+    /// it drops it: its own value is newer). The queued op is newer than the
+    /// one draining and already carries what that one owed, so it wins.
+    private static func owedProfileValue(_ replaced: PendingSettingWrite?) -> SettingJSONValue? {
+        guard let replaced else { return nil }
+        if replaced.scope == .profile, case .set(let value) = replaced.operation { return value }
+        return replaced.owedProfileValue
+    }
+
+    /// `next` receives the op queued for `key`, the op for `key` a drain is
+    /// sending (or has failed and will retry) for this partition right now,
+    /// the partition and its profile.
     private func schedule(
         _ key: SettingKey,
-        _ next: (PendingSettingWrite?, String?, String?) -> PendingSettingWrite?
+        _ next: (PendingSettingWrite?, PendingSettingWrite?, String?, String?) -> PendingSettingWrite?
     ) {
         lock.lock()
         let scopeIdentifier = journal?.scopeIdentifier
         transitionScopeIfNeededLocked(to: scopeIdentifier)
-        pending[key] = next(pending[key], scopeIdentifier, journal?.profileId)
+        // A failed op waiting for the drain to end is as owed as one being
+        // sent, and the op queued now replaces it.
+        let draining = [inFlight[key], failedInDrain[key]].lazy
+            .compactMap { $0 }
+            .first { $0.scopeIdentifier == scopeIdentifier }
+        pending[key] = next(pending[key], draining, scopeIdentifier, journal?.profileId)
         persistLocked()
         // The debounced drain below sends every queued op, so a pending retry
         // timer would only duplicate it.
@@ -823,10 +1117,10 @@ final class PlayerSettingsFlusher: @unchecked Sendable {
 
     /// Write the queue to the journal. Caller must hold `lock`.
     ///
-    /// `alsoOwed` covers ops this drain has already failed and will re-queue
-    /// when it finishes: they are momentarily in neither `pending` nor
-    /// `inFlight`, and a process death in that window would drop them.
-    private func persistLocked(alsoOwed: [SettingKey: PendingSettingWrite] = [:]) {
+    /// Includes ``failedInDrain``: those ops are momentarily in neither
+    /// `pending` nor `inFlight`, and a process death in that window would drop
+    /// them.
+    private func persistLocked() {
         guard let journal else { return }
         let scopeIdentifier = journal.scopeIdentifier
         var owed = pending.filter { $0.value.scopeIdentifier == scopeIdentifier }
@@ -834,7 +1128,7 @@ final class PlayerSettingsFlusher: @unchecked Sendable {
             where write.scopeIdentifier == scopeIdentifier && owed[key] == nil {
             owed[key] = write
         }
-        for (key, write) in alsoOwed
+        for (key, write) in failedInDrain
             where write.scopeIdentifier == scopeIdentifier && owed[key] == nil {
             owed[key] = write
         }
@@ -867,7 +1161,8 @@ final class PlayerSettingsFlusher: @unchecked Sendable {
     private static func orderedKeys(
         in writes: [SettingKey: PendingSettingWrite]
     ) -> [SettingKey] {
-        let preferred = SettingKey.playerDeviceSettings.filter { writes[$0] != nil }
+        let preferred = (SettingKey.playerDeviceSettings + SettingKey.playerCellularQualitySettings)
+            .filter { writes[$0] != nil }
         let preferredSet = Set(preferred)
         let remaining = writes.keys
             .filter { !preferredSet.contains($0) }
@@ -876,15 +1171,15 @@ final class PlayerSettingsFlusher: @unchecked Sendable {
     }
 
     private func drain() async {
-        // Ops that failed during this drain. Held out of `pending` until the
-        // loop finishes, or the loop would retry them immediately and spin.
+        // Ops that fail during this drain go to `failedInDrain`, held out of
+        // `pending` until the loop finishes, or the loop would retry them
+        // immediately and spin.
         //
-        // Only the latest outcome per key may live here: a later pass that
+        // Only the latest outcome per key may live there: a later pass that
         // settles a newer op for the same key must evict the older failed
         // entry, or the re-queue below would resurrect a value the user has
         // already replaced. The `pending[key] == nil` guard below cannot catch
         // that — the very pass that sent the newer op already cleared it.
-        var retryable: [SettingKey: PendingSettingWrite] = [:]
         var rejected: [SettingKey] = []
 
         while true {
@@ -905,18 +1200,20 @@ final class PlayerSettingsFlusher: @unchecked Sendable {
             // (playback.preferred_quality and playback.max_bitrate_kbps) always
             // reach the server in the same sequence.
             for key in Self.orderedKeys(in: snapshot) {
-                guard let write = snapshot[key] else { continue }
-                let outcome = await send(key, write)
+                guard var write = snapshot[key] else { continue }
+                // `send` leaves `write` as what is still owed: less than the
+                // queued op once one of its two requests has landed.
+                let outcome = await send(key, &write)
                 lock.withLock {
                     if inFlight[key] == write {
                         inFlight.removeValue(forKey: key)
                     }
                     switch outcome {
                     case .settled, .rejected:
-                        retryable.removeValue(forKey: key)
+                        failedInDrain.removeValue(forKey: key)
                         journal?.retire(key, matching: write)
                     case .leftInOriginalJournal:
-                        retryable.removeValue(forKey: key)
+                        failedInDrain.removeValue(forKey: key)
                     case .retryWithBackoff:
                         var failed = write
                         failed.failedAttempts += 1
@@ -924,14 +1221,14 @@ final class PlayerSettingsFlusher: @unchecked Sendable {
                             failed.isHeld = true
                             log(key, "out of automatic retries", kept: true)
                         }
-                        retryable[key] = failed
+                        failedInDrain[key] = failed
                     case .retryOnNextTrigger:
-                        retryable[key] = write
+                        failedInDrain[key] = write
                     }
                     // The failed ops are not in `pending` yet — they go back at the
                     // end of the drain — so the journal is the union of everything
                     // still owed.
-                    persistLocked(alsoOwed: retryable)
+                    persistLocked()
                 }
                 if case .rejected = outcome {
                     rejected.append(key)
@@ -939,16 +1236,18 @@ final class PlayerSettingsFlusher: @unchecked Sendable {
             }
         }
 
-        typealias Completion = ([CheckedContinuation<Void, Never>], (@Sendable (SettingKey) -> Void)?)
-        let (resumed, rejectionObserver) = lock.withLock { () -> Completion in
+        typealias Completion = ([CheckedContinuation<Void, Never>], (@Sendable (SettingKey) -> Void)?, Set<SettingKey>)
+        let (resumed, rejectionObserver, refused) = lock.withLock { () -> Completion in
             let currentScopeIdentifier = journal?.scopeIdentifier
+            let retryable = failedInDrain
             for (key, write) in retryable
                 where write.scopeIdentifier == currentScopeIdentifier && pending[key] == nil {
                 // A newer op enqueued during the drain wins over the failed one:
-                // it is newer content.
+                // it is newer content, and inherited what the failed one owed.
                 pending[key] = write
             }
             inFlight.removeAll()
+            failedInDrain.removeAll()
             persistLocked()
             isDraining = false
             let resumed = waiters
@@ -966,14 +1265,16 @@ final class PlayerSettingsFlusher: @unchecked Sendable {
             if let attempt = retrying.min() {
                 scheduleRetryLocked(attempt: attempt)
             }
-            return (resumed, self.rejectionObserver)
+            let refused = refusedInDrain
+            refusedInDrain.removeAll()
+            return (resumed, self.rejectionObserver, refused)
         }
 
         for continuation in resumed {
             continuation.resume()
         }
         publishHeldKeys()
-        for key in rejected {
+        for key in rejected + refused.subtracting(rejected).sorted(by: { $0.rawValue < $1.rawValue }) {
             rejectionObserver?(key)
         }
     }
@@ -1008,7 +1309,45 @@ final class PlayerSettingsFlusher: @unchecked Sendable {
 
     // MARK: - Sending
 
-    private func send(_ key: SettingKey, _ write: PendingSettingWrite) async -> FlushOutcome {
+    /// Record that `write` stored `profileValue`, so only `remainder` is owed
+    /// (nothing when nil): a retry, a retried held change or a replay after
+    /// relaunch sends that alone instead of repeating a request the server
+    /// already took. On the profile row a repeat is not harmless, since another
+    /// device may have saved a newer value in between.
+    ///
+    /// One lock section, so an op queued meanwhile either sees the remainder
+    /// or has its owed copy of the stored value dropped here.
+    private func acknowledgeProfileValue(
+        _ key: SettingKey,
+        _ profileValue: SettingJSONValue,
+        of write: inout PendingSettingWrite,
+        leaving remainder: PendingSettingWrite?
+    ) {
+        let original = write
+        if let remainder {
+            write = remainder
+        }
+        lock.withLock {
+            if inFlight[key] == original {
+                inFlight[key] = remainder
+            }
+            if let queued = pending[key], queued.scopeIdentifier == original.scopeIdentifier,
+               queued.owedProfileValue == profileValue {
+                pending[key] = queued.droppingOwedProfileValue()
+            }
+            // The partition the write came from, which may no longer be the
+            // active one; persisting covers the active one.
+            journal?.acknowledge(key, storing: profileValue, matching: original, leaving: remainder)
+            persistLocked()
+        }
+    }
+
+    /// Send `write`, leaving it as what is still owed afterwards.
+    ///
+    /// A write can take two requests: the profile value it owes, or a profile
+    /// value and the clear of this device's value. Once the first lands, only
+    /// the rest is owed (see ``acknowledgeProfileValue(_:_:of:leaving:)``).
+    private func send(_ key: SettingKey, _ write: inout PendingSettingWrite) async -> FlushOutcome {
         if let journal, write.scopeIdentifier != journal.scopeIdentifier {
             log(
                 key,
@@ -1017,24 +1356,131 @@ final class PlayerSettingsFlusher: @unchecked Sendable {
             )
             return .leftInOriginalJournal
         }
+        if key.isNewerThanMinimumServer {
+            // An older server answers `unknown_setting` for a key it does not
+            // define, which would drop the edit as refused.
+            guard let revision = knownManifestRevision else {
+                log(key, "server manifest revision not known yet", kept: true)
+                return .retryOnNextTrigger
+            }
+            guard key.isServed(atRevision: revision) else {
+                // Nothing can be stored for the key there, so a clear is
+                // already true. A value stays owed on this device, which keeps
+                // using it, and goes once the server serves the key.
+                if case .delete = write.operation { return .settled }
+                log(key, "server predates this key; kept on this device", kept: true)
+                return .retryOnNextTrigger
+            }
+        }
         do {
+            if let owed = write.owedProfileValue {
+                var profileValue: SettingJSONValue? = owed
+                if !key.revisionGatedMembers.isEmpty || key.profileScopeRevision != nil {
+                    guard let revision = knownManifestRevision else {
+                        log(key, "server manifest revision not known yet", kept: true)
+                        return .retryOnNextTrigger
+                    }
+                    // A server that only stores this key per device had the
+                    // owed edit replaced on the device row anyway.
+                    profileValue = key.acceptsProfileScope(atRevision: revision)
+                        ? key.wireValue(owed, forServerRevision: revision)
+                        : nil
+                }
+                if let profileValue {
+                    do {
+                        try await transport.putValue(key: key, scope: .profile, value: profileValue, profileId: write.profileId)
+                    } catch let error as SettingsAPIError {
+                        guard case .release = error.writeFailure else { throw error }
+                        // Refused for the profile, and sending it again would
+                        // be refused the same way. This device's own edit in
+                        // the same write still goes.
+                        log(key, "owed profile value refused: \(error)", kept: false)
+                        lock.withLock { _ = refusedInDrain.insert(key) }
+                    }
+                    let remainder = write.droppingOwedProfileValue()
+                    acknowledgeProfileValue(key, owed, of: &write, leaving: remainder)
+                    if let journal, write.scopeIdentifier != journal.scopeIdentifier {
+                        log(key, "settings scope changed after the owed profile value; the rest is owed by the original scope's journal", kept: true)
+                        return .leftInOriginalJournal
+                    }
+                }
+            }
             switch write.operation {
             case .set(let value):
                 var wireValue = value
-                if !key.revisionGatedMembers.isEmpty {
+                var scope = write.scope
+                var clearsDeviceValue = write.clearsDeviceValue
+                let needsRevision = !key.revisionGatedMembers.isEmpty
+                    || (scope == .profile && key.profileScopeRevision != nil)
+                if needsRevision {
                     // Decided here rather than at enqueue: the queued value
-                    // keeps every member, so a write queued before the revision
-                    // was known is neither sent to an older server with members
-                    // it rejects nor stripped for a server that stores them.
+                    // keeps every member and its intended scope, so a write
+                    // queued before the revision was known is neither sent to
+                    // an older server in a shape it rejects nor downgraded for
+                    // a server that accepts it.
                     guard let revision = knownManifestRevision else {
                         log(key, "server manifest revision not known yet", kept: true)
                         return .retryOnNextTrigger
                     }
                     wireValue = key.wireValue(value, forServerRevision: revision)
+                    if scope == .profile, let required = key.profileScopeRevision, revision < required {
+                        // The server only stores this key per device, so the
+                        // device row is the only place the edit can live.
+                        scope = .profileDevice
+                        clearsDeviceValue = false
+                    }
                 }
-                try await transport.putValue(key: key, value: wireValue, profileId: write.profileId)
+                try await transport.putValue(
+                    key: key,
+                    scope: scope,
+                    value: wireValue,
+                    profileId: write.profileId
+                )
+                if scope == .profile {
+                    // With a clear to follow, from here the clear is the only
+                    // part owed.
+                    let remainder = clearsDeviceValue ? write.remainingDeviceClear(exposing: value) : nil
+                    acknowledgeProfileValue(key, value, of: &write, leaving: remainder)
+                }
+                if clearsDeviceValue {
+                    // The profile may have changed while the first request was
+                    // sent. The original partition's journal now holds the
+                    // clear, and replays it there.
+                    if let journal, write.scopeIdentifier != journal.scopeIdentifier {
+                        log(key, "settings scope changed before the device clear; owed by the original scope's journal", kept: true)
+                        return .leftInOriginalJournal
+                    }
+                    do {
+                        try await transport.deleteValue(
+                            key: key,
+                            scope: .profileDevice,
+                            profileId: write.profileId
+                        )
+                    } catch SettingsAPIError.noValueAtScope {
+                        // No device value, so the profile value already shows.
+                    }
+                }
             case .delete:
-                try await transport.deleteValue(key: key, profileId: write.profileId)
+                if write.onlyWhereProfileScoped, let required = key.profileScopeRevision {
+                    guard let revision = knownManifestRevision else {
+                        log(key, "server manifest revision not known yet", kept: true)
+                        return .retryOnNextTrigger
+                    }
+                    guard revision >= required else {
+                        // The device value is the only one this server keeps;
+                        // an edit the clear replaced still goes to it.
+                        if let fallback = write.fallbackDeviceValue {
+                            try await transport.putValue(
+                                key: key,
+                                scope: .profileDevice,
+                                value: key.wireValue(fallback, forServerRevision: revision),
+                                profileId: write.profileId
+                            )
+                        }
+                        return .settled
+                    }
+                }
+                try await transport.deleteValue(key: key, scope: write.scope, profileId: write.profileId)
             }
             return .settled
         } catch let error as SettingsAPIError {

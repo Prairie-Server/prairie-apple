@@ -94,6 +94,12 @@ struct AetherPlaybackStatsSnapshot: Equatable {
     let outputVideoFormat: VideoFormat
     let sourceDVProfile: Int?
     let dolbyVisionConversion: DolbyVisionConversion?
+    /// FFmpeg's name for the source's transfer, e.g. `arib-std-b67` for an
+    /// HLG Dolby Vision base layer.
+    let sourceVideoTransfer: String?
+    /// What the display can present. Sampled only on tvOS, where Aether
+    /// cannot confirm which mode the TV is in; nil everywhere else.
+    let tvDisplay: DisplayCapabilities?
     let sourceVideoWidth: Int32
     let sourceVideoHeight: Int32
     let sourceVideoPixelAspectRatio: Double
@@ -117,6 +123,12 @@ struct AetherPlaybackStatsSnapshot: Equatable {
         outputVideoFormat = engine.videoFormat
         sourceDVProfile = engine.sourceDVProfile
         dolbyVisionConversion = engine.dolbyVisionConversion
+        sourceVideoTransfer = engine.sourceVideoStreamFormat?.transfer
+        #if os(tvOS)
+        tvDisplay = AetherEngine.displayCapabilities
+        #else
+        tvDisplay = nil
+        #endif
         sourceVideoWidth = engine.sourceVideoWidth
         sourceVideoHeight = engine.sourceVideoHeight
         sourceVideoPixelAspectRatio = engine.sourceVideoPixelAspectRatio
@@ -140,6 +152,8 @@ struct AetherPlaybackStatsSnapshot: Equatable {
         outputVideoFormat: VideoFormat = .sdr,
         sourceDVProfile: Int? = nil,
         dolbyVisionConversion: DolbyVisionConversion? = nil,
+        sourceVideoTransfer: String? = nil,
+        tvDisplay: DisplayCapabilities? = nil,
         sourceVideoWidth: Int32 = 0,
         sourceVideoHeight: Int32 = 0,
         sourceVideoPixelAspectRatio: Double = 1,
@@ -161,6 +175,8 @@ struct AetherPlaybackStatsSnapshot: Equatable {
         self.outputVideoFormat = outputVideoFormat
         self.sourceDVProfile = sourceDVProfile
         self.dolbyVisionConversion = dolbyVisionConversion
+        self.sourceVideoTransfer = sourceVideoTransfer
+        self.tvDisplay = tvDisplay
         self.sourceVideoWidth = sourceVideoWidth
         self.sourceVideoHeight = sourceVideoHeight
         self.sourceVideoPixelAspectRatio = sourceVideoPixelAspectRatio
@@ -328,14 +344,53 @@ enum AetherPlaybackStatsProjection {
         guard snapshot.sourceVideoWidth > 0, snapshot.sourceVideoHeight > 0 else { return nil }
         if let planned = plannedDynamicRangeLabel(metadata) { return planned }
         let source = videoFormatLabel(snapshot.sourceVideoFormat, dvProfile: snapshot.sourceDVProfile)
-        if snapshot.outputVideoFormat == .dolbyVision,
+        let unconfirmed = unconfirmedSentVideoFormat(snapshot)
+        let outputFormat = unconfirmed ?? snapshot.outputVideoFormat
+        let suffix = unconfirmed == nil ? "" : " (unconfirmed)"
+        if outputFormat == .dolbyVision,
            snapshot.dolbyVisionConversion == .profile7ToProfile81 {
-            return "\(source) → Profile 8.1"
+            return "\(source) → Profile 8.1\(suffix)"
         }
-        let output = videoFormatLabel(snapshot.outputVideoFormat, dvProfile: nil)
-        return snapshot.sourceVideoFormat == snapshot.outputVideoFormat
-            ? source
-            : "\(source) → \(output)"
+        let output = videoFormatLabel(outputFormat, dvProfile: nil)
+        return snapshot.sourceVideoFormat == outputFormat
+            ? "\(source)\(suffix)"
+            : "\(source) → \(output)\(suffix)"
+    }
+
+    /// The range Aether sent to an Apple TV when it can't confirm the TV's
+    /// mode, or nil when its own `videoFormat` stands.
+    ///
+    /// `videoFormat` stays SDR until the panel proves it left SDR, and an
+    /// Apple TV whose format is set to SDR never proves it: its EDR headroom
+    /// reads 1.0 even after Match Dynamic Range switches it. Aether sends an
+    /// HDR display the HDR stream anyway, and tvOS doesn't say whether the TV
+    /// switched (its one setting covers frame-rate and range matching both),
+    /// so the label names what was sent and marks it unconfirmed. On a display
+    /// without Dolby Vision that is the Dolby Vision base layer, as Aether's
+    /// `effectiveVideoFormat` routes it.
+    private static func unconfirmedSentVideoFormat(_ snapshot: AetherPlaybackStatsSnapshot) -> VideoFormat? {
+        guard snapshot.outputVideoFormat == .sdr,
+              snapshot.route == .loopback || snapshot.route == .remoteBypass,
+              let display = snapshot.tvDisplay else { return nil }
+        switch snapshot.sourceVideoFormat {
+        case .sdr:
+            return nil
+        case .hdr10, .hdr10Plus:
+            return display.supportsHDR10 ? snapshot.sourceVideoFormat : nil
+        case .hlg:
+            return display.supportsHLG ? .hlg : nil
+        case .dolbyVision:
+            let transfer = snapshot.sourceVideoTransfer
+            let hasHLGBase = transfer == "arib-std-b67"
+            // Aether treats an unspecified transfer as PQ (Profile 5 often has an empty VUI).
+            let hasPQBase = transfer == nil || transfer == "smpte2084"
+            // Aether strips Dolby Vision from an SDR base layer (Profiles 8.2
+            // and 10.2) and plays that base as SDR on every display.
+            guard hasHLGBase || hasPQBase else { return nil }
+            if display.supportsDolbyVision { return .dolbyVision }
+            if hasHLGBase { return display.supportsHLG ? .hlg : nil }
+            return display.supportsHDR10 ? .hdr10 : nil
+        }
     }
 
     /// A server-transformed stream reaches Aether after conversion, so both of

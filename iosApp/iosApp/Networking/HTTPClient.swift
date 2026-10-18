@@ -156,16 +156,17 @@ actor HTTPClient {
     private enum RefreshFlightFailure: Sendable {
         /// A version mismatch (see `noteRefreshUpdateRequirement`).
         case updateRequired(UpdateRequirement)
-        /// 503 `provider_unavailable`: the provider re-check could not ask
-        /// the provider. The waiting requests fail with that problem, which
+        /// 503 `provider_unavailable` or `dependency_unavailable`: the
+        /// server could not ask the sign-in provider, or could not reach its
+        /// own database. The waiting requests fail with that problem, which
         /// reads as a transient outage, instead of the 401 that sent them
         /// to refresh (which would read as an ended session).
-        case providerUnavailable(body: String)
+        case unavailable(body: String)
 
         var error: Error {
             switch self {
             case .updateRequired(let requirement): return requirement
-            case .providerUnavailable(let body): return HTTPError.http(statusCode: 503, body: body)
+            case .unavailable(let body): return HTTPError.http(statusCode: 503, body: body)
             }
         }
     }
@@ -186,6 +187,9 @@ actor HTTPClient {
     /// Invalidates request captures even when a short transition begins and
     /// completes entirely while the request is suspended on another actor.
     private var requestDispatchRevision: UInt64 = 0
+    /// The local route requests may take (`LocalRoute.active`; tests pass
+    /// their own).
+    private let localRoute: @Sendable () -> LocalRoute?
 
     private struct IdentityTransitionWaiter {
         let id: UUID
@@ -206,7 +210,8 @@ actor HTTPClient {
         cancellationSessionBarrier: (@Sendable (Int) async -> Void)? = nil,
         scopedRefreshRetryBarrier: (@Sendable () async -> Void)? = nil,
         requestCaptureBarrier: (@Sendable () async -> Void)? = nil,
-        responseReceivedBarrier: (@Sendable () async -> Void)? = nil
+        responseReceivedBarrier: (@Sendable () async -> Void)? = nil,
+        localRoute: @escaping @Sendable () -> LocalRoute? = { LocalRoute.active }
     ) {
         // An injected session (tests) serves both timeout classes so mocks
         // observe every request regardless of the caller's timeout choice.
@@ -219,6 +224,7 @@ actor HTTPClient {
         self.scopedRefreshRetryBarrier = scopedRefreshRetryBarrier
         self.requestCaptureBarrier = requestCaptureBarrier
         self.responseReceivedBarrier = responseReceivedBarrier
+        self.localRoute = localRoute
 
         self.decoder = Self.makeJSONDecoder()
 
@@ -261,7 +267,9 @@ actor HTTPClient {
         // bytes, not a total budget, so slow-but-alive responses are
         // unaffected.
         config.timeoutIntervalForRequest = requestTimeout
-        return URLSession(configuration: config)
+        // The delegate only answers challenges from the active server's local
+        // route (LocalRouteTrust); every other host keeps default handling.
+        return URLSession(configuration: config, delegate: LocalRouteTrustDelegate.shared, delegateQueue: nil)
     }
 
     /// Parser for the fractional-second ISO-8601 timestamps the Prairie
@@ -328,7 +336,8 @@ actor HTTPClient {
             quietStatuses: [],
             timeout: nil,
             dispatchRevision: dispatchRevision,
-            reportReachability: true
+            reportReachability: true,
+            routesLocally: true
         )
     }
 
@@ -358,7 +367,8 @@ actor HTTPClient {
         quietStatuses: Set<Int>,
         timeout: TimeInterval?,
         dispatchRevision capturedRevision: UInt64? = nil,
-        reportReachability: Bool = false
+        reportReachability: Bool = false,
+        routesLocally: Bool = false
     ) async throws -> T {
         let dispatchRevision = try capturedRevision ?? captureRequestDispatchRevision()
         var request = try buildRequest(
@@ -376,7 +386,8 @@ actor HTTPClient {
         let (data, response) = try await perform(
             request: request,
             dispatchRevision: dispatchRevision,
-            reportReachability: reportReachability
+            reportReachability: reportReachability,
+            routesLocally: routesLocally
         )
         try ensureSuccess(data, response, method: "GET", quietStatuses: quietStatuses)
         return try Self.decode(data, path: path, decoder: decoder)
@@ -498,7 +509,8 @@ actor HTTPClient {
                 request: request,
                 timeout: timeout,
                 dispatchRevision: dispatchRevision,
-                dispatchRecord: dispatchRecord
+                dispatchRecord: dispatchRecord,
+                routesLocally: true
             )
 
             if response.statusCode == 401,
@@ -541,7 +553,8 @@ actor HTTPClient {
                         request: request,
                         timeout: timeout,
                         dispatchRevision: dispatchRevision,
-                        dispatchRecord: dispatchRecord
+                        dispatchRecord: dispatchRecord,
+                        routesLocally: true
                     )
                 } else {
                     // Refresh reported success but the recapture disagreed, so
@@ -618,8 +631,8 @@ actor HTTPClient {
         let renewed: Bool
         do {
             renewed = try await refreshScopedTokens(auth: auth, expected: requestIdentity, dispatchRevision: dispatchRevision)
-        } catch let error where Self.isProviderUnavailableRefresh(error) && !Self.hasExpired(auth.accessToken) {
-            // The bearer still works; the next renewal asks the provider again.
+        } catch let error where Self.isOutageRefresh(error) && !Self.hasExpired(auth.accessToken) {
+            // The bearer still works; the next renewal asks again.
             renewed = false
         }
         if renewed {
@@ -1005,8 +1018,8 @@ actor HTTPClient {
             let renewed: CapturedOrdinaryRequestAuth?
             do {
                 renewed = try await refreshTokens(expected: current, dispatchRevision: dispatchRevision)
-            } catch let error where Self.isProviderUnavailableRefresh(error) && !Self.hasExpired(accessToken) {
-                // The bearer still works; the next renewal asks the provider again.
+            } catch let error where Self.isOutageRefresh(error) && !Self.hasExpired(accessToken) {
+                // The bearer still works; the next renewal asks again.
                 renewed = nil
             }
             if let refreshed = renewed {
@@ -1042,7 +1055,8 @@ actor HTTPClient {
             request: request,
             timeout: timeout,
             dispatchRevision: dispatchRevision,
-            dispatchRecord: dispatchRecord
+            dispatchRecord: dispatchRecord,
+            routesLocally: true
         )
 
         if response.statusCode == 401, Self.shouldAttemptRefresh(path: path, method: method) {
@@ -1071,7 +1085,8 @@ actor HTTPClient {
                     request: retry,
                     timeout: timeout,
                     dispatchRevision: dispatchRevision,
-                    dispatchRecord: dispatchRecord
+                    dispatchRecord: dispatchRecord,
+                    routesLocally: true
                 )
                 await signalProfileVerificationIfRequired(retryData, retryResponse, sent: retry, auth: refreshedAuth)
                 if !acceptedStatuses.contains(retryResponse.statusCode) {
@@ -1391,12 +1406,17 @@ actor HTTPClient {
     /// the only places in this file that may call `session.data(for:)`, apart
     /// from the best-effort, unclassified `revokeSession`; adding another
     /// would reintroduce an unclassified path.
+    ///
+    /// `routesLocally` lets an ordinary active-server request take the local
+    /// route (``LocalRoute``). Explicit-URL reads never do: they name the
+    /// address they mean.
     private func perform(
         request: URLRequest,
         timeout: HTTPTimeout = .standard,
         dispatchRevision: UInt64,
         dispatchRecord: HTTPDispatchRecord? = nil,
-        reportReachability: Bool = true
+        reportReachability: Bool = true,
+        routesLocally: Bool = false
     ) async throws -> (Data, HTTPURLResponse) {
         #if os(iOS) || os(tvOS)
         // Templated once, at capture, before anything can log it. `request.url`
@@ -1428,7 +1448,8 @@ actor HTTPClient {
         let response: URLResponse
         do {
             let session = timeout == .extended ? longWaitSession : session
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await send(
+                request, on: session, routesLocally: routesLocally, dispatchRevision: dispatchRevision)
         } catch {
             if isRequestDispatchBlocked || requestDispatchRevision != dispatchRevision {
                 #if os(iOS) || os(tvOS)
@@ -1437,18 +1458,22 @@ actor HTTPClient {
                 #endif
                 throw HTTPError.requestIdentityChanged
             }
+            // A local-route failure that could not go again to the saved
+            // address says nothing about the server's reachability there.
+            let localRouteFailure = error as? LocalRouteFailure
+            let transportError = localRouteFailure?.underlying ?? error
             // Feed ConnectionMonitor from every transport failure so the app
             // learns "server down" passively. Cancellation says nothing about
             // reachability, so it is excluded.
-            if reportReachability {
-                await Self.noteServerUnreachable(for: error)
+            if reportReachability, localRouteFailure == nil {
+                await Self.noteServerUnreachable(for: transportError)
             }
             #if os(iOS) || os(tvOS)
             // Split on the same axis reachability does. A cancellation is
             // ordinary (screen dismissed, server switched) and high-volume, so
             // it is verbose; a real transport failure is the "it won't connect"
             // evidence this instrumentation exists for, so it is essential.
-            let isCancellation = (error as? URLError)?.code == .cancelled
+            let isCancellation = (transportError as? URLError)?.code == .cancelled
             DiagTrace.log(
                 isCancellation ? .verbose : .essential,
                 level: isCancellation ? .debug : .error,
@@ -1464,11 +1489,11 @@ actor HTTPClient {
                             ? HTTPDiagnosticsOutcome.cancelled
                             : HTTPDiagnosticsOutcome.transportError
                     ),
-                    "error_code": .string(HTTPDiagnosticsErrorCode.classify(transport: error)),
+                    "error_code": .string(HTTPDiagnosticsErrorCode.classify(transport: transportError)),
                 ]
             )
             #endif
-            throw HTTPError.network(underlying: error)
+            throw HTTPError.network(underlying: transportError)
         }
         if let responseReceivedBarrier {
             await responseReceivedBarrier()
@@ -1543,6 +1568,56 @@ actor HTTPClient {
         )
         #endif
         return (data, http)
+    }
+
+    /// Matched anywhere in the path, so a base path prefix cannot hide one.
+    private static func isAuthPath(_ url: URL?) -> Bool {
+        url.map { $0.path.contains("/api/v2/auth/") } ?? false
+    }
+
+    /// Sends `request`, over the local route when it is allowed and one is
+    /// active for its origin. The route is read once, so the response and any
+    /// failure belong to the route this request used; the response reports the
+    /// saved origin. A route failure drops that route, and a request that
+    /// cannot have reached the server, or is safe to repeat, goes again to the
+    /// saved address under the same dispatch fence. Anything else is thrown as
+    /// ``LocalRouteFailure``.
+    private func send(
+        _ request: URLRequest,
+        on session: URLSession,
+        routesLocally: Bool,
+        dispatchRevision: UInt64
+    ) async throws -> (Data, URLResponse) {
+        // Sign-in stays on the saved address: the server builds verification
+        // and redirect links from the origin a request arrived on.
+        guard routesLocally, !Self.isAuthPath(request.url), let route = localRoute(),
+              let routed = route.routed(request) else {
+            return try await session.data(for: request)
+        }
+        do {
+            let (data, response) = try await session.data(for: routed)
+            return (data, route.relabeled(response))
+        } catch {
+            // A cancelled task stays cancelled; that is not the route's doing.
+            if Task.isCancelled || error is CancellationError { throw error }
+            if LocalRoute.isRouteFailure(error) {
+                LocalRouteController.reportFailure(of: route)
+                #if os(iOS) || os(tvOS)
+                DiagTrace.log(
+                    .essential, level: .warning, category: .network, tag: "HTTP",
+                    message: "local route failed",
+                    attrs: ["error_code": .string(HTTPDiagnosticsErrorCode.classify(transport: error))]
+                )
+                #endif
+            }
+            // A cancellation pass for an identity change fails the fence below;
+            // a challenge the pin refused goes again to the saved address.
+            guard LocalRoute.mayRetryOnSavedAddress(after: error, method: request.httpMethod) else {
+                throw LocalRouteFailure(underlying: error)
+            }
+            try ensureRequestDispatchAllowed(expectedRevision: dispatchRevision)
+            return try await session.data(for: request)
+        }
     }
 
     /// One token-refresh round trip, classified the way ``perform`` classifies
@@ -1960,8 +2035,8 @@ actor HTTPClient {
                 await noteRefreshUpdateRequirement(requirement, serverId: auth.account.serverId)
                 return .updateRequired(requirement)
             }
-            if isProviderUnavailable(statusCode: http.statusCode, body: body) {
-                return .providerUnavailable(body: body)
+            if isRefreshOutage(statusCode: http.statusCode, body: body) {
+                return .unavailable(body: body)
             }
             guard shouldInvalidateSessionAfterRefreshFailure(http.statusCode) else {
                 return nil
@@ -2195,8 +2270,8 @@ actor HTTPClient {
                     await noteRefreshUpdateRequirement(requirement, serverId: expected.serverId)
                     return .updateRequired(requirement)
                 }
-                if isProviderUnavailable(statusCode: http.statusCode, body: body) {
-                    return .providerUnavailable(body: body)
+                if isRefreshOutage(statusCode: http.statusCode, body: body) {
+                    return .unavailable(body: body)
                 }
                 guard shouldInvalidateSessionAfterRefreshFailure(http.statusCode) else {
                     return nil
@@ -2382,16 +2457,34 @@ actor HTTPClient {
     /// Whether a refresh answer is the server's external-sign-in re-check
     /// failing closed: 503 with the `provider_unavailable` problem.
     static func isProviderUnavailable(statusCode: Int, body: String) -> Bool {
-        guard statusCode == 503, let data = body.data(using: .utf8),
+        statusCode == 503 && problemIdentifier(in: body) == "provider_unavailable"
+    }
+
+    /// Whether a refresh answer is an outage the session survives: 503
+    /// `provider_unavailable`, or 503 `dependency_unavailable` when the
+    /// server cannot reach its database.
+    static func isRefreshOutage(statusCode: Int, body: String) -> Bool {
+        guard statusCode == 503, let identifier = problemIdentifier(in: body) else { return false }
+        return identifier == "provider_unavailable" || identifier == "dependency_unavailable"
+    }
+
+    private static func problemIdentifier(in body: String) -> Substring? {
+        guard let data = body.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let type = object["type"] as? String else { return false }
-        return type.split(separator: "/").last == "provider_unavailable"
+              let type = object["type"] as? String else { return nil }
+        return type.split(separator: "/").last
     }
 
     /// Whether `error` is a refresh flight's `provider_unavailable` failure.
     private static func isProviderUnavailableRefresh(_ error: Error) -> Bool {
         guard case HTTPError.http(let statusCode, let body) = error else { return false }
         return isProviderUnavailable(statusCode: statusCode, body: body ?? "")
+    }
+
+    /// Whether `error` is a refresh flight's outage failure (`isRefreshOutage`).
+    private static func isOutageRefresh(_ error: Error) -> Bool {
+        guard case HTTPError.http(let statusCode, let body) = error else { return false }
+        return isRefreshOutage(statusCode: statusCode, body: body ?? "")
     }
 
     /// Match Android's refresh-failure classifier (AuthInterceptorImpl.kt).
@@ -2411,8 +2504,10 @@ actor HTTPClient {
     /// 503 `provider_unavailable` is the server's external-sign-in re-check
     /// failing closed because the provider (OIDC or LDAP) could not be asked:
     /// the session stays valid and the next refresh asks again, so it is kept
-    /// like any other 5xx. The requests waiting on that refresh fail with the
-    /// problem itself rather than their 401 (`RefreshFlightFailure`).
+    /// like any other 5xx. 503 `dependency_unavailable` is the server failing
+    /// to reach its database, and is kept the same way. The requests waiting
+    /// on either refresh fail with the problem itself rather than their 401
+    /// (`RefreshFlightFailure`).
     static func shouldInvalidateSessionAfterRefreshFailure(_ statusCode: Int) -> Bool {
         statusCode == 400 || statusCode == 401 || statusCode == 403
     }

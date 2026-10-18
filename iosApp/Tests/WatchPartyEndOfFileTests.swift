@@ -33,7 +33,7 @@ final class WatchPartyEndOfFileTests: XCTestCase {
         defer { adapter.stop() }
         adapter.canSeek = true
         var requests: [WatchPartyPlaybackAction] = []
-        adapter.onUserTransport = { action, _, _ in requests.append(action) }
+        adapter.onUserTransport = { action, _, _ in requests.append(action); return true }
         player.duration = 1_200
         player.currentTime = 1_200
         player.hasReachedEndOfFile = true
@@ -43,8 +43,10 @@ final class WatchPartyEndOfFileTests: XCTestCase {
         player.endScrub()
 
         XCTAssertEqual(requests, [.seek(300), .seek(600)])
-        // The room's command moves the playhead, not the request.
-        XCTAssertEqual(player.currentTime, 1_200)
+        // The timeline holds the newest request until the room's seek runs;
+        // only that command remounts the ended stream.
+        XCTAssertEqual(player.currentTime, 600)
+        XCTAssertTrue(player.hasReachedEndOfFile)
     }
 
     func testPlayFromTheEndIsNotSentToTheRoom() {
@@ -53,7 +55,7 @@ final class WatchPartyEndOfFileTests: XCTestCase {
         adapter.canPlayPause = true
         adapter.canSeek = true
         var requests: [WatchPartyPlaybackAction] = []
-        adapter.onUserTransport = { action, _, _ in requests.append(action) }
+        adapter.onUserTransport = { action, _, _ in requests.append(action); return true }
         player.hasReachedEndOfFile = true
         adapter.update(player.watchPartyPlaybackSnapshot)
 

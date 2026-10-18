@@ -10,6 +10,9 @@ import Foundation
 /// the next item. Cache-backed native stills are preferred because they do
 /// not open a second connection; software playback falls back to Aether's
 /// session-coupled `FrameExtractor` over the exact load URL and headers.
+/// When the server published seek-bar previews for the file, they answer
+/// what the cache cannot, before any second reader: they cover the whole
+/// file, not only what has been buffered, and need no decode.
 @MainActor
 final class AetherScrubPreviewProvider {
     struct Preview {
@@ -19,15 +22,24 @@ final class AetherScrubPreviewProvider {
 
     var onPreview: ((Preview?) -> Void)?
 
+    /// The server's previews for the file being played, set by the owner of
+    /// the playback item. They outlive load generations: a replan or quality
+    /// switch plays the same file.
+    var serverPreviews: ServerTrickplaySheets?
+
     private static let requestDebounce: Duration = .milliseconds(80)
     private static let thumbnailWidth = 480
 
     private struct PendingRequest {
         let sourceTime: Double
-        let playerTime: Double
+        /// Nil when the loaded transport cannot express the target; only
+        /// the server's previews can answer it then.
+        let playerTime: Double?
         let extractor: FrameExtractor?
         let sessionGeneration: UInt64
         let requestGeneration: UInt64
+        /// Asked again once its sheet arrived; it is not retried again.
+        let isRetry: Bool
     }
 
     private let engine: AetherEngine
@@ -64,6 +76,8 @@ final class AetherScrubPreviewProvider {
     func begin(atSourceTime sourceTime: Double) {
         guard let spec = activeSpec else { return }
         onPreview?(nil)
+        // The extractor is kept even when the server's previews are set: it
+        // is the fallback for a sheet that cannot be fetched.
         if !engine.supportsCacheBackedStills {
             if extractor == nil {
                 extractor = engine.makeFrameExtractor(
@@ -72,7 +86,7 @@ final class AetherScrubPreviewProvider {
                 )
             }
         }
-        if !engine.supportsCacheBackedStills, let extractor {
+        if serverPreviews == nil, !engine.supportsCacheBackedStills, let extractor {
             prewarmTask?.cancel()
             prewarmTask = Task {
                 await extractor.prewarm()
@@ -93,9 +107,14 @@ final class AetherScrubPreviewProvider {
     /// with a neutral (nil) publication. Converting them through
     /// `playerPosition(forSourceTime:)` clamps to player time 0, which would
     /// present the transport's first frame as if it were the requested source
-    /// moment. Only a server replan can produce a transport containing them,
-    /// and server-backed preview fetching is out of scope here.
+    /// moment. The server's previews still answer them, since they are
+    /// indexed by source time; without those, only a server replan can
+    /// produce a transport containing them.
     func request(atSourceTime sourceTime: Double) {
+        request(atSourceTime: sourceTime, isRetry: false)
+    }
+
+    private func request(atSourceTime sourceTime: Double, isRetry: Bool) {
         guard sourceTime.isFinite, sourceTime >= 0 else {
             // An invalid target still supersedes whatever was decoding: fence
             // the in-flight result and clear the published preview, or a stale
@@ -110,9 +129,12 @@ final class AetherScrubPreviewProvider {
         }
 
         requestGeneration &+= 1
-        guard case let .local(playerTime) = spec.timeline.seekDisposition(
-            forSourceTime: sourceTime
-        ) else {
+        let playerTime: Double?
+        if case let .local(time) = spec.timeline.seekDisposition(forSourceTime: sourceTime) {
+            playerTime = time
+        } else if serverPreviews != nil {
+            playerTime = nil
+        } else {
             pendingRequest = nil
             onPreview?(nil)
             return
@@ -122,7 +144,8 @@ final class AetherScrubPreviewProvider {
             playerTime: playerTime,
             extractor: extractor,
             sessionGeneration: sessionGeneration,
-            requestGeneration: requestGeneration
+            requestGeneration: requestGeneration,
+            isRetry: isRetry
         )
         if workerTask == nil {
             workerTask = Task { @MainActor [weak self] in
@@ -170,31 +193,65 @@ final class AetherScrubPreviewProvider {
             pendingRequest = nil
             guard sessionGeneration == request.sessionGeneration else { continue }
 
-            let playerTime = request.playerTime
-            let image: CGImage?
-            if engine.supportsCacheBackedStills {
-                // A nil is expected when the requested native segment is not
-                // resident. Do not fall through to a second network reader:
-                // that breaks single-connection/debrid sources.
+            // Cache-backed stills come first: they are local, exact, and
+            // answer quickly with nil when the segment is not resident. The
+            // server's previews cover the rest of the file. A second network
+            // reader is the last resort, after the server's previews.
+            var image: CGImage?
+            if engine.supportsCacheBackedStills, let playerTime = request.playerTime {
+                // Do not fall through to a second network reader: that
+                // breaks single-connection/debrid sources.
                 image = await engine.scrubThumbnail(
                     atSeconds: playerTime,
                     maxWidth: Self.thumbnailWidth
                 )
-            } else if let extractor = request.extractor {
+            }
+            if image == nil, let serverPreviews {
+                // On the software path the extractor answers a target in the
+                // stream, so do not hold it for a sheet still downloading.
+                let extractorAnswers = !engine.supportsCacheBackedStills
+                    && request.playerTime != nil && request.extractor != nil
+                image = await serverPreviews.thumbnail(
+                    atSourceTime: request.sourceTime,
+                    waitingForDownload: !extractorAnswers
+                )
+            }
+            if image == nil, !engine.supportsCacheBackedStills,
+               let playerTime = request.playerTime, let extractor = request.extractor {
                 image = await extractor.thumbnail(
                     at: playerTime,
                     maxWidth: Self.thumbnailWidth
                 )
-            } else {
-                image = nil
             }
 
             guard sessionGeneration == request.sessionGeneration,
                   requestGeneration == request.requestGeneration else {
                 continue
             }
-            guard let image else { continue }
+            guard let image else {
+                // A target outside the loaded stream must not keep the
+                // previous target's still (see `request(atSourceTime:)`).
+                if request.playerTime == nil { onPreview?(nil) }
+                if !request.isRetry { retryWhenSheetArrives(request) }
+                continue
+            }
             onPreview?(Preview(image: image, sourceTime: request.sourceTime))
+        }
+    }
+
+    /// A scrub held still past the buffer gave up on a sheet that was still
+    /// downloading, or that arrived just after. Ask once more for the same
+    /// target when it is held, unless a newer target or session has
+    /// replaced it.
+    private func retryWhenSheetArrives(_ request: PendingRequest) {
+        guard let sheets = serverPreviews else { return }
+        Task { @MainActor [weak self] in
+            guard await sheets.awaitSheet(atSourceTime: request.sourceTime),
+                  let self,
+                  self.serverPreviews === sheets,
+                  self.sessionGeneration == request.sessionGeneration,
+                  self.requestGeneration == request.requestGeneration else { return }
+            self.request(atSourceTime: request.sourceTime, isRetry: true)
         }
     }
 

@@ -397,6 +397,110 @@ final class HomeSectionsMutationTests: XCTestCase {
         XCTAssertEqual(cached?.sections.first?.items.first?.contentId, "new-profile-item")
     }
 
+    /// A Home load that fails while the app is in the background (cut off
+    /// when the app was suspended, or with no network while a push woke it)
+    /// leaves no error waiting for the person. Home keeps its placeholder
+    /// and loads again when the app returns.
+    @MainActor
+    func testLoadFailingInTheBackgroundShowsNoErrorAndRunsAgainOnReturn() async throws {
+        ResponseCache.shared.remove(CacheKey.homeSections)
+        let section = makeSection(id: "continue", type: "continue_watching", totalCount: 1,
+                                  items: [try makeItem(contentId: "target")])
+        let replies: [Result<SectionsResponse, Error>] = [
+            .failure(URLError(.networkConnectionLost)), .success(SectionsResponse(sections: [section])),
+        ]
+        var fetches = 0
+        let viewModel = HomeViewModel(fetchHomeSections: {
+            fetches += 1
+            return try replies[min(fetches, replies.count) - 1].get()
+        })
+        viewModel.isInBackground = true
+
+        await viewModel.loadSections()
+
+        XCTAssertNil(viewModel.error)
+        XCTAssertTrue(viewModel.isLoading)
+        XCTAssertEqual(fetches, 1)
+
+        viewModel.isInBackground = false
+        await viewModel.reloadIfInterrupted()
+
+        XCTAssertNil(viewModel.error)
+        XCTAssertFalse(viewModel.isLoading)
+        XCTAssertEqual(viewModel.sections.map(\.id), ["continue"])
+    }
+
+    /// Home stays mounted while the app is away, so returning to the app
+    /// retries a load that ended in an error, and leaves a Home that loaded
+    /// fine alone.
+    @MainActor
+    func testReturningToTheAppRetriesOnlyAFailedLoad() async throws {
+        ResponseCache.shared.remove(CacheKey.homeSections)
+        let section = makeSection(id: "continue", type: "continue_watching", totalCount: 1,
+                                  items: [try makeItem(contentId: "target")])
+        let replies: [Result<SectionsResponse, Error>] = [
+            .failure(APIv2Error.httpStatus(404)), .success(SectionsResponse(sections: [section])),
+        ]
+        var fetches = 0
+        let viewModel = HomeViewModel(fetchHomeSections: {
+            fetches += 1
+            return try replies[min(fetches, replies.count) - 1].get()
+        })
+        await viewModel.loadSections()
+        XCTAssertNotNil(viewModel.error)
+
+        await viewModel.reloadIfInterrupted()
+
+        XCTAssertNil(viewModel.error)
+        XCTAssertEqual(viewModel.sections.map(\.id), ["continue"])
+
+        await viewModel.reloadIfInterrupted()
+
+        XCTAssertEqual(fetches, 2)
+    }
+
+    /// A load still waiting when the app leaves may have had its request cut
+    /// off by suspension, with the failure delivered only after the app
+    /// returns. Returning replaces that load, and its late failure leaves no
+    /// error over the rows the new load brought.
+    @MainActor
+    func testReturningReplacesALoadCutOffInTheBackground() async throws {
+        ResponseCache.shared.remove(CacheKey.homeSections)
+        let section = makeSection(id: "continue", type: "continue_watching", totalCount: 1,
+                                  items: [try makeItem(contentId: "target")])
+        var fetches = 0
+        var cutOffRequest: CheckedContinuation<SectionsResponse, Error>?
+        var cutOffRequestStarted: CheckedContinuation<Void, Never>?
+        let viewModel = HomeViewModel(fetchHomeSections: {
+            fetches += 1
+            switch fetches {
+            case 1:
+                throw URLError(.networkConnectionLost)
+            case 2:
+                // The transient retry: held until the app has left and returned.
+                return try await withCheckedThrowingContinuation { continuation in
+                    cutOffRequest = continuation
+                    cutOffRequestStarted?.resume()
+                }
+            default:
+                return SectionsResponse(sections: [section])
+            }
+        })
+        let firstLoad = Task { await viewModel.loadSections() }
+        await withCheckedContinuation { cutOffRequestStarted = $0 }
+
+        viewModel.isInBackground = true
+        viewModel.isInBackground = false
+        await viewModel.reloadIfInterrupted()
+        cutOffRequest?.resume(throwing: URLError(.networkConnectionLost))
+        await firstLoad.value
+
+        XCTAssertEqual(fetches, 3)
+        XCTAssertNil(viewModel.error)
+        XCTAssertFalse(viewModel.isLoading)
+        XCTAssertEqual(viewModel.sections.map(\.id), ["continue"])
+    }
+
     private func makeItem(
         contentId: String,
         progressUpdatedAt: String? = "2026-07-10T12:00:00Z",

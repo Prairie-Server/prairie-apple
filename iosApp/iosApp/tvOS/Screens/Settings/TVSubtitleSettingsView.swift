@@ -5,7 +5,7 @@ import SwiftUI
 /// the two-pane `TVSettingsView`. Profile-wide prefs (language / behavior
 /// / forced / metadata language) save through the `ProfilePrefsEditor`
 /// `set…` methods their controls call; the appearance block writes a
-/// per-device override directly.
+/// profile value, or this Apple TV's own while its override is on.
 struct TVSubtitleSettingsPane: View {
     @Bindable var viewModel: SettingsViewModel
     let detailFocus: FocusState<TVSettingsDetailFocus?>.Binding
@@ -20,13 +20,15 @@ struct TVSubtitleSettingsPane: View {
             }
             appearanceSection
         }
-        .alert("Reset Custom Appearance?", isPresented: $showResetConfirmation) {
+        .alert("Reset Appearance?", isPresented: $showResetConfirmation) {
             Button("Reset", role: .destructive) {
                 Task { await viewModel.setSubtitleAppearance(.default) }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This restores all custom subtitle appearance options to their defaults.")
+            Text(viewModel.subtitleUsesDeviceAppearanceOverride
+                 ? "This restores this Apple TV's subtitle appearance to the defaults."
+                 : "This restores this profile's subtitle appearance to the defaults on all devices.")
         }
     }
 
@@ -120,7 +122,7 @@ struct TVSubtitleSettingsPane: View {
         .focused(detailFocus, equals: .subtitleUseDeviceSettings)
 
         TVSettingsToggleRow(
-            title: "Custom Subtitle Appearance",
+            title: "Only on This Apple TV",
             isOn: viewModel.subtitleUsesDeviceAppearanceOverride
         ) {
             let enabled = !viewModel.subtitleUsesDeviceAppearanceOverride
@@ -128,7 +130,10 @@ struct TVSubtitleSettingsPane: View {
         }
         .disabled(viewModel.subtitleMatchesSystemAppearance)
 
-        TVSettingsNestedGroup(enabled: viewModel.subtitleUsesDeviceAppearanceOverride) {
+        TVSettingsNestedGroup(
+            enabled: appearanceEditable,
+            disabledHint: "Turn off Use Device Settings to make changes"
+        ) {
             pickerRow("Font Size", options: TVSettingsOptions.subtitleSize,
                       selection: viewModel.subtitleAppearance.fontSize.rawValue, kind: .fontSize)
             pickerRow("Font Family", options: TVSettingsOptions.fontFamily,
@@ -141,7 +146,7 @@ struct TVSubtitleSettingsPane: View {
                     title: "Text Opacity",
                     value: "\(viewModel.subtitleAppearance.textOpacity)%"
                 ) {
-                    guard viewModel.subtitleUsesDeviceAppearanceOverride else { return }
+                    guard appearanceEditable else { return }
                     showPicker(.textOpacity)
                 }
                 .focused(detailFocus, equals: .subtitleTextOpacity)
@@ -151,7 +156,7 @@ struct TVSubtitleSettingsPane: View {
                 title: "Text Outline",
                 isOn: viewModel.subtitleAppearance.textOutline
             ) {
-                guard viewModel.subtitleUsesDeviceAppearanceOverride else { return }
+                guard appearanceEditable else { return }
                 var next = viewModel.subtitleAppearance
                 next.textOutline.toggle()
                 Task { await viewModel.setSubtitleAppearance(next) }
@@ -166,7 +171,7 @@ struct TVSubtitleSettingsPane: View {
                     )
                     : "—"
             ) {
-                guard viewModel.subtitleUsesDeviceAppearanceOverride else { return }
+                guard appearanceEditable else { return }
                 showPicker(.outlineColor)
             }
             .focused(detailFocus, equals: .subtitleOutlineColor)
@@ -180,7 +185,7 @@ struct TVSubtitleSettingsPane: View {
                     ? "\(viewModel.subtitleAppearance.backgroundOpacity)%"
                     : "—"
             ) {
-                guard viewModel.subtitleUsesDeviceAppearanceOverride else { return }
+                guard appearanceEditable else { return }
                 showPicker(.backgroundOpacity)
             }
             .focused(detailFocus, equals: .subtitleBackgroundOpacity)
@@ -194,7 +199,7 @@ struct TVSubtitleSettingsPane: View {
                     )
                     : "—"
             ) {
-                guard viewModel.subtitleUsesDeviceAppearanceOverride else { return }
+                guard appearanceEditable else { return }
                 showPicker(.backgroundColor)
             }
             .focused(detailFocus, equals: .subtitleBackgroundColor)
@@ -202,8 +207,8 @@ struct TVSubtitleSettingsPane: View {
             pickerRow("Position", options: TVSettingsOptions.position,
                       selection: viewModel.subtitleAppearance.position.rawValue, kind: .position)
 
-            Button("Reset Custom Appearance", role: .destructive) {
-                guard viewModel.subtitleUsesDeviceAppearanceOverride else { return }
+            Button("Reset Appearance", role: .destructive) {
+                guard appearanceEditable else { return }
                 showResetConfirmation = true
             }
             .buttonStyle(TVSettingsPaneRowStyle(isDestructive: true))
@@ -212,14 +217,20 @@ struct TVSubtitleSettingsPane: View {
         TVSettingsFooter(appearanceFooterText)
     }
 
+    /// Appearance edits save for the profile, or for this Apple TV while its
+    /// override is on; only following the system captions locks them.
+    private var appearanceEditable: Bool {
+        !viewModel.subtitleMatchesSystemAppearance
+    }
+
     private var appearanceFooterText: String {
         let source: String
         if viewModel.subtitleMatchesSystemAppearance {
             source = "Following this Apple TV's caption language, display behavior, CC/SDH preference, font, colors, opacity, edges, size, and caption window from Settings → Accessibility."
         } else if viewModel.subtitleUsesDeviceAppearanceOverride {
-            source = "Appearance is saved on the server for this profile on this Apple TV."
+            source = "Saved only on this Apple TV. Other devices use the profile's settings."
         } else {
-            source = "Appearance is using the server fallback for this profile on this Apple TV."
+            source = "Saved for this profile on all devices."
         }
         let authoredStyleBehavior = viewModel.subtitleMatchesSystemAppearance
             ? " Subtitles with built-in styling follow each device caption option's Video Overrides Style choice."
@@ -259,7 +270,7 @@ struct TVSubtitleSettingsPane: View {
             title: title,
             value: TVSettingsOptions.label(for: selection, in: options)
         ) {
-            guard viewModel.subtitleUsesDeviceAppearanceOverride else { return }
+            guard appearanceEditable else { return }
             showPicker(kind)
         }
         .focused(detailFocus, equals: kind.returnFocus)

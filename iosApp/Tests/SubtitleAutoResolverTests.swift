@@ -404,4 +404,56 @@ final class SubtitleAutoResolverTests: XCTestCase {
         ))
         XCTAssertEqual(result, .select(external))
     }
+
+    // MARK: - Mode off with forced subtitles
+
+    func testModeOffWithShowForcedSelectsTheForcedTrackInTheAudioLanguage() {
+        let tracks = [
+            track(id: 1, lang: "en"),
+            track(id: 2, lang: "fr", forced: true),
+            track(id: 3, lang: "en", forced: true, title: "ENG FORCED"),
+        ]
+        let result = SubtitleAutoResolver.resolve(inputs(
+            preferredLanguage: "fr", mode: .off, showForced: true, tracks: tracks, audioLanguage: "eng"
+        ))
+        XCTAssertEqual(result, .select(tracks[2]))
+    }
+
+    func testModeOffWithoutShowForcedDisables() {
+        let tracks = [track(id: 1, lang: "en"), track(id: 2, lang: "en", forced: true)]
+        let result = SubtitleAutoResolver.resolve(inputs(
+            preferredLanguage: "en", mode: .off, showForced: false, tracks: tracks, audioLanguage: "en"
+        ))
+        XCTAssertEqual(result, .disable)
+    }
+
+    /// Never a full-dialogue track, and never a forced track in another
+    /// language than the audio.
+    func testModeOffWithShowForcedDisablesWhenNoForcedTrackMatchesTheAudio() {
+        let tracks = [track(id: 1, lang: "en"), track(id: 2, lang: "fr", forced: true)]
+        XCTAssertEqual(
+            SubtitleAutoResolver.resolve(inputs(
+                preferredLanguage: "en", mode: .off, showForced: true, tracks: tracks, audioLanguage: "en"
+            )),
+            .disable
+        )
+        XCTAssertEqual(
+            SubtitleAutoResolver.resolve(inputs(
+                preferredLanguage: "en", mode: .off, showForced: true, tracks: tracks, audioLanguage: nil
+            )),
+            .disable,
+            "an unknown audio language selects nothing"
+        )
+    }
+
+    /// The per-series sticky pick does not bring dialogue subtitles back
+    /// while the mode is off.
+    func testModeOffIgnoresTheSeriesTrackSignature() {
+        let tracks = [track(id: 1, lang: "en"), track(id: 2, lang: "en", forced: true)]
+        let result = SubtitleAutoResolver.resolve(inputs(
+            preferredLanguage: "en", mode: .off, showForced: true, tracks: tracks, audioLanguage: "en",
+            signature: SubtitleTrackSignature(language: "en", forced: false, hearingImpaired: false)
+        ))
+        XCTAssertEqual(result, .select(tracks[1]))
+    }
 }
