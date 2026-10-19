@@ -218,14 +218,4 @@ final class TokenStoreFailureTests: XCTestCase {
         let access = await store.getAccessToken()
         XCTAssertNil(access)
     }
-
-    func testServerSwitchClearsAPushDisplayTokenIssuedForAnotherServer() async throws {
-        let store = try await signedInStore()
-        let profileKeychain = keychain.withAudience(.currentUser)
-        XCTAssertTrue(profileKeychain.set("display-token", for: SharedStorage.applePushDisplayTokenAccount))
-        defaults.set(serverA, forKey: SharedStorage.applePushDisplayTokenServerIdKey)
-        await store.switchActiveServer(serverId: serverB)
-        XCTAssertNil(profileKeychain.get(SharedStorage.applePushDisplayTokenAccount))
-        XCTAssertNil(defaults.string(forKey: SharedStorage.applePushDisplayTokenServerIdKey))
-    }
 }

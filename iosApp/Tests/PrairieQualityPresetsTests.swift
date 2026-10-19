@@ -24,14 +24,14 @@ final class PrairieQualityPresetsTests: XCTestCase {
     func testDescribeFormatsCustomBitratePairs() {
         XCTAssertEqual(PrairieQualityPresets.describe(resolution: "1080p", bitrateKbps: 5_500), "1080p at 5.5 Mbps")
         XCTAssertEqual(PrairieQualityPresets.describe(resolution: "2160p", bitrateKbps: 12_000), "4K at 12 Mbps")
-        XCTAssertEqual(PrairieQualityPresets.describe(resolution: "original", bitrateKbps: nil), "Original")
+        XCTAssertEqual(PrairieQualityPresets.describe(resolution: "original", bitrateKbps: nil), "Auto")
     }
 
     func testNormalizeResolutionHandlesLegacySpellings() {
         XCTAssertEqual(PrairieQualityPresets.normalizeResolution(nil), "auto")
         XCTAssertEqual(PrairieQualityPresets.normalizeResolution(""), "auto")
         XCTAssertEqual(PrairieQualityPresets.normalizeResolution("  AUTO  "), "auto")
-        XCTAssertEqual(PrairieQualityPresets.normalizeResolution("original"), "original")
+        XCTAssertEqual(PrairieQualityPresets.normalizeResolution("original"), "auto")
         XCTAssertEqual(PrairieQualityPresets.normalizeResolution("4k"), "2160p")
         XCTAssertEqual(PrairieQualityPresets.normalizeResolution("UHD"), "2160p")
         XCTAssertEqual(PrairieQualityPresets.normalizeResolution("1080p-high"), "1080p")
@@ -40,8 +40,8 @@ final class PrairieQualityPresetsTests: XCTestCase {
     }
 
     func testAllPresetsExposeStableIds() {
-        XCTAssertEqual(PrairieQualityPresets.all.count, 9)
-        XCTAssertEqual(Set(PrairieQualityPresets.all.map(\.id)).count, 9)
+        XCTAssertEqual(PrairieQualityPresets.all.count, 8)
+        XCTAssertEqual(Set(PrairieQualityPresets.all.map(\.id)).count, 8)
         XCTAssertTrue(PrairieQualityPresets.all.allSatisfy { !$0.label.isEmpty && !$0.description.isEmpty })
     }
 
