@@ -75,7 +75,7 @@ final class AICapabilities {
 final class ImageSizeCapability: @unchecked Sendable {
     static let shared = ImageSizeCapability()
     var requestQuery: [String: String] { [:] }
-    func requestQueryForImageRequest() async -> [String: String] { [:] }
+    func requestQueryForImageRequest(_ surface: ArtworkSurface, slotWidthsOnly: Bool = false) async -> [String: String] { [:] }
     func reset() {}
     func refresh(retryFailed: Bool = true) async {}
 }

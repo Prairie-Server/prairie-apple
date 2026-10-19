@@ -430,6 +430,10 @@ targets:
       - path: iosApp/Navigation/AppNavPreferences.swift
       - path: iosApp/Control/tvOS/RemotePlaybackIdentityManager.swift
       - path: iosApp/Screens/Player/PlayerTrack.swift
+      - path: iosApp/Screens/Player/TrackLabels.swift
+      - path: iosApp/Screens/Player/OfflinePreparedTrackInventory.swift
+      - path: iosApp/Screens/Player/PlaybackPrefsResolver.swift
+      - path: iosApp/Screens/Player/ApplePlaybackQuality.swift
       - path: iosApp/Screens/Auth/AuthModels.swift
       - path: iosApp/Screens/Calendar/CalendarModels.swift
       - path: iosApp/Screens/Player/Subtitles/SubtitleAppearance.swift
