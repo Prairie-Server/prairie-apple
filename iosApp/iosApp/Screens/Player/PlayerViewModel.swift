@@ -10513,7 +10513,7 @@ private extension PlayerTrack {
     /// Rich one-line label for the stats panel and playback event log,
     /// e.g. "English · 5.1 · EAC3 · Default".
     var statsLabel: String {
-        ([languageFirstPrimaryLabel] + attributePillLabels(includeLanguage: false))
+        ([primaryLabel] + attributePillLabels())
             .joined(separator: " · ")
     }
 }
