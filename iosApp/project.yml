@@ -411,6 +411,7 @@ targets:
           - RequestsFeatureStore.swift
           - LiveTVFeatureStore.swift
           - LAN/FramedJSONSession.swift
+          - ServerTrickplaySheets.swift
       - path: iosApp/Shared/SharedStorage.swift
       - path: iosApp/Shared/KeychainAudience.swift
       - path: iosApp/Shared/ImageSizeSelection.swift
