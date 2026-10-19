@@ -439,6 +439,8 @@ targets:
       - path: iosApp/Screens/Player/AppleQualityAxes.swift
       - path: iosApp/Components/Images/ArtworkDisplay.swift
       - path: iosApp/Screens/Auth/AuthModels.swift
+      # NativeSignIn.origin(of:) is used by Networking/LocalRoute; deps are all in Networking.
+      - path: iosApp/Screens/Auth/ExternalSignIn.swift
       - path: iosApp/Screens/Calendar/CalendarModels.swift
       - path: iosApp/Screens/Player/Subtitles/SubtitleAppearance.swift
       - path: iosApp/Screens/Player/ProtocolV3/PlaybackProtocolV3Models.swift
