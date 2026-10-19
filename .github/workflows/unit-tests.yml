@@ -143,6 +143,11 @@ jobs:
             PrairieNetworkingTests/TitleArtPreferencesTests
             PrairieNetworkingTests/TitleArtWritePlanTests
             PrairieNetworkingTests/NetworkingUpstreamGateFillTests
+            # Upstream's local-route and server trickplay suites (Nuke-linked host).
+            PrairieNetworkingTests/LocalRouteTests
+            PrairieNetworkingTests/LocalRouteControllerTests
+            PrairieNetworkingTests/ServerTrickplayTests
+            PrairieNetworkingTests/ServerTrickplaySheetsTests
           )
 
           ONLY_TESTING_ARGS=()
