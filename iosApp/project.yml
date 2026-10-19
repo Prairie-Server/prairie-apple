@@ -411,7 +411,6 @@ targets:
           - RequestsFeatureStore.swift
           - LiveTVFeatureStore.swift
           - LAN/FramedJSONSession.swift
-          - ServerTrickplaySheets.swift
       - path: iosApp/Shared/SharedStorage.swift
       - path: iosApp/Shared/KeychainAudience.swift
       - path: iosApp/Shared/ImageSizeSelection.swift
@@ -438,6 +437,8 @@ targets:
       - path: iosApp/Screens/Player/ApplePlaybackQuality.swift
       - path: iosApp/Screens/Player/AppleQualityAxes.swift
       - path: iosApp/Components/Images/ArtworkDisplay.swift
+      # Nuke loader over Networking/LocalRoute; LocalRouteTests drives it.
+      - path: iosApp/Components/Images/LocalRouteDataLoader.swift
       - path: iosApp/Screens/Auth/AuthModels.swift
       # NativeSignIn.origin(of:) is used by Networking/LocalRoute; deps are all in Networking.
       - path: iosApp/Screens/Auth/ExternalSignIn.swift
@@ -464,6 +465,11 @@ targets:
       - path: iosApp/Shared/PrairieURLScheme.swift
       - path: iosApp/Components/Ratings/DisplayRating.swift
       - path: CI/NetworkingHost
+    dependencies:
+      # ServerTrickplaySheets and LocalRouteDataLoader load through Nuke
+      # (macOS-capable); their upstream suites run in PrairieNetworkingTests.
+      - package: Nuke
+        product: Nuke
     settings:
       base:
         # Product/module must be `Prairie` so shared `@testable import Prairie`
@@ -568,6 +574,11 @@ targets:
           - HiddenLibraryPreferenceTests.swift
           - ResponseSnapshotStoreTests.swift
           - TitleArtPreferencesTests.swift
+          # Upstream's local-route (LocalRoute/*, LocalRouteDataLoader) and
+          # server trickplay suites, against the Nuke-linked host.
+          - LocalRouteTests.swift
+          - Support/RedirectingOrigin.swift
+          - ServerTrickplayTests.swift
           # Covers the upstream Networking models those app-level suites test.
           - NetworkingUpstreamGateFillTests.swift
       - path: Tests/Fixtures/SettingsContract/conformance.json

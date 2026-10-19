@@ -646,4 +646,51 @@ final class NetworkingUpstreamGateFillTests: XCTestCase {
         XCTAssertEqual(CacheKey.catalogCollectionItems("c"), "collection:c:catalog:v2")
         cache.seedFromSnapshots()
     }
+
+    // MARK: - 2026-10-18 merge: setting revisions, bitrate picker, artwork widths
+
+    func testSubtitleSyncProfileScopeIsRevisionGated() {
+        let key = SettingKey.playerSubtitleSyncMs
+        XCTAssertEqual(key.profileScopeRevision, SettingKey.subtitleSyncProfileScopeRevision)
+        XCTAssertFalse(key.acceptsProfileScope(atRevision: SettingKey.subtitleSyncProfileScopeRevision - 1))
+        XCTAssertTrue(key.acceptsProfileScope(atRevision: SettingKey.subtitleSyncProfileScopeRevision))
+        for other in SettingKey.allCases where other != key {
+            XCTAssertNil(other.profileScopeRevision, other.rawValue)
+            XCTAssertTrue(other.acceptsProfileScope(atRevision: 0), other.rawValue)
+            XCTAssertEqual(other.isNewerThanMinimumServer, other.introducedIn > SettingKey.minimumServerRevision)
+        }
+    }
+
+    func testBitratePickerLabelsAndKeepsAnUncoveredStoredCap() {
+        XCTAssertEqual(PrairieQualityPresets.bitrateLabel(nil), PrairieQualityPresets.noBitrateLimitLabel)
+        XCTAssertEqual(PrairieQualityPresets.bitrateLabel(0), PrairieQualityPresets.noBitrateLimitLabel)
+        XCTAssertEqual(PrairieQualityPresets.bitrateLabel(8_000), ApplePlaybackQuality.formatBitrate(kbps: 8_000))
+
+        let choices = PrairieQualityPresets.bitrateChoicesKbps
+        XCTAssertEqual(PrairieQualityPresets.bitrateChoices(including: nil), choices)
+        XCTAssertEqual(PrairieQualityPresets.bitrateChoices(including: choices[0]), choices)
+        let custom = PrairieQualityPresets.bitrateChoices(including: 12_345)
+        XCTAssertEqual(custom, (choices + [12_345]).sorted(by: >))
+    }
+
+    #if os(macOS)
+    func testMacArtworkSlotsFollowTheContentColumn() {
+        let display = ArtworkDisplay(scale: 2, screenSize: CGSize(width: 1840, height: 1000))
+        // 1600 pt column; Home's hero is 0.8 x 1000 = 800 pt high.
+        XCTAssertEqual(ArtworkSurface.home.slots(on: display).backdrop, 1600)
+        XCTAssertEqual(ArtworkSurface.detail.slots(on: display).backdrop, 1600)
+        XCTAssertEqual(ArtworkSurface.shelves.slots(on: display).backdrop, 340)
+        XCTAssertEqual(ArtworkSurface.episodes.slots(on: display).still, 240)
+        XCTAssertEqual(ArtworkSurface.seasons.slots(on: display).poster, 130)
+        for surface in [ArtworkSurface.similar, .cards, .lists] {
+            XCTAssertEqual(surface.slots(on: display).poster, 185)
+        }
+        XCTAssertNil(ArtworkSurface.watch.slots(on: display).poster)
+        XCTAssertEqual(ArtworkSurface.shuffle.slots(on: display).imageSize, "medium")
+        // A window narrower than the sidebar leaves a 0 pt column, so the
+        // hero's height decides its width.
+        let narrow = ArtworkDisplay(scale: 1, screenSize: CGSize(width: 100, height: 900))
+        XCTAssertEqual(ArtworkSurface.detail.slots(on: narrow).backdrop, ArtworkSurface.fillWidth(CGSize(width: 0, height: 520)))
+    }
+    #endif
 }
