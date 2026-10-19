@@ -431,6 +431,8 @@ targets:
       - path: iosApp/Control/tvOS/RemotePlaybackIdentityManager.swift
       - path: iosApp/Screens/Player/PlayerTrack.swift
       - path: iosApp/Screens/Player/TrackLabels.swift
+      - path: iosApp/Screens/Player/Subtitles/SubtitleDisplayOrder.swift
+      - path: iosApp/Screens/Player/Subtitles/SubtitleCodecClassifier.swift
       - path: iosApp/Screens/Player/OfflinePreparedTrackInventory.swift
       - path: iosApp/Screens/Player/PlaybackPrefsResolver.swift
       - path: iosApp/Screens/Player/ApplePlaybackQuality.swift

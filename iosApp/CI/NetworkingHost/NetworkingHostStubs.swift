@@ -283,3 +283,10 @@ enum WatchPartyLobbyPolicy {
             .split(separator: "/").reduce("") { $0 + "/" + $1 }
     }
 }
+
+/// The real type pulls AVFoundation, PlayerSettings and HDR probing; the host
+/// only compiles `SubtitleAutoResolver.needsBurnIn`, which needs these two.
+enum ApplePlaybackV3Capabilities {
+    static func normalizedSubtitleCodec(_ codec: String) -> String { codec.lowercased() }
+    static func nativeEmbeddedSubtitleCapabilities(containers: [String]) -> [PlaybackV3NativeEmbeddedSubtitleCapability] { [] }
+}
