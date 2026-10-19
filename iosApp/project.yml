@@ -439,6 +439,8 @@ targets:
       - path: iosApp/Components/Images/ArtworkDisplay.swift
       # Nuke loader over Networking/LocalRoute; LocalRouteTests drives it.
       - path: iosApp/Components/Images/LocalRouteDataLoader.swift
+      # ImageRequest(artwork:), which ServerTrickplaySheets loads sheets with.
+      - path: iosApp/Components/Images/ArtworkCacheKey.swift
       - path: iosApp/Screens/Auth/AuthModels.swift
       # NativeSignIn.origin(of:) is used by Networking/LocalRoute; deps are all in Networking.
       - path: iosApp/Screens/Auth/ExternalSignIn.swift
