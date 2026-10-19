@@ -581,6 +581,10 @@ targets:
           - LocalRouteTests.swift
           - Support/RedirectingOrigin.swift
           - ServerTrickplayTests.swift
+          # Upstream suites over host-only types: inactive-server bearer reads
+          # (TokenStore/HTTPClient) and the ResponseCache write fence.
+          - ApproverBearerTests.swift
+          - ResponseCacheWriteFenceTests.swift
           # Covers the upstream Networking models those app-level suites test.
           - NetworkingUpstreamGateFillTests.swift
       - path: Tests/Fixtures/SettingsContract/conformance.json

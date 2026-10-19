@@ -148,6 +148,8 @@ jobs:
             PrairieNetworkingTests/LocalRouteControllerTests
             PrairieNetworkingTests/ServerTrickplayTests
             PrairieNetworkingTests/ServerTrickplaySheetsTests
+            PrairieNetworkingTests/ApproverBearerTests
+            PrairieNetworkingTests/ResponseCacheWriteFenceTests
           )
 
           ONLY_TESTING_ARGS=()

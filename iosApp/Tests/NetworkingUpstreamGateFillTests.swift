@@ -10,6 +10,7 @@
 
 import XCTest
 import Foundation
+import Security
 @testable import Prairie
 
 @MainActor
@@ -693,4 +694,283 @@ final class NetworkingUpstreamGateFillTests: XCTestCase {
         XCTAssertEqual(ArtworkSurface.detail.slots(on: narrow).backdrop, ArtworkSurface.fillWidth(CGSize(width: 0, height: 520)))
     }
     #endif
+
+    // MARK: - 2026-10-18 merge: local route (logic, trust, loopback probes)
+
+    #if os(macOS)
+    private static let localRouteCertificateDER = """
+        MIIBnDCCAUGgAwIBAgIUSxpnkdZA5xBXafcjvWFhk6Q6n7wwCgYIKoZIzj0EAwIwIjEgMB4GA1UEAwwXU2lsbyBsb2NhbCBuZXR3b3JrIHRlc3Qw\
+        IBcNMjYxMDE1MTYyNjM2WhgPMjEyNjA5MjExNjI2MzZaMCIxIDAeBgNVBAMMF1NpbG8gbG9jYWwgbmV0d29yayB0ZXN0MFkwEwYHKoZIzj0CAQYI\
+        KoZIzj0DAQcDQgAECLBMnaOC4XmHFgOm3leZovbEDjiTS1aQvQvEpuK7+pijHaDLyjiMKHTukpbZEXtFlmvWIgDwKjx3KNlfjqrw6aNTMFEwHQYD\
+        VR0OBBYEFC7Vqs9kCy3x862iCj89njKDZo1CMB8GA1UdIwQYMBaAFC7Vqs9kCy3x862iCj89njKDZo1CMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZI\
+        zj0EAwIDSQAwRgIhAIJ3l11Gx4MVk08d0KY55qthP1N4i3qYmJgq4r2AOzl2AiEAjp3SZvZjf1LC0glmNaZdSdMnretJtK8EK5t2ZUmliVU=
+        """
+
+    private func localRouteConnections(pin: String?) throws -> ServerConnectionsDocument {
+        let localRoute = pin.map { #","local_route":{"spki_sha256":"\#($0)","url":"http://192.168.1.20:8080"}"# } ?? ""
+        let json = #"{"state":"available","allowed":true,"server_id":"deployment","endpoints":[]"# + localRoute + "}"
+        return try HTTPClient.makeJSONDecoder().decode(ServerConnectionsDocument.self, from: Data(json.utf8))
+    }
+
+    private func localRouteEntry() -> ServerEntry {
+        ServerEntry(id: "server", url: "https://local-route-gate.example", fetchedName: "Home",
+                    lastUsedAt: Date(), verifiedServerId: "deployment")
+    }
+
+    private func localRouteController(
+        store: LocalRouteStore,
+        document: ServerConnectionsDocument?,
+        confirms: Bool,
+        startsSystemMonitors: Bool = false
+    ) -> LocalRouteController {
+        LocalRouteController(environment: .init(
+            fetchConnections: { _ in document },
+            probe: { _, _, _ in confirms },
+            resolveIPv4: { _ in [] },
+            registerSensitiveHost: { _ in },
+            store: store,
+            startsSystemMonitors: startsSystemMonitors,
+            retryDelay: .seconds(3600),
+            connectionsRefreshInterval: 3600
+        ))
+    }
+
+    private func localRouteStore() -> LocalRouteStore {
+        let key = "NetworkingUpstreamGateFillTests.localRoute.\(UUID().uuidString)"
+        addTeardownBlock {
+            UserDefaults.standard.removeObject(forKey: key)
+            LocalRoute.publish(nil)
+            LocalRouteTrust.removeAll()
+        }
+        return LocalRouteStore(defaultsKey: key)
+    }
+
+    func testDroppingByHostAndPortTakesOnlyThatAddress() {
+        defer { LocalRoute.publish(nil) }
+        let route = LocalRoute(serverID: "server", savedOrigin: "https://local-route-gate.example",
+                               localOrigin: "https://192.168.1.20:8080", generation: 1)
+        LocalRoute.publish(route)
+        LocalRoute.drop(host: "192.168.1.20", port: 443)
+        LocalRoute.drop(host: "192.168.1.21", port: 8080)
+        XCTAssertEqual(LocalRoute.active, route)
+        LocalRoute.drop(host: "192.168.1.20", port: 8080)
+        XCTAssertNil(LocalRoute.active)
+
+        LocalRoute.publish(route)
+        LocalRouteController.reportKeyMismatch(host: "192.168.1.20", port: 8080)
+        XCTAssertNil(LocalRoute.active)
+    }
+
+    func testAnUnpinnedKeyOnTheActiveAddressDropsTheRoute() async throws {
+        let controller = localRouteController(store: localRouteStore(), document: try localRouteConnections(pin: "pin"),
+                                              confirms: true)
+        controller.update(activeServer: localRouteEntry(), isSignedIn: true)
+        await controller.settle()
+        XCTAssertTrue(controller.isOnLocalNetwork)
+
+        controller.keyMismatch(host: "192.168.1.21", port: 8080)
+        XCTAssertTrue(controller.isOnLocalNetwork, "another address's key says nothing about this one")
+        controller.keyMismatch(host: "192.168.1.20", port: 8080)
+        XCTAssertFalse(controller.isOnLocalNetwork)
+        XCTAssertNil(LocalRoute.active)
+
+        controller.sceneDidEnterBackground()
+        controller.sceneDidBecomeActive()
+        await controller.settle()
+        controller.update(activeServer: nil, isSignedIn: false)
+    }
+
+    func testAServerThatStopsOfferingTheRouteForgetsTheSavedPin() async throws {
+        let store = localRouteStore()
+        store.save(LocalRouteRecord(pin: "pin", localURL: "http://192.168.1.20:8080"), for: "server")
+        let controller = localRouteController(store: store, document: try localRouteConnections(pin: nil), confirms: false)
+        controller.update(activeServer: localRouteEntry(), isSignedIn: true)
+        await controller.settle()
+        XCTAssertNil(store.record(for: "server"))
+        XCTAssertFalse(controller.isOnLocalNetwork)
+    }
+
+    func testTheForegroundBrowserStartsAndStopsWithTheScene() async throws {
+        let store = localRouteStore()
+        store.save(LocalRouteRecord(pin: "pin", localURL: nil), for: "server")
+        let controller = localRouteController(store: store, document: nil, confirms: false, startsSystemMonitors: true)
+        controller.update(activeServer: localRouteEntry(), isSignedIn: true)
+        controller.sceneDidEnterBackground()
+        controller.sceneDidBecomeActive()
+        controller.sceneDidEnterBackground()
+        XCTAssertFalse(controller.isOnLocalNetwork)
+    }
+
+    func testLoopbackProbesNeverLeaveTheMachine() async throws {
+        // Numeric and loopback names resolve locally; nothing listens on the
+        // discard port, so the probe is refused at once.
+        let numeric = await LocalRouteProbe.privateIPv4Addresses(of: "192.168.1.20")
+        XCTAssertEqual(numeric, ["192.168.1.20"])
+        let loopback = await LocalRouteProbe.privateIPv4Addresses(of: "localhost")
+        XCTAssertEqual(loopback, [], "loopback is not a private LAN address")
+        let refused = await LocalRouteProbe.confirms(origin: "https://127.0.0.1:9", pin: "pin", identity: "deployment")
+        XCTAssertFalse(refused)
+
+        let live = LocalRouteController.Environment.live
+        XCTAssertTrue(live.startsSystemMonitors)
+        live.registerSensitiveHost("192.168.1.20")
+        let resolved = await live.resolveIPv4("192.168.1.20")
+        XCTAssertEqual(resolved, ["192.168.1.20"])
+        let probed = await live.probe("https://127.0.0.1:9", "pin", "deployment")
+        XCTAssertFalse(probed)
+        let server = LocalRouteController.Server(id: "no-such-server-\(UUID().uuidString)",
+                                                 savedURL: "https://local-route-gate.example",
+                                                 savedOrigin: "https://local-route-gate.example",
+                                                 identity: "deployment")
+        let document = await live.fetchConnections(server)
+        XCTAssertNil(document, "only the signed-in server's own bearer reads the pin")
+    }
+
+    func testPinnedAddressesAcceptOnlyThePinnedKey() throws {
+        defer {
+            LocalRouteTrust.removeAll()
+            LocalRoute.publish(nil)
+        }
+        let der = try XCTUnwrap(Data(base64Encoded: Self.localRouteCertificateDER))
+        let certificate = try XCTUnwrap(SecCertificateCreateWithData(nil, der as CFData))
+        var created: SecTrust?
+        let status = SecTrustCreateWithCertificates(certificate, SecPolicyCreateSSL(true, nil), &created)
+        XCTAssertEqual(status, errSecSuccess)
+        let trust = try XCTUnwrap(created)
+        let pin = try XCTUnwrap(LocalRouteTrust.spkiPin(of: trust))
+        LocalRouteTrust.trust("https://192.168.1.20:8080", pin: pin)
+
+        func disposition(_ space: URLProtectionSpace) -> URLSession.AuthChallengeDisposition? {
+            let challenge = URLAuthenticationChallenge(
+                protectionSpace: space, proposedCredential: nil, previousFailureCount: 0,
+                failureResponse: nil, error: nil, sender: LocalRouteGateChallengeSender())
+            var result: URLSession.AuthChallengeDisposition?
+            LocalRouteTrust.handle(challenge) { answer, _ in result = answer }
+            return result
+        }
+
+        let basic = URLProtectionSpace(host: "192.168.1.20", port: 8080, protocol: NSURLProtectionSpaceHTTPS,
+                                       realm: nil, authenticationMethod: NSURLAuthenticationMethodHTTPBasic)
+        XCTAssertEqual(disposition(basic), .performDefaultHandling)
+        XCTAssertEqual(disposition(LocalRouteGateTrustSpace(host: "10.0.0.9", port: 8080, trust: trust)),
+                       .performDefaultHandling, "unpinned hosts keep the system's handling")
+        XCTAssertEqual(disposition(LocalRouteGateTrustSpace(host: "192.168.1.20", port: 8080, trust: trust)),
+                       .useCredential)
+        XCTAssertEqual(disposition(LocalRouteGateTrustSpace(host: "192.168.1.20", port: 8080, trust: nil)),
+                       .cancelAuthenticationChallenge)
+        LocalRouteTrust.trust("https://192.168.1.20:8080", pin: "another-key")
+        XCTAssertEqual(disposition(LocalRouteGateTrustSpace(host: "192.168.1.20", port: 8080, trust: trust)),
+                       .cancelAuthenticationChallenge)
+
+        let box = LocalRouteGateDispositionBox()
+        let space = LocalRouteGateTrustSpace(host: "10.0.0.9", port: 8080, trust: trust)
+        let challenge = URLAuthenticationChallenge(
+            protectionSpace: space, proposedCredential: nil, previousFailureCount: 0,
+            failureResponse: nil, error: nil, sender: LocalRouteGateChallengeSender())
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        LocalRouteTrustDelegate.shared.urlSession(session, didReceive: challenge) { answer, _ in box.values.append(answer) }
+        let task = session.dataTask(with: try XCTUnwrap(URL(string: "https://10.0.0.9:8080/")))
+        LocalRouteTrustDelegate.shared.urlSession(session, task: task, didReceive: challenge) { answer, _ in
+            box.values.append(answer)
+        }
+        XCTAssertEqual(box.values, [.performDefaultHandling, .performDefaultHandling])
+    }
+
+    // MARK: - 2026-10-18 merge: settings transports and branding over a stub
+
+    private func stubbedAPI() async throws -> (PrairieAPI, HTTPRequestIdentity, TokenStore) {
+        let name = "NetworkingUpstreamGateFillTests.api.\(UUID().uuidString)"
+        let suite = try XCTUnwrap(UserDefaults(suiteName: name))
+        addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
+        let tokens = TokenStore(keychain: SharedKeychain(service: name, accessGroup: nil),
+                                defaults: SharedDefaults(suite: suite, standard: suite))
+        await tokens.switchActiveServer(serverId: "server-a")
+        await tokens.setServerUrl("https://settings-gate.example")
+        await tokens.setProfileId("profile-a")
+        let problem = #"{"type":"about:blank","title":"Problem","status":500,"detail":"rejected"}"#
+        let stub = APIv2TestStub(fallback: .json(500, problem))
+        let api = PrairieAPI(http: HTTPClient(session: stub.makeSession(), tokenStore: tokens), tokenStore: tokens)
+        let identity = HTTPRequestIdentity(serverId: "server-a", serverURL: "https://settings-gate.example",
+                                           profileId: "profile-a", clientFamily: AppleDeviceIdentity.current.clientFamily)
+        return (api, identity, tokens)
+    }
+
+    func testSettingsTransportsForwardToTheSettingsAPI() async throws {
+        let (api, identity, _) = try await stubbedAPI()
+
+        let advisory = PrairieAdvisoryAgePreferenceTransport(api: api)
+        _ = await advisory.contractCapabilities(requestIdentity: identity)
+        _ = try? await advisory.effectiveValue(requestIdentity: identity)
+        try? await advisory.putValue(true, requestIdentity: identity)
+
+        let titleArt = PrairieTitleArtTransport(api: api)
+        _ = await titleArt.contractCapabilities(requestIdentity: identity)
+        _ = try? await titleArt.effectiveValues(keys: [.catalogShowAdvisoryAge], requestIdentity: identity)
+        try? await titleArt.putValue(key: .catalogShowAdvisoryAge, scope: .profile, value: .bool(true),
+                                     requestIdentity: identity)
+        try? await titleArt.deleteValue(key: .catalogShowAdvisoryAge, scope: .profile, requestIdentity: identity)
+
+        XCTAssertEqual(AdvisoryAgePreferenceStore.writeFailureMessage(for: SettingsAPIError.serverUpgradeRequired),
+                       "This server can't save Show Advisory Age.")
+        XCTAssertEqual(AdvisoryAgePreferenceStore.writeFailureMessage(for: SettingsAPIError.ownerChanged),
+                       "The server didn't save Show Advisory Age. Try again.")
+        XCTAssertEqual(TitleArtPreferences.writeFailureMessage(for: SettingsAPIError.serverUpgradeRequired),
+                       "This server can't save the title art setting.")
+    }
+
+    func testTitleArtWithoutASignedInProfileIsUnavailable() async throws {
+        let (api, _, _) = try await stubbedAPI()
+        let name = "NetworkingUpstreamGateFillTests.titleArt.\(UUID().uuidString)"
+        let suite = try XCTUnwrap(UserDefaults(suiteName: name))
+        addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
+        let preferences = TitleArtPreferences(
+            defaults: SharedDefaults(suite: suite, standard: suite),
+            transport: PrairieTitleArtTransport(api: api),
+            requestIdentity: { nil }
+        )
+        await preferences.refresh()
+        XCTAssertEqual(preferences.syncState, .unavailable)
+        _ = TitleArtPreferences.activeRequestIdentity()
+    }
+
+    func testBrandingLoaderReadsTheServersBrandingByExplicitURL() async throws {
+        let (_, _, tokens) = try await stubbedAPI()
+        let stub = StubURLProtocol.Handler()
+        stub.route(StubURLProtocol.method("GET", path: ServerIdentity.brandingPath)) { _ in
+            .json(#"{"server_name":"Home"}"#)
+        }
+        let loader = ServerBrandingLoader(httpClient: HTTPClient(session: stub.makeSession(), tokenStore: tokens))
+        let branding = await loader.branding(serverURL: "https://branding-gate.example")
+        XCTAssertNotNil(branding)
+        XCTAssertEqual(stub.requests.count, 1)
+    }
+    #endif
 }
+
+#if os(macOS)
+/// A server-trust protection space presenting `trust`, as URLSession builds one.
+private final class LocalRouteGateTrustSpace: URLProtectionSpace {
+    private let presented: SecTrust?
+
+    init(host: String, port: Int, trust: SecTrust?) {
+        presented = trust
+        super.init(host: host, port: port, protocol: NSURLProtectionSpaceHTTPS, realm: nil,
+                   authenticationMethod: NSURLAuthenticationMethodServerTrust)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override var serverTrust: SecTrust? { presented }
+}
+
+private final class LocalRouteGateChallengeSender: NSObject, URLAuthenticationChallengeSender {
+    func use(_ credential: URLCredential, for challenge: URLAuthenticationChallenge) {}
+    func continueWithoutCredential(for challenge: URLAuthenticationChallenge) {}
+    func cancel(_ challenge: URLAuthenticationChallenge) {}
+}
+
+private final class LocalRouteGateDispositionBox: @unchecked Sendable {
+    var values: [URLSession.AuthChallengeDisposition] = []
+}
+#endif
