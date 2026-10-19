@@ -13,10 +13,6 @@ struct TVSettingsOption: Identifiable, Hashable {
 
 /// Canonical option sets shared by the tvOS settings sub-screens.
 enum TVSettingsOptions {
-    /// Tag for the "stored pair matches no preset" entry. Not a preset id, so
-    /// selecting it is a no-op rather than a write.
-    static let customQualityId = SettingsViewModel.customQualityTag
-
     /// Leads a profile-backed Playback picker: selected while this Apple TV
     /// has no value of its own, and choosing it clears that value.
     static let useProfileSetting = TVSettingsOption(
@@ -34,18 +30,15 @@ enum TVSettingsOptions {
             .init(id: $0.rawValue, label: $0.title, detail: $0.tvDescription)
         }
 
-    /// The shared cross-client quality presets, optionally led by a
-    /// description of a stored pair no preset covers.
-    ///
-    /// These are the settings vocabulary, not the in-player switcher's finer
-    /// ladder: what is stored is a (resolution, bitrate) pair, so the two
-    /// tables can label it differently without either reinterpreting it.
-    static func quality(including customLabel: String? = nil) -> [TVSettingsOption] {
-        let presets = PrairieQualityPresets.all.map {
-            TVSettingsOption(id: $0.id, label: $0.label)
-        }
-        guard let customLabel else { return presets }
-        return [.init(id: customQualityId, label: customLabel)] + presets
+    /// The Resolution picker, tagged with the contract's resolution members.
+    static let resolution: [TVSettingsOption] = PrairieQualityPresets.resolutionChoices.map {
+        .init(id: $0, label: PrairieQualityPresets.resolutionLabel($0))
+    }
+
+    /// The Maximum Bitrate picker: "No limit", then each cap.
+    static func maxBitrate(_ choicesKbps: [Int]) -> [TVSettingsOption] {
+        [.init(id: SettingsViewModel.noBitrateLimitTag, label: PrairieQualityPresets.noBitrateLimitLabel)]
+            + choicesKbps.map { .init(id: String($0), label: PrairieQualityPresets.bitrateLabel($0)) }
     }
 
     static func audioLanguage(_ languages: [PlaybackLanguageOption]) -> [TVSettingsOption] {
@@ -354,10 +347,13 @@ struct TVSettingsToggleRow: View {
 /// owner is responsible for ignoring edits until `enabled` is true.
 struct TVSettingsNestedGroup<Content: View>: View {
     let enabled: Bool
+    /// What VoiceOver says while the group is locked: how to unlock it.
+    let disabledHint: String
     let content: Content
 
-    init(enabled: Bool, @ViewBuilder content: () -> Content) {
+    init(enabled: Bool, disabledHint: String, @ViewBuilder content: () -> Content) {
         self.enabled = enabled
+        self.disabledHint = disabledHint
         self.content = content()
     }
 
@@ -376,7 +372,7 @@ struct TVSettingsNestedGroup<Content: View>: View {
         )
         .padding(.leading, 24)
         .opacity(enabled ? 1 : 0.42)
-        .accessibilityHint(enabled ? "" : "Turn on the parent setting to make changes")
+        .accessibilityHint(enabled ? "" : disabledHint)
     }
 }
 

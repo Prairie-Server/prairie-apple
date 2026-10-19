@@ -79,12 +79,19 @@ final class WatchPartySession {
     @ObservationIgnored private var lastAttach: Date = .distantPast
     @ObservationIgnored private var lastReport: Date = .distantPast
     @ObservationIgnored private var lastPing: Date = .distantPast
+    /// Clock samples taken on the current socket; until there are a few,
+    /// pings run fast to fill the clock.
+    @ObservationIgnored private var connectionSamples = 0
+    /// The playhead at the drift loop's last tick, to tell a held clock from
+    /// a playing one.
+    @ObservationIgnored private var lastLoopSample: (at: Date, sourceTime: Double)?
     @ObservationIgnored private var lastReady: Date = .distantPast
     /// The playback session whose media has been playable at least once. Its
     /// position is real from then on, including while it rebuffers.
     @ObservationIgnored private var playableSession: String?
     @ObservationIgnored private var stall = WatchPartyStallTimer()
-    @ObservationIgnored private var serverOffset: TimeInterval = 0
+    @ObservationIgnored private var clock = WatchPartyClock()
+    private var serverOffset: TimeInterval { clock.offset }
     /// Local receipt time of the current room snapshot. Its anchor position is
     /// already projected to the server's build time, so only this age remains.
     @ObservationIgnored private var roomReceivedAt: Date = .distantPast
@@ -271,7 +278,7 @@ final class WatchPartySession {
         capabilities = nil
         supportsPlayback = false
         supportsFallback = false
-        serverOffset = 0
+        clock = WatchPartyClock()
         playbackContext = nil
         connection = .idle
         errorMessage = nil
@@ -398,12 +405,15 @@ final class WatchPartySession {
         isLoadingMemberState = false
         socket?.close(); socket = nil
         adapter?.cancelCorrection()
+        adapter?.releaseHeldSeek()
         attachmentConfirmed = false
         applyingCommand = nil
     }
 
     /// Drops queued and in-flight transport commands and the attach handshake.
+    /// A held seek request waits on a command dropped here, so it ends too.
     private func resetCommandState() {
+        adapter?.releaseHeldSeek()
         commandTask?.cancel()
         commandTask = nil
         applyingCommand = nil
@@ -471,6 +481,8 @@ final class WatchPartySession {
                 self.reportTask?.cancel()
                 self.commandTask?.cancel()
                 self.adapter?.cancelCorrection()
+                // The room's seek for a held request may never arrive now.
+                self.adapter?.releaseHeldSeek()
                 self.attachmentConfirmed = false
                 // The server ends every room socket at its connection deadline
                 // (five minutes, or sooner when the bearer expires). A socket
@@ -512,8 +524,10 @@ final class WatchPartySession {
         case .snapshot(let room): accept(room)
         case .transport(let command):
             guard let room, commands.receive(command, room: room, sessionId: adapter?.snapshot.sessionId) else { return }
+            if command.action == .seek { adapter?.roomSeekArrived(at: command.positionSeconds) }
+            // A rate nudge keeps running until the command executes; changing
+            // the rate or play state on receipt would act a lead early.
             commandTask?.cancel()
-            adapter?.cancelCorrection()
             commandTask = nil
             applyingCommand = nil
             applyPendingCommand()
@@ -521,11 +535,10 @@ final class WatchPartySession {
             guard let room, suggestions.allSatisfy({ $0.roomId == room.roomId }) else { return }
             votes.receive(suggestions)
             refreshSuggestions()
-        case .pong(let client, let received, let sent):
-            let now = Date()
-            let roundTrip = now.timeIntervalSince(client) - sent.timeIntervalSince(received)
-            guard roundTrip >= 0, roundTrip < 5 else { return }
-            serverOffset = (received.timeIntervalSince(client) + sent.timeIntervalSince(now)) / 2
+        case .pong(let client, let received, let sent, let receivedAt):
+            if clock.record(clientSent: client, serverReceived: received, serverSent: sent, clientReceived: receivedAt) {
+                connectionSamples += 1
+            }
         case .closed: terminate("This party has ended.", canRejoin: false)
         case .connectionReplaced:
             terminate("This profile joined the party on another device. Rejoin here to take over playback.", replaced: true)
@@ -603,6 +616,8 @@ final class WatchPartySession {
             self.issuedAttachSession = nil
             self.stall.reset()
             self.lastAttach = .distantPast
+            // A nudge belongs to the stream it measured, not the new session.
+            adapter?.cancelCorrection()
         }
         adapter.onResyncRequired = { [weak self, weak adapter] in
             guard let self, self.adapter === adapter else { return }
@@ -615,8 +630,8 @@ final class WatchPartySession {
             }
         }
         adapter.onUserTransport = { [weak self, weak adapter] action, position, paused in
-            guard let self, self.adapter === adapter else { return }
-            self.requestTransport(action, position: position, paused: paused)
+            guard let self, self.adapter === adapter else { return false }
+            return self.requestTransport(action, position: position, paused: paused)
         }
         adapter.onLocalExit = { [weak self, weak adapter] in
             guard let self, self.adapter === adapter else { return }
@@ -629,9 +644,10 @@ final class WatchPartySession {
         adapter.prepare(context)
     }
 
-    private func requestTransport(_ action: WatchPartyPlaybackAction, position: Double, paused: Bool) {
+    /// Returns whether the request was sent; a dropped one never reaches the room.
+    private func requestTransport(_ action: WatchPartyPlaybackAction, position: Double, paused: Bool) -> Bool {
         guard connection == .connected, attachmentConfirmed, let room,
-              action.isPermitted(canPlayPause: room.selfCanControlTransport, canSeek: room.selfRole == .host) else { return }
+              action.isPermitted(canPlayPause: room.selfCanControlTransport, canSeek: room.selfRole == .host) else { return false }
         // Play and pause carry the local position, which the room adopts as
         // its anchor. Before the media has first become playable that
         // position isn't real, so the press is dropped (#410 tracks queueing
@@ -640,7 +656,7 @@ final class WatchPartySession {
         case .seek: break
         case .play, .pause:
             guard let snapshot = adapter?.snapshot, let session = snapshot.sessionId,
-                  snapshot.isReady || playableSession == session else { return }
+                  snapshot.isReady || playableSession == session else { return false }
         }
         let wire: WatchPartyTransportAction
         let target: Double
@@ -649,7 +665,7 @@ final class WatchPartySession {
         case .pause: wire = .pause; target = position
         case .seek(let value): wire = .seek; target = value
         }
-        send(WatchPartyClientMessage(type: "transport_request", action: wire, positionSeconds: target, isPaused: paused))
+        return send(WatchPartyClientMessage(type: "transport_request", action: wire, positionSeconds: target, isPaused: paused))
     }
 
     private func applyPendingCommand() {
@@ -674,18 +690,23 @@ final class WatchPartySession {
                 guard await self.validateIdentity(), !Task.isCancelled, owner == self.engagement, socketID == self.connectionID,
                       self.commands.pending?.commandId == command.commandId, self.playbackContext == context,
                       adapter.snapshot.sessionId == sessionID else { return }
+                adapter.roomCommandStarts(seekingTo: command.action == .seek ? command.positionSeconds : nil)
                 let target = WatchPartyCommandState.projectedPosition(command, serverNow: Date().addingTimeInterval(self.serverOffset))
                 if command.playbackState != .playing { _ = try await adapter.apply(.pause) }
-                // Server drift corrections use play/pause. An explicit seek
-                // enters the waiting barrier and must always land on its target.
-                if command.action == .play, command.playbackState == .playing, adapter.snapshot.isPlaying {
-                    _ = try await adapter.correct(to: target)
-                } else if command.action == .seek || abs(adapter.snapshot.sourceTime - target) > 1 {
-                    let smallPausedCorrection = command.action == .pause
-                        && abs(adapter.snapshot.sourceTime - target) <= 2 && !adapter.canSeekLocally(to: target)
-                    if !smallPausedCorrection {
-                        _ = try await adapter.apply(.seek(target), origin: command.action == .seek ? .room : .realign)
-                    }
+                // An explicit seek enters the waiting barrier and must always
+                // land on its target. A play or pause, including the server's
+                // corrections, converges a playing member by rate and moves a
+                // stopped one only when the move is cheap or the drift large.
+                // The host seeks from a narrower band; see `WatchPartyCorrection.hostSeek`.
+                let seekBand = WatchPartyCorrection.seekBand(isHost: self.room?.selfRole == .host)
+                switch WatchPartyCommandState.positionStep(command, memberPlaying: adapter.snapshot.isPlaying,
+                                                           drift: target - adapter.snapshot.sourceTime,
+                                                           reachableInPlace: adapter.canReachInPlace(target),
+                                                           seekBand: seekBand) {
+                case .roomSeek: _ = try await adapter.apply(.seek(target), origin: .room)
+                case .correct: _ = try await adapter.correct(to: target, seekBand: seekBand)
+                case .realign: _ = try await adapter.apply(.seek(target), origin: .realign)
+                case .none: break
                 }
                 try Task.checkCancellation()
                 guard owner == self.engagement, socketID == self.connectionID,
@@ -706,6 +727,7 @@ final class WatchPartySession {
     private func startReporting(owner: UUID, socketID: UUID) {
         reportTask?.cancel()
         lastAttach = .distantPast; lastPing = .distantPast; lastReady = .distantPast
+        connectionSamples = 0
         reportTask = Task { [weak self] in
             while let self, !Task.isCancelled, owner == self.engagement, socketID == self.connectionID {
                 guard await self.validateIdentity() else { return }
@@ -722,7 +744,10 @@ final class WatchPartySession {
         let context = playbackContext
         let now = Date()
         do {
-            if now.timeIntervalSince(lastPing) >= 15 {
+            // A clock step discards older samples; warm up again until it refills.
+            let warming = min(connectionSamples, clock.samples.count) < WatchPartyClock.warmupSamples
+            let pingInterval = warming ? WatchPartyClock.warmupInterval : WatchPartyClock.interval
+            if now.timeIntervalSince(lastPing) >= pingInterval {
                 lastPing = now
                 try await socket.send(WatchPartyClientMessage(type: "ping", clientSentAt: now))
             }
@@ -759,14 +784,24 @@ final class WatchPartySession {
                   now.timeIntervalSince(lastCommandCompleted) >= 0.25,
                   snapshot.fileId == playbackContext?.fileId else {
                 stall.interrupt(buffering: snapshot.isBuffering)
+                // A pending command keeps a running nudge until it executes,
+                // but a member that rebuffers meanwhile resumes at 1x.
+                if snapshot.isBuffering { adapter.cancelCorrection() }
                 return
             }
-            if stall.observe(buffering: snapshot.isBuffering, at: now) {
+            // Only a playing room pauses for a stall; in a waiting room the
+            // barrier already waits for this member.
+            if room.playbackState == .playing, stall.observe(buffering: snapshot.isBuffering, at: now) {
                 try await socket.send(WatchPartyClientMessage(type: "buffering", sessionId: session,
                     positionSeconds: snapshot.sourceTime, isPaused: !snapshot.isPlaying))
             }
-            if snapshot.isBuffering { return }
-            guard snapshot.isReady else { return }
+            // A rebuffering member resumes at 1x; a nudge would drain the
+            // buffer it just refilled. The loop starts it again if needed.
+            guard !snapshot.isBuffering, snapshot.isReady else {
+                adapter.cancelCorrection()
+                return
+            }
+            nudgeTowardRoom(room, snapshot: snapshot, adapter: adapter)
             let completed = commands.completed
             let ready = WatchPartyCommandState.canAcknowledge(completed, roomPlaybackState: room.playbackState,
                 sourceTime: snapshot.sourceTime, isHost: room.selfRole == .host)
@@ -785,10 +820,37 @@ final class WatchPartySession {
         } catch { socket.close() }
     }
 
-    private func send(_ message: WatchPartyClientMessage) {
+    /// Keeps a playing member on the room between commands. The last command
+    /// this member ran is the room's position at its execute time, advancing
+    /// at 1x while the room plays, so drift is measured locally every tick and
+    /// closed by rate; the server only steps in for drift the nudge has not
+    /// fixed.
+    private func nudgeTowardRoom(_ room: WatchPartyRoom, snapshot: WatchPartyPlaybackSnapshot,
+                                 adapter: WatchPartyPlaybackAdapter) {
+        // Sampled after the report's sends, alongside the player position.
+        let now = Date()
+        let previous = lastLoopSample
+        lastLoopSample = (at: now, sourceTime: snapshot.sourceTime)
+        let advancing = previous.map {
+            now.timeIntervalSince($0.at) < WatchPartyCommandState.heldClockInterval
+                || snapshot.sourceTime - $0.sourceTime >= WatchPartyCommandState.heldClockAdvance
+        } ?? true
+        switch WatchPartyCommandState.loopStep(reference: commands.completed, room: room, memberPlaying: snapshot.isPlaying,
+                                               sourceTime: snapshot.sourceTime, serverNow: now.addingTimeInterval(serverOffset),
+                                               sinceCompleted: now.timeIntervalSince(lastCommandCompleted),
+                                               playheadAdvancing: advancing) {
+        case .reset: adapter.cancelCorrection()
+        case .wait: break
+        case .nudge(let drift): adapter.nudge(drift: drift)
+        }
+    }
+
+    /// Returns false when there is no socket to send on.
+    @discardableResult
+    private func send(_ message: WatchPartyClientMessage) -> Bool {
         let owner = engagement
         let socketID = connectionID
-        guard let socket, let room else { return }
+        guard let socket, let room else { return false }
         let sessionId = adapter?.snapshot.sessionId
         Task { [weak self] in
             guard let self, await self.validateIdentity(), owner == self.engagement, socketID == self.connectionID,
@@ -799,6 +861,7 @@ final class WatchPartySession {
             }
             do { try await socket.send(message) } catch { socket.close() }
         }
+        return true
     }
 
     func setLobbyReady(_ ready: Bool) {
@@ -1043,7 +1106,9 @@ final class WatchPartySession {
         selectedItemTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let detail = try await self.api.catalogItem(id: contentId, libraryId: room.selectedLibraryId, imageSize: nil, auth: auth)
+                // The room draws its backdrop across the whole window, like a detail hero.
+                let detail = try await self.api.catalogItem(id: contentId, libraryId: room.selectedLibraryId,
+                                                            artwork: await PrairieAPI.shared.artworkQuery(.detail, slotWidthsOnly: true), auth: auth)
                 var item = WatchPartySelectedItem(detail)
                 if detail.type == "episode", let seriesId = detail.seriesId, !seriesId.isEmpty,
                    let poster = await self.showPoster(seriesId: seriesId, seasonNumber: detail.seasonNumber,
@@ -1075,13 +1140,15 @@ final class WatchPartySession {
     private func showPoster(seriesId: String, seasonNumber: Int64?, libraryId: String?,
                             auth: CapturedOrdinaryRequestAuth) async -> (url: String, thumbhash: String?)? {
         if let seasonNumber,
-           let seasons = try? await api.catalogSeasons(seriesId: seriesId, libraryId: libraryId, imageSize: nil, auth: auth),
+           let seasons = try? await api.catalogSeasons(seriesId: seriesId, libraryId: libraryId,
+                                                        artwork: await PrairieAPI.shared.artworkQuery(.seasons, slotWidthsOnly: true), auth: auth),
            let season = seasons.first(where: { $0.seasonNumber == seasonNumber }),
            let url = season.posterUrl, !url.isEmpty {
             return (url, season.posterThumbhash)
         }
         guard !Task.isCancelled,
-              let series = try? await api.catalogItem(id: seriesId, libraryId: libraryId, imageSize: nil, auth: auth),
+              let series = try? await api.catalogItem(id: seriesId, libraryId: libraryId,
+                                                      artwork: await PrairieAPI.shared.artworkQuery(.cards, slotWidthsOnly: true), auth: auth),
               let url = series.posterUrl, !url.isEmpty else { return nil }
         return (url, series.posterThumbhash)
     }

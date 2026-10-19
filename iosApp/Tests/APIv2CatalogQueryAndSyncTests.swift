@@ -34,7 +34,7 @@ final class APIv2CatalogQueryAndSyncTests: XCTestCase {
         query.type = "movie"
         query.namePrefix = "H"
         query.group = "year"
-        query.imageSize = "medium"
+        query.artwork = ["image_size": "medium"]
         query.sort = "title"
         query.order = "desc"
         query.limit = 25

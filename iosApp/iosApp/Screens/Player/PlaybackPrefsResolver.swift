@@ -19,7 +19,7 @@ import Foundation
 
 enum SubtitleAutoSelection: Equatable {
     /// User had no preferences that point at a track, or already had
-    /// an explicit override, or `mode == off`. Caller should leave the
+    /// an explicit override. Caller should leave the
     /// subtitle slot however the player started it.
     case noChange
     /// User wants subs disabled for this content.
@@ -61,7 +61,8 @@ struct SubtitleAutoResolver {
         /// Language of the audio track currently playing. Used by
         /// "auto" mode to skip subs when audio matches the user's
         /// preferred subtitle language (e.g. English audio + English
-        /// sub preference → no subs).
+        /// sub preference → no subs), and by "off" to find the forced
+        /// track in that language.
         let currentAudioLanguage: String?
         /// The file's container (`FileVersion.container`). Decides which
         /// embedded bitmap tracks this player renders without a burn-in; nil
@@ -106,7 +107,36 @@ struct SubtitleAutoResolver {
         let mode = inputs.mode ?? .auto
 
         if mode == .off {
-            return .disable
+            // Off turns dialogue subtitles off, not forced ones: with "show
+            // forced subtitles" on, the forced track in the language of the
+            // audio that will play still covers foreign-language lines, as
+            // the settings copy promises and as web does (Android follows in
+            // prairie-android#572). Nothing when the audio language is unknown or
+            // no forced track matches.
+            //
+            // Reached by every automatic start: the start request's intent
+            // (`initialProtocolV3SubtitleIntent`) when the load carries no
+            // subtitle index, which covers detail-page Play with the server
+            // mode Off, next episode, Up Next and on-deck starts; the
+            // post-load pass (`applyAutoSubtitlePreferencesIfNeeded`) until
+            // the viewer picks a track; and the detail page's Auto preview.
+            // Not reached for an Off the viewer chose: an Off tap in the
+            // player sets the playback's explicit choice and carries `-1`
+            // into its reloads, and an Off picked in the detail page's
+            // selector on this visit launches with `-1`, also after the
+            // viewer returns from the player.
+            guard inputs.showForced,
+                  let audio = inputs.currentAudioLanguage, !audio.isEmpty,
+                  let forced = bestLanguageMatch(
+                      audio,
+                      in: inputs.availableSubtitles.filter(\.isForced),
+                      preferForced: true,
+                      preferAccessibility: inputs.preferAccessibilityTracks,
+                      sourceContainer: inputs.sourceContainer
+                  ) else {
+                return .disable
+            }
+            return .select(forced)
         }
 
         let preferredLanguages = orderedLanguages(from: inputs)

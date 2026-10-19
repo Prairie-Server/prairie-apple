@@ -343,6 +343,9 @@ private struct ItemDetailPhoneContent: View {
     @State private var preferredAudioTrackIndex: Int?
     @State private var preferredSubtitleTrackIndex: Int?
     @State private var preferredSubtitleTrackWasManuallySelected = false
+    /// The file a manual subtitle track pick was made on; its index means
+    /// nothing on another version.
+    @State private var preferredSubtitleTrackFileId: Int?
     @State private var preferredNextUpFileId: Int?
     @State private var preferredNextUpAudioTrackIndex: Int?
     @State private var preferredNextUpSubtitleTrackIndex: Int?
@@ -359,7 +362,9 @@ private struct ItemDetailPhoneContent: View {
     @State private var isPageVisible = false
     /// Set when this page starts playback, so it only acts on its own return.
     @State private var awaitsPlaybackReturn = false
-    @State private var refreshOnPlayerDismiss = false
+    /// `PlayerCleanupBarrier` generation of the player this page presented,
+    /// so the reload after it closes waits for that player's final write.
+    @State private var playerCleanupGeneration: Int?
     @State private var offlinePlayChoice: OfflinePlayChoice?
     @State private var unreachablePlayRequest: UnreachablePlayRequest?
     @State private var detailScrollState = PhoneDetailScrollState()
@@ -410,23 +415,43 @@ private struct ItemDetailPhoneContent: View {
             hasStartedDetailLoad = true
             preferredVersionFileId = nil
             preferredAudioTrackIndex = nil
-            preferredSubtitleTrackIndex = nil
-            preferredSubtitleTrackWasManuallySelected = false
+            // A subtitle picked in the selector on this visit, Off included,
+            // stays when the viewer returns from the player, as on tvOS.
+            // `reseedSubtitleOverride` drops it only if the reloaded version
+            // no longer has that track.
+            if !isReturning || !preferredSubtitleTrackWasManuallySelected {
+                preferredSubtitleTrackIndex = nil
+                preferredSubtitleTrackWasManuallySelected = false
+                preferredSubtitleTrackFileId = nil
+            }
             if isReturning {
                 if let playback = takePlaybackReturn() {
                     await applySeriesPlaybackReturn(playback)
                 }
-                viewModel.initialResumeSeasonNumber = viewModel.selectedSeason?.seasonNumber
-                    ?? viewModel.initialResumeSeasonNumber
             } else {
                 selectedSeriesEpisodeId = resumeContext?.episodeContentId
                 viewModel.initialResumeSeasonNumber = resumeContext?.seasonNumber
             }
-            refreshOnPlayerDismiss = false
             detailScrollState.reset()
             // Seed from the painted detail so the selector doesn't show
             // "Auto" while the page reloads, then again from the fresh one.
             seedSubtitleOverrideIfNeeded()
+            if let cleanupGeneration = playerCleanupGeneration {
+                // Reloading before the closed player's last progress write
+                // lands would show the progress and watched state from before it.
+                await PlayerCleanupBarrier.waitForCleanup(of: cleanupGeneration)
+                // Hidden again before the write landed; the next return waits.
+                guard !Task.isCancelled else { return }
+                if playerCleanupGeneration == cleanupGeneration {
+                    playerCleanupGeneration = nil
+                }
+            }
+            if isReturning {
+                // Read after the wait, so a Series return that arrived during
+                // it keeps the season it chose.
+                viewModel.initialResumeSeasonNumber = viewModel.selectedSeason?.seasonNumber
+                    ?? viewModel.initialResumeSeasonNumber
+            }
             await viewModel.loadDetail(contentId: contentId)
             reseedSubtitleOverride()
         }
@@ -454,16 +479,17 @@ private struct ItemDetailPhoneContent: View {
             // A full-screen player hides this page, and the `.task` above
             // reloads it when it reappears. Reload here only when the page
             // stayed on screen under the player.
-            guard oldValue != nil, newValue == nil, refreshOnPlayerDismiss, isPageVisible else { return }
-            refreshOnPlayerDismiss = false
+            guard oldValue != nil, newValue == nil, let cleanupGeneration = playerCleanupGeneration,
+                  isPageVisible else { return }
+            playerCleanupGeneration = nil
             Task {
+                await PlayerCleanupBarrier.waitForCleanup(of: cleanupGeneration)
                 viewModel.initialResumeSeasonNumber = viewModel.selectedSeason?.seasonNumber
                     ?? viewModel.initialResumeSeasonNumber
                 await viewModel.loadDetail(contentId: contentId)
-                // A track picked inside the player persisted server-side;
-                // drop the pre-play selector state so the reloaded pref
-                // re-seeds and the selector reflects the latest pick.
-                preferredSubtitleTrackWasManuallySelected = false
+                // A track picked inside the player persisted server-side and
+                // re-seeds the selector, unless the viewer picked one in the
+                // selector on this visit; that pick stays, as on tvOS.
                 reseedSubtitleOverride()
             }
         }
@@ -482,7 +508,7 @@ private struct ItemDetailPhoneContent: View {
             presenting: offlinePlayChoice
         ) { choice in
             Button(choice.downloadedLabel) {
-                refreshOnPlayerDismiss = true
+                playerCleanupGeneration = PlayerCleanupBarrier.beginPlayback()
                 router.presentOfflinePlayer(
                     downloadId: choice.downloadId,
                     contentId: choice.leafContentId,
@@ -827,6 +853,7 @@ private struct ItemDetailPhoneContent: View {
                         versionFileId: fileId,
                         candidate: preferredSubtitleTrackIndex
                     )
+                    preferredSubtitleTrackFileId = effectiveVersion(for: detail, versionFileId: fileId)?.fileId
                 },
                 onSelectAudioTrack: { index in
                     preferredAudioTrackIndex = sanitizedAudioTrackIndex(
@@ -848,6 +875,10 @@ private struct ItemDetailPhoneContent: View {
                         versionFileId: preferredVersionFileId,
                         candidate: index
                     )
+                    preferredSubtitleTrackFileId = effectiveVersion(
+                        for: detail,
+                        versionFileId: preferredVersionFileId
+                    )?.fileId
                     persistSubtitleSelection(
                         prefKey: prefKey(for: detail),
                         version: effectiveVersion(for: detail, versionFileId: preferredVersionFileId),
@@ -1011,14 +1042,32 @@ private struct ItemDetailPhoneContent: View {
             version: effectiveVersion(for: detail, versionFileId: preferredVersionFileId),
             signature: detail.effectiveSubtitleTrackSignature,
             mode: detail.effectiveSubtitleMode,
+            showForced: detail.showsForcedSubtitles,
             usesDeviceSettings: PlayerSettings.shared.subtitleMatchesSystemAppearance
         )
     }
 
     /// Re-derive the seeded subtitle from the current detail unless the user
-    /// picked one on this visit.
+    /// picked one on this visit and the reloaded page still shows it: the
+    /// same file, which still offers that track.
     private func reseedSubtitleOverride() {
-        guard !preferredSubtitleTrackWasManuallySelected else { return }
+        if preferredSubtitleTrackWasManuallySelected {
+            guard let detail = viewModel.detail else { return }
+            let keepsPick = DetailPlaybackFormatting.keepsManualSubtitlePick(
+                preferredSubtitleTrackIndex,
+                pickedFileId: preferredSubtitleTrackFileId,
+                reloadedFileId: effectiveVersion(for: detail, versionFileId: preferredVersionFileId)?.fileId
+            ) { index in
+                sanitizedSubtitleTrackIndex(
+                    for: detail,
+                    versionFileId: preferredVersionFileId,
+                    candidate: index
+                ) != nil
+            }
+            if keepsPick { return }
+            preferredSubtitleTrackWasManuallySelected = false
+            preferredSubtitleTrackFileId = nil
+        }
         preferredSubtitleTrackIndex = nil
         seedSubtitleOverrideIfNeeded()
     }
@@ -1166,6 +1215,7 @@ private struct ItemDetailPhoneContent: View {
             version: effectiveVersion(for: watchDetail, versionFileId: nil),
             signature: watchDetail.effectiveSubtitleTrackSignature,
             mode: watchDetail.effectiveSubtitleMode,
+            showForced: watchDetail.showsForcedSubtitles,
             usesDeviceSettings: PlayerSettings.shared.subtitleMatchesSystemAppearance
         )
     }
@@ -1219,7 +1269,7 @@ private struct ItemDetailPhoneContent: View {
             // Server unreachable: streaming can't start, so skip the source
             // choice and play the local copy directly.
             guard ConnectionMonitor.shared.isServerReachable else {
-                refreshOnPlayerDismiss = true
+                playerCleanupGeneration = PlayerCleanupBarrier.beginPlayback()
                 router.presentOfflinePlayer(
                     downloadId: record.id,
                     contentId: record.leafMediaItemId,
@@ -1274,7 +1324,7 @@ private struct ItemDetailPhoneContent: View {
         startFromBeginning: Bool,
         resumePosition: Double?
     ) {
-        refreshOnPlayerDismiss = true
+        playerCleanupGeneration = PlayerCleanupBarrier.beginPlayback()
         // Pass the artwork URLs we already loaded into the detail view so
         // PlayerViewModel.pushNowPlayingArtwork can publish lock-screen art
         // without re-fetching the catalog item. The hints are best-effort —

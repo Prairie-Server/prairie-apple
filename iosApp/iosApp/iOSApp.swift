@@ -17,6 +17,9 @@ struct PrairieApp: App {
         // runs so poster/backdrop-heavy screens reuse the same pipeline on
         // both iOS and tvOS.
         PosterImageCache.install()
+        // Artwork reads ask for widths in device pixels; keep the display
+        // they are sized for readable off the main actor.
+        ArtworkDisplay.install()
 
         #if os(iOS) || os(tvOS)
         // Aether's optional host stream enters Prairie diagnostics only through a
@@ -33,6 +36,9 @@ struct PrairieApp: App {
 
         #if os(iOS)
         MetricKitCapture.shared.start()
+        // Started at launch so the first playback already knows whether it
+        // is on mobile data (the cellular quality pair).
+        PlaybackNetworkMonitor.shared.start()
         #endif
     }
 

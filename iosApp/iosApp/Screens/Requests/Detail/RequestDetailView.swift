@@ -11,11 +11,11 @@ import SwiftUI
 /// tvOS focus safety: the primary action is a single `Button` whose label
 /// and enabled state vary by `RequestPrimaryAction`. It is never swapped
 /// for a different view identity mid-morph, so focus stays put across
-/// request → submitting → pending.
+/// request → submitting → pending. Its label keeps the same accessibility
+/// shape across states too (see `primaryLabel`).
 struct RequestDetailView: View {
     @State private var viewModel: RequestDetailViewModel
     @Environment(AppRouter.self) private var router
-    @State private var isConfirmingDecline = false
     /// Closes the whole detail card; set when this page is the card's root.
     private let onClose: (() -> Void)?
     #if os(tvOS)
@@ -49,27 +49,23 @@ struct RequestDetailView: View {
         .animation(.smooth(duration: 0.3), value: viewModel.hasFreshDetail)
         .animation(.smooth(duration: 0.3), value: viewModel.progress)
         .sensoryFeedback(.success, trigger: viewModel.submittedCount)
-        .sensoryFeedback(.success, trigger: viewModel.moderatedCount)
+        .sensoryFeedback(.success, trigger: viewModel.followToggledCount)
         .sensoryFeedback(trigger: viewModel.actionErrorMessage) { _, message in
             guard let message else { return nil }
-            // An unconfirmed create, cancel, or decision may still have
-            // landed, so it warns.
+            // An unconfirmed create or cancel may still have landed, so it
+            // warns.
             let unconfirmed = viewModel.isSubmissionUnconfirmed
-                || viewModel.isModerationUnconfirmed
                 || message == RequestErrorCopy.unconfirmedCancelMessage
             return unconfirmed ? .warning : .error
-        }
-        .alert("Decline this request?", isPresented: $isConfirmingDecline) {
-            Button("Decline", role: .destructive) {
-                Task { await viewModel.moderate(.decline) }
-            }
-            Button("Keep", role: .cancel) {}
-        } message: {
-            Text("The person who asked for it will see it as declined.")
         }
         .onChange(of: RequestsEventBus.shared.lastUpdate) { _, update in
             if let update {
                 viewModel.applyRequestUpdate(update)
+            }
+        }
+        .onChange(of: RequestsEventBus.shared.lastTitleState) { _, update in
+            if let update {
+                viewModel.applyTitleStateUpdate(update)
             }
         }
         #if os(iOS)
@@ -199,8 +195,8 @@ struct RequestDetailView: View {
                 RequestStatusCard(progress: progress, record: viewModel.displayedRecord)
             }
 
-            if !viewModel.moderationActions.isEmpty {
-                phoneModerationRow
+            if viewModel.canFollow {
+                phoneFollowButton
             }
 
             if viewModel.canCancel {
@@ -216,43 +212,40 @@ struct RequestDetailView: View {
             }
         }
     }
-    /// Admin decision on someone's request, under their status.
-    private var phoneModerationRow: some View {
-        HStack(spacing: 8) {
-            ForEach(viewModel.moderationActions, id: \.self) { action in
-                Button {
-                    if action == .decline {
-                        isConfirmingDecline = true
-                    } else {
-                        Task { await viewModel.moderate(action) }
-                    }
-                } label: {
-                    Label(moderationTitle(action), systemImage: moderationIcon(action))
-                        .font(.subheadline.weight(action == .decline ? .semibold : .bold))
-                        .foregroundStyle(action == .decline ? Color.prairieOnSurface : Color.black)
-                        .frame(maxWidth: .infinity, minHeight: 44)
-                        .background(Capsule().fill(action == .decline ? Color.prairieChromeSelectedFill : Color.white))
-                }
-                .buttonStyle(.plain)
+    /// Someone else's request: hear when it lands instead of requesting it
+    /// again. One button whose label flips, never two.
+    private var phoneFollowButton: some View {
+        VStack(spacing: 8) {
+            Button {
+                Task { await viewModel.toggleFollow() }
+            } label: {
+                Label(followTitle, systemImage: followIcon)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.prairieOnSurface)
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .background(Capsule().fill(Color.prairieChromeSelectedFill))
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(viewModel.isTogglingFollow)
+            .accessibilityValue(viewModel.isFollowing ? "On" : "Off")
+
+            if let notice = viewModel.followNotice {
+                Text(notice)
+                    .font(.prairieCaption)
+                    .foregroundColor(.prairieSecondaryText)
+                    .frame(maxWidth: .infinity, alignment: .center)
             }
         }
     }
     #endif
 
-    private func moderationTitle(_ action: AdminRequestAction) -> String {
-        switch action {
-        case .approve: "Approve"
-        case .decline: "Decline"
-        case .retry: "Retry"
-        }
+    private var followTitle: String {
+        viewModel.isFollowing ? "Stop Notifying Me" : "Notify Me"
     }
 
-    private func moderationIcon(_ action: AdminRequestAction) -> String {
-        switch action {
-        case .approve: "checkmark"
-        case .decline: "xmark"
-        case .retry: "arrow.clockwise"
-        }
+    private var followIcon: String {
+        viewModel.isFollowing ? "bell.slash" : "bell"
     }
 
     // MARK: - tvOS
@@ -303,15 +296,11 @@ struct RequestDetailView: View {
             primaryActionButton
                 .focused($primaryFocused)
 
-            ForEach(viewModel.moderationActions, id: \.self) { action in
-                if action == .decline {
-                    TVSecondaryPillButton(icon: moderationIcon(action), title: moderationTitle(action)) {
-                        isConfirmingDecline = true
-                    }
-                } else {
-                    TVPrimaryPillButton(icon: moderationIcon(action), title: moderationTitle(action)) {
-                        Task { await viewModel.moderate(action) }
-                    }
+            // Stays enabled while a toggle runs: a disabled button leaves
+            // the focus graph and would drop focus. Only its label flips.
+            if viewModel.canFollow {
+                TVSecondaryPillButton(icon: followIcon, title: followTitle) {
+                    Task { await viewModel.toggleFollow() }
                 }
             }
 
@@ -321,13 +310,20 @@ struct RequestDetailView: View {
                 }
             }
 
-            if let message = viewModel.actionErrorMessage {
+            if let message = tvActionMessage {
                 Text(message)
                     .font(.prairieCaption)
                     .foregroundColor(.prairieSecondaryText)
             }
         }
         .focusSection()
+    }
+
+    private var tvActionMessage: String? {
+        if let error = viewModel.actionErrorMessage { return error }
+        // The follow notice belongs to the button: once the title lands or
+        // following goes away, it goes too.
+        return viewModel.canFollow ? viewModel.followNotice : nil
     }
 
     /// The labeled summary under the synopsis, in the playback summary's
@@ -410,7 +406,15 @@ struct RequestDetailView: View {
     private func primaryLabel(for action: RequestPrimaryAction) -> some View {
         #if os(tvOS)
         HStack(spacing: 14) {
+            // Decorative (the button carries its own accessibility label),
+            // and hidden so the morph doesn't change the button's
+            // accessibility children. Swapping the plus for the spinner and
+            // then the status dot while the button is focused otherwise
+            // detaches it from the focus engine: the pill still draws as
+            // focused, but VoiceOver and UI tests see nothing focused until
+            // the page is reopened.
             buttonIcon(for: action)
+                .accessibilityHidden(true)
             Text(buttonTitle(for: action))
                 .lineLimit(1)
         }
@@ -512,9 +516,6 @@ struct RequestDetailView: View {
     /// Where the title stands, in the slot a library title uses for its
     /// editorial eyebrow.
     private var eyebrow: String? {
-        if viewModel.moderationRecord != nil, viewModel.openedForModeration || viewModel.record == nil {
-            return "Requested by someone on this server"
-        }
         guard let display = viewModel.progress?.display else { return "Not in your library" }
         return display == .inLibrary ? nil : "Requested"
     }

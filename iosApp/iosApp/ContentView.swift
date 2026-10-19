@@ -56,6 +56,11 @@ struct ContentView: View {
     /// Set when the scene enters the background, so `.active` refreshes only
     /// on a real return to the app.
     @State private var isReturningFromBackground = false
+    #if os(iOS)
+    /// When the scene last entered the background, for the Home refresh
+    /// threshold on return.
+    @State private var sceneBackgroundedAt: Date?
+    #endif
 
     // The root modifier chain runs presentedContent -> appEventContent ->
     // sessionTaskContent -> body. Swift 6.2 cannot type-check it as one
@@ -297,6 +302,15 @@ struct ContentView: View {
         #endif
     }
 
+    /// What the local route depends on: the active server's saved address and
+    /// identity, and whether the app is signed in.
+    private var localRouteKey: String {
+        let server = serverRegistry.activeServer
+        return [server?.id, server?.url, server?.verifiedServerId,
+                router.authState == .authenticated ? "signed-in" : "signed-out"]
+            .map { $0 ?? "-" }.joined(separator: "|")
+    }
+
     private var sessionTaskContent: some View {
         appEventContent
         #if DEBUG
@@ -438,6 +452,15 @@ struct ContentView: View {
                 #endif
             }
         }
+        // The local route follows the active server, its identity and whether
+        // the app is signed in to it (LocalRouteController).
+        .task(id: localRouteKey) {
+            guard await HTTPClient.shared.waitForRequestDispatchOpen(), !Task.isCancelled else { return }
+            LocalRouteController.shared.update(
+                activeServer: serverRegistry.activeServer,
+                isSignedIn: router.authState == .authenticated
+            )
+        }
         .task(id: serverRegistry.activeProfileId) {
             #if os(iOS) || os(tvOS)
             diagnosticsModel.reset()
@@ -463,6 +486,11 @@ struct ContentView: View {
             // timeline) and stamps the inter-phase `duration_ms`.
             LaunchTimeline.recordScenePhase(Self.diagnosticsScenePhase(newPhase))
             #endif
+            switch newPhase {
+            case .active: LocalRouteController.shared.sceneDidBecomeActive()
+            case .background: LocalRouteController.shared.sceneDidEnterBackground()
+            default: break
+            }
             #if os(iOS)
             switch newPhase {
             case .active:
@@ -500,6 +528,9 @@ struct ContentView: View {
 
             if newPhase == .background {
                 isReturningFromBackground = true
+                #if os(iOS)
+                sceneBackgroundedAt = .now
+                #endif
                 markProfileAwayStartIfNeeded()
                 return
             }
@@ -839,6 +870,22 @@ struct ContentView: View {
             return
         }
         #if os(iOS)
+        // A notification from another server or profile does not navigate,
+        // whichever branch below its link would take. A link held for
+        // profile selection is decided again for the profile chosen.
+        switch ApplePushDeepLinkCoordinator.admission(
+            for: url,
+            profileInUse: router.authState == .authenticated && !launchPreferences.requiresSelectionAfterBackground(),
+            activeServer: serverRegistry.activeServer,
+            activeProfileID: serverRegistry.activeProfileId
+        ) {
+        case .open: break
+        case .wait:
+            pendingDeepLink = url
+            return
+        case .drop:
+            return
+        }
         // A TV sign-in code from the web approval page. Approval is
         // account-level: it waits for a signed-in session, not a profile.
         if let link = DeviceApprovalLink(url: url) {
@@ -1056,6 +1103,14 @@ struct ContentView: View {
         router.authState = state
     }
 
+    /// Saved servers' push registrations still need renewing while no
+    /// profile is in use, or their display tokens lapse at Who's Watching.
+    private func maintainPushRegistrationsWithoutProfile() {
+        #if os(iOS)
+        Task { await ApplePushRegistrationCoordinator.shared.maintainWithoutProfile() }
+        #endif
+    }
+
     /// The splash has lifted over a committed route. Launch intents that
     /// present UI (deep links, sheets, the player) were held until now.
     /// A return to the foreground after a real background: the profile
@@ -1063,11 +1118,19 @@ struct ContentView: View {
     private func handleReturnFromBackgroundIfNeeded() {
         guard isReturningFromBackground else { return }
         isReturningFromBackground = false
-        guard router.authState == .authenticated else { return }
+        #if os(iOS)
+        let backgroundedAt = sceneBackgroundedAt
+        sceneBackgroundedAt = nil
+        #endif
+        guard router.authState == .authenticated else {
+            maintainPushRegistrationsWithoutProfile()
+            return
+        }
         if keepsProfileActiveInBackground {
             launchPreferences.clearBackgroundedAt()
         } else if launchPreferences.requiresSelectionAfterBackground() {
             Task { await applyProfileReturnPolicy() }
+            maintainPushRegistrationsWithoutProfile()
             return
         } else {
             launchPreferences.clearBackgroundedAt()
@@ -1097,6 +1160,10 @@ struct ContentView: View {
         #endif
         #if os(tvOS)
         NotificationCenter.default.post(name: .homeSectionsShouldRefresh, object: nil)
+        #elseif os(iOS)
+        if HomeForegroundRefreshPolicy.shouldRefresh(backgroundedAt: backgroundedAt) {
+            NotificationCenter.default.post(name: .homeSectionsShouldRefresh, object: nil)
+        }
         #endif
         #if !os(tvOS)
         Task { await DownloadManager.shared.onAppActive() }
@@ -2424,6 +2491,14 @@ struct MainTabView: View {
                 visibleDestinations: visibleDestinations
             )
         }
+        #if os(macOS)
+        .onChange(of: RequestsFeatureStore.shared.isEnabled) { _, _ in
+            selectedDestinationID = resolvedVisibleMainTabDestination(
+                selectedDestinationID,
+                visibleDestinations: visibleDestinations
+            )
+        }
+        #endif
         .onChange(of: librarySnapshot) { _, _ in
             #if os(macOS)
             // The fallback Libraries row gives way to the real library rows
@@ -2452,22 +2527,15 @@ struct MainTabView: View {
         .modifier(AudioPlayerPresentationModifier(router: router))
         .modifier(PlayerPresentationModifier(router: router))
         .sheet(
-            item: itemDetailBinding(fillsWindow: false),
+            item: $router.presentedItemDetail,
             onDismiss: { router.itemDetailPresentationDidDismiss() }
         ) { presentation in
-            ItemDetailSheet(presentation: presentation, router: router)
-        }
-        .fullScreenCover(
-            item: itemDetailBinding(fillsWindow: true),
-            onDismiss: { router.itemDetailPresentationDidDismiss() }
-        ) { presentation in
-            ItemDetailSheet(presentation: presentation, router: router)
+            itemDetail(presentation)
         }
         .onGeometryChange(for: Bool.self) { proxy in
             PhoneDetailHeroLayout.usesSplitLayout(pageSize: proxy.size, verticalSizeClass: vSize)
         } action: { splitsDetail in
             router.presentsItemDetailFullWindow = splitsDetail
-                && UIDevice.current.userInterfaceIdiom == .phone
         }
         .sheet(isPresented: Binding(
             get: { prairieControl.isShowingRemoteControl },
@@ -2549,15 +2617,12 @@ struct MainTabView: View {
     @Environment(\.horizontalSizeClass) private var hSize
     @Environment(\.verticalSizeClass) private var vSize
 
-    /// The open detail, routed to whichever presentation it opened in: the
-    /// sheet, or the full-window cover (`ItemDetailPresentation.fillsWindow`).
-    private func itemDetailBinding(fillsWindow: Bool) -> Binding<AppRouter.ItemDetailPresentation?> {
-        Binding(
-            get: {
-                router.presentedItemDetail?.fillsWindow == fillsWindow ? router.presentedItemDetail : nil
-            },
-            set: { router.presentedItemDetail = $0 }
-        )
+    /// Passes the audio store in explicitly. When the iPad app runs on a Mac,
+    /// presented content doesn't inherit it, and the detail's audio player
+    /// modifier traps reading it as the sheet appears.
+    private func itemDetail(_ presentation: AppRouter.ItemDetailPresentation) -> some View {
+        ItemDetailSheet(presentation: presentation, router: router)
+            .environment(audioStore)
     }
     #endif
 
@@ -2595,7 +2660,8 @@ struct MainTabView: View {
         macSidebarSections(
             destinations: projectedDestinations,
             libraries: librarySnapshot.availableLibraries(for: currentLibraryAuthority),
-            showAudiobooks: navPrefs.showAudiobooks
+            showAudiobooks: navPrefs.showAudiobooks,
+            requestsEnabled: RequestsFeatureStore.shared.isEnabled
         )
     }
     #endif
@@ -2849,8 +2915,10 @@ struct MainTabView: View {
                 // title on root pages would repeat them.
                 .toolbar(removing: .title)
                 .modifier(MacRootPageTopInset(
-                    // Search keeps the toolbar strip: its field lives there.
+                    // Search and Requests keep the toolbar strip: their
+                    // fields live there.
                     reclaimsToolbarStrip: selectedDestination.id != .app(.search)
+                        && selectedDestination.id != .app(.requests)
                 ))
                 #endif
                 #if os(iOS)
@@ -2892,10 +2960,16 @@ struct MainTabView: View {
             ForEach(sidebarDestinations(nestingPinnedLibraries: nestsPinnedLibraries)) { item in
                 let destination = item.destination
                 let isSelected = selectedDestinationID == destination.id
-                Label(
-                    destination.title,
-                    systemImage: isSelected ? destination.selectedIcon : destination.icon
-                )
+                Label {
+                    Text(destination.title)
+                } icon: {
+                    Image(systemName: isSelected ? destination.selectedIcon : destination.icon)
+                        #if os(iOS)
+                        // Row icons otherwise take the list's graphite tint,
+                        // which is also the selected row's fill.
+                        .foregroundStyle(isSelected ? .primary : .secondary)
+                        #endif
+                }
                 .padding(.leading, item.isNestedLibrary ? 24 : 0)
                 .tag(destination.id)
             }
@@ -3051,6 +3125,9 @@ struct MainTabView: View {
         case .downloads:
             DownloadsView()
 
+        case .requests:
+            RequestsHubView()
+
         case .settings:
             SettingsView()
 
@@ -3134,8 +3211,6 @@ struct MainTabView: View {
             RequestDetailView(mediaType: mediaType, tmdbId: tmdbId)
         case .myRequests:
             MyRequestsView()
-        case .requestApprovals:
-            MyRequestsView(initialScope: .everyone)
         case .search:
             #if os(iOS)
             SearchView(seededQuery: $siriSearchRequest)
@@ -3197,33 +3272,11 @@ private struct ItemDetailSheet: View {
     var body: some View {
         NavigationStack(path: $router.itemDetailPath) {
             GeometryReader { geometry in
-                let pageHeight = geometry.size.height + geometry.safeAreaInsets.bottom
-
-                if browseSource == nil {
-                    // iPhone has one detail page. Do not put its vertical
-                    // scroll view inside an unused horizontal scroll view:
-                    // the native sheet should coordinate with that page directly.
-                    detailPage(contentID: currentContentID, width: geometry.size.width, height: pageHeight)
-                } else {
-                    // Keep iPad's source-aware, finger-following page deck.
-                    ScrollView(.horizontal) {
-                        LazyHStack(spacing: 10) {
-                            ForEach(pageContentIDs, id: \.self) { contentID in
-                                detailPage(contentID: contentID, width: geometry.size.width, height: pageHeight)
-                            }
-                        }
-                        .scrollTargetLayout()
-                    }
-                    .scrollIndicators(.hidden)
-                    .scrollTargetBehavior(.viewAligned(limitBehavior: .always))
-                    .scrollPosition(id: pagingSelection, anchor: .center)
-                    .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-                    .frame(height: pageHeight, alignment: .top)
-                    .ignoresSafeArea(.container, edges: .bottom)
-                    .task(id: currentContentID) {
-                        await prefetchAdjacentDetails()
-                    }
-                }
+                rootPage
+                    .frame(
+                        width: geometry.size.width,
+                        height: geometry.size.height + geometry.safeAreaInsets.bottom
+                    )
             }
                 .navigationDestination(for: Route.self) { route in
                     destination(for: route)
@@ -3239,8 +3292,10 @@ private struct ItemDetailSheet: View {
         .ignoresSafeArea(.container, edges: .bottom)
         // A page-sized sheet avoids the narrow form-card treatment on iPad,
         // while the large detent raises the rounded card to the top safe area.
-        // Native pull-down dismissal still returns to the exact source page.
-        .presentationSizing(.page)
+        // A wide, short window (iPad or iPhone Duo in landscape) gets a sheet
+        // as large as the window instead, so the split page has room. Either
+        // way native pull-down dismissal returns to the exact source page.
+        .presentationSizing(ItemDetailSheetSizing(fillsWindow: presentation.fillsWindow))
         .presentationDetents([.large])
         // Nested pages handle a top pull as Back. The sheet's native dismiss
         // remains available only at the root, preserving the source page.
@@ -3249,85 +3304,21 @@ private struct ItemDetailSheet: View {
         .modifier(AudioPlayerPresentationModifier(router: router, detailPresentationID: presentation.id))
     }
 
-    private var currentContentID: String {
-        router.presentedItemDetail?.contentId ?? presentation.contentId
-    }
-
     @ViewBuilder
-    private func detailPage(contentID: String, width: CGFloat, height: CGFloat) -> some View {
-        if let request = presentation.request, contentID == presentation.contentId {
+    private var rootPage: some View {
+        if let request = presentation.request {
             RequestDetailView(
                 mediaType: request.mediaType,
                 tmdbId: request.tmdbId,
                 onClose: router.dismissItemDetail
             )
-            .frame(width: width, height: height)
         } else {
-            itemDetailPage(contentID: contentID, width: width, height: height)
-        }
-    }
-
-    @ViewBuilder
-    private func itemDetailPage(contentID: String, width: CGFloat, height: CGFloat) -> some View {
-        let shape = UnevenRoundedRectangle(
-            topLeadingRadius: 28, bottomLeadingRadius: 0,
-            bottomTrailingRadius: 0, topTrailingRadius: 28, style: .continuous
-        )
-        let page = ItemDetailView(
-            contentId: contentID,
-            libraryId: presentation.libraryId,
-            onClose: router.dismissItemDetail,
-            resumeContext: presentation.resumeContext?.seriesContentId == contentID ? presentation.resumeContext : nil
-        )
-            .frame(width: width, height: height)
-            .id(contentID)
-        if browseSource == nil {
-            page
-        } else {
-            page.clipShape(shape).contentShape(shape)
-        }
-    }
-
-    /// iPhone detail cards are intentionally fixed to the title that was
-    /// opened. iPad keeps its existing wider, source-aware page deck.
-    private var browseSource: ItemDetailBrowseSource? {
-        guard UIDevice.current.userInterfaceIdiom != .phone else { return nil }
-        return router.presentedItemDetail?.browseSource ?? presentation.browseSource
-    }
-
-    private var pageContentIDs: [String] {
-        browseSource?.contentIDs ?? [currentContentID]
-    }
-
-    private var pagingSelection: Binding<String?> {
-        Binding(
-            get: { currentContentID },
-            set: { contentID in
-                guard let contentID, contentID != currentContentID else { return }
-                router.selectPresentedItemDetail(contentId: contentID)
-            }
-        )
-    }
-
-    /// Warm just the two neighbouring cards. This keeps the first sideways
-    /// swipe cache-fast without launching requests for an entire long library.
-    @MainActor
-    private func prefetchAdjacentDetails() async {
-        guard let source = browseSource,
-              let currentIndex = source.contentIDs.firstIndex(of: currentContentID)
-        else { return }
-
-        let neighborIDs = [currentIndex - 1, currentIndex + 1]
-            .filter(source.contentIDs.indices.contains)
-            .map { source.contentIDs[$0] }
-
-        for contentID in neighborIDs {
-            guard !Task.isCancelled else { return }
-            let key = CacheKey.itemDetail(contentID, libraryId: presentation.libraryId)
-            if let _: ItemDetail = ResponseCache.shared.get(key) { continue }
-            guard let detail = try? await PrairieAPI.shared.itemDetail(contentId: contentID, libraryId: presentation.libraryId),
-                  !Task.isCancelled else { continue }
-            ResponseCache.shared.set(detail, for: key)
+            ItemDetailView(
+                contentId: presentation.contentId,
+                libraryId: presentation.libraryId,
+                onClose: router.dismissItemDetail,
+                resumeContext: presentation.resumeContext
+            )
         }
     }
 
@@ -3343,6 +3334,16 @@ private struct ItemDetailSheet: View {
         default:
             EmptyView()
         }
+    }
+}
+
+/// `.page` normally; the whole window when `fillsWindow`. iPadOS keeps the
+/// sheet inside the window, so an unbounded proposal fills it.
+private struct ItemDetailSheetSizing: PresentationSizing {
+    let fillsWindow: Bool
+
+    func proposedSize(for root: PresentationSizingRoot, context: PresentationSizingContext) -> ProposedViewSize {
+        fillsWindow ? .infinity : PagePresentationSizing.page.proposedSize(for: root, context: context)
     }
 }
 #endif

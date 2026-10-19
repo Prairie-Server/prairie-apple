@@ -138,9 +138,6 @@ struct PlayerView: View {
                     loadingCloseButton
                     #endif
                 } else {
-                    #if os(iOS)
-                    if viewModel.showNextUpScreen { loadingCloseButton }
-                    #endif
                     if !viewModel.showNextUpScreen {
 
                         #if os(tvOS)
@@ -286,21 +283,28 @@ struct PlayerView: View {
                         }
                         #endif
 
-                        #if os(tvOS)
-                        if let identity = remoteIdentityNotice {
-                            RemotePlaybackIdentityNotice(identity: identity)
-                                .transition(.opacity)
-                        } else if let notice = viewModel.presentedNotice {
-                            PlayerNoticeOverlay(notice: notice)
-                        }
-                        #else
-                        if let notice = viewModel.presentedNotice {
-                            PlayerNoticeOverlay(notice: notice)
-                        }
-                        #endif
-
                         subtitleSyncIndicator
                     }
+
+                    // Outside the playback-only branch, so an end that stopped
+                    // short explains itself on the end-of-playback screen too,
+                    // above that screen's video preview.
+                    #if os(tvOS)
+                    if let identity = remoteIdentityNotice {
+                        RemotePlaybackIdentityNotice(identity: identity)
+                            .transition(.opacity)
+                    } else if let notice = viewModel.presentedNotice {
+                        PlayerNoticeOverlay(notice: notice)
+                    }
+                    #else
+                    if let notice = viewModel.presentedNotice {
+                        PlayerNoticeOverlay(notice: notice)
+                    }
+                    #endif
+                    #if os(iOS)
+                    // Above the notice, which starts at the same corner.
+                    if viewModel.showNextUpScreen { loadingCloseButton }
+                    #endif
 
                     #if os(tvOS)
                     if let message = watchPartySyncMessage {
@@ -834,7 +838,6 @@ struct PlayerNextUpScreen: View {
     let onBack: () -> Void
     var onStopShuffling: () -> Void = {}
     @FocusState private var focusedTarget: PlayerNextUpFocusTarget?
-    @State private var onDeckFocusRequest = 0
     @State private var didRequestInitialActionFocus = false
     @State private var uiCustomization = UICustomizationPreferences.shared
 
@@ -1063,11 +1066,11 @@ struct PlayerNextUpScreen: View {
         .accessibilityIdentifier("next-up-stop-shuffling")
         #if os(tvOS)
         .focused($focusedTarget, equals: .stopShuffling)
+        // Down is left to the focus engine, which enters On Deck at its
+        // first card, as it does from the actions row.
         .onMoveCommand { direction in
             if direction == .up {
                 focusPreferredAction()
-            } else if direction == .down {
-                focusFirstOnDeckItem()
             }
         }
         #endif
@@ -1304,8 +1307,6 @@ struct PlayerNextUpScreen: View {
         .onMoveCommand { direction in
             if direction == .up {
                 focusPreferredAction()
-            } else if direction == .down {
-                focusFirstOnDeckItem()
             }
         }
         #endif
@@ -1320,7 +1321,12 @@ struct PlayerNextUpScreen: View {
             icon: "play.circle.fill",
             layout: .thumbnail,
             usesProvidedThumbnailTapAction: onDeckUsesProvidedThumbnailTapAction,
-            focusRequest: onDeckFocusRequest,
+            // The panel sits above the third card, so a geometric Down entry
+            // would skip the first. Let the focus engine enter the row and
+            // land on its first card instead of redirecting the move, and
+            // scroll the strip home on exit so that card is loaded next time.
+            prefersDefaultFocusOnFirstItem: true,
+            scrollsToFirstItemWhenFocusLeaves: true,
             onMoveUp: focusAboveOnDeck
         )
     }
@@ -1386,11 +1392,9 @@ struct PlayerNextUpScreen: View {
     }
 
     private func focusBelowActions() {
-        if viewModel.nextUpEpisode != nil {
-            focusedTarget = .autoPlay
-            return
-        }
-        focusFirstOnDeckItem()
+        // Without the Auto-play toggle, Down enters On Deck natively.
+        guard viewModel.nextUpEpisode != nil else { return }
+        focusedTarget = .autoPlay
     }
 
     private func focusAboveOnDeck() {
@@ -1399,11 +1403,6 @@ struct PlayerNextUpScreen: View {
             return
         }
         focusPreferredAction()
-    }
-
-    private func focusFirstOnDeckItem() {
-        guard !viewModel.nextUpCarouselItems.isEmpty else { return }
-        onDeckFocusRequest &+= 1
     }
 
     private func requestInitialActionFocusIfNeeded() {

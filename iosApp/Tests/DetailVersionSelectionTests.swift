@@ -9,14 +9,143 @@ final class DetailVersionSelectionTests: XCTestCase {
             version: nil,
             signature: nil,
             mode: SubtitleMode.off.rawValue,
+            showForced: false,
             usesDeviceSettings: true
         ))
         XCTAssertEqual(DetailPlaybackFormatting.launchPreferredSubtitleIndex(
             version: nil,
             signature: nil,
             mode: SubtitleMode.off.rawValue,
+            showForced: false,
             usesDeviceSettings: false
         ), -1)
+    }
+
+    /// A subtitle picked in the iPhone and iPad detail selector stays when the
+    /// viewer returns from the player, as on tvOS. Server mode Off with show
+    /// forced on reseeds to Auto (the forced track), so an explicit Off has to
+    /// survive the reload rather than be re-derived from the server.
+    func testAManualSubtitlePickSurvivesTheReloadAfterThePlayer() {
+        let offered: Set<Int> = [2, 3]
+        func keeps(_ index: Int?, pickedOn picked: Int? = 10, reloaded: Int? = 10) -> Bool {
+            DetailPlaybackFormatting.keepsManualSubtitlePick(
+                index,
+                pickedFileId: picked,
+                reloadedFileId: reloaded
+            ) { offered.contains($0) }
+        }
+        XCTAssertTrue(keeps(-1), "Off")
+        XCTAssertTrue(keeps(nil), "Auto")
+        XCTAssertTrue(keeps(3))
+        XCTAssertFalse(keeps(7), "a track the reloaded version no longer has")
+        // The reload can show another version, for example the default one
+        // after a play too short to record the file. The same index there is
+        // another stream, so the pick is reseeded; Off and Auto still stay.
+        XCTAssertFalse(keeps(3, pickedOn: 11), "a track picked on another file")
+        XCTAssertTrue(keeps(-1, pickedOn: 11, reloaded: 10))
+        XCTAssertTrue(keeps(nil, pickedOn: nil, reloaded: 10))
+        // What the reload would otherwise show instead of that Off.
+        XCTAssertNil(DetailPlaybackFormatting.launchPreferredSubtitleIndex(
+            version: subtitleVersion(),
+            signature: nil,
+            mode: SubtitleMode.off.rawValue,
+            showForced: true,
+            usesDeviceSettings: false
+        ))
+    }
+
+    /// Server mode Off (profile or series) with show forced on is not an
+    /// explicit Off: Play from the detail page lets the resolver start on the
+    /// forced track in the audio language, like every other entry path. A
+    /// stored signature does not turn dialogue subtitles back on.
+    func testServerOffWithShowForcedLaunchesWithoutAnExplicitOff() {
+        let version = subtitleVersion()
+        let fullEnglish = SubtitleTrackSignature(language: "eng", forced: false)
+        for signature in [nil, fullEnglish] {
+            XCTAssertNil(DetailPlaybackFormatting.launchPreferredSubtitleIndex(
+                version: version,
+                signature: signature,
+                mode: SubtitleMode.off.rawValue,
+                showForced: true,
+                usesDeviceSettings: false
+            ))
+            XCTAssertEqual(DetailPlaybackFormatting.launchPreferredSubtitleIndex(
+                version: version,
+                signature: signature,
+                mode: SubtitleMode.off.rawValue,
+                showForced: false,
+                usesDeviceSettings: false
+            ), -1)
+        }
+        // Outside Off a stored signature still seeds its track.
+        XCTAssertEqual(DetailPlaybackFormatting.launchPreferredSubtitleIndex(
+            version: version,
+            signature: fullEnglish,
+            mode: SubtitleMode.auto.rawValue,
+            showForced: true,
+            usesDeviceSettings: false
+        ), 2)
+    }
+
+    /// The Auto preview names the track that launch then starts on: the
+    /// forced track in the audio language, with the audio language resolved
+    /// as the start request resolves it. The audio track here carries no
+    /// language, so only the server's effective audio language says Spanish.
+    func testAutoPreviewForServerOffWithShowForcedNamesTheForcedTrack() {
+        let version = subtitleVersion(
+            audioLanguage: nil,
+            effectiveAudioLanguage: "spa",
+            extraSubtitles: [Self.subtitle(5, "spa", forced: true)]
+        )
+        func label(showForced: Bool) -> String {
+            DetailPlaybackFormatting.subtitleValueLabel(
+                version: version,
+                selectedSubtitleTrackIndex: nil,
+                autoContext: .init(
+                    version: version,
+                    selectedAudioTrackIndex: nil,
+                    preferredLanguage: "en",
+                    mode: SubtitleMode.off.rawValue,
+                    signature: nil,
+                    showForced: showForced
+                )
+            )
+        }
+        let spanishForced = DetailPlaybackFormatting.subtitleValueLabel(
+            version: version,
+            selectedSubtitleTrackIndex: 5
+        )
+        XCTAssertEqual(label(showForced: true), "Auto: \(spanishForced)")
+        XCTAssertEqual(label(showForced: false), "Auto: Off")
+    }
+
+    private static func subtitle(_ index: Int, _ language: String, forced: Bool = false) -> SubtitleTrack {
+        SubtitleTrack(
+            index: index, codec: "subrip", language: language, title: nil, embeddedTitle: nil,
+            forced: forced, hearingImpaired: false, isDefault: false, external: false, externalPath: nil
+        )
+    }
+
+    private func subtitleVersion(
+        audioLanguage: String? = "eng",
+        effectiveAudioLanguage: String? = nil,
+        extraSubtitles: [SubtitleTrack] = []
+    ) -> FileVersion {
+        FileVersion(
+            fileId: 7, fileName: "e1.mkv", resolution: "1280x720", codecVideo: "h264", codecAudio: "aac",
+            hdr: false, container: "mkv", fileSize: 1_000, duration: 60, bitrate: 1_000_000,
+            videoTracks: nil,
+            audioTracks: [AudioTrack(
+                index: 1, codec: "aac", channels: 2, channelLayout: "stereo", bitrate: 128_000,
+                sampleRate: 48_000, language: audioLanguage, title: nil, embeddedTitle: nil, isDefault: true
+            )],
+            subtitleTracks: [
+                Self.subtitle(2, "eng"), Self.subtitle(3, "spa"), Self.subtitle(4, "eng", forced: true),
+            ] + extraSubtitles,
+            chapters: nil,
+            effectiveAudioTrackIndex: 0,
+            effectiveAudioLanguage: effectiveAudioLanguage
+        )
     }
 
     func testAutoDisplayPrefersBestVersionOverFirstReturnedVersion() {

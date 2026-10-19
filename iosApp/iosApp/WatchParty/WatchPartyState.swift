@@ -50,9 +50,76 @@ struct WatchPartyCommandState {
         pending = nil
     }
 
+    /// How long after a command finished before the drift loop measures
+    /// again; the player's clock settles after a play or seek.
+    static let nudgeSettle: TimeInterval = 1
+
+    /// A playhead that moved less than `heldClockAdvance` over at least
+    /// `heldClockInterval` is held, not playing.
+    static let heldClockInterval: TimeInterval = 0.4
+    static let heldClockAdvance: Double = 0.1
+
+    /// What the session's drift loop does on a report tick.
+    enum LoopStep: Equatable {
+        /// The room or this member is not playing, so the member runs at 1x.
+        case reset
+        /// A command just ran; the rate stays until playback settles.
+        case wait
+        /// Close this drift (room position minus local position) by rate.
+        case nudge(Double)
+    }
+
+    /// The last command this member ran is the room's position at its execute
+    /// time, advancing at 1x while the room plays.
+    /// `playheadAdvancing` is false when the player claims to play but its
+    /// position has not moved since the last tick: Aether's software path
+    /// holds its clock to rebuffer without reporting it, and a rate written
+    /// then restarts that clock. The loop waits it out.
+    static func loopStep(reference: WatchPartyTransportCommand?, room: WatchPartyRoom, memberPlaying: Bool,
+                         sourceTime: Double, serverNow: Date, sinceCompleted: TimeInterval,
+                         playheadAdvancing: Bool = true) -> LoopStep {
+        guard let reference, reference.playbackState == .playing,
+              reference.selectionRevision == room.selectionRevision,
+              room.phase == .playing, room.playbackState == .playing, !room.isPaused, memberPlaying else { return .reset }
+        guard sinceCompleted >= nudgeSettle, playheadAdvancing else { return .wait }
+        return .nudge(projectedPosition(reference, serverNow: serverNow) - sourceTime)
+    }
+
+    /// What a command does to this member's position when it executes.
+    enum PositionStep: Equatable {
+        /// The room's explicit seek: a barrier everyone lands on exactly.
+        case roomSeek
+        /// A playing member staying in a playing room: rate, or a large seek.
+        case correct
+        /// A stopped member moves before it plays or pauses there.
+        case realign
+        case none
+    }
+
+    /// `seekBand` is `WatchPartyCorrection.seekBand(isHost:)` for this member.
+    static func positionStep(_ command: WatchPartyTransportCommand, memberPlaying: Bool,
+                             drift: Double, reachableInPlace: Bool,
+                             seekBand: Double) -> PositionStep {
+        if command.action == .seek { return .roomSeek }
+        if command.playbackState == .playing, memberPlaying { return .correct }
+        return WatchPartyCorrection.seeksWhileStopped(drift: drift, reachableInPlace: reachableInPlace,
+                                                      band: seekBand) ? .realign : .none
+    }
+
+    /// The room's position at `serverNow`: a command carries the room's
+    /// position at its execute time, and a playing room advances at 1x.
     static func projectedPosition(_ command: WatchPartyTransportCommand, serverNow: Date) -> Double {
         command.positionSeconds + (command.playbackState == .playing ? max(0, serverNow.timeIntervalSince(command.executeAt)) : 0)
     }
+
+    /// How far from a waiting seek's target a guest still acknowledges it.
+    /// The server applies the tolerance that fits the seek: 1s for the room's
+    /// own seek, 5s for the seek it sends a stalled guest, whose rebuilt stream
+    /// often lands short and then closes the rest by rate. This client cannot
+    /// tell the two apart and has no pre-roll, so it reports and lets the
+    /// server decide.
+    static let guestSeekAcknowledgeTolerance: Double = 5
+    static let hostSeekAcknowledgeTolerance: Double = 15
 
     /// Waiting seeks require a landed destination; a buffering pause only
     /// requires the applied command and actual media readiness.
@@ -60,7 +127,8 @@ struct WatchPartyCommandState {
                                sourceTime: Double, isHost: Bool) -> Bool {
         guard let completed, sourceTime.isFinite, sourceTime >= 0 else { return false }
         guard roomPlaybackState == .waiting, completed.action == .seek else { return true }
-        return abs(sourceTime - completed.positionSeconds) <= (isHost ? 15 : 1)
+        let tolerance = isHost ? hostSeekAcknowledgeTolerance : guestSeekAcknowledgeTolerance
+        return abs(sourceTime - completed.positionSeconds) <= tolerance
     }
 
     /// The room waits for this member's `ready` only at a barrier, or while the
@@ -74,6 +142,54 @@ struct WatchPartyCommandState {
         if room.playbackState == .waiting { return true }
         return room.phase == .playing && (room.playbackState == .playing || room.playbackState == .paused)
             && (room.selfIgnoreWait || member?.isBuffering == true)
+    }
+}
+
+/// The offset from this device's clock to the server's, from ping/pong
+/// samples. A sample's error is at most half its round trip, so the offset in
+/// use is the one from the fastest recent round trip, not the latest: one slow
+/// pong would otherwise move every command's local execute time.
+struct WatchPartyClock {
+    static let sampleLimit = 8
+    static let maxRoundTrip: TimeInterval = 5
+    /// Pings this fast until a connection has this many samples, then slowly.
+    static let warmupSamples = 4
+    static let warmupInterval: TimeInterval = 2
+    static let interval: TimeInterval = 15
+
+    private(set) var samples: [(roundTrip: TimeInterval, offset: TimeInterval)] = []
+
+    /// Server time minus local time, or 0 before any sample.
+    var offset: TimeInterval { fastest?.offset ?? 0 }
+
+    /// The fastest sample, the newest on a tie.
+    private var fastest: (roundTrip: TimeInterval, offset: TimeInterval)? {
+        samples.reversed().min(by: { $0.roundTrip < $1.roundTrip })
+    }
+
+    /// Millisecond timestamps can make a LAN round trip read slightly negative.
+    static let roundingSlack: TimeInterval = 0.002
+    /// Beyond their round-trip error bounds, two offsets disagree by this much
+    /// only when this device's clock moved between them.
+    static let stepMargin: TimeInterval = 0.05
+
+    /// Records a sample and returns whether it was usable.
+    @discardableResult
+    mutating func record(clientSent: Date, serverReceived: Date, serverSent: Date, clientReceived: Date) -> Bool {
+        var roundTrip = clientReceived.timeIntervalSince(clientSent) - serverSent.timeIntervalSince(serverReceived)
+        if roundTrip < 0, roundTrip >= -Self.roundingSlack { roundTrip = 0 }
+        guard roundTrip.isFinite, roundTrip >= 0, roundTrip <= Self.maxRoundTrip else { return false }
+        let offset = (serverReceived.timeIntervalSince(clientSent) + serverSent.timeIntervalSince(clientReceived)) / 2
+        // Each offset is within half its round trip of the truth. When the new
+        // one cannot agree with the best kept one, the device clock stepped
+        // (a time sync, or waking from sleep) and the old samples are stale.
+        if let best = fastest,
+           abs(offset - best.offset) > (roundTrip + best.roundTrip) / 2 + Self.stepMargin {
+            samples.removeAll()
+        }
+        samples.append((roundTrip: roundTrip, offset: offset))
+        if samples.count > Self.sampleLimit { samples.removeFirst() }
+        return true
     }
 }
 

@@ -16,6 +16,24 @@ class HomeViewModel {
     /// True only while loading with nothing cached to show.
     var isLoading = false
     var error: ErrorState?
+    /// Whether the app is in the background, kept by `HomeView` from the
+    /// scene phase.
+    var isInBackground = false {
+        didSet {
+            if isInBackground, isLoadInFlight { loadCrossedBackground = true }
+        }
+    }
+    /// A load failed, or its retry was put off, while the app was in the
+    /// background: Home kept its placeholder and loads again when the app
+    /// returns.
+    private var reloadsOnReturn = false
+    /// Numbers each load. A newer load replaces one still in flight, whose
+    /// late result or failure is then ignored.
+    private var loadGeneration = 0
+    private var isLoadInFlight = false
+    /// The load in flight started or ran while the app was in the
+    /// background, so suspension may have cut its request off.
+    private var loadCrossedBackground = false
     private(set) var actionError: ErrorState?
     /// An unconfirmed watched change, offered for discard. Never re-sent.
     var personalStateNotice: PersonalStateNotice?
@@ -68,25 +86,50 @@ class HomeViewModel {
     }
 
     func loadSections() async {
+        // A load that crossed into the background may be waiting on a request
+        // that suspension cut off. Start a new request instead of joining it.
+        if isLoadInFlight, loadCrossedBackground {
+            StartupContentPrefetcher.invalidateHomeSectionsInFlight()
+        }
+        loadGeneration += 1
+        let generation = loadGeneration
+        isLoadInFlight = true
+        loadCrossedBackground = isInBackground
         isLoading = sections.isEmpty
         error = nil
+        reloadsOnReturn = false
 
         do {
-            try await fetchAndApplySections()
+            try await fetchAndApplySections(generation)
         } catch let err {
             // Don't blow away painted content on a transient failure —
             // surface the error only when there's nothing to show.
-            if sections.isEmpty {
+            if generation == loadGeneration, sections.isEmpty {
                 let state = ErrorState(err)
-                if state.isTransient {
-                    await retryTransientInitialLoad()
+                if state.isTransient, !isInBackground {
+                    await retryTransientInitialLoad(generation)
                 } else {
-                    self.error = state
+                    showFailure(state)
                 }
             }
         }
 
-        isLoading = false
+        guard generation == loadGeneration else { return }
+        isLoadInFlight = false
+        // A load put off until the app returns keeps the placeholder up.
+        isLoading = reloadsOnReturn
+    }
+
+    /// Loads again as the app returns when the last load failed, was put off
+    /// in the background, or is still waiting on a request that crossed into
+    /// the background: suspension may have cut that request off, and its
+    /// failure would arrive only now. The new load replaces it. `HomeView`
+    /// calls this as the app becomes active: Home stays mounted while the
+    /// app is away, so its appear task does not run again.
+    func reloadIfInterrupted() async {
+        let isWaitingOnCutOffLoad = isLoadInFlight && loadCrossedBackground
+        guard isWaitingOnCutOffLoad || error != nil || reloadsOnReturn else { return }
+        await loadSections()
     }
 
     /// The Continue Watching row mixes two kinds of cards, and the server keys
@@ -204,20 +247,41 @@ class HomeViewModel {
         }
     }
 
-    private func fetchAndApplySections() async throws {
+    /// Applies the rows only while `generation` is the latest load, so an
+    /// older load finishing late cannot replace newer rows.
+    private func fetchAndApplySections(_ generation: Int) async throws {
         let response = try await fetchHomeSections()
+        guard generation == loadGeneration else { return }
         sections = response.sections.filter { !$0.items.isEmpty }
         error = nil
     }
 
-    private func retryTransientInitialLoad() async {
+    private func retryTransientInitialLoad(_ generation: Int) async {
         try? await Task.sleep(nanoseconds: 750_000_000)
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled, generation == loadGeneration else { return }
+        // The app may have left during the wait; a request now would risk
+        // being cut off, so load again on return instead.
+        guard !isInBackground else {
+            reloadsOnReturn = true
+            return
+        }
 
         do {
-            try await fetchAndApplySections()
+            try await fetchAndApplySections(generation)
         } catch {
-            self.error = ErrorState(error)
+            if generation == loadGeneration { showFailure(ErrorState(error)) }
+        }
+    }
+
+    /// A failure in the background (a request cut off when the app was
+    /// suspended, or no network while a push woke it) says nothing about
+    /// what the person will find on return, so it is not shown; Home loads
+    /// again then.
+    private func showFailure(_ state: ErrorState) {
+        if isInBackground {
+            reloadsOnReturn = true
+        } else {
+            error = state
         }
     }
 }

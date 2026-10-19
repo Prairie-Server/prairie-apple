@@ -11,6 +11,12 @@ import UIKit
 /// `UISearchController` that `.searchable` installed. Pair it with
 /// `.searchPresentationToolbarBehavior(.avoidHidingContent)`, which keeps the
 /// back button on screen while the field is focused.
+///
+/// It also lays the navigation bar out again once the push that shows the
+/// screen finishes. Pushed from a page that hides its navigation bar (the tab
+/// roots), a large title with an always-visible search drawer comes up with
+/// the search bar laid out over the title, where it doesn't take taps, until
+/// the next scroll lays the bar out again.
 struct SearchCancelButtonSuppressor: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView {
         let view = SuppressorView()
@@ -35,12 +41,23 @@ struct SearchCancelButtonSuppressor: UIViewRepresentable {
         private func suppressCancelButton() {
             var responder: UIResponder? = self
             while let current = responder {
-                if let controller = (current as? UIViewController)?.navigationItem.searchController {
+                if let viewController = current as? UIViewController,
+                   let controller = viewController.navigationItem.searchController {
                     controller.automaticallyShowsCancelButton = false
                     controller.searchBar.setShowsCancelButton(false, animated: false)
+                    relayoutNavigationBarAfterTransition(of: viewController)
                     return
                 }
                 responder = current.next
+            }
+        }
+
+        private func relayoutNavigationBarAfterTransition(of viewController: UIViewController) {
+            guard let coordinator = viewController.transitionCoordinator else { return }
+            coordinator.animate(alongsideTransition: nil) { [weak viewController] _ in
+                guard let bar = viewController?.navigationController?.navigationBar else { return }
+                bar.setNeedsLayout()
+                bar.layoutIfNeeded()
             }
         }
     }

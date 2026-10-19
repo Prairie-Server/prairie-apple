@@ -23,11 +23,16 @@ struct MacPlayerOptionsPanel: View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Picker("Options", selection: $selectedTab) {
-                    ForEach(Tab.allCases) { tab in
+                    ForEach(Tab.allCases.filter { $0 != .quality || viewModel.hasQualityChoice }) { tab in
                         Text(tab.rawValue).tag(tab)
                     }
                 }
                 .pickerStyle(.segmented)
+                // The Quality tab is gone when a replan leaves one quality;
+                // leave it rather than keep showing its content.
+                .onChange(of: viewModel.hasQualityChoice, initial: true) { _, hasChoice in
+                    if !hasChoice, selectedTab == .quality { selectedTab = .playback }
+                }
 
                 Button {
                     onDismiss()
@@ -83,7 +88,7 @@ struct MacPlayerOptionsPanel: View {
                 }
                 ForEach(viewModel.orderedSubtitleTracks) { track in
                     trackButton(
-                        title: track.languageFirstPrimaryLabel,
+                        title: track.primaryLabel,
                         detail: subtitleDetail(for: track),
                         selected: viewModel.selectedSubtitleId == track.trackId
                     ) {
@@ -127,7 +132,7 @@ struct MacPlayerOptionsPanel: View {
                         title: option.label,
                         detail: nil,
                         trailing: option.bitrateText,
-                        selected: option.id == viewModel.activeQualityId
+                        selected: option.id == viewModel.highlightedQualityOptionId
                     ) {
                         viewModel.switchQuality(option.id)
                     }
@@ -282,10 +287,13 @@ struct MacPlayerOptionsPanel: View {
 
     private func subtitleDetail(for track: PlayerTrack) -> String? {
         var parts: [String] = []
-        if let attributes = track.languageFirstAttributesLabel, !attributes.isEmpty {
+        if let attributes = track.attributesLabel, !attributes.isEmpty {
             parts.append(attributes)
         }
-        parts.append(track.isExternal ? "External" : "Embedded")
+        // The attributes already end with "External" for a sidecar.
+        if !track.isExternal {
+            parts.append("Embedded")
+        }
         if let status = viewModel.subtitleSyncStatus(for: track) {
             parts.append(status)
         }

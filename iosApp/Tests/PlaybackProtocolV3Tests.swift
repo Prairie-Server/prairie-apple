@@ -215,6 +215,84 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         XCTAssertTrue(rows.last?.isSelected == true)
     }
 
+    /// Subtitle mode Off with "show forced subtitles" starts on the forced
+    /// track in the audio language, as web and Android do. An explicit Off
+    /// carried by the request still starts with no subtitle.
+    func testInitialIntentForModeOffKeepsTheForcedTrackForTheAudioLanguage() {
+        let version = makeVersion(container: "mkv", videoCodec: "h264", audioCodec: "aac", subtitleTracks: [
+            makeSubtitle(index: 11, codec: "srt", external: false, path: nil),
+            makeSubtitle(index: 12, codec: "srt", external: false, path: nil, forced: true),
+            makeSubtitle(index: 13, codec: "srt", external: false, path: nil, forced: true, language: "ja"),
+        ])
+        func intent(showForced: Bool, audio: String?, explicitCombinedIndex: Int? = nil) -> Int? {
+            PlaybackSessionBridge.initialProtocolV3SubtitleIntent(
+                version: version, explicitFFmpegIndex: nil, explicitCombinedIndex: explicitCombinedIndex,
+                preferredLanguage: "en", mode: .off, showForced: showForced,
+                trackSignature: nil, currentAudioLanguage: audio
+            ).ffmpegStreamIndex
+        }
+        XCTAssertEqual(intent(showForced: true, audio: "eng"), 12)
+        XCTAssertEqual(intent(showForced: true, audio: "ja"), 13)
+        XCTAssertNil(intent(showForced: false, audio: "en"))
+        XCTAssertNil(intent(showForced: true, audio: "fr"), "no forced track in the audio language")
+        XCTAssertNil(intent(showForced: true, audio: nil))
+        XCTAssertNil(intent(showForced: true, audio: "en", explicitCombinedIndex: -1), "an explicit Off stays off")
+    }
+
+    /// The next-episode fixture: video at stream 0, English audio at stream 1
+    /// (ordinal 0), and English full, Spanish and English forced subtitles.
+    /// The effective audio index is an ordinal, so the start must read the
+    /// audio language from ordinal 0, not from a track whose stream index is
+    /// 0. Auto with the audio already in the subtitle language then starts on
+    /// the forced track, as a fresh start and the post-load pass do.
+    func testAutoStartUsesTheAudioOrdinalToKeepForcedOnlyForMatchingAudio() {
+        let version = makeVersion(
+            container: "mkv", videoCodec: "h264", audioCodec: "aac",
+            audioTracks: [makeAudio(index: 1, codec: "aac", isDefault: true, language: "eng")],
+            subtitleTracks: [
+                makeSubtitle(index: 2, codec: "srt", external: false, path: nil, language: "eng"),
+                makeSubtitle(index: 3, codec: "srt", external: false, path: nil, language: "spa"),
+                makeSubtitle(index: 4, codec: "srt", external: false, path: nil, forced: true, language: "eng"),
+            ],
+            effectiveAudioTrackIndex: 0
+        )
+        XCTAssertEqual(PlaybackSessionBridge.startAudioLanguage(version: version, audioOrdinal: 0), "eng")
+        XCTAssertEqual(PlaybackSessionBridge.startAudioLanguage(version: version, audioOrdinal: nil), "eng")
+        XCTAssertNil(PlaybackSessionBridge.startAudioLanguage(version: version, audioOrdinal: 5))
+
+        let intent = PlaybackSessionBridge.initialProtocolV3SubtitleIntent(
+            version: version, explicitFFmpegIndex: nil, explicitCombinedIndex: nil,
+            preferredLanguage: "en", mode: .auto, showForced: true, trackSignature: nil,
+            currentAudioLanguage: PlaybackSessionBridge.startAudioLanguage(
+                version: version, audioOrdinal: version.effectiveAudioTrackIndex
+            )
+        )
+        XCTAssertEqual(intent.ffmpegStreamIndex, 4)
+    }
+
+    func testStartAudioLanguageFallsBackToTheServersEffectiveLanguage() {
+        let unlabelled = makeVersion(
+            container: "mkv", videoCodec: "h264", audioCodec: "aac",
+            effectiveAudioTrackIndex: 0, effectiveAudioLanguage: "ja"
+        )
+        XCTAssertEqual(PlaybackSessionBridge.startAudioLanguage(version: unlabelled, audioOrdinal: 0), "ja")
+        XCTAssertEqual(PlaybackSessionBridge.startAudioLanguage(version: unlabelled, audioOrdinal: nil), "ja")
+        XCTAssertNil(PlaybackSessionBridge.startAudioLanguage(version: nil, audioOrdinal: 0))
+
+        // The track is listed but carries no language: the server's language
+        // for that same track stands in, and not for a different one.
+        let blankTrack = makeVersion(
+            container: "mkv", videoCodec: "h264", audioCodec: "aac",
+            audioTracks: [
+                makeAudio(index: 1, codec: "aac", isDefault: true, language: " "),
+                makeAudio(index: 2, codec: "aac", isDefault: false, language: ""),
+            ],
+            effectiveAudioTrackIndex: 0, effectiveAudioLanguage: "ja"
+        )
+        XCTAssertEqual(PlaybackSessionBridge.startAudioLanguage(version: blankTrack, audioOrdinal: 0), "ja")
+        XCTAssertNil(PlaybackSessionBridge.startAudioLanguage(version: blankTrack, audioOrdinal: 1))
+    }
+
     func testLocalSelectionCannotSelectReusedOrdinalFromAnotherFile() {
         let selection = ProtocolV3SubtitleSelection.track("file:other:subtitle:3")
         let plan = makePlan(subtitleInventory: [makeInventoryItem(combinedIndex: 3, source: "external")])
@@ -256,13 +334,13 @@ final class PlaybackProtocolV3Tests: XCTestCase {
             libraryId: 9, contentId: "movie", preferredFileId: 42, preferredAudioTrackIndex: 1,
             preferredSubtitleTrackIndex: 11, preferredSidecarSubtitleTrackId: nil,
             startFromBeginning: false, preferredProtocolV3SubtitleIndex: 0,
-            preferredQualityOverride: "original"
+            preferredQualityOverride: "1080p"
         )
         for selection in [ProtocolV3SubtitleSelection.off, .track("file:42:subtitle:3")] {
             let retry = original.adoptingLocalProtocolV3SubtitleSelection(selection, plan: plan)
             XCTAssertEqual(retry.libraryId, 9)
             XCTAssertEqual(retry.preferredAudioTrackIndex, 1)
-            XCTAssertEqual(retry.preferredQualityOverride, "original")
+            XCTAssertEqual(retry.preferredQualityOverride, "1080p")
             XCTAssertEqual(retry.preferredProtocolV3SubtitleIndex, selection == .off ? -1 : 3)
             let intent = PlaybackSessionBridge.initialProtocolV3SubtitleIntent(
                 version: version, explicitFFmpegIndex: retry.preferredSubtitleTrackIndex,
@@ -292,13 +370,13 @@ final class PlaybackProtocolV3Tests: XCTestCase {
                 let plan = makePlan(delivery: delivery, selectedAudioIndex: 1,
                     selectedSubtitleIndex: 0, subtitleMode: "render", subtitleInventory: inventory)
                 let adopted = retry.adoptingProtocolV3Intent(
-                    plan: plan, selectedVersion: version, activeQualityId: "720p"
+                    plan: plan, selectedVersion: version
                 )
                 retry = adopted.adoptingLocalProtocolV3SubtitleSelection(selection, plan: plan)
                 let pending = PlayerViewModel.protocolV3PendingTrackIntent(plan: plan, request: adopted)
                 XCTAssertEqual(pending.sidecarSubtitleTrackId, SubtitleTrackIdSpace.makeSidecarTrackId(urlIndex: 0))
                 XCTAssertEqual(retry.preferredAudioTrackIndex, 1)
-                XCTAssertEqual(retry.preferredQualityOverride, "720p")
+                XCTAssertNil(retry.preferredQualityOverride, "an automatic quality is not adopted")
                 XCTAssertEqual(retry.preferredProtocolV3SubtitleIndex, selection == .off ? -1 : 3)
             }
             // Terminal cleanup no longer has a renderer override to consult.
@@ -346,7 +424,7 @@ final class PlaybackProtocolV3Tests: XCTestCase {
             ]
         )
         let adopted = recovery.adoptingProtocolV3Intent(
-            plan: refreshedPlan, selectedVersion: version, activeQualityId: "original"
+            plan: refreshedPlan, selectedVersion: version
         )
         XCTAssertEqual(adopted.preferredSidecarSubtitleTrackId, localID)
         XCTAssertNil(adopted.preferredSubtitleTrackIndex)
@@ -401,6 +479,37 @@ final class PlaybackProtocolV3Tests: XCTestCase {
             pendingEmbeddedIndex: nil, pendingSidecarID: nil))
     }
 
+    /// An Off the viewer chose survives adopting the server's off plan, so a
+    /// retry starts fully off. Without an explicit choice an off plan stays
+    /// automatic, and a server mode Off with forced subtitles on starts on the
+    /// forced track in the audio language again.
+    func testAdoptingAnOffPlanKeepsAnExplicitOffForRetry() {
+        let version = makeVersion(container: "mkv", videoCodec: "h264", audioCodec: "aac", subtitleTracks: [
+            makeSubtitle(index: 11, codec: "srt", external: false, path: nil),
+            makeSubtitle(index: 12, codec: "srt", external: false, path: nil, forced: true),
+        ])
+        let plan = makePlan(container: "mkv", subtitleMode: "off")
+        let request = PlayerViewModel.LoadRequest(
+            contentId: "movie", preferredFileId: 42, preferredAudioTrackIndex: nil,
+            preferredSubtitleTrackIndex: nil, preferredSidecarSubtitleTrackId: nil,
+            startFromBeginning: false
+        )
+        func retryStart(keepsExplicitOff: Bool) -> Int? {
+            let retry = request.adoptingProtocolV3Intent(
+                plan: plan, selectedVersion: version,
+                keepsExplicitOff: keepsExplicitOff
+            )
+            return PlaybackSessionBridge.initialProtocolV3SubtitleIntent(
+                version: version, explicitFFmpegIndex: retry.preferredSubtitleTrackIndex,
+                explicitCombinedIndex: retry.preferredProtocolV3SubtitleIndex,
+                preferredLanguage: "en", mode: .off, showForced: true,
+                trackSignature: nil, currentAudioLanguage: "eng"
+            ).ffmpegStreamIndex
+        }
+        XCTAssertNil(retryStart(keepsExplicitOff: true))
+        XCTAssertEqual(retryStart(keepsExplicitOff: false), 12)
+    }
+
     func testRenewalPreservesBurnInBeforeItsPickerSelectionPublishes() {
         let version = makeVersion(container: "mkv", videoCodec: "h264", audioCodec: "aac")
         let plan = makePlan(selectedSubtitleIndex: 7, subtitleMode: "burn_in",
@@ -409,7 +518,7 @@ final class PlaybackProtocolV3Tests: XCTestCase {
             contentId: "movie", preferredFileId: 42, preferredAudioTrackIndex: nil,
             preferredSubtitleTrackIndex: nil, preferredSidecarSubtitleTrackId: nil,
             startFromBeginning: false, preferredProtocolV3SubtitleIndex: 7
-        ).adoptingProtocolV3Intent(plan: plan, selectedVersion: version, activeQualityId: "original")
+        ).adoptingProtocolV3Intent(plan: plan, selectedVersion: version)
         let pending = PlayerViewModel.protocolV3PendingTrackIntent(plan: plan, request: original)
         XCTAssertEqual(pending.embeddedSubtitleIndex, -1)
         XCTAssertNil(pending.sidecarSubtitleTrackId)
@@ -457,8 +566,7 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         )
         let adopted = request.adoptingProtocolV3Intent(
             plan: plan,
-            selectedVersion: makeVersion(container: "mkv", videoCodec: "h264", audioCodec: "aac"),
-            activeQualityId: "original"
+            selectedVersion: makeVersion(container: "mkv", videoCodec: "h264", audioCodec: "aac")
         )
         XCTAssertNil(adopted.preferredSidecarSubtitleTrackId)
         XCTAssertEqual(adopted.preferredSubtitleTrackIndex, 11)
@@ -526,8 +634,8 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         let qualityOptions = ApplePlaybackQuality.playbackOptions(
             serverQualities: plan.availableQualities
         )
-        XCTAssertEqual(qualityOptions.map(\.id), ["auto", "original"])
-        XCTAssertEqual(qualityOptions.map(\.bitrateKbps), [0, 8_000])
+        // The fixture's lone "original" entry is not shown; Auto plays it.
+        XCTAssertEqual(qualityOptions.map(\.id), ["auto"])
 
         let session = ApplePlaybackV3PlanAdapter.playbackSession(
             plan: plan,
@@ -1289,8 +1397,7 @@ final class PlaybackProtocolV3Tests: XCTestCase {
 
         let renewal = original.adoptingProtocolV3Intent(
             plan: plan,
-            selectedVersion: version,
-            activeQualityId: "720p"
+            selectedVersion: version
         )
 
         XCTAssertEqual(renewal.preferredFileId, 42)
@@ -1301,8 +1408,64 @@ final class PlaybackProtocolV3Tests: XCTestCase {
             renewal.preferredSidecarSubtitleTrackId,
             SubtitleTrackIdSpace.makeSidecarTrackId(urlIndex: 2)
         )
-        XCTAssertEqual(renewal.preferredQualityOverride, "720p")
+        XCTAssertNil(renewal.preferredQualityOverride, "an automatic quality is not adopted")
         XCTAssertFalse(renewal.startFromBeginning)
+    }
+
+    /// A renewal keeps only the viewer's own pick. An automatic quality, such
+    /// as a cellular 1080p / 6 Mbps pair whose nearest local rung is larger,
+    /// is derived again from the pair, so recovery asks for the exact cap.
+    func testARenewalRecoversAnAutomaticPairWithItsExactCap() {
+        let version = makeVersion(container: "mkv", videoCodec: "h264", audioCodec: "aac")
+        let pair = AppleQualityAxes(resolution: "1080p", bitrateKbps: 6_000)
+        let request = PlayerViewModel.LoadRequest(
+            contentId: "movie", preferredFileId: 42, preferredAudioTrackIndex: nil,
+            preferredSubtitleTrackIndex: nil, preferredSidecarSubtitleTrackId: nil,
+            startFromBeginning: false
+        )
+        // The connection-change replan sends the pair as stored.
+        XCTAssertEqual(ApplePlaybackQuality.protocolV3Selection(axes: pair).bandwidthCapKbps, 6_000)
+
+        let renewal = request.adoptingProtocolV3Intent(plan: makePlan(), selectedVersion: version)
+        XCTAssertNil(renewal.preferredQualityOverride)
+        let recovery = PlaybackSessionBridge.startQuality(
+            preferredQualityOverride: renewal.preferredQualityOverride,
+            settingsQuality: pair
+        )
+        XCTAssertEqual(recovery.bandwidthCapKbps, 6_000)
+
+        var picked = request
+        picked.preferredQualityOverride = "720p"
+        XCTAssertEqual(
+            picked.adoptingProtocolV3Intent(plan: makePlan(), selectedVersion: version).preferredQualityOverride,
+            "720p",
+            "the viewer's pick holds for reloads of the title"
+        )
+    }
+
+    /// A viewer's switch is written into the candidate's recovery intent when
+    /// it is adopted, before it loads, so a failed load promoted to recovery
+    /// and any later renewal keep the new quality rather than the old one.
+    func testAViewerSwitchIsPartOfTheCandidatesRecoveryIntent() {
+        let version = makeVersion(container: "mkv", videoCodec: "h264", audioCodec: "aac")
+        let request = PlayerViewModel.LoadRequest(
+            contentId: "movie", preferredFileId: 42, preferredAudioTrackIndex: nil,
+            preferredSubtitleTrackIndex: nil, preferredSidecarSubtitleTrackId: nil,
+            startFromBeginning: false, preferredQualityOverride: "1080p"
+        )
+
+        let candidate = request.adoptingProtocolV3Intent(
+            plan: makePlan(), selectedVersion: version, viewerQualityId: "720p"
+        )
+        XCTAssertEqual(candidate.preferredQualityOverride, "720p")
+        XCTAssertEqual(
+            candidate.adoptingProtocolV3Intent(plan: makePlan(), selectedVersion: version).preferredQualityOverride,
+            "720p",
+            "a later renewal keeps it"
+        )
+
+        let automatic = request.adoptingProtocolV3Intent(plan: makePlan(), selectedVersion: version)
+        XCTAssertEqual(automatic.preferredQualityOverride, "1080p", "an automatic replan leaves the viewer's quality alone")
     }
 
     func testAdoptedSubtitleOffPlanClearsDurableSubtitleIntent() {
@@ -1326,8 +1489,7 @@ final class PlaybackProtocolV3Tests: XCTestCase {
 
         let renewal = original.adoptingProtocolV3Intent(
             plan: makePlan(selectedAudioIndex: 3),
-            selectedVersion: version,
-            activeQualityId: "original"
+            selectedVersion: version
         )
 
         XCTAssertEqual(renewal.preferredFileId, 42)
@@ -1335,7 +1497,7 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         XCTAssertNil(renewal.preferredSubtitleTrackIndex)
         XCTAssertNil(renewal.preferredProtocolV3SubtitleIndex)
         XCTAssertNil(renewal.preferredSidecarSubtitleTrackId)
-        XCTAssertEqual(renewal.preferredQualityOverride, "original")
+        XCTAssertNil(renewal.preferredQualityOverride, "an automatic quality is not adopted")
         XCTAssertFalse(renewal.startFromBeginning)
     }
 
@@ -1668,14 +1830,17 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         XCTAssertTrue(WatchPartyPlaybackAction.seek(10).isPermitted(canPlayPause: true, canSeek: true))
     }
 
-    func testWatchPartySmallCorrectionConvergesByRate() {
-        XCTAssertEqual(WatchPartyCorrection.resolve(drift: 0.3), .none)
-        XCTAssertEqual(WatchPartyCorrection.resolve(drift: 1), .rate(1.125))
-        XCTAssertEqual(WatchPartyCorrection.resolve(drift: 2), .rate(WatchPartyCorrection.maxRate))
-        XCTAssertEqual(WatchPartyCorrection.resolve(drift: -1.2), .rate(WatchPartyCorrection.minRate))
-        XCTAssertEqual(WatchPartyCorrection.resolve(drift: 3), .seek)
-        XCTAssertEqual(WatchPartyCorrection.resolve(drift: -3), .seek)
-        XCTAssertEqual(WatchPartyCorrection.resolve(drift: .nan), .none)
+    func testWatchPartyDriftBelowTheHardSeekBandConvergesByRate() {
+        XCTAssertFalse(WatchPartyCorrection.seeks(drift: .nan))
+        for drift in [0.3, 0.5, 1, 3, 4.9, -0.5, -2, -4.9] {
+            XCTAssertFalse(WatchPartyCorrection.seeks(drift: drift), "drift \(drift) seeked")
+        }
+        for drift in [0.5, 1, 3, 4.9, -0.5, -2, -4.9] {
+            let rate = WatchPartyCorrection.nudge(drift: drift, currentRate: 1)
+            XCTAssertEqual(rate > 1, drift > 0, "drift \(drift) moved the wrong way at \(rate)")
+        }
+        XCTAssertTrue(WatchPartyCorrection.seeks(drift: 5.1))
+        XCTAssertTrue(WatchPartyCorrection.seeks(drift: -5.1))
     }
 
     func testWatchPartyScrubResumeIsPartOfTheSeekRequest() {
@@ -1688,7 +1853,7 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         ))
         adapter.canSeek = true
         var requests: [(WatchPartyPlaybackAction, Bool)] = []
-        adapter.onUserTransport = { action, _, paused in requests.append((action, paused)) }
+        adapter.onUserTransport = { action, _, paused in requests.append((action, paused)); return true }
         player.duration = 100
         player.beginScrub(fraction: 0.5)
         player.endScrub(resumePlayback: true)
@@ -1696,6 +1861,98 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         XCTAssertEqual(requests.first?.0, .seek(50))
         XCTAssertEqual(requests.first?.1, false)
         XCTAssertFalse(player.isScrubbing)
+    }
+
+    func testWatchPartySeekRequestHoldsItsTargetAndSkipsBuildOnIt() async throws {
+        let player = PlayerViewModel()
+        let adapter = WatchPartyPlaybackAdapter(player: player)
+        defer { adapter.stop() }
+        adapter.prepare(WatchPartyPlaybackContext(
+            roomId: "room", selectionRevision: 1, contentId: "movie",
+            fileId: 42, libraryId: nil, startPosition: 0
+        ))
+        adapter.canSeek = true
+        var seeks: [WatchPartyPlaybackAction] = []
+        adapter.onUserTransport = { action, _, _ in seeks.append(action); return true }
+        player.currentTime = 23
+        player.duration = 600
+        // The room runs the seek a lead later; the timeline holds the target.
+        player.seekTo(seconds: 50)
+        XCTAssertEqual(seeks, [.seek(50)])
+        XCTAssertEqual(player.currentTime, 50)
+        // A skip pressed before the room's seek arrives builds on the target,
+        // not on the position the room is about to move away from.
+        player.skipForward(10)
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertEqual(seeks, [.seek(50), .seek(60)])
+        XCTAssertEqual(player.currentTime, 60)
+        // Progress saves where the engine plays, not a target the room has
+        // not run and may never run.
+        XCTAssertEqual(player.progressReportPosition, player.watchPartyPlaybackSnapshot.sourceTime)
+        XCTAssertNotEqual(player.progressReportPosition, 60)
+    }
+
+    func testWatchPartyHeldSeekEndsWhenItsRoomSeekIsReplacedOrTheConnectionDrops() {
+        let player = PlayerViewModel()
+        let adapter = WatchPartyPlaybackAdapter(player: player)
+        defer { adapter.stop() }
+        adapter.prepare(WatchPartyPlaybackContext(
+            roomId: "room", selectionRevision: 1, contentId: "movie",
+            fileId: 42, libraryId: nil, startPosition: 0
+        ))
+        adapter.canSeek = true
+        adapter.onUserTransport = { _, _, _ in true }
+        player.currentTime = 23
+        player.duration = 600
+        let engine = player.watchPartyPlaybackSnapshot.sourceTime
+        player.seekTo(seconds: 50)
+        XCTAssertEqual(player.currentTime, 50)
+        // A correction the room sent before its seek leaves the request held,
+        // and so does the room's seek for an earlier skip in a burst.
+        adapter.roomCommandStarts(seekingTo: nil)
+        adapter.roomSeekArrived(at: 30)
+        adapter.roomCommandStarts(seekingTo: 30)
+        adapter.roomCommandStarts(seekingTo: nil)
+        XCTAssertEqual(player.currentTime, 50)
+        // The room's seek to 50 arrives. When it runs it answers the request.
+        adapter.roomSeekArrived(at: 50)
+        adapter.roomCommandStarts(seekingTo: 50)
+        XCTAssertEqual(player.currentTime, 50)
+        // The host pauses before that seek runs: the pause replaces it, so
+        // the seek never runs here and the timeline returns to the engine.
+        adapter.roomCommandStarts(seekingTo: nil)
+        XCTAssertEqual(player.currentTime, engine)
+        XCTAssertEqual(player.progressReportPosition, engine)
+        // A lost connection releases a held request too.
+        player.seekTo(seconds: 80)
+        XCTAssertEqual(player.currentTime, 80)
+        adapter.releaseHeldSeek()
+        XCTAssertEqual(player.currentTime, engine)
+    }
+
+    func testWatchPartySeekRequestTheSessionDropsDoesNotHoldTheTimeline() async throws {
+        let player = PlayerViewModel()
+        let adapter = WatchPartyPlaybackAdapter(player: player)
+        defer { adapter.stop() }
+        adapter.prepare(WatchPartyPlaybackContext(
+            roomId: "room", selectionRevision: 1, contentId: "movie",
+            fileId: 42, libraryId: nil, startPosition: 0
+        ))
+        adapter.canSeek = true
+        var seeks: [WatchPartyPlaybackAction] = []
+        // Disconnected or not attached yet: the session drops the request.
+        adapter.onUserTransport = { action, _, _ in seeks.append(action); return false }
+        player.currentTime = 23
+        player.duration = 600
+        XCTAssertEqual(adapter.submit(.seek(40)), .dropped)
+        player.seekTo(seconds: 50)
+        XCTAssertEqual(player.currentTime, 23)
+        XCTAssertEqual(player.progressReportPosition, 23)
+        // The next skip builds on the engine's position, not the dropped target.
+        player.skipForward(10)
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertEqual(seeks, [.seek(40), .seek(50), .seek(33)])
+        XCTAssertEqual(player.currentTime, 23)
     }
 
     func testWatchPartyGuestSeekCannotMutateLocalPlayhead() {
@@ -1709,7 +1966,7 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         player.currentTime = 23
         player.duration = 100
         var requests = 0
-        adapter.onUserTransport = { _, _, _ in requests += 1 }
+        adapter.onUserTransport = { _, _, _ in requests += 1; return true }
         player.seekTo(seconds: 50)
         player.beginHoldSeek(forward: true)
         XCTAssertEqual(player.currentTime, 23)
@@ -1808,6 +2065,27 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         XCTAssertEqual(ordinals, DownloadedSubtitleOrdinals(published: ["11": 2, "12": 3], next: 4))
     }
 
+    /// An audio switch re-runs the automatic subtitle pass while its own
+    /// replan is still loading. A pick the new plan lacks (a burned-in track
+    /// to replace or remove) must be held for that replan's exit, not dropped.
+    func testAutomaticSubtitlePickDuringAReplanIsHeldUntilItCommits() {
+        typealias Action = PlayerViewModel.AutomaticProtocolV3SubtitlePlanAction
+        func action(pick: Int?, plan: Int?, committed: Bool, replanning: Bool) -> Action {
+            PlayerViewModel.automaticProtocolV3SubtitlePlanAction(
+                pickCombinedIndex: pick, planCombinedIndex: plan,
+                loadCommitted: committed, replanInFlight: replanning
+            )
+        }
+        // Replace the burned-in track, or turn it off, mid audio replan.
+        XCTAssertEqual(action(pick: 5, plan: 3, committed: true, replanning: true), .holdUntilCommitted)
+        XCTAssertEqual(action(pick: nil, plan: 3, committed: false, replanning: true), .holdUntilCommitted)
+        // The start's own uncommitted load, as before.
+        XCTAssertEqual(action(pick: 5, plan: 3, committed: false, replanning: false), .holdUntilCommitted)
+        XCTAssertEqual(action(pick: 5, plan: 3, committed: true, replanning: false), .replan)
+        XCTAssertEqual(action(pick: 3, plan: 3, committed: true, replanning: true), .keepPlan)
+        XCTAssertEqual(action(pick: nil, plan: nil, committed: false, replanning: true), .keepPlan)
+    }
+
     func testBurnInSelectionSurvivesInventoryBeforeAndAfterLoadEstablishes() async {
         let model = PlayerViewModel()
         let plan = makePlan(selectedSubtitleIndex: 3, subtitleMode: "burn_in",
@@ -1890,7 +2168,7 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         let sidecar = model.armProtocolV3SubtitleIntentForSamePlanReload(
             plan: sidecarPlan,
             request: request.adoptingProtocolV3Intent(
-                plan: sidecarPlan, selectedVersion: version, activeQualityId: "original"
+                plan: sidecarPlan, selectedVersion: version
             )
         )
         XCTAssertEqual(sidecar?.sidecarSubtitleTrackId, SubtitleTrackIdSpace.makeSidecarTrackId(urlIndex: 3))
@@ -2219,8 +2497,7 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         )
         let adopted = original.adoptingProtocolV3Intent(
             plan: plan,
-            selectedVersion: version,
-            activeQualityId: "original"
+            selectedVersion: version
         )
         let intent = PlayerViewModel.protocolV3PendingTrackIntent(
             plan: plan,
@@ -2318,8 +2595,7 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         )
         let adopted = original.adoptingProtocolV3Intent(
             plan: makePlan(selectedAudioIndex: 1),
-            selectedVersion: version,
-            activeQualityId: "original"
+            selectedVersion: version
         )
 
         let intent = PlayerViewModel.protocolV3PendingTrackIntent(
@@ -2396,6 +2672,49 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         XCTAssertFalse(original.audioDecodeCodecs.contains("vorbis"))
     }
 
+    func testAnOlderServersOriginalEntryIsNotShownAndIsNoChoice() {
+        func quality(_ label: String, height: Int?, original: Bool = false) -> PlaybackV3AvailableQuality {
+            PlaybackV3AvailableQuality(label: label, displayName: original ? "Original" : nil, height: height,
+                                       bitrateKbps: 8000, preservesSource: original)
+        }
+        let originalOnly = ApplePlaybackQuality.playbackOptions(serverQualities: [quality("original", height: 2160, original: true)])
+        XCTAssertEqual(originalOnly.map(\.id), ["auto"], "Auto is the way back to the source")
+        XCTAssertFalse(ApplePlaybackQuality.hasChoice(among: originalOnly))
+        XCTAssertFalse(ApplePlaybackQuality.hasChoice(among: ApplePlaybackQuality.playbackOptions(serverQualities: [])))
+
+        let withRung = ApplePlaybackQuality.playbackOptions(
+            serverQualities: [quality("original", height: 2160, original: true), quality("1080p", height: 1080)])
+        XCTAssertEqual(withRung.map(\.id), ["auto", "1080p"])
+        XCTAssertTrue(ApplePlaybackQuality.hasChoice(among: withRung), "one fixed rung beside Auto is a choice")
+        XCTAssertEqual(withRung.first?.subtitle, "Original file when possible")
+    }
+
+    func testALegacyOriginalQualityIsRequestedAsAuto() {
+        let originalEntry = PlaybackV3AvailableQuality(
+            label: "original", displayName: "Original", height: 2160, bitrateKbps: 40_000, preservesSource: true
+        )
+        for legacy in ["original", "Original", "source", "max"] {
+            XCTAssertEqual(PlaybackSessionBridge.protocolV3QualityPreference(legacy), "auto", legacy)
+            let selection = ApplePlaybackQuality.protocolV3Selection(
+                requestedQualityId: legacy,
+                availableQualities: [originalEntry],
+                autoBandwidthCapKbps: 6_000
+            )
+            XCTAssertEqual(selection.clientQualityId, "auto", legacy)
+            XCTAssertEqual(selection.serverPreference, "auto", legacy)
+            // Read as Auto, which keeps the saved cap rather than the old
+            // entry's source bitrate.
+            XCTAssertEqual(selection.bandwidthCapKbps, 6_000, legacy)
+            XCTAssertEqual(
+                ApplePlaybackQuality.protocolV3QualityId(legacy),
+                "auto",
+                legacy
+            )
+        }
+        XCTAssertEqual(PlaybackSessionBridge.protocolV3QualityPreference("1080p-high"), "1080p")
+        XCTAssertEqual(PlaybackSessionBridge.protocolV3QualityPreference(nil), "auto")
+    }
+
     func testAudioOnlyAndUnknownServerQualityRungsRemainUsable() {
         let options = ApplePlaybackQuality.playbackOptions(
             serverQualities: [
@@ -2433,7 +2752,8 @@ final class PlaybackProtocolV3Tests: XCTestCase {
 
         let selection = ApplePlaybackQuality.protocolV3Selection(
             requestedQualityId: "1080p-medium",
-            availableQualities: serverQualities
+            availableQualities: serverQualities,
+            autoBandwidthCapKbps: 2_000
         )
         XCTAssertEqual(selection.clientQualityId, "1080p-medium")
         XCTAssertEqual(selection.serverPreference, "1080p-medium")
@@ -2442,7 +2762,8 @@ final class PlaybackProtocolV3Tests: XCTestCase {
 
         let settingsFallback = ApplePlaybackQuality.protocolV3Selection(
             requestedQualityId: "1080p-medium",
-            availableQualities: []
+            availableQualities: [],
+            autoBandwidthCapKbps: 2_000
         )
         XCTAssertEqual(settingsFallback.serverPreference, "1080p")
         XCTAssertEqual(settingsFallback.bandwidthCapKbps, 12_000)
@@ -2485,10 +2806,10 @@ final class PlaybackProtocolV3Tests: XCTestCase {
             ]
         )
 
-        XCTAssertEqual(options.map(\.id), ["auto", "original", "1080p", "1080p-high", "720p-low"])
-        XCTAssertEqual(options.map(\.label), ["Auto", "Original", "1080p", "1080p High", "720p Low"])
-        XCTAssertEqual(options.map(\.bitrateText), [nil, nil, "9.5 Mbps", "20 Mbps", "2.5 Mbps"])
-        XCTAssertEqual(options[3].labelWithBitrate, "1080p High (20 Mbps)")
+        XCTAssertEqual(options.map(\.id), ["auto", "1080p", "1080p-high", "720p-low"])
+        XCTAssertEqual(options.map(\.label), ["Auto", "1080p", "1080p High", "720p Low"])
+        XCTAssertEqual(options.map(\.bitrateText), [nil, "9.5 Mbps", "20 Mbps", "2.5 Mbps"])
+        XCTAssertEqual(options[2].labelWithBitrate, "1080p High (20 Mbps)")
         XCTAssertEqual(options[0].labelWithBitrate, "Auto")
     }
 
@@ -2499,37 +2820,15 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         XCTAssertEqual(options.map(\.id), [ApplePlaybackQuality.autoId])
     }
 
-    func testCompoundAndUnknownV3QualityIdsSurvivePlanMatching() {
-        let qualities = [
-            PlaybackV3AvailableQuality(
-                label: "1080p",
-                displayName: nil,
-                height: 1_080,
-                bitrateKbps: 8_000,
-                preservesSource: false
-            ),
-            PlaybackV3AvailableQuality(
-                label: "audio_high",
-                displayName: nil,
-                height: nil,
-                bitrateKbps: 320,
-                preservesSource: false
-            )
-        ]
-        XCTAssertEqual(
-            ApplePlaybackQuality.activeProtocolV3QualityId(
-                requestedQualityId: "1080p-8",
-                availableQualities: qualities
-            ),
-            "1080p-8"
-        )
-        XCTAssertEqual(
-            ApplePlaybackQuality.activeProtocolV3QualityId(
-                requestedQualityId: "audio_high",
-                availableQualities: qualities
-            ),
-            "audio_high"
-        )
+    /// The session's quality id is its preference: compound and unknown
+    /// rungs survive, and a fixed preference the plan lists no rung for (a
+    /// saved 1080p whose source plays as-is) stays fixed rather than reading
+    /// as Auto.
+    func testTheSessionQualityIdKeepsFixedPreferences() {
+        XCTAssertEqual(ApplePlaybackQuality.protocolV3QualityId("1080p-8"), "1080p-8")
+        XCTAssertEqual(ApplePlaybackQuality.protocolV3QualityId("audio_high"), "audio_high")
+        XCTAssertEqual(ApplePlaybackQuality.protocolV3QualityId("1080p-high"), "1080p-high")
+        XCTAssertEqual(ApplePlaybackQuality.protocolV3QualityId(nil), "auto")
     }
 
     func testPlanRuntimeDistinguishesUnknownFromFeatureAbsence() throws {
@@ -2798,7 +3097,9 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         videoCodec: String,
         audioCodec: String,
         audioTracks: [AudioTrack]? = nil,
-        subtitleTracks: [SubtitleTrack]? = nil
+        subtitleTracks: [SubtitleTrack]? = nil,
+        effectiveAudioTrackIndex: Int? = nil,
+        effectiveAudioLanguage: String? = nil
     ) -> FileVersion {
         FileVersion(
             fileId: 42,
@@ -2814,14 +3115,17 @@ final class PlaybackProtocolV3Tests: XCTestCase {
             videoTracks: nil,
             audioTracks: audioTracks,
             subtitleTracks: subtitleTracks,
-            chapters: nil
+            chapters: nil,
+            effectiveAudioTrackIndex: effectiveAudioTrackIndex,
+            effectiveAudioLanguage: effectiveAudioLanguage
         )
     }
 
     private func makeAudio(
         index: Int,
         codec: String,
-        isDefault: Bool
+        isDefault: Bool,
+        language: String = "en"
     ) -> AudioTrack {
         AudioTrack(
             index: index,
@@ -2830,7 +3134,7 @@ final class PlaybackProtocolV3Tests: XCTestCase {
             channelLayout: "5.1",
             bitrate: 640_000,
             sampleRate: 48_000,
-            language: "en",
+            language: language,
             title: codec.uppercased(),
             embeddedTitle: nil,
             isDefault: isDefault
@@ -2844,12 +3148,13 @@ final class PlaybackProtocolV3Tests: XCTestCase {
         path: String?,
         forced: Bool = false,
         isDefault: Bool = false,
-        hearingImpaired: Bool = false
+        hearingImpaired: Bool = false,
+        language: String = "en"
     ) -> SubtitleTrack {
         SubtitleTrack(
             index: index,
             codec: codec,
-            language: "en",
+            language: language,
             title: codec.uppercased(),
             embeddedTitle: nil,
             forced: forced,

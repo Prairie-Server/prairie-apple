@@ -28,7 +28,7 @@ final class APIv2WireModelsTests: XCTestCase {
         XCTAssertEqual(try decode([APIv2AvatarSource].self, #"["none","preset","upload","gif"]"#),
                        [.none, .preset, .upload, .unknown("gif")])
         XCTAssertEqual(try decode([APIv2QualityPreference].self, #"["auto","original","720p"]"#),
-                       [.auto, .original, .unknown("720p")])
+                       [.auto, .auto, .unknown("720p")])
         XCTAssertEqual(try decode([APIv2SubtitleMode].self, #"["auto","always","off","smart"]"#),
                        [.auto, .always, .off, .unknown("smart")])
         XCTAssertEqual(try decode([APIv2PlaybackQuality].self, #"["1080p","2160p","720p"]"#),
@@ -36,7 +36,7 @@ final class APIv2WireModelsTests: XCTestCase {
 
         XCTAssertEqual(try wire(APIv2AccountRole.unknown("owner")), #"["owner"]"#)
         XCTAssertEqual(try wire(APIv2AvatarSource.upload), #"["upload"]"#)
-        XCTAssertEqual(try wire(APIv2QualityPreference.original), #"["original"]"#)
+        XCTAssertEqual(try wire(APIv2QualityPreference.auto), #"["auto"]"#)
         XCTAssertEqual(try wire(APIv2SubtitleMode.off), #"["off"]"#)
         XCTAssertEqual(try wire(APIv2PlaybackQuality.p2160), #"["2160p"]"#)
         for value in [APIv2AccountRole.admin, .user] { XCTAssertEqual(APIv2AccountRole(wireValue: value.wireValue), value) }
@@ -115,7 +115,7 @@ final class APIv2WireModelsTests: XCTestCase {
         patch.pin = .clear
         patch.isChild = false
         patch.maxContentRating = .set("R")
-        patch.qualityPreference = .original
+        patch.qualityPreference = .auto
         patch.language = .clear
         patch.subtitleMode = .off
         patch.autoSkipIntro = true
@@ -132,7 +132,7 @@ final class APIv2WireModelsTests: XCTestCase {
         XCTAssertTrue(body["pin"] is NSNull)
         XCTAssertTrue(body["language"] is NSNull)
         XCTAssertEqual(body["max_content_rating"] as? String, "R")
-        XCTAssertEqual(body["quality_preference"] as? String, "original")
+        XCTAssertEqual(body["quality_preference"] as? String, "auto")
         XCTAssertEqual(body["subtitle_mode"] as? String, "off")
         XCTAssertEqual(body["auto_play_next_preview"] as? Bool, true)
         XCTAssertEqual(body["allowed_library_ids"] as? [String], ["1", "2"])

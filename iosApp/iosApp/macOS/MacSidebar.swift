@@ -57,7 +57,7 @@ struct MacSidebar: View {
                 profile: profileStore.profile,
                 showsName: true,
                 onOpenSettings: { router.navigate(to: .settings) },
-                onOpenRequests: { router.navigate(to: .requestsHub) },
+                onOpenRequests: { onSelect(.app(.requests)) },
                 onSwitchProfile: { router.switchProfile() },
                 onSwitchServer: { router.navigate(to: .serverList) },
                 onSignOut: { router.signOutAndReset() }
@@ -88,6 +88,11 @@ struct MacSidebar: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            // The list reports a click only when the selection changes, so the
+            // row handles its own click: the highlighted row returns to its root.
+            .onTapGesture { onSelect(destination.id) }
             .tag(destination.id)
         }
     }

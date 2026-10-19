@@ -1,71 +1,71 @@
-import Synchronization
+import OSLog
 import UserNotifications
 
 final class NotificationService: UNNotificationServiceExtension {
-    private struct State {
-        var contentHandler: ((UNNotificationContent) -> Void)?
-        var bestAttemptContent: UNMutableNotificationContent?
-        var enrichmentTask: Task<Void, Never>?
-    }
+    private static let logger = Logger(subsystem: "org.prairieserver.prairie.NotificationService", category: "display")
 
-    /// `didReceive` and `serviceExtensionTimeWillExpire` arrive on
-    /// system-owned threads while the enrichment task completes on the Swift
-    /// concurrency pool, and the system's content handler must be invoked
-    /// exactly once.
-    private let state = Mutex(State())
+    private let completion = ApplePushDisplayCompletion { outcome in
+        NotificationService.logger.log("Push display \(outcome.kind.rawValue, privacy: .public) reason=\(outcome.reason ?? "-", privacy: .public) attempts=\(outcome.attempts, privacy: .public) duration_ms=\(outcome.durationMs, privacy: .public) credential=\(outcome.credential ?? "-", privacy: .public)")
+        ApplePushDisplayOutcomeLog.append(outcome)
+    }
 
     override func didReceive(
         _ request: UNNotificationRequest,
         withContentHandler contentHandler: @escaping (UNNotificationContent) -> Void
     ) {
-        state.withLock { $0.contentHandler = contentHandler }
+        let startedAt = Date()
+        completion.begin(handler: contentHandler, startedAt: startedAt)
 
         guard let bestAttemptContent = request.content.mutableCopy() as? UNMutableNotificationContent else {
-            complete(with: request.content)
+            completion.complete(with: request.content)
             return
         }
-        state.withLock { $0.bestAttemptContent = bestAttemptContent }
+        completion.setFallback(bestAttemptContent)
 
-        guard let deliveryID = ApplePushDisplayWire.deliveryID(from: bestAttemptContent.userInfo),
-              let displayState = ApplePushDisplayStateReader().currentState() else {
-            complete(with: bestAttemptContent)
+        guard let deliveryID = ApplePushDisplayWire.deliveryID(from: bestAttemptContent.userInfo) else {
+            completion.complete(with: bestAttemptContent)
             return
         }
-
+        let route = ApplePushDisplayStateReader().route(for: bestAttemptContent.userInfo)
+        guard case .fetch(let displayState) = route else {
+            completion.complete(with: bestAttemptContent, outcome: ApplePushDisplayOutcome(
+                kind: .unknownTarget,
+                reason: route == .ambiguousTarget ? "ambiguous_target" : nil,
+                attempts: 0,
+                credential: nil,
+                startedAt: startedAt
+            ))
+            return
+        }
+        let missing = displayState.missingParts
+        guard missing.isEmpty else {
+            completion.complete(with: bestAttemptContent, outcome: ApplePushDisplayOutcome(
+                kind: .missingState,
+                reason: missing.joined(separator: ","),
+                attempts: 0,
+                credential: nil,
+                startedAt: startedAt
+            ))
+            return
+        }
         let client = ApplePushDisplayClient()
-        let task = Task { [weak self, bestAttemptContent] in
-            do {
-                let response = try await client.fetchDisplay(deliveryID: deliveryID, state: displayState)
-                response.apply(to: bestAttemptContent)
-            } catch {
-                // The generic APNs fallback remains the notification content.
+        let completion = self.completion
+        completion.attach(Task { [bestAttemptContent] in
+            let result = await client.fetchDisplay(deliveryID: deliveryID, state: displayState) {
+                completion.progress(attempts: $0, credential: $1)
             }
-            self?.complete(with: bestAttemptContent)
-        }
-        let alreadyCompleted = state.withLock { state in
-            // Expiry may have completed already; then the task's own
-            // complete(with:) no-ops, so just stop the fetch.
-            guard state.contentHandler != nil else { return true }
-            state.enrichmentTask = task
-            return false
-        }
-        if alreadyCompleted { task.cancel() }
+            if case .success(let response) = result.outcome {
+                response.apply(to: bestAttemptContent)
+            }
+            // On failure the generic APNs fallback remains the notification content.
+            completion.complete(
+                with: bestAttemptContent,
+                outcome: ApplePushDisplayOutcome(result: result, startedAt: startedAt)
+            )
+        })
     }
 
     override func serviceExtensionTimeWillExpire() {
-        let (task, content) = state.withLock { ($0.enrichmentTask, $0.bestAttemptContent) }
-        task?.cancel()
-        if let content {
-            complete(with: content)
-        }
-    }
-
-    private func complete(with content: UNNotificationContent) {
-        let handler = state.withLock { state in
-            let handler = state.contentHandler
-            state = State()
-            return handler
-        }
-        handler?(content)
+        completion.expire()
     }
 }

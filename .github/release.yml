@@ -1,0 +1,15 @@
+# Groups the release notes GitHub generates by the labels prairie-triage puts on
+# pull requests. TestFlight's What to Test summarizes them, or keeps only the
+# Features and Fixes sections when it can't. See docs/release/ci-release.md.
+changelog:
+  categories:
+    - title: 🚀 Features
+      labels: [enhancement]
+    - title: 🐛 Fixes
+      labels: [bug]
+    - title: 📚 Documentation
+      labels: [documentation]
+    - title: 📦 Dependencies
+      labels: [dependencies]
+    - title: Other changes
+      labels: ["*"]

@@ -71,6 +71,14 @@ enum AetherAuthenticationRecoveryPolicy {
         return authorizationHeader(in: failedHeaders) != refreshed
     }
 
+    /// Server HLS resolves the current credential for every playlist and
+    /// segment request, and direct play for every range request, so media
+    /// with video survives token rotation without a reload. Audio-only media
+    /// keeps the headers it opened with and the reload-after-rotation path.
+    static func resolvesRequestCredentials(delivery: String, hasVideo: Bool) -> Bool {
+        hasVideo && PlaybackProtocolV3.PlanDelivery.supported.contains(delivery)
+    }
+
     static func shouldReloadAfterProgress(
         _ result: PlaybackProgressReportResult,
         activeHeaders: [String: String],
@@ -494,8 +502,9 @@ struct AetherLoadSpec {
         ].contains(plan.delivery)
         var loadOptions = LoadOptions(
             httpHeaders: effectiveHeaders,
-            httpRequestAuthorization: isServerHLS && plan.effectiveRecipe.videoCodec != nil
-                ? requestAuthorization : nil,
+            httpRequestAuthorization: AetherAuthenticationRecoveryPolicy.resolvesRequestCredentials(
+                delivery: plan.delivery, hasVideo: plan.effectiveRecipe.videoCodec != nil
+            ) ? requestAuthorization : nil,
             dolbyVisionHandling: dolbyVisionHandling,
             matchContentEnabled: matchContentEnabled,
             panelIsInHDRMode: panelIsInHDRMode ?? AetherDisplayContext.panelIsInHDRMode,

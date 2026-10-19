@@ -93,6 +93,7 @@ struct RecommendationsView: View {
                 onSignOut: { router.signOutAndReset() }
             )
         }
+        .clearsWindowControls()
         .padding(.horizontal, PrairieTheme.padding)
         .padding(.top, PrairieTheme.smallPadding)
         .padding(.bottom, PrairieTheme.smallPadding)

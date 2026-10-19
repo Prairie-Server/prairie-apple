@@ -91,7 +91,7 @@ struct TVMovieDetailView: View {
                                     ? nil
                                     : detail.effectiveSubtitleTrackSignature,
                                 preferredSubtitleLanguage: profilePrefsStore.preferredSubtitleLanguage,
-                                showForcedSubtitles: detail.effectiveShowForcedSubtitles ?? false
+                                showForcedSubtitles: detail.showsForcedSubtitles
                             ),
                             actions: { actionColumn },
                             belowSynopsis: { EmptyView() }
@@ -175,7 +175,7 @@ struct TVMovieDetailView: View {
                     subtitleSignature: subtitleOverrideCleared
                         ? nil
                         : detail.effectiveSubtitleTrackSignature,
-                    showForcedSubtitles: detail.effectiveShowForcedSubtitles ?? false,
+                    showForcedSubtitles: detail.showsForcedSubtitles,
                     preferredSubtitleLanguage: profilePrefsStore.preferredSubtitleLanguage,
                     onSelectVersion: onSelectVersion,
                     onSelectAudioTrack: onSelectAudioTrack,

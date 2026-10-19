@@ -641,9 +641,9 @@ final class TVFocusMarqueeModel {
     /// Detail backfill (§9: air date, cast) for the displayed content.
     /// Uses cached detail immediately; `nil` while an uncached fetch runs.
     private(set) var enrichment: TVMarqueeEnrichment?
-    /// Dominant-color wash behind the backdrop, sampled per displayed
-    /// backdrop via HeroBackdropPalette.
-    private(set) var tintColor: Color = .prairieBackground
+    /// Color washes behind the backdrop, sampled per displayed backdrop via
+    /// HeroBackdropPalette.
+    private(set) var tints: HeroBackdropPalette.Tints = .flat(.prairieBackground)
 
     /// Backdrop art for the root hero. Episodes need their detail-level series
     /// backdrop, and any item missing a section backdrop gets one chance to
@@ -732,7 +732,7 @@ final class TVFocusMarqueeModel {
         enrichment = nil
         enrichmentState = .notStarted
         displayedArtwork = nil
-        tintColor = .prairieBackground
+        tints = .flat(.prairieBackground)
         pendingNeighborBackdropURLs = []
         if wasActive { resume() }
     }
@@ -917,7 +917,7 @@ final class TVFocusMarqueeModel {
             sampleTintIfNeeded(for: artwork.url)
         } else if enrichmentState.permitsFallback {
             displayedArtwork = nil
-            tintColor = .prairieBackground
+            tints = .flat(.prairieBackground)
             tintTask?.cancel()
             lastSampledTintURL = nil
         }
@@ -1136,21 +1136,21 @@ final class TVFocusMarqueeModel {
         // A previously-sampled tint (startup prefetch, earlier focus visit)
         // applies synchronously, so a cold-entry seed paints the wash on the
         // same frame as the backdrop.
-        if let cached = HeroBackdropPalette.cachedTint(for: url) {
-            tintColor = cached
+        if let cached = HeroBackdropPalette.cachedTints(for: url) {
+            tints = cached
             return
         }
 
         tintTask = Task { [weak self] in
-            let tint = await HeroBackdropPalette.tintColor(for: url)
+            let sampled = await HeroBackdropPalette.tints(for: url)
             guard !Task.isCancelled, let self, self.backdropURL == urlString else { return }
-            guard let tint else {
+            guard let sampled else {
                 if self.lastSampledTintURL == urlString {
                     self.lastSampledTintURL = nil
                 }
                 return
             }
-            self.tintColor = tint
+            self.tints = sampled
         }
     }
 }
@@ -1323,7 +1323,7 @@ private struct TVMarqueeBlock: View {
         if TitleArtPreferences.shared.showsTitleArt,
            let logoUrl = content.logoUrl, !logoUrl.isEmpty,
            let url = URL(string: logoUrl),
-           let cached = ImagePipeline.shared.cache[ImageRequest(url: url)] {
+           let cached = ImagePipeline.shared.cache[PosterImageCache.titleLogoRequest(for: url)] {
             _logoImage = State(initialValue: cached.image)
         }
     }
@@ -1575,7 +1575,7 @@ private struct TVMarqueeBlock: View {
               let url = URL(string: logoUrl) else {
             return
         }
-        let request = ImageRequest(url: url, priority: .normal)
+        let request = PosterImageCache.titleLogoRequest(for: url)
         if let image = try? await ImagePipeline.shared.image(for: request) {
             logoImage = image
         }

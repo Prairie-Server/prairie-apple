@@ -279,6 +279,27 @@ enum APIv2CatalogRead {
         let endSeconds: Double
     }
 
+    /// A file's seek-bar previews: sprite sheets of thumbnails. Thumbnail
+    /// i shows what plays from i*intervalMs to (i+1)*intervalMs and sits on
+    /// sheet i / (tileColumns*tileRows), left to right and top to bottom.
+    struct WatchTrickplay: Decodable {
+        let fileId: String
+        let intervalMs: Int64
+        let thumbnailWidth: Int64
+        let thumbnailHeight: Int64
+        let tileColumns: Int64
+        let tileRows: Int64
+        let thumbnailCount: Int64
+        let sheets: [WatchTrickplaySheet]
+        let expiresAt: Date
+    }
+
+    struct WatchTrickplaySheet: Decodable {
+        let index: Int64
+        /// Carries its own authorization.
+        @RequiredArtworkURL var url: String
+    }
+
     struct WatchFileVersion: Decodable {
         let audioTracks: [AudioTrack]?
         let bitrate: Int64
@@ -306,6 +327,8 @@ enum APIv2CatalogRead {
         let resolution: String
         let subtitleTracks: [VersionSubtitleTrack]?
         let videoTracks: [VideoTrack]?
+        /// Whether the server publishes seek-bar previews for this file.
+        let trickplayAvailable: Bool?
     }
 
     struct WatchDetail: Decodable {

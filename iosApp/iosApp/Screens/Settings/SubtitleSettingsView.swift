@@ -3,8 +3,8 @@ import SwiftUI
 
 /// Subtitle preferences sub-screen — a native grouped list. The
 /// language / behavior / forced trio is profile-wide on the server;
-/// the appearance block is a per-device override with a server
-/// fallback.
+/// the appearance block saves for the profile too, unless this device
+/// keeps its own ("Only on This Device").
 struct SubtitleSettingsView: View {
     let viewModel: SettingsViewModel
 
@@ -135,7 +135,7 @@ struct SubtitleSettingsView: View {
         .listRowBackground(Color.prairieGroupedCell)
     }
 
-    // MARK: - Appearance (per-device override)
+    // MARK: - Appearance (profile, with an optional device override)
 
     private var manualEditingDisabled: Bool {
         viewModel.subtitleMatchesSystemAppearance
@@ -169,7 +169,7 @@ struct SubtitleSettingsView: View {
             .tint(.prairieSwitchOn)
 
             Toggle(
-                "Custom Appearance",
+                "Only on This Device",
                 isOn: Binding(
                     get: { viewModel.subtitleUsesDeviceAppearanceOverride },
                     set: { enabled in
@@ -185,9 +185,9 @@ struct SubtitleSettingsView: View {
                 if viewModel.subtitleMatchesSystemAppearance {
                     Text("Following this device's caption language, display behavior, CC/SDH preference, font, colors, opacity, edges, size, and caption window from Accessibility → Subtitles & Captioning.")
                 } else if viewModel.subtitleUsesDeviceAppearanceOverride {
-                    Text("Saved on the server for this profile on this device. An admin can reset it.")
+                    Text("Saved only on this device. Other devices use the profile's settings.")
                 } else {
-                    Text("Using the server fallback for this profile on this device. Turn on Custom Appearance to save your own here.")
+                    Text("Saved for this profile on all devices.")
                 }
                 if viewModel.subtitleMatchesSystemAppearance {
                     Text("Subtitles with built-in styling follow each device caption option's Video Overrides Style choice.")

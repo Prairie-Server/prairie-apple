@@ -546,6 +546,10 @@ extension ItemDetail {
     var isAudiobook: Bool {
         audiobook != nil || PrairieMediaType.isAudiobook(type)
     }
+
+    /// See `WatchDetail.showsForcedSubtitles`: a missing value is the
+    /// contract default, which is on.
+    var showsForcedSubtitles: Bool { effectiveShowForcedSubtitles ?? true }
 }
 
 /// Server-wide star rating aggregate for a title.
@@ -909,6 +913,8 @@ struct FileVersion: Codable, Identifiable, Hashable {
     /// Server-resolved default audio track ordinal for this version.
     let effectiveAudioTrackIndex: Int?
     let effectiveAudioLanguage: String?
+    /// Whether the server publishes seek-bar previews for this file.
+    let trickplayAvailable: Bool?
     var id: Int { fileId }
     var editionDisplayLabel: String {
         let trimmed = editionRaw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -941,7 +947,8 @@ struct FileVersion: Codable, Identifiable, Hashable {
         editionRaw: String? = nil,
         editionKey: String? = nil,
         effectiveAudioTrackIndex: Int? = nil,
-        effectiveAudioLanguage: String? = nil
+        effectiveAudioLanguage: String? = nil,
+        trickplayAvailable: Bool? = nil
     ) {
         self.fileId = fileId
         self.fileName = fileName
@@ -969,6 +976,7 @@ struct FileVersion: Codable, Identifiable, Hashable {
         self.editionKey = editionKey
         self.effectiveAudioTrackIndex = effectiveAudioTrackIndex
         self.effectiveAudioLanguage = effectiveAudioLanguage
+        self.trickplayAvailable = trickplayAvailable
     }
 }
 
@@ -1270,6 +1278,11 @@ struct WatchDetail {
     let effectiveSubtitleMode: String?
     let effectiveShowForcedSubtitles: Bool?
     let effectiveSubtitleTrackSignature: SubtitleTrackSignature?
+
+    /// "Show forced subtitles" for this content. The server omits
+    /// `effective_show_forced_subtitles` when no stored setting applies, and
+    /// the contract default is on, as web and the Jellyfin layer read it.
+    var showsForcedSubtitles: Bool { effectiveShowForcedSubtitles ?? true }
 }
 
 // MARK: - Collections

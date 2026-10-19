@@ -63,7 +63,7 @@ packages:
   # reviewed revision; Package.resolved also freezes its binary dependencies.
   AetherEngine:
     url: https://github.com/Silo-Server/AetherEngine
-    revision: 87f8574083f96e7d5f3a9cfe07bb2525f708cd4c
+    revision: b0712217abb7399aeb21f875bcc7c26e7af92fd8
   SwiftAssRenderer:
     url: https://github.com/mihai8804858/swift-ass-renderer
     exactVersion: 1.3.1
@@ -292,6 +292,7 @@ targets:
     sources:
       - path: NotificationService
       - path: iosApp/Notifications/ApplePushDisplayMetadata.swift
+      - path: iosApp/Notifications/ApplePushDisplayTargets.swift
       - path: iosApp/Shared/KeychainAudience.swift
       - path: iosApp/Shared/SharedStorage.swift
     configFiles:
@@ -428,7 +429,21 @@ targets:
       - path: iosApp/Navigation/AppNavPreferences.swift
       - path: iosApp/Control/tvOS/RemotePlaybackIdentityManager.swift
       - path: iosApp/Screens/Player/PlayerTrack.swift
+      - path: iosApp/Screens/Player/TrackLabels.swift
+      - path: iosApp/Screens/Player/Subtitles/SubtitleDisplayOrder.swift
+      - path: iosApp/Screens/Player/Subtitles/SubtitleCodecClassifier.swift
+      - path: iosApp/Screens/Player/OfflinePreparedTrackInventory.swift
+      - path: iosApp/Screens/Player/PlaybackPrefsResolver.swift
+      - path: iosApp/Screens/Player/ApplePlaybackQuality.swift
+      - path: iosApp/Screens/Player/AppleQualityAxes.swift
+      - path: iosApp/Components/Images/ArtworkDisplay.swift
+      # Nuke loader over Networking/LocalRoute; LocalRouteTests drives it.
+      - path: iosApp/Components/Images/LocalRouteDataLoader.swift
+      # ImageRequest(artwork:), which ServerTrickplaySheets loads sheets with.
+      - path: iosApp/Components/Images/ArtworkCacheKey.swift
       - path: iosApp/Screens/Auth/AuthModels.swift
+      # NativeSignIn.origin(of:) is used by Networking/LocalRoute; deps are all in Networking.
+      - path: iosApp/Screens/Auth/ExternalSignIn.swift
       - path: iosApp/Screens/Calendar/CalendarModels.swift
       - path: iosApp/Screens/Player/Subtitles/SubtitleAppearance.swift
       - path: iosApp/Screens/Player/ProtocolV3/PlaybackProtocolV3Models.swift
@@ -452,6 +467,11 @@ targets:
       - path: iosApp/Shared/PrairieURLScheme.swift
       - path: iosApp/Components/Ratings/DisplayRating.swift
       - path: CI/NetworkingHost
+    dependencies:
+      # ServerTrickplaySheets and LocalRouteDataLoader load through Nuke
+      # (macOS-capable); their upstream suites run in PrairieNetworkingTests.
+      - package: Nuke
+        product: Nuke
     settings:
       base:
         # Product/module must be `Prairie` so shared `@testable import Prairie`
@@ -556,6 +576,15 @@ targets:
           - HiddenLibraryPreferenceTests.swift
           - ResponseSnapshotStoreTests.swift
           - TitleArtPreferencesTests.swift
+          # Upstream's local-route (LocalRoute/*, LocalRouteDataLoader) and
+          # server trickplay suites, against the Nuke-linked host.
+          - LocalRouteTests.swift
+          - Support/RedirectingOrigin.swift
+          - ServerTrickplayTests.swift
+          # Upstream suites over host-only types: inactive-server bearer reads
+          # (TokenStore/HTTPClient) and the ResponseCache write fence.
+          - ApproverBearerTests.swift
+          - ResponseCacheWriteFenceTests.swift
           # Covers the upstream Networking models those app-level suites test.
           - NetworkingUpstreamGateFillTests.swift
       - path: Tests/Fixtures/SettingsContract/conformance.json

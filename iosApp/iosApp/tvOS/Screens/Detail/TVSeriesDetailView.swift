@@ -391,7 +391,7 @@ struct TVSeriesDetailView: View {
                     ? nil
                     : matchingPlaybackDetail?.effectiveSubtitleTrackSignature,
                 preferredSubtitleLanguage: profilePrefsStore.preferredSubtitleLanguage,
-                showForcedSubtitles: matchingPlaybackDetail?.effectiveShowForcedSubtitles ?? false
+                showForcedSubtitles: matchingPlaybackDetail?.showsForcedSubtitles ?? true
             ),
             showsPlaybackSummary: isLoadingEpisodes || playbackEpisode != nil,
             backdropHeight: TVDetailLayout.heroHeight,
@@ -546,8 +546,7 @@ struct TVSeriesDetailView: View {
                     subtitleSignature: nextUpSubtitleOverrideCleared
                         ? nil
                         : matchingPlaybackDetail?.effectiveSubtitleTrackSignature,
-                    showForcedSubtitles: matchingPlaybackDetail?.effectiveShowForcedSubtitles
-                        ?? false,
+                    showForcedSubtitles: matchingPlaybackDetail?.showsForcedSubtitles ?? true,
                     preferredSubtitleLanguage: profilePrefsStore.preferredSubtitleLanguage,
                     onSelectVersion: onSelectNextUpVersion,
                     onSelectAudioTrack: onSelectNextUpAudioTrack,

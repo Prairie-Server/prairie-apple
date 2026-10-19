@@ -378,6 +378,33 @@ final class SettingsConformanceTests: XCTestCase {
         }
     }
 
+    /// On a server older than revision 20 the local default is the only
+    /// cellular pair there is, so it must be the contract's.
+    func testTheCellularQualityDefaultMatchesTheVendoredManifest() throws {
+        let definitions = try rawDefinitions()
+        let resolution = try XCTUnwrap(
+            definitions[SettingKey.playbackCellularPreferredQuality.rawValue]?["default_value"] as? String
+        )
+        let bitrate = try XCTUnwrap(
+            definitions[SettingKey.playbackCellularMaxBitrateKbps.rawValue]?["default_value"] as? Int
+        )
+        XCTAssertEqual(PlayerSettings.defaultCellularQuality, AppleQualityAxes(resolution: resolution, bitrateKbps: bitrate))
+        XCTAssertEqual(SettingKey.cellularQualityRevision, SettingKey.playbackCellularPreferredQuality.introducedIn)
+    }
+
+    /// Every Maximum Bitrate choice is a cap the contract accepts.
+    func testMaximumBitrateChoicesAreInsideTheContractRange() throws {
+        let definitions = try rawDefinitions()
+        let schema = try XCTUnwrap(
+            definitions[SettingKey.playbackMaxBitrateKbps.rawValue]?["value_schema"] as? [String: Any]
+        )
+        let minimum = try XCTUnwrap(schema["minimum"] as? Int)
+        let maximum = try XCTUnwrap(schema["maximum"] as? Int)
+        for kbps in PrairieQualityPresets.bitrateChoicesKbps {
+            XCTAssertTrue((minimum...maximum).contains(kbps), "\(kbps)")
+        }
+    }
+
     /// Object members added after their key are gated by a hand-kept revision
     /// too. The manifest records that revision only in the definition's notes
     /// ("Revision N adds the optional <member> property"), so the sentence is
@@ -403,6 +430,26 @@ final class SettingsConformanceTests: XCTestCase {
         }
     }
 
+    /// A scope added to a key after the key itself is tagged in the manifest
+    /// as `{ "scope": "profile", "introduced_in": N }`. The flusher's
+    /// hand-kept `profileScopeRevision` must name the same revision for every
+    /// key, and nothing for a key whose profile scope is untagged.
+    func testProfileScopeRevisionsMatchTheVendoredManifest() throws {
+        let definitions = try rawDefinitions()
+        for key in SettingKey.allCases {
+            guard let definition = definitions[key.rawValue] else { continue }
+            let scopes = definition["allowed_scopes"] as? [Any] ?? []
+            let tagged = scopes.compactMap { $0 as? [String: Any] }
+                .first { $0["scope"] as? String == "profile" }
+            XCTAssertEqual(
+                key.profileScopeRevision,
+                tagged?["introduced_in"] as? Int,
+                key.rawValue
+            )
+        }
+        XCTAssertEqual(SettingKey.playerSubtitleSyncMs.profileScopeRevision, 19)
+    }
+
     /// A batch read fails as a whole when one of its keys is newer than the
     /// server, so a feature with no per-key fallback must only read keys
     /// every accepted server serves. The player batch carries
@@ -410,7 +457,7 @@ final class SettingsConformanceTests: XCTestCase {
     /// `minimumServerRevision` from dropping below it.
     func testBatchesWithoutAFallbackAreServedAtTheMinimumRevision() {
         let batches: [(name: String, keys: [SettingKey])] = [
-            ("player", SettingKey.playerDeviceSettings),
+            ("player", SettingKey.playerReadSettings),
             ("profile", ProfileSettingKeys.all),
         ]
         for batch in batches {

@@ -21,7 +21,10 @@ final class AccountSessionPersistenceTests: XCTestCase {
         return store
     }
     @MainActor
-    private func lifecycleHarness(purgeDiagnostics: @escaping @Sendable (String) async -> Bool = { _ in true }) async throws -> (
+    private func lifecycleHarness(
+        purgeDiagnostics: @escaping @Sendable (String) async -> Bool = { _ in true },
+        unregisterPush: @escaping @Sendable (String) async -> Void = { _ in }
+    ) async throws -> (
         store: TokenStore, keys: SharedKeychain, defaults: SharedDefaults,
         memory: SessionMemory, registry: ServerRegistry, auth: AuthService, http: HTTPClient, stub: APIv2TestStub
     ) {
@@ -32,14 +35,14 @@ final class AccountSessionPersistenceTests: XCTestCase {
         stub.reply(204, "")
         let http = HTTPClient(session: stub.makeSession(), tokenStore: store)
         let registry = ServerRegistry(defaults: defaults, keychain: keys,
-            launchPreferences: preferences, tokenStore: store, httpClient: http)
+            launchPreferences: preferences, tokenStore: store, httpClient: http, unregisterPush: unregisterPush)
         XCTAssertNotNil(registry.addOrUpdate(ServerEntry(id: "server", url: "https://session.example",
             fetchedName: "Test Server", lastUsedAt: Date())))
         let switched = await registry.switchTo(serverId: "server")
         XCTAssertTrue(switched)
         let auth = AuthService(serverRegistry: registry, launchPreferences: preferences,
             httpClient: http, tokenStore: store, sessionPersistence: memory.persistence,
-            purgeDiagnostics: purgeDiagnostics)
+            purgeDiagnostics: purgeDiagnostics, unregisterPush: unregisterPush)
         try await store.installAccountSession(accessToken: "original", refreshToken: "refresh", accountID: "12")
         await store.setProfileId("profile")
         _ = await store.setProfileToken("proof")
@@ -47,6 +50,78 @@ final class AccountSessionPersistenceTests: XCTestCase {
         preferences.remember(profileID: "profile", requiresPIN: true,
             accountEpoch: try XCTUnwrap(epoch), for: "server")
         return (store, keys, defaults, memory, registry, auth, http, stub)
+    }
+
+    /// Records each request to turn a server's pushes off with the access
+    /// token the device still held at the time.
+    private final class PushOffProbe: @unchecked Sendable {
+        private let lock = NSLock()
+        private var recorded: [String] = []
+        var store: TokenStore?
+
+        var calls: [String] { lock.withLock { recorded } }
+
+        func record(_ serverID: String) async {
+            let token = await store?.getAccessToken()
+            lock.withLock { recorded.append("\(serverID):\(token ?? "none")") }
+        }
+    }
+
+    /// A server can only be told to stop pushing while this device can still
+    /// authenticate to it, so sign-out and removal ask before clearing.
+    @MainActor
+    func testSignOutAndRemovalTurnPushOffBeforeClearingCredentials() async throws {
+        for removesServer in [false, true] {
+            let probe = PushOffProbe()
+            let h = try await lifecycleHarness(unregisterPush: { await probe.record($0) })
+            probe.store = h.store
+
+            if removesServer {
+                let removed = await h.registry.remove(serverId: "server")
+                XCTAssertTrue(removed)
+            } else {
+                let outcome = await h.auth.signOutWithOutcome()
+                XCTAssertEqual(outcome, .completed)
+            }
+
+            XCTAssertEqual(probe.calls, ["server:original"])
+            let remaining = await h.store.getAccessToken()
+            XCTAssertNil(remaining)
+        }
+    }
+
+    /// Removing a server turns its pushes off first. When the removal then
+    /// fails, the server stays saved and signed in, so its pushes are turned
+    /// back on rather than left off for good.
+    @MainActor
+    func testFailedRemovalOfAnInactiveServerTurnsItsPushesBackOn() async throws {
+        let (store, keys, defaults, _) = try await harness()
+        defaults.set(true, forKey: ServerRegistry.migratedKey)
+        let pushes = PushCalls()
+        var allowsPersistence = true
+        let registry = ServerRegistry(defaults: defaults, keychain: keys,
+            launchPreferences: ProfileLaunchPreferences(defaults: defaults),
+            persistenceOverride: { _, _ in allowsPersistence }, tokenStore: store,
+            httpClient: HTTPClient(session: APIv2TestStub().makeSession(), tokenStore: store),
+            unregisterPush: { pushes.record("off \($0)") }, restorePush: { pushes.record("on \($0)") })
+        XCTAssertNotNil(registry.addOrUpdate(ServerEntry(id: "server", url: "https://session.example",
+            fetchedName: nil, lastUsedAt: Date())))
+        XCTAssertNotNil(registry.addOrUpdate(ServerEntry(id: "other", url: "https://other.example",
+            fetchedName: nil, lastUsedAt: Date())))
+        allowsPersistence = false
+
+        let removed = await registry.remove(serverId: "other")
+
+        XCTAssertFalse(removed)
+        XCTAssertNotNil(registry.entry(with: "other"))
+        XCTAssertEqual(pushes.calls, ["off other", "on other"])
+    }
+
+    private final class PushCalls: @unchecked Sendable {
+        private let lock = NSLock()
+        private var recorded: [String] = []
+        var calls: [String] { lock.withLock { recorded } }
+        func record(_ call: String) { lock.withLock { recorded.append(call) } }
     }
 
     @MainActor

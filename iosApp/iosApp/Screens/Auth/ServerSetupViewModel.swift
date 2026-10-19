@@ -321,6 +321,9 @@ class ServerSetupViewModel {
            !parsedHost.isEmpty {
             let parsedScheme = rawHost.contains("://") ? components.scheme?.lowercased() : nil
             let parsedPort = components.port.map(String.init)
+            // Keep the host's case: the registry already matches a host that
+            // differs only in case to the saved server, and a server picked
+            // from Recent must reconnect its own entry, not a duplicate.
             return ParsedServerInput(
                 schemeOverride: parsedScheme,
                 host: parsedHost,

@@ -389,7 +389,9 @@ struct MobilePlayerControls: View {
             && !viewModel.subtitleSearchVisible
             && !aiSubtitlesAvailable
         return HStack(spacing: 8) {
-            qualityMenu(compact: style != .full)
+            if viewModel.hasQualityChoice {
+                qualityMenu(compact: style != .full)
+            }
 
             trackSelectionButton(style: style)
                 .disabled(noTracks)
@@ -414,12 +416,13 @@ struct MobilePlayerControls: View {
                 Button {
                     viewModel.switchQuality(option.id)
                 } label: {
-                    if option.id == viewModel.activeQualityId {
+                    if option.id == viewModel.highlightedQualityOptionId {
                         Label(option.labelWithBitrate, systemImage: "checkmark")
                     } else {
                         Text(option.labelWithBitrate)
                     }
                 }
+                .disabled(viewModel.isQualitySwitching)
             }
         } label: {
             HStack(spacing: 5) {
@@ -459,13 +462,14 @@ struct MobilePlayerControls: View {
     }
 
     /// Short value for the pill — the tier's resolution ("1080p") rather
-    /// than the full "Up to 1080p HD (High)" menu label.
+    /// than the full "Up to 1080p HD (High)" menu label. A fixed saved
+    /// resolution the menu has no row for still reads as that resolution.
     private var qualityValueText: String {
-        guard let active = viewModel.qualityOptions.first(where: { $0.id == viewModel.activeQualityId }),
-              !active.isAuto, !active.isOriginal, !active.resolution.isEmpty else {
-            return "Auto"
+        let activeId = viewModel.activeQualityId
+        if let active = viewModel.qualityOptions.first(where: { $0.id == activeId }) {
+            return active.isAuto || active.resolution.isEmpty ? "Auto" : active.resolution
         }
-        return active.resolution
+        return PrairieQualityPresets.resolutionLabel(AppleQualityAxes.split(activeId).resolution)
     }
 
     // MARK: - Audio & Subtitles sheet

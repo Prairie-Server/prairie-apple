@@ -495,8 +495,7 @@ struct APIv2Client: Sendable {
             let encoder = JSONEncoder()
             encoder.keyEncodingStrategy = .convertToSnakeCase
             body = try encoder.encode(APIv2CatalogQueryBody(query: query, cursor: cursor))
-            parameters = [:]
-            if let size = query.imageSize { parameters["image_size"] = size }
+            parameters = query.artwork
         } else {
             guard (parameters["groups"]?.utf8.count ?? 0) <= 32768 else { throw APIv2Error.invalidCatalogQuery }
             if let cursor { parameters["cursor"] = cursor }
@@ -674,7 +673,7 @@ struct APIv2Client: Sendable {
         return true
     }
 
-    func discover(auth: CapturedOrdinaryRequestAuth) async throws -> [APIv2DiscoverRow] {
+    func discover(artwork: [String: String], auth: CapturedOrdinaryRequestAuth) async throws -> [APIv2DiscoverRow] {
         try await gate()
         guard let profile = auth.profileId, !profile.isEmpty,
               await tokenStore.currentOrdinaryRequestAuth(matchingIdentityOf: auth) != nil else {
@@ -684,7 +683,7 @@ struct APIv2Client: Sendable {
         let identity = Self.requestIdentity(auth, profile: profile)
         let raw = try await tokenStore.withOwnerFence(auth) {
             try await mapErrors {
-                try await http.requestData(method: "GET", path: "/api/v2/recommendations/discover", query: [:],
+                try await http.requestData(method: "GET", path: "/api/v2/recommendations/discover", query: artwork,
                     requestIdentity: identity, expectedAccount: auth.account, expectedAuth: auth)
             }
         }
@@ -729,7 +728,7 @@ struct APIv2Client: Sendable {
         guard raw.statusCode == 204 else { throw APIv2Error.httpStatus(raw.statusCode) }
     }
 
-    func librarySections(id: Int, imageSize: String?, auth: CapturedOrdinaryRequestAuth) async throws -> APIv2LibrarySectionsRead {
+    func librarySections(id: Int, artwork: [String: String], auth: CapturedOrdinaryRequestAuth) async throws -> APIv2LibrarySectionsRead {
         try await gate()
         guard id > 0, let profile = auth.profileId, !profile.isEmpty,
               await tokenStore.currentOrdinaryRequestAuth(matchingIdentityOf: auth) != nil else {
@@ -739,7 +738,7 @@ struct APIv2Client: Sendable {
         let identity = Self.requestIdentity(auth, profile: profile)
         let raw = try await tokenStore.withOwnerFence(auth) {
             try await mapErrors {
-                try await http.requestData(method: "GET", path: "/api/v2/library/\(id)/sections", query: imageSize.map { ["image_size": $0] } ?? [:],
+                try await http.requestData(method: "GET", path: "/api/v2/library/\(id)/sections", query: artwork,
                     requestIdentity: identity, expectedAccount: auth.account, expectedAuth: auth)
             }
         }
@@ -748,7 +747,7 @@ struct APIv2Client: Sendable {
         return APIv2LibrarySectionsRead(libraryId: id, auth: auth, response: try Self.decodeSections(raw))
     }
 
-    func homeSections(imageSize: String?, auth: CapturedOrdinaryRequestAuth) async throws -> APIv2HomeSectionsRead {
+    func homeSections(artwork: [String: String], auth: CapturedOrdinaryRequestAuth) async throws -> APIv2HomeSectionsRead {
         try await gate()
         guard let profile = auth.profileId, !profile.isEmpty,
               await tokenStore.currentOrdinaryRequestAuth(matchingIdentityOf: auth) != nil else {
@@ -758,7 +757,7 @@ struct APIv2Client: Sendable {
         let identity = Self.requestIdentity(auth, profile: profile)
         let raw = try await tokenStore.withOwnerFence(auth) {
             try await mapErrors {
-                try await http.requestData(method: "GET", path: "/api/v2/home/sections", query: imageSize.map { ["image_size": $0] } ?? [:],
+                try await http.requestData(method: "GET", path: "/api/v2/home/sections", query: artwork,
                     requestIdentity: identity, expectedAccount: auth.account, expectedAuth: auth)
             }
         }
@@ -796,7 +795,7 @@ struct APIv2Client: Sendable {
         return try HTTPClient.makeJSONDecoder(artworkServerURL: raw.url).decode(CalendarResponse.self, from: raw.data)
     }
 
-    func similarCards(id: String, limit: Int, auth: CapturedOrdinaryRequestAuth) async throws -> [BrowseItem] {
+    func similarCards(id: String, limit: Int, artwork: [String: String], auth: CapturedOrdinaryRequestAuth) async throws -> [BrowseItem] {
         try await gate()
         guard (1...50).contains(limit), let profile = auth.profileId, !profile.isEmpty,
               await tokenStore.currentOrdinaryRequestAuth(matchingIdentityOf: auth) != nil else {
@@ -807,7 +806,7 @@ struct APIv2Client: Sendable {
         let path = "/api/v2/recommendations/similar/\(try catalogPathSegment(id))"
         let raw = try await tokenStore.withOwnerFence(auth) {
             try await mapErrors {
-                try await http.requestData(method: "GET", path: path, query: ["limit": String(limit)],
+                try await http.requestData(method: "GET", path: path, query: artwork.merging(["limit": String(limit)]) { $1 },
                     requestIdentity: identity, expectedAccount: auth.account, expectedAuth: auth)
             }
         }
@@ -832,15 +831,15 @@ struct APIv2Client: Sendable {
         return response
     }
 
-    func catalogItem(id: String, libraryId: String? = nil, imageSize: String?, auth: CapturedOrdinaryRequestAuth) async throws -> APIv2CatalogRead.CatalogItemDetail {
-        let raw = try await trailerRequest(id: id, refresh: false, libraryId: libraryId, imageSize: imageSize, auth: auth)
+    func catalogItem(id: String, libraryId: String? = nil, artwork: [String: String], auth: CapturedOrdinaryRequestAuth) async throws -> APIv2CatalogRead.CatalogItemDetail {
+        let raw = try await trailerRequest(id: id, refresh: false, libraryId: libraryId, artwork: artwork, auth: auth)
         guard raw.statusCode == 200 else { throw APIv2Error.httpStatus(raw.statusCode) }
         let item = try HTTPClient.makeJSONDecoder(artworkServerURL: raw.url).decode(APIv2CatalogRead.CatalogItemDetail.self, from: raw.data)
         guard item.contentId == id else { throw APIv2Error.incompleteCatalogRead }
         return item
     }
 
-    private func trailerRequest(id: String, refresh: Bool, libraryId: String? = nil, imageSize: String? = nil,
+    private func trailerRequest(id: String, refresh: Bool, libraryId: String? = nil, artwork: [String: String] = [:],
                                 auth: CapturedOrdinaryRequestAuth) async throws -> HTTPRawResponse {
         try await gate()
         guard let profile = auth.profileId, !profile.isEmpty,
@@ -850,7 +849,7 @@ struct APIv2Client: Sendable {
         try Task.checkCancellation()
         let identity = Self.requestIdentity(auth, profile: profile)
         let path = "/api/v2/catalog/items/\(try catalogPathSegment(id))" + (refresh ? "/trailers/refresh" : "")
-        let query = refresh ? [:] : catalogReadScope(libraryId: libraryId, imageSize: imageSize)
+        let query = refresh ? [:] : catalogReadScope(libraryId: libraryId, artwork: artwork)
         let raw = try await tokenStore.withOwnerFence(auth) {
             try await mapErrors {
                 try await http.requestData(method: refresh ? "POST" : "GET", path: path, query: query,
@@ -862,15 +861,15 @@ struct APIv2Client: Sendable {
     }
 
     func catalogItem(id: String, libraryId: String? = nil, fileId: String? = nil,
-                     imageSize: String? = nil) async throws -> APIv2CatalogRead.CatalogItemDetail {
-        var query = catalogReadScope(libraryId: libraryId, imageSize: imageSize)
+                     artwork: [String: String] = [:]) async throws -> APIv2CatalogRead.CatalogItemDetail {
+        var query = catalogReadScope(libraryId: libraryId, artwork: artwork)
         if let fileId { query["file_id"] = fileId }
         return try await catalogRead("/api/v2/catalog/items/\(try catalogPathSegment(id))", query: query)
     }
 
     func catalogSeasons(seriesId: String, libraryId: String? = nil,
-                        imageSize: String? = nil, includeArtwork: Bool? = nil) async throws -> [APIv2CatalogRead.Season] {
-        var query = catalogReadScope(libraryId: libraryId, imageSize: imageSize)
+                        artwork: [String: String] = [:], includeArtwork: Bool? = nil) async throws -> [APIv2CatalogRead.Season] {
+        var query = catalogReadScope(libraryId: libraryId, artwork: artwork)
         if let includeArtwork { query["include_artwork"] = String(includeArtwork) }
         let response: APIv2CatalogReadCollection<APIv2CatalogRead.Season> = try await catalogRead(
             "/api/v2/catalog/series/\(try catalogPathSegment(seriesId))/seasons",
@@ -879,15 +878,15 @@ struct APIv2Client: Sendable {
     }
 
     func catalogEpisodes(seriesId: String, seasonNumber: Int, libraryId: String? = nil,
-                         imageSize: String? = nil) async throws -> [APIv2CatalogRead.Episode] {
+                         artwork: [String: String] = [:]) async throws -> [APIv2CatalogRead.Episode] {
         guard seasonNumber >= 0 else { throw APIv2Error.invalidCatalogQuery }
         let response: APIv2CatalogReadCollection<APIv2CatalogRead.Episode> = try await catalogRead(
             "/api/v2/catalog/series/\(try catalogPathSegment(seriesId))/seasons/\(seasonNumber)/episodes",
-            query: catalogReadScope(libraryId: libraryId, imageSize: imageSize))
+            query: catalogReadScope(libraryId: libraryId, artwork: artwork))
         return try response.completeItems()
     }
 
-    func catalogEpisodes(seriesId: String, seasonNumber: Int, libraryId: String? = nil, imageSize: String?,
+    func catalogEpisodes(seriesId: String, seasonNumber: Int, libraryId: String? = nil, artwork: [String: String],
                          auth: CapturedOrdinaryRequestAuth) async throws -> [APIv2CatalogRead.Episode] {
         try await gate()
         guard seasonNumber >= 0 else { throw APIv2Error.invalidCatalogQuery }
@@ -898,7 +897,7 @@ struct APIv2Client: Sendable {
         try Task.checkCancellation()
         let identity = Self.requestIdentity(auth, profile: profile)
         let path = "/api/v2/catalog/series/\(try catalogPathSegment(seriesId))/seasons/\(seasonNumber)/episodes"
-        let query = catalogReadScope(libraryId: libraryId, imageSize: imageSize)
+        let query = catalogReadScope(libraryId: libraryId, artwork: artwork)
         let raw = try await tokenStore.withOwnerFence(auth) {
             try await mapErrors {
                 try await http.requestData(method: "GET", path: path, query: query,
@@ -911,7 +910,7 @@ struct APIv2Client: Sendable {
         return try response.completeItems()
     }
 
-    func catalogSeasons(seriesId: String, libraryId: String? = nil, imageSize: String?, includeArtwork: Bool? = nil,
+    func catalogSeasons(seriesId: String, libraryId: String? = nil, artwork: [String: String], includeArtwork: Bool? = nil,
                          auth: CapturedOrdinaryRequestAuth) async throws -> [APIv2CatalogRead.Season] {
         try await gate()
         guard let profile = auth.profileId, !profile.isEmpty,
@@ -921,7 +920,7 @@ struct APIv2Client: Sendable {
         try Task.checkCancellation()
         let identity = Self.requestIdentity(auth, profile: profile)
         let path = "/api/v2/catalog/series/\(try catalogPathSegment(seriesId))/seasons"
-        var query = catalogReadScope(libraryId: libraryId, imageSize: imageSize)
+        var query = catalogReadScope(libraryId: libraryId, artwork: artwork)
         if let includeArtwork { query["include_artwork"] = String(includeArtwork) }
         let requestQuery = query
         let raw = try await tokenStore.withOwnerFence(auth) {
@@ -1002,10 +1001,9 @@ struct APIv2Client: Sendable {
         return response
     }
 
-    private func catalogReadScope(libraryId: String?, imageSize: String?) -> [String: String] {
-        var query: [String: String] = [:]
+    private func catalogReadScope(libraryId: String?, artwork: [String: String]) -> [String: String] {
+        var query = artwork
         if let libraryId { query["library_id"] = libraryId }
-        if let imageSize { query["image_size"] = imageSize }
         return query
     }
 
@@ -1162,7 +1160,7 @@ struct APIv2Client: Sendable {
         }
     }
 
-    func watchDetail(id: String, libraryId: String? = nil, imageSize: String?, auth: CapturedOrdinaryRequestAuth) async throws -> WatchDetail {
+    func watchDetail(id: String, libraryId: String? = nil, artwork: [String: String], auth: CapturedOrdinaryRequestAuth) async throws -> WatchDetail {
         try await gate()
         guard let profile = auth.profileId, !profile.isEmpty,
               await tokenStore.currentOrdinaryRequestAuth(matchingIdentityOf: auth) != nil else {
@@ -1173,13 +1171,35 @@ struct APIv2Client: Sendable {
         let path = "/api/v2/watch/\(try catalogPathSegment(id))"
         let raw = try await tokenStore.withOwnerFence(auth) {
             try await mapErrors {
-                try await http.requestData(method: "GET", path: path, query: catalogReadScope(libraryId: libraryId, imageSize: imageSize),
+                try await http.requestData(method: "GET", path: path, query: catalogReadScope(libraryId: libraryId, artwork: artwork),
                     requestIdentity: identity, expectedAccount: auth.account, expectedAuth: auth)
             }
         }
         try Task.checkCancellation()
         guard raw.statusCode == 200 else { throw APIv2Error.httpStatus(raw.statusCode) }
         return try WatchDetail(v2: HTTPClient.makeJSONDecoder(artworkServerURL: raw.url).decode(APIv2CatalogRead.WatchDetail.self, from: raw.data))
+    }
+
+    /// The seek-bar previews of one of an item's files, for versions whose
+    /// `trickplay_available` is true.
+    func watchTrickplay(id: String, fileId: Int, auth: CapturedOrdinaryRequestAuth) async throws -> APIv2CatalogRead.WatchTrickplay {
+        try await gate()
+        guard let profile = auth.profileId, !profile.isEmpty,
+              await tokenStore.currentOrdinaryRequestAuth(matchingIdentityOf: auth) != nil else {
+            throw HTTPError.requestIdentityChanged
+        }
+        try Task.checkCancellation()
+        let identity = Self.requestIdentity(auth, profile: profile)
+        let path = "/api/v2/watch/\(try catalogPathSegment(id))/trickplay"
+        let raw = try await tokenStore.withOwnerFence(auth) {
+            try await mapErrors {
+                try await http.requestData(method: "GET", path: path, query: ["file_id": String(fileId)],
+                    requestIdentity: identity, expectedAccount: auth.account, expectedAuth: auth)
+            }
+        }
+        try Task.checkCancellation()
+        guard raw.statusCode == 200 else { throw APIv2Error.httpStatus(raw.statusCode) }
+        return try HTTPClient.makeJSONDecoder(artworkServerURL: raw.url).decode(APIv2CatalogRead.WatchTrickplay.self, from: raw.data)
     }
 
     func playbackCapabilities(auth: CapturedOrdinaryRequestAuth) async throws -> APIv2PlaybackCapabilities {
@@ -1221,7 +1241,7 @@ struct APIv2Client: Sendable {
     }
 
     func applePushRegistrationCapability(auth: CapturedOrdinaryRequestAuth) async throws -> APIv2ApplePushCapability {
-        let data = try await applePushRequest(method: "GET", path: "/api/v2/devices/push/apple/capabilities", auth: auth)
+        let data = try await applePushRequest(method: "GET", path: Self.applePushCapabilityPath, auth: auth)
         return try HTTPClient.makeJSONDecoder().decode(APIv2ApplePushCapability.self, from: data)
     }
 
@@ -1234,16 +1254,36 @@ struct APIv2Client: Sendable {
     /// receipt does not describe this generation and payload.
     func registerApplePush(_ body: APIv2ApplePushRegistrationBody, installationKey: String, generation: Int64,
                            auth: CapturedOrdinaryRequestAuth) async throws -> APIv2ApplePushRegistrationReceipt {
+        let data = try await applePushRequest(method: "POST", path: Self.applePushRegistrationPath,
+            body: Self.applePushRegistrationBody(body),
+            headers: Self.applePushInstallationHeaders(installationKey: installationKey, generation: generation),
+            auth: auth)
+        return try Self.applePushReceipt(from: data, generation: generation, body: body)
+    }
+
+    static let applePushCapabilityPath = "/api/v2/devices/push/apple/capabilities"
+    static let applePushRegistrationPath = "/api/v2/devices/push/apple"
+
+    /// The ordered-registration headers, refused before anything is sent
+    /// when the journal handed over a value outside the contract.
+    static func applePushInstallationHeaders(installationKey: String, generation: Int64) throws -> [String: String] {
         guard ApplePushInstallationJournal.isInstallationKey(installationKey), generation > 0 else {
             throw ApplePushRegistrationError.invalidInstallation
         }
+        return ["X-Push-Installation-Key": installationKey, "X-Push-Generation": String(generation)]
+    }
+
+    /// Sorted keys, so a replay sends the same bytes whichever server
+    /// session sends it.
+    static func applePushRegistrationBody(_ body: APIv2ApplePushRegistrationBody) throws -> Data {
         let encoder = JSONEncoder()
         encoder.keyEncodingStrategy = .convertToSnakeCase
         encoder.outputFormatting = .sortedKeys
-        let data = try await applePushRequest(method: "POST", path: "/api/v2/devices/push/apple",
-            body: encoder.encode(body),
-            headers: ["X-Push-Installation-Key": installationKey, "X-Push-Generation": String(generation)],
-            auth: auth)
+        return try encoder.encode(body)
+    }
+
+    static func applePushReceipt(from data: Data, generation: Int64,
+                                 body: APIv2ApplePushRegistrationBody) throws -> APIv2ApplePushRegistrationReceipt {
         let receipt = try HTTPClient.makeJSONDecoder().decode(APIv2ApplePushRegistrationReceipt.self, from: data)
         guard receipt.generation == String(generation), !receipt.id.isEmpty, !receipt.serverDeviceId.isEmpty,
               receipt.pushMode == body.pushMode else {
