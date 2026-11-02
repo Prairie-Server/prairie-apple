@@ -17,6 +17,9 @@ struct TVItemDetailView: View {
     let onResolveSeries: ((SeriesDetailContext) -> Void)?
 
     @State private var viewModel: ItemDetailViewModel
+    /// Season and episode routes resolve to their series, so this is the
+    /// page theme music looks up the selected season's own set on.
+    private var isSeriesPage: Bool { viewModel.detail.map { PrairieMediaType.isSeries($0.type) } ?? false }
     @State private var hasStartedDetailLoad = false
     /// Set when the user explicitly resets subtitles to "Auto" this visit:
     /// the server override is cleared with a fire-and-forget DELETE, but the
@@ -72,7 +75,7 @@ struct TVItemDetailView: View {
             // seeds the season. Otherwise cached detail paints at once while
             // `.task` refreshes it.
             if !hasStartedDetailLoad, navigationContext?.seriesContentId == contentId {
-                TVItemDetailLoadingView(seed: seed)
+                TVItemDetailLoadingView(seed: seed, isSeriesRoute: true)
             } else if let detail = viewModel.detail {
                 content(for: detail)
             } else if let error = viewModel.error {
@@ -85,6 +88,15 @@ struct TVItemDetailView: View {
         .prairieNavigationTitleDisplayMode(.inline)
         .prairieNavigationBarBackgroundHidden()
         .descriptionTranslation(viewModel)
+        .themeMusic(
+            viewModel.detail?.themes,
+            seasonContentId: isSeriesPage ? viewModel.selectedSeason?.contentId : nil,
+            // A series page waits for its seasons, so a season that owns a
+            // theme never opens on a burst of the series' one.
+            isLoading: viewModel.detail == nil
+                || (isSeriesPage && viewModel.seasons.isEmpty
+                    && viewModel.isLoadingSeriesHierarchy)
+        )
         .personalStateNoticeAlert($viewModel.personalStateNotice)
         .onAppear {
             isPageVisible = true
@@ -353,6 +365,8 @@ struct TVItemDetailView: View {
                                 to: .playerWithFile(
                                     contentId: id,
                                     fileId: playbackFileId,
+                                    // `fileId` is set only by a version picked for this episode.
+                                    pinsVersion: fileId != nil,
                                     audioTrackIndex: audioTrackIndex,
                                     subtitleTrackIndex: subtitleTrackIndex,
                                     startFromBeginning: startFromBeginning,
@@ -418,8 +432,7 @@ struct TVItemDetailView: View {
                         prefKey: prefKey(for: nextUpPlaybackDetail),
                         version: effectiveVersion(for: nextUpPlaybackDetail, versionFileId: preferredNextUpFileId),
                         requested: index,
-                        sanitized: preferredNextUpSubtitleTrackIndex,
-                        showForced: nil
+                        sanitized: preferredNextUpSubtitleTrackIndex
                     )
                 },
                 onToggleFavorite: { Task { await viewModel.toggleFavorite() } },
@@ -433,7 +446,7 @@ struct TVItemDetailView: View {
                     }
                 },
                 onNavigateToItem: { id in
-                    router.navigate(to: .itemDetail(contentId: id))
+                    router.openRelatedTitle(contentId: id)
                 },
                 synopsisStatus: viewModel.descriptionTranslationStatus,
                 isTranslatingEpisodes: viewModel.isTranslatingSeasonEpisodes,
@@ -459,6 +472,7 @@ struct TVItemDetailView: View {
                 isFavorite: viewModel.isFavorite,
                 inWatchlist: viewModel.inWatchlist,
                 isWatched: viewModel.isWatched,
+                boxSet: viewModel.boxSet,
                 selectedVersionFileId: preferredVersionFileId,
                 selectedAudioTrackIndex: preferredAudioTrackIndex,
                 selectedSubtitleTrackIndex: preferredSubtitleTrackIndex,
@@ -480,6 +494,7 @@ struct TVItemDetailView: View {
                     // Version and track picks are read at the press, not
                     // after the watch-state read.
                     let fileId = playbackFileId(for: detail)
+                    let pinsVersion = preferredVersionFileId != nil
                     let audioTrackIndex = preferredAudioTrackIndex
                     let subtitleTrackIndex = preferredSubtitleTrackIndex
                     playWithFreshResumePosition(
@@ -492,6 +507,7 @@ struct TVItemDetailView: View {
                                 to: .playerWithFile(
                                     contentId: contentId,
                                     fileId: fileId,
+                                    pinsVersion: pinsVersion,
                                     audioTrackIndex: audioTrackIndex,
                                     subtitleTrackIndex: subtitleTrackIndex,
                                     startFromBeginning: startFromBeginning,
@@ -549,8 +565,7 @@ struct TVItemDetailView: View {
                         prefKey: prefKey(for: detail),
                         version: effectiveVersion(for: detail, versionFileId: preferredVersionFileId),
                         requested: index,
-                        sanitized: preferredSubtitleTrackIndex,
-                        showForced: nil
+                        sanitized: preferredSubtitleTrackIndex
                     )
                 },
                 onToggleFavorite: { Task { await viewModel.toggleFavorite() } },
@@ -563,7 +578,7 @@ struct TVItemDetailView: View {
                     }
                 },
                 onNavigateToItem: { id in
-                    router.navigate(to: .itemDetail(contentId: id))
+                    router.openRelatedTitle(contentId: id)
                 },
                 synopsisStatus: viewModel.descriptionTranslationStatus,
                 onTranslateDescription: translateDescriptionAction
@@ -757,8 +772,7 @@ struct TVItemDetailView: View {
         prefKey: String?,
         version: FileVersion?,
         requested: Int?,
-        sanitized: Int?,
-        showForced: Bool?
+        sanitized: Int?
     ) {
         guard let prefKey else { return }
         guard let requested else {
@@ -766,11 +780,7 @@ struct TVItemDetailView: View {
             return
         }
         guard requested == sanitized, let version,
-              let request = TrackSelectionPersistence.subtitleRequest(
-                  version: version,
-                  ffIndex: requested,
-                  showForced: showForced
-              )
+              let request = TrackSelectionPersistence.subtitleRequest(version: version, ffIndex: requested)
         else { return }
         TrackSelectionPersistence.saveSubtitle(prefKey: prefKey, request: request)
     }
@@ -938,11 +948,15 @@ struct TVItemDetailView: View {
     ) async {
         let selected = order[selectedIndex].seasonNumber
         var index = selectedIndex + direction
-        while order.indices.contains(index) {
+        // Short seasons need several pages before the rail has a full row.
+        // Count cards, not rows: the rail drops repeated episode ids.
+        var seen = Set((viewModel.episodesBySeason[selected] ?? []).map(\.contentId))
+        var loadedCount = 0
+        while order.indices.contains(index), loadedCount < SeriesEpisodeWindow.minimumEpisodesPerSide {
             guard !Task.isCancelled, viewModel.selectedSeason?.seasonNumber == selected else { return }
             let season = order[index]
             if let page = viewModel.episodesBySeason[season.seasonNumber] {
-                if !page.isEmpty { break }
+                loadedCount += page.filter { seen.insert($0.contentId).inserted }.count
                 index += direction
                 continue
             }
@@ -980,7 +994,7 @@ struct TVItemDetailView: View {
                 PosterImageCache.prefetchArtworkData(edgeEpisodes.compactMap {
                     $0.stillUrl.flatMap(URL.init(string:))
                 })
-                if !sorted.isEmpty { break }
+                loadedCount += sorted.filter { seen.insert($0.contentId).inserted }.count
                 index += direction
             } catch {
                 guard !Task.isCancelled else { return }
@@ -1073,7 +1087,8 @@ struct TVItemDetailView: View {
             extras: item.extras,
             machineTranslatedFields: item.machineTranslatedFields,
             communityRating: item.communityRating,
-            userRating: item.userRating
+            userRating: item.userRating,
+            themes: item.themes
         )
     }
 }

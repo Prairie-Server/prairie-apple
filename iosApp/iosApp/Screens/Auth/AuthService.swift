@@ -775,6 +775,9 @@ final class AuthService: @unchecked Sendable {
         RequestsFeatureStore.shared.reset()
         LiveTVFeatureStore.shared.reset()
         ShuffleFeatureStore.shared.reset()
+        // Theme music and its capability belong to the outgoing profile.
+        ThemeMusicCenter.shared.reset()
+        ThemeMusicPreferences.shared.reset()
         CurrentProfileStore.shared.reset()
         SubtitleProvidersStore.shared.reset()
         RequestsEventBus.shared.reset()
@@ -796,7 +799,8 @@ final class AuthService: @unchecked Sendable {
         isChild: Bool,
         maxContentRating: String? = nil,
         libraryRestrictionsEnabled: Bool = false,
-        allowedLibraryIds: [Int] = []
+        allowedLibraryIds: [Int] = [],
+        requestsAllowed: Bool? = nil
     ) async throws -> UserProfile {
         try await PrairieAPI.shared.createProfile(
             name: name,
@@ -805,7 +809,8 @@ final class AuthService: @unchecked Sendable {
             isChild: isChild,
             maxContentRating: maxContentRating,
             libraryRestrictionsEnabled: libraryRestrictionsEnabled,
-            allowedLibraryIds: allowedLibraryIds
+            allowedLibraryIds: allowedLibraryIds,
+            requestsAllowed: requestsAllowed
         )
     }
 
@@ -851,10 +856,12 @@ final class AuthService: @unchecked Sendable {
         guard case .allowed(let account) = Self.signOutAuthorization(
             activeServerId: serverID, capturedAuth: capturedAuth
         ) else { return .refused }
-        // Only a device that can still authenticate can tell the server to
-        // stop pushing, so this runs before the credentials are cleared. A
-        // refused sign-out keeps the server signed in, so its pushes are
-        // turned back on.
+        // Signing out leaves the server's registration for this device in
+        // place, so its pushes stop the same way as for a removal: a
+        // retirement, retried after the credentials are gone, or a session
+        // `off` for an older server, which is why this runs first. A refused
+        // sign-out keeps the server signed in, so its pushes are turned back
+        // on.
         if let serverID { await unregisterPush(serverID) }
         guard let lease = await httpClient.beginIdentityTransition() else {
             if let serverID { await restorePush(serverID) }

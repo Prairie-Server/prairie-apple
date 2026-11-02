@@ -487,6 +487,18 @@ final class TopShelfSpoilerTests: XCTestCase {
         XCTAssertEqual(movie.fallbackPosterUrl(hidingEpisodeStills: true), "https://example.invalid/poster.jpg")
     }
 
+    func testCardShowPosterPrefersSeasonThenSeries() throws {
+        let both = try item(#"{"content_id":"e1","type":"episode","title":"Pilot","season_poster_url":"https://example.invalid/season.jpg","series_poster_url":"https://example.invalid/series.jpg"}"#)
+        let seriesOnly = try item(#"{"content_id":"e2","type":"episode","title":"Two","series_poster_url":"https://example.invalid/series.jpg"}"#)
+        let older = try item(#"{"content_id":"e3","type":"episode","title":"Three","poster_url":"https://example.invalid/still.jpg"}"#)
+        XCTAssertEqual(both.cardShowPosterUrl, "https://example.invalid/season.jpg")
+        XCTAssertEqual(seriesOnly.cardShowPosterUrl, "https://example.invalid/series.jpg")
+        XCTAssertNil(older.cardShowPosterUrl)
+        let alias = try item(#"{"content_id":"e4","type":" Episodes ","title":"Four"}"#)
+        XCTAssertTrue(alias.isEpisode)
+        XCTAssertFalse(try item(#"{"content_id":"m1","type":"movie","title":"Film"}"#).isEpisode)
+    }
+
     func testFallbackKeepsWatchedEpisodesAndSeriesArtwork() throws {
         let watched = try item(#"{"content_id":"e1","type":"episode","title":"Pilot","user_state":{"played":true},"poster_url":"https://example.invalid/still.jpg"}"#)
         let seriesArt = try item(#"{"content_id":"e2","type":"episode","title":"Two","poster_is_episode_still":false,"poster_url":"https://example.invalid/series.jpg"}"#)
@@ -515,6 +527,30 @@ final class EpisodeSpoilerMarqueeTests: XCTestCase {
         let fallback = TVMarqueeContent(item: item, rowTitle: "Next Up", spoilers: spoilers)
         XCTAssertNil(fallback.backdropUrl)
         XCTAssertEqual(fallback.fallbackArtworkUrl, item.posterUrl)
+    }
+
+    /// The card's series backdrop paints at once, without waiting on the
+    /// detail fetch, and stays visible while the episode's still is hidden.
+    @MainActor
+    func testCardSeriesBackdropShowsWithoutDetailAndSurvivesSpoilers() throws {
+        var item = try episodeItem(
+            contentId: "series-art-\(UUID().uuidString)",
+            backdropUrl: "https://img.example/still.jpg"
+        )
+        item.backdropIsEpisodeStill = true
+        item.seriesBackdropUrl = "https://img.example/series-bg.jpg"
+        item.seriesBackdropThumbhash = "BG"
+        let spoilers = EpisodeSpoilerSettings(hidesImages: true, hidesOverviews: true)
+        let content = TVMarqueeContent(item: item, rowTitle: "Continue Watching", spoilers: spoilers)
+        XCTAssertEqual(content.backdropUrl, "https://img.example/series-bg.jpg")
+        XCTAssertTrue(content.backdropIsSeriesArtwork)
+
+        let model = TVFocusMarqueeModel()
+        defer { model.suspend() }
+        model.seed(content)
+        XCTAssertNil(model.enrichment)
+        XCTAssertEqual(model.backdropURL, "https://img.example/series-bg.jpg")
+        XCTAssertEqual(model.backdropThumbhash, "BG")
     }
 
     func testHiddenEpisodeDropsItsStillSynopsisAndPosterFallback() throws {
@@ -571,6 +607,16 @@ final class EpisodeSpoilerMarqueeTests: XCTestCase {
         model.replaceContent(TVMarqueeContent(item: item, rowId: "other", rowTitle: "Other"))
         XCTAssertNil(model.content?.synopsis)
         model.suspend()
+    }
+
+    func testEnrichmentPrefersTheDetailsSeriesBackdrop() throws {
+        let detail = try HTTPClient.makeJSONDecoder().decode(ItemDetail.self, from: Data("""
+            {"content_id":"e1","type":"episode","title":"Pilot","backdrop_url":"https://img.example/still.jpg","backdrop_is_episode_still":true,"series_backdrop_url":"https://img.example/series-bg.jpg","series_backdrop_thumbhash":"BG"}
+            """.utf8))
+        let enrichment = TVMarqueeEnrichment(detail: detail)
+        XCTAssertEqual(enrichment.backdropUrl, "https://img.example/series-bg.jpg")
+        XCTAssertEqual(enrichment.backdropThumbhash, "BG")
+        XCTAssertEqual(enrichment.backdropIsEpisodeStill, false)
     }
 
     @MainActor
@@ -699,8 +745,7 @@ private func spoilerCapabilities(
         allowed: allowed,
         manifestRevision: revision,
         clientFamilies: ["tv", "mobile", "tablet", "desktop", "web"],
-        supportsBatchedEffective: batchedEffective,
-        supportsAtomicShortcuts: true
+        supportsBatchedEffective: batchedEffective
     )
 }
 

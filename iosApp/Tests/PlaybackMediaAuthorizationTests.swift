@@ -103,6 +103,41 @@ final class PlaybackMediaAuthorizationTests: XCTestCase {
         XCTAssertFalse(scope.allows(url("https://api.example:8080/base/api/v2/playback/transcode/session-one/master.m3u8")))
     }
 
+    /// The multivariant playlist of an in-stream subtitle names its variant
+    /// and subtitle playlists as the master route under `prairie_rendition`.
+    func testHLSMasterAuthorizesItsRenditionPlaylistsOnly() throws {
+        for master in [
+            "https://api.example/prairie/api/v2/playback/transcode/session-one/master.m3u8",
+            "https://proxy.example/stream/v3/session-one/master.m3u8",
+        ] {
+            let scope = try PlaybackMediaAuthorization.Scope(
+                sourceURL: url(master), serverURL: "https://api.example/prairie", sessionID: "session-one"
+            )
+            XCTAssertTrue(scope.allows(url(master + "?prairie_rendition=video")), master)
+            XCTAssertTrue(scope.allows(url(master + "?prairie_rendition=subtitles")), master)
+            let segments = String(master.dropLast("master.m3u8".count)) + "segment/"
+            XCTAssertTrue(scope.allows(url(segments + "sub_00012.vtt")), master)
+            // A rendition per embedded track names its track's playlist.
+            XCTAssertTrue(scope.allows(url(master + "?prairie_rendition=subtitles&prairie_track=4")), master)
+            XCTAssertTrue(scope.allows(url(master + "?prairie_track=12&prairie_rendition=subtitles")), master)
+            XCTAssertTrue(scope.allows(url(segments + "sub_4_00012.vtt")), master)
+            for suffix in ["?prairie_rendition=other", "?prairie_rendition=", "?prairie_rendition=video&st=secret",
+                           "?prairie_rendition=video&prairie_rendition=subtitles",
+                           "?prairie_rendition=video&prairie_track=4", "?prairie_rendition=subtitles&prairie_track=04",
+                           "?prairie_rendition=subtitles&prairie_track=", "?prairie_rendition=subtitles&prairie_track=4a",
+                           "?prairie_track=4", "?prairie_rendition=subtitles&prairie_track=4&st=secret",
+                           "?prairie_rendition=subtitles&prairie_track=4&prairie_track=5"] {
+                XCTAssertFalse(scope.allows(url(master + suffix)), master + suffix)
+            }
+            XCTAssertFalse(scope.allows(url(segments + "seg_00001.ts?prairie_rendition=video")), master)
+        }
+        let progressive = try PlaybackMediaAuthorization.Scope(
+            sourceURL: url("https://api.example/prairie/api/v2/stream/session-one"),
+            serverURL: "https://api.example/prairie", sessionID: "session-one"
+        )
+        XCTAssertFalse(progressive.allows(url("https://api.example/prairie/api/v2/stream/session-one?prairie_rendition=video")))
+    }
+
     func testUnexpectedQueriesAndURLCredentialsAreDenied() throws {
         let master = "https://api.example/api/v2/playback/transcode/session-one/master.m3u8"
         let scope = try PlaybackMediaAuthorization.Scope(

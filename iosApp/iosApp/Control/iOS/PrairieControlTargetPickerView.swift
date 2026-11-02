@@ -7,6 +7,9 @@ struct PrairieControlTargetPickerView: View {
 
     @State private var browser = PrairieControlBrowser()
     @State private var searchTimedOut = false
+    /// Read once: the picker lives for one search.
+    @State private var rememberedRoku = PrairieControlClient.rememberedRoku
+    private let pairingKeys = PrairieControlPairingKeys()
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -21,6 +24,7 @@ struct PrairieControlTargetPickerView: View {
                 }
             }
             .prairieSheetBackground()
+            .statusColumnSheetWidth()
             .navigationTitle("Remote Control")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -53,8 +57,17 @@ struct PrairieControlTargetPickerView: View {
         ContentUnavailableView(
             "No Prairie TVs Found",
             systemImage: "tv",
-            description: Text("Foreground Apple TVs on this server appear here.")
+            description: Text(missingRokuHint
+                ?? "TVs on this server appear here while Prairie is open on them. On a Roku, open Prairie with the Roku remote.")
         )
+    }
+
+    /// The phone can't open Prairie on a Roku, so when the Roku it last
+    /// controlled hasn't turned up by the end of the search, the picker says
+    /// how to bring it back.
+    private var missingRokuHint: String? {
+        guard searchTimedOut, let roku = rememberedRoku, !browser.found.contains(where: { $0.id == roku.id }) else { return nil }
+        return "Don't see \(roku.name)? Open Prairie on your Roku."
     }
 
     private var foundList: some View {
@@ -78,7 +91,11 @@ struct PrairieControlTargetPickerView: View {
 
                     VStack(alignment: .leading, spacing: 3) {
                         Text(target.name).font(.headline)
-                        if request != nil, target.protocolVersion < 2 {
+                        if target.transport == .sealed, pairingKeys.key(for: target) == nil {
+                            Text("Scan this Roku's pairing code to connect")
+                                .font(.subheadline)
+                                .foregroundStyle(Color.prairieSecondaryText)
+                        } else if request != nil, target.protocolVersion < 2 {
                             Text("Update Prairie on this TV to use your profile")
                                 .font(.subheadline)
                                 .foregroundStyle(Color.prairieSecondaryText)
@@ -106,6 +123,14 @@ struct PrairieControlTargetPickerView: View {
             .buttonStyle(.plain)
             .disabled(request != nil && target.protocolVersion < 2)
             .listRowBackground(Color.prairieSurface)
+        }
+        .safeAreaInset(edge: .bottom) {
+            if let missingRokuHint {
+                Text(missingRokuHint)
+                    .font(.footnote)
+                    .foregroundStyle(Color.prairieSecondaryText)
+                    .padding(.bottom, 12)
+            }
         }
         .scrollContentBackground(.hidden)
     }

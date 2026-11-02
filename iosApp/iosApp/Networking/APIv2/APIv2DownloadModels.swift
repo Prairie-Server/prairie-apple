@@ -24,6 +24,9 @@ struct APIv2DownloadCapability: Decodable, Sendable {
     /// quality; they download originals only.
     let bulkQuality: Bool?
     let monitorQuality: Bool?
+    /// An administrator revocation means "delete the local copy, then the
+    /// entry". Absent on older servers, which keep revoked files playable.
+    let revokedRemovesLocal: Bool?
 }
 
 /// `DownloadQualityOption`: a preset's video bitrate cap and the tallest

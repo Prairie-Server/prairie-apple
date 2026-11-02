@@ -525,6 +525,7 @@ final class ServerRegistry {
             Task { await RequestsFeatureStore.shared.refresh() }
             Task { await LiveTVFeatureStore.shared.refresh() }
             Task { await ShuffleFeatureStore.shared.refresh() }
+            Task { await SectionItemLimitSupport.shared.refresh() }
             Task { await CurrentProfileStore.shared.refresh() }
             // Same shape: without a re-probe the destination server's
             // image-size support would stay unknown, and TV requests would
@@ -548,10 +549,11 @@ final class ServerRegistry {
         serverId: String,
         resolveFallbackProfile: Bool = false
     ) async -> Bool {
-        // Only a device that can still authenticate can tell the server to
-        // stop pushing, so this runs before the credentials are deleted. A
-        // removal that then fails leaves the server saved and signed in, so
-        // its pushes are turned back on.
+        // Runs before the credentials are deleted: the retirement it queues
+        // needs only the installation key and is retried after they are
+        // gone, but an older server without the retirement endpoint can only
+        // be turned off with them. A removal that then fails leaves the
+        // server saved and signed in, so its pushes are turned back on.
         let turnsPushOff = entries.contains(where: { $0.id == serverId })
         if turnsPushOff {
             await unregisterPush(serverId)

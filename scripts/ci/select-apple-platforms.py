@@ -27,14 +27,14 @@ PROJECT = "iosApp/project.yml"
 # The meaningful lines of project.yml and every committed Signing/*.xcconfig.
 # Settings and includes can introduce build inputs outside a source directory.
 # Review ownership and update this snapshot when project configuration changes.
-BUILD_INPUTS_SHA256 = "8c4892914fc9d93b5cd3ed9941f52e735fcab58b215aca8471c4b58f9391b0e0"
+BUILD_INPUTS_SHA256 = "9f1f2cf779f41b30bf1bbd98f8c70e906e2dd3fba9c8e63ae451679d1e5c5d5c"
 SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
 ROOT_DOCUMENTATION = frozenset({"README.md", "CONTRIBUTING.md", "AGENTS.md", "SECURITY.md", "CHANGELOG.md"})
-# These 223 existing Swift inputs belong exclusively to the mobile test targets.
+# These 309 existing Swift inputs belong exclusively to the mobile test targets.
 # Refresh their ownership review after any other tracked input changes. Both Git
 # trees must retain every other path, mode and blob from the reviewed graph.
 TEST_SOURCE_OWNERSHIP = "scripts/ci/apple-test-source-ownership.json"
-TEST_SOURCE_OWNERSHIP_SHA256 = "cfbabb4be7fd3f3316cea06e14590dc347a5dce607ba39c9616046f642c6dfb7"
+TEST_SOURCE_OWNERSHIP_SHA256 = "a08a089a2812ade925ad529e9a59b85fdfab827868df50b5dcbaf64886cdfede"
 TEST_SOURCE_INPUTS_SHA256 = "ccffff0f25127480afa371b6fdc7613b914efa532f5dcf51aa52a896fb49f91e"
 SELECTOR_FILES = ("scripts/ci/select-apple-platforms.py", "scripts/ci/select-apple-platforms.test.py", TEST_SOURCE_OWNERSHIP)
 SELECTOR_CONTRACT = "scripts/ci/apple-test-selector-contract.json"
@@ -133,7 +133,7 @@ def reviewed_test_sources():
     if hashlib.sha256(raw).hexdigest() != TEST_SOURCE_OWNERSHIP_SHA256:
         raise SelectionUnavailable("The test source ownership list needs a review.")
     paths = json.loads(raw)
-    if (not isinstance(paths, list) or len(paths) != 223
+    if (not isinstance(paths, list) or len(paths) != 309
             or any(not isinstance(path, str) or not path.startswith("iosApp/Tests/") or not path.endswith(".swift") for path in paths)
             or paths != sorted(set(paths))):
         raise SelectionUnavailable("The reviewed test source list is malformed.")

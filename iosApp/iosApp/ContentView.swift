@@ -382,6 +382,13 @@ struct ContentView: View {
                 await LiveTVFeatureStore.shared.refresh()
             }
         }
+        // A signed-in profile reads the server's speed reading at once, so a
+        // start in the first seconds sends it; the speed test waits a few
+        // seconds for the first screen to settle. The server task below also
+        // hands over each server it commits.
+        .task(id: router.authState == .authenticated) {
+            await handOffSignedInSession()
+        }
         // Work that can prompt the user, or that competes with the first
         // screen for bandwidth, waits until the splash has lifted.
         .task(id: isAuthenticatedAppVisible) {
@@ -433,11 +440,16 @@ struct ContentView: View {
             )
             overlayPrefs.clear()
             guard !Task.isCancelled else { return }
+            // A restored session can reach `.authenticated` before this
+            // commit, and a server switch can stay `.authenticated` across
+            // it, so the speed scheduler follows the committed server here.
+            await handOffSignedInSession()
             Task { await AuthService.shared.refreshActiveServerName() }
             if router.authState == .authenticated {
                 // Nothing below reads title art, and surfaces show its cached
                 // answer meanwhile, so it need not hold up overlay hydration.
                 Task { await TitleArtPreferences.shared.refresh() }
+                Task { await ThemeMusicPreferences.shared.refresh() }
                 await uiCustomization.refresh()
                 await SeekIntervalPreferences.shared.refresh()
                 await EpisodeSpoilerPreferences.shared.refresh()
@@ -467,6 +479,7 @@ struct ContentView: View {
             #endif
             if router.authState == .authenticated {
                 Task { await TitleArtPreferences.shared.refresh() }
+                Task { await ThemeMusicPreferences.shared.refresh() }
                 await uiCustomization.refresh()
                 await SeekIntervalPreferences.shared.refresh()
                 await EpisodeSpoilerPreferences.shared.refresh()
@@ -479,6 +492,12 @@ struct ContentView: View {
 
     var body: some View {
         sessionTaskContent
+        // The speed scheduler starts out in the background and follows the
+        // scene from its first phase, so a launch into the background reads
+        // and tests nothing.
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            if phase == .active { BandwidthProbeScheduler.shared.setForeground(true) }
+        }
         .onChange(of: scenePhase) { _, newPhase in
             #if os(iOS) || os(tvOS)
             // Single funnel for every scene edge. `LaunchTimeline` decides the
@@ -487,8 +506,12 @@ struct ContentView: View {
             LaunchTimeline.recordScenePhase(Self.diagnosticsScenePhase(newPhase))
             #endif
             switch newPhase {
-            case .active: LocalRouteController.shared.sceneDidBecomeActive()
-            case .background: LocalRouteController.shared.sceneDidEnterBackground()
+            case .active:
+                LocalRouteController.shared.sceneDidBecomeActive()
+                BandwidthProbeScheduler.shared.setForeground(true)
+            case .background:
+                LocalRouteController.shared.sceneDidEnterBackground()
+                BandwidthProbeScheduler.shared.setForeground(false)
             default: break
             }
             #if os(iOS)
@@ -551,6 +574,34 @@ struct ContentView: View {
             updateProfileAwayStartForBackgroundPlayback()
         }
         #endif
+        .onChange(of: requestsScreensCheck, initial: true) { _, check in
+            guard check.requestsUnavailable else { return }
+            router.closeRequestsScreens()
+        }
+    }
+
+    /// What decides whether open Requests screens must close: the server's
+    /// answer, and the pages in view, so a Requests page that comes back into
+    /// view (Back from a title opened from Requests) closes too.
+    private struct RequestsScreensCheck: Equatable {
+        let requestsUnavailable: Bool
+        let pathCount: Int
+        let detailCardID: UUID?
+        let detailCardPathCount: Int
+    }
+
+    private var requestsScreensCheck: RequestsScreensCheck {
+        // Only an answered probe closes anything: before the first answer,
+        // after a reset, and after a failed probe the store is not "off".
+        let unavailable = router.authState == .authenticated
+            && RequestsFeatureStore.shared.isKnownUnavailable
+        #if os(iOS)
+        return RequestsScreensCheck(requestsUnavailable: unavailable, pathCount: router.path.count,
+            detailCardID: router.presentedItemDetail?.id, detailCardPathCount: router.itemDetailPath.count)
+        #else
+        return RequestsScreensCheck(requestsUnavailable: unavailable, pathCount: router.path.count,
+            detailCardID: nil, detailCardPathCount: 0)
+        #endif
     }
 
     /// Overlay hydration is the one post-authentication refresh whose failure
@@ -589,12 +640,15 @@ struct ContentView: View {
         async let requests: Void = RequestsFeatureStore.shared.refresh()
         async let shuffle: Void = ShuffleFeatureStore.shared.refresh()
         async let subtitles: Void = SubtitleProvidersStore.shared.refresh()
+        async let sectionItemLimit: Void = SectionItemLimitSupport.shared.refresh()
         async let profile: Void = CurrentProfileStore.shared.refresh()
         async let customization: Void = uiCustomization.refresh()
         async let seek: Void = SeekIntervalPreferences.shared.refresh()
         async let titleArt: Void = TitleArtPreferences.shared.refresh()
         async let spoilers: Void = EpisodeSpoilerPreferences.shared.refresh()
-        _ = await (overlay, ai, imageSize, requests, shuffle, subtitles, profile, customization, seek, titleArt, spoilers)
+        async let themeMusic: Void = ThemeMusicPreferences.shared.refresh()
+        _ = await (overlay, ai, imageSize, requests, shuffle, subtitles, sectionItemLimit, profile, customization, seek,
+                   titleArt, spoilers, themeMusic)
     }
 
     @MainActor
@@ -610,6 +664,37 @@ struct ContentView: View {
         #else
         await overlayPrefs.hydrateIfNeeded()
         #endif
+    }
+
+    /// Hands the signed-in session to the speed scheduler, and sends the plan
+    /// summaries an earlier run kept for it.
+    private func handOffSignedInSession() async {
+        let scheduler = BandwidthProbeScheduler.shared
+        // Video players register themselves when their playback starts.
+        // An audiobook loading holds tests off as well as one playing.
+        scheduler.isMediaActive = { [audioStore] in
+            audioStore.player.isPlaying || audioStore.player.isLoading || audioStore.player.engineState == .loading
+        }
+        guard router.authState == .authenticated else {
+            scheduler.setActiveServer(nil)
+            return
+        }
+        // Captures only a committed identity, never one mid-transition.
+        guard await HTTPClient.shared.waitForRequestDispatchOpen(), !Task.isCancelled else { return }
+        let auth = await TokenStore.shared.captureOrdinaryRequestAuth()
+        // The session may have ended while this hand-off waited: a sign-out
+        // handed over meanwhile must not be undone by a stale sign-in.
+        guard !Task.isCancelled, router.authState == .authenticated else { return }
+        scheduler.setActiveSession(auth.map {
+            BandwidthProbeSession(
+                serverId: $0.account.serverId,
+                credentialGeneration: $0.account.credentialGenerationID,
+                profileId: $0.profileId
+            )
+        })
+        // Plan summaries an earlier run kept for this server and profile,
+        // because the app ended before their plans did.
+        if let auth { await PlanSummaryJournal.shared.replay(as: auth) }
     }
 
     /// Background audio and PiP are still active use of the selected profile,
@@ -821,6 +906,8 @@ struct ContentView: View {
     ///   invitation (see `WatchPartyInvitation`)
     /// - `prairie://search?q={term}` — open Search with `term` filled in
     ///   (Siri's in-app search; see `SiriSearchLink`)
+    /// - `prairie://cast?host=…&port=…&id=…` — connect the remote to the Roku
+    ///   whose pairing code was scanned (iOS; see `PrairieControlPairingLink`)
     ///
     /// If the auth state isn't ready yet, the link is queued in
     /// `pendingDeepLink` until startup commits its initial route.
@@ -894,6 +981,17 @@ struct ContentView: View {
                 return
             }
             deviceApprovalLink = link
+            return
+        }
+        // A Roku's pairing code, scanned with the Camera. The remote needs a
+        // profile on the Roku's server to connect under.
+        if let link = PrairieControlPairingLink(url: url) {
+            guard router.authState == .authenticated,
+                  !launchPreferences.requiresSelectionAfterBackground() else {
+                pendingDeepLink = url
+                return
+            }
+            Task { await prairieControl.connect(pairingLink: link) }
             return
         }
         #endif
@@ -1320,6 +1418,9 @@ struct ContentView: View {
             StartupContentPrefetcher.prefetchAuthenticatedContent()
             await PlayerSettings.shared.refreshFromServer()
             router.resetToHome()
+            // A re-login while already authenticated flips no auth state, so
+            // nothing else hands the new session over.
+            await handOffSignedInSession()
             print("[DebugAutoLogin] signed in and selected profile")
         } catch {
             print("[DebugAutoLogin] failed: \(error)")
@@ -2000,8 +2101,8 @@ private struct RemotePlaybackRoutingModifier: ViewModifier {
                 // One routing decision for every streaming play on iOS: an
                 // engaged TV (including one mid-reconnect) takes the request;
                 // otherwise the local player opens as before.
-                router.remotePlaybackInterceptor = { [prairieControl] request in
-                    await prairieControl.launchOnEngagedTV(request)
+                router.remotePlaybackInterceptor = { [prairieControl] request, replaceConsent in
+                    await prairieControl.launchOnEngagedTV(request, replaceConsent: replaceConsent)
                 }
                 router.isRemotePlaybackEngaged = { [prairieControl] in prairieControl.remotePlaybackEngaged }
                 router.remotePlaybackCurrentTitle = { [prairieControl] in
@@ -2118,7 +2219,7 @@ private struct MacRootPageTopInset: ViewModifier {
 
 enum MainTabDestinationID: Hashable {
     case app(AppTab)
-    case libraryCategory(PrimaryMenuBuiltin)
+    /// A Mac sidebar library row.
     case library(Int)
 }
 
@@ -2145,130 +2246,12 @@ struct MainTabDestination: Identifiable, Equatable {
             selectedIcon: selectedIcon
         )
     }
-
-    static func libraryCategory(_ category: PrimaryMenuBuiltin) -> MainTabDestination {
-        return .init(
-            id: .libraryCategory(category),
-            title: category.title,
-            icon: category.navigationIcon,
-            selectedIcon: category.navigationIcon
-        )
-    }
 }
 
-private struct MainTabSidebarDestination: Identifiable {
-    let destination: MainTabDestination
-    let isNestedLibrary: Bool
-
-    var id: MainTabDestinationID { destination.id }
-}
-
-/// Projects the cross-client menu into roots this Apple shell can navigate
-/// without discarding destination identity. Sections and collections remain
-/// stored in the synced document, but stay hidden until this shell has a
-/// destination-specific root for them.
-func projectedMainTabDestinations(
-    primaryMenu: PrimaryMenuPreference?,
-    availableLibraries: [Library] = [],
-    showAudiobooks: Bool = true
-) -> [MainTabDestination] {
-    guard let primaryMenu else {
-        return AppTab.visibleCases.map(MainTabDestination.app)
-    }
-
-    let menuItems = primaryMenu.items.count == 1 && primaryMenu.items[0].isHome
-        ? appleDefaultPrimaryMenuItems()
-        : primaryMenu.items
-    var destinations: [MainTabDestination] = []
-    for item in menuItems {
-        guard mainTabSupportsDestination(
-            item,
-            availableLibraries: availableLibraries,
-            showAudiobooks: showAudiobooks
-        ) else {
-            continue
-        }
-        let destination: MainTabDestination?
-        switch item {
-        case .builtin(.home): destination = .app(.home)
-        case .builtin(.movies): destination = .libraryCategory(.movies)
-        case .builtin(.series): destination = .libraryCategory(.series)
-        case .builtin(.audiobooks): destination = .libraryCategory(.audiobooks)
-        case .builtin(.music): destination = nil
-        case .builtin(.forYou): destination = .app(.recommendations)
-        case .builtin(.calendar): destination = .app(.calendar)
-        case .library(let libraryId, let label):
-            let library = availableLibraries.first(where: { $0.id == libraryId })
-            destination = .library(
-                id: libraryId,
-                label: library?.name ?? label,
-                icon: library?.navigationIcon ?? "rectangle.stack",
-                selectedIcon: library?.selectedNavigationIcon ?? "rectangle.stack.fill"
-            )
-        case .section, .collection:
-            destination = nil
-        }
-        if let destination,
-           !destinations.contains(where: { $0.id == destination.id }) {
-            destinations.append(destination)
-        }
-    }
-    if !destinations.contains(where: { $0.id == .app(.home) }) {
-        destinations.insert(.app(.home), at: 0)
-    }
-    if destinations.count == 1, destinations[0].id == .app(.home) {
-        var defaults: [MainTabDestination] = [.app(.home)]
-        if availableLibraries.contains(where: {
-            libraryMatchesPrimaryMenuCategory($0, category: .movies)
-        }) {
-            defaults.append(.libraryCategory(.movies))
-        }
-        if availableLibraries.contains(where: {
-            libraryMatchesPrimaryMenuCategory($0, category: .series)
-        }) {
-            defaults.append(.libraryCategory(.series))
-        }
-        defaults.append(contentsOf: [
-            .app(.recommendations),
-            .app(.calendar),
-        ])
-        return defaults
-    }
-    return destinations
-}
-
-/// Runtime/editor capability gate for the non-tvOS Apple main shell. The
-/// synced document remains untouched; roots that the active profile cannot
-/// currently open simply stay out of the rendered navigation and editor.
-func mainTabSupportsDestination(
-    _ item: PrimaryMenuItem,
-    availableLibraries: [Library],
-    showAudiobooks: Bool = true
-) -> Bool {
-    switch item {
-    case .builtin(.movies):
-        return availableLibraries.contains {
-            libraryMatchesPrimaryMenuCategory($0, category: .movies)
-        }
-    case .builtin(.series):
-        return availableLibraries.contains {
-            libraryMatchesPrimaryMenuCategory($0, category: .series)
-        }
-    case .builtin(.audiobooks):
-        return showAudiobooks && availableLibraries.contains {
-            libraryMatchesPrimaryMenuCategory($0, category: .audiobooks)
-        }
-    case .builtin(.music):
-        return false
-    case .builtin(.home), .builtin(.forYou), .builtin(.calendar):
-        return true
-    case .library(let libraryId, _):
-        return availableLibraries.contains {
-            $0.id == libraryId && (showAudiobooks || !$0.isAudiobookLibrary)
-        }
-    case .section, .collection:
-        return false
-    }
+/// The iPhone, iPad and Mac roots, in a fixed order that matches the Android
+/// phone bar. Search, Requests and Profile live in each page's header.
+func mainTabDestinations(downloadsEnabled: Bool) -> [MainTabDestination] {
+    AppTab.visibleCases.map(MainTabDestination.app) + (downloadsEnabled ? [.app(.downloads)] : [])
 }
 
 func resolvedVisibleMainTabDestination(
@@ -2286,15 +2269,11 @@ func resolvedRequestedMainTabDestination(
 ) -> MainTabDestinationID {
     if requestedTab == .libraries,
        !visibleDestinations.contains(where: { $0.id == .app(.libraries) }),
-       let authoredLibraryRoot = visibleDestinations.first(where: {
-           switch $0.id {
-           case .libraryCategory, .library:
-               return true
-           case .app:
-               return false
-           }
+       let libraryRoot = visibleDestinations.first(where: {
+           if case .library = $0.id { return true }
+           return false
        }) {
-        return authoredLibraryRoot.id
+        return libraryRoot.id
     }
     return resolvedVisibleMainTabDestination(
         .app(requestedTab),
@@ -2345,9 +2324,7 @@ struct MainTabLibrarySnapshot: Equatable {
 struct MainTabView: View {
     @Bindable var router: AppRouter
     @State private var selectedDestinationID: MainTabDestinationID = .app(.home)
-    @State private var uiCustomization = UICustomizationPreferences.shared
-    /// The local audiobook opt-in is a final visibility gate even when a
-    /// synced/custom menu contains an Audiobooks destination.
+    /// The local audiobook opt-in; it hides audiobook libraries.
     @State private var navPrefs = AppNavPreferences.shared
     @State private var serverRegistry = ServerRegistry.shared
     /// Tagged with the server/profile that authorized the library list. A
@@ -2381,6 +2358,9 @@ struct MainTabView: View {
     /// Whether the app's window fills its screen. Split View, Slide Over,
     /// Stage Manager, and resized windows all report `false`.
     @State private var windowFillsScreen = WindowSceneFullScreenReader.currentWindowFillsScreen()
+    /// Set on the iPhone Duo's folded screen, where navigation moves into
+    /// the status column beside the page.
+    @State private var statusColumn: StatusColumnLayout?
     #endif
 
     var body: some View {
@@ -2403,6 +2383,9 @@ struct MainTabView: View {
                 .frame(width: 0, height: 0)
                 .accessibilityHidden(true)
         }
+        .onGeometryChange(for: StatusColumnLayout?.self) { proxy in
+            StatusColumnLayout(safeArea: proxy.safeAreaInsets)
+        } action: { statusColumn = $0 }
         #endif
         .tint(.prairieOnSurface)
         #if os(iOS)
@@ -2417,6 +2400,8 @@ struct MainTabView: View {
                     .overlay(Color.prairieGlassStrong.opacity(0.92))
                     .ignoresSafeArea()
                     .allowsHitTesting(false)
+                    // A sideways swipe on the card reveals the page it returns to.
+                    .opacity(1 - router.itemDetailSwipeProgress)
                     .transition(.opacity)
             }
         }
@@ -2479,12 +2464,6 @@ struct MainTabView: View {
         }
         .task { openRequestedSearch() }
         #endif
-        .onChange(of: uiCustomization.primaryMenu) { _, _ in
-            selectedDestinationID = resolvedVisibleMainTabDestination(
-                selectedDestinationID,
-                visibleDestinations: visibleDestinations
-            )
-        }
         .onChange(of: navPrefs.showAudiobooks) { _, _ in
             selectedDestinationID = resolvedVisibleMainTabDestination(
                 selectedDestinationID,
@@ -2527,7 +2506,13 @@ struct MainTabView: View {
         .modifier(AudioPlayerPresentationModifier(router: router))
         .modifier(PlayerPresentationModifier(router: router))
         .sheet(
-            item: $router.presentedItemDetail,
+            item: itemDetailBinding(coversWindow: false),
+            onDismiss: { router.itemDetailPresentationDidDismiss() }
+        ) { presentation in
+            itemDetail(presentation)
+        }
+        .fullScreenCover(
+            item: itemDetailBinding(coversWindow: true),
             onDismiss: { router.itemDetailPresentationDidDismiss() }
         ) { presentation in
             itemDetail(presentation)
@@ -2536,14 +2521,20 @@ struct MainTabView: View {
             PhoneDetailHeroLayout.usesSplitLayout(pageSize: proxy.size, verticalSizeClass: vSize)
         } action: { splitsDetail in
             router.presentsItemDetailFullWindow = splitsDetail
+            // A detail opened on the iPhone Duo's folded screen would stay a
+            // capped card with black bars beside it once unfolded.
+            if !audioStore.isShowingFullPlayer {
+                router.refitItemDetail()
+            }
         }
-        .sheet(isPresented: Binding(
-            get: { prairieControl.isShowingRemoteControl },
-            set: { if !$0 { prairieControl.hideRemoteControl() } }
-        )) {
-            PrairieControlRemoteView(controller: prairieControl)
-                .presentationDetents([.large])
-        }
+        .prairieRemoteControl(
+            isPresented: Binding(
+                get: { prairieControl.isShowingRemoteControl },
+                set: { if !$0 { prairieControl.hideRemoteControl() } }
+            ),
+            coversWindow: router.presentsItemDetailFullWindow || statusColumn != nil,
+            controller: prairieControl
+        )
         #endif
         #if !os(macOS)
         // Prairie: Live TV session cover (live must DELETE its session on dismiss).
@@ -2617,6 +2608,29 @@ struct MainTabView: View {
     @Environment(\.horizontalSizeClass) private var hSize
     @Environment(\.verticalSizeClass) private var vSize
 
+    #if os(iOS)
+    /// The open detail, routed to the presentation it opened in. iOS 27.1
+    /// caps an iPhone sheet at about 650pt wide, so a detail that should
+    /// fill the window (the iPhone Duo's open display) opens as a cover
+    /// there. iPad sheets fill the window, so iPad keeps the sheet.
+    private func itemDetailBinding(coversWindow: Bool) -> Binding<AppRouter.ItemDetailPresentation?> {
+        func belongsHere(_ presentation: AppRouter.ItemDetailPresentation) -> Bool {
+            (presentation.fillsWindow && UIDevice.current.userInterfaceIdiom == .phone) == coversWindow
+        }
+        return Binding(
+            get: { router.presentedItemDetail.flatMap { belongsHere($0) ? $0 : nil } },
+            set: { newValue in
+                // The host the detail just left must not close it as it
+                // moves to the other one (see `refitItemDetail`).
+                if newValue == nil, let current = router.presentedItemDetail, !belongsHere(current) {
+                    return
+                }
+                router.presentedItemDetail = newValue
+            }
+        )
+    }
+    #endif
+
     /// Passes the audio store in explicitly. When the iPad app runs on a Mac,
     /// presented content doesn't inherit it, and the detail's audio player
     /// modifier traps reading it as the sheet appears.
@@ -2655,7 +2669,7 @@ struct MainTabView: View {
 
     #if os(macOS)
     /// The Mac sidebar's groups. Every library the profile can open gets its
-    /// own row; the synced menu only orders the other destinations.
+    /// own row.
     private var macSidebarSectionList: [MacSidebarSection] {
         macSidebarSections(
             destinations: projectedDestinations,
@@ -2667,21 +2681,13 @@ struct MainTabView: View {
     #endif
 
     private var projectedDestinations: [MainTabDestination] {
-        var destinations = projectedMainTabDestinations(
-            primaryMenu: uiCustomization.primaryMenu,
-            availableLibraries: librarySnapshot.availableLibraries(
-                for: currentLibraryAuthority
-            ),
-            showAudiobooks: navPrefs.showAudiobooks
-        )
-        // Prairie: Live TV appears once the server reports an enabled channel.
+        var destinations = mainTabDestinations(downloadsEnabled: DownloadManager.shared.downloadsEnabled)
+        // Prairie: Live TV appears once the server reports an enabled channel,
+        // ahead of Downloads.
         if LiveTVFeatureStore.shared.isEnabled,
            !destinations.contains(where: { $0.id == .app(.liveTV) }) {
-            destinations.append(.app(.liveTV))
-        }
-        if DownloadManager.shared.downloadsEnabled,
-           !destinations.contains(where: { $0.id == .app(.downloads) }) {
-            destinations.append(.app(.downloads))
+            let index = destinations.firstIndex(where: { $0.id == .app(.downloads) }) ?? destinations.endIndex
+            destinations.insert(.app(.liveTV), at: index)
         }
         return destinations
     }
@@ -2731,6 +2737,9 @@ struct MainTabView: View {
                         value: destination.id
                     ) {
                         destinationContent(for: destination)
+                            #if os(iOS)
+                            .toolbar(statusColumn == nil ? .automatic : .hidden, for: .tabBar)
+                            #endif
                     }
                 }
             }
@@ -2738,11 +2747,45 @@ struct MainTabView: View {
                 routeContent(for: route)
             }
             #if os(iOS)
+            .environment(\.statusColumn, statusColumn)
             .prairieTabBarMinimizeOnScroll()
-            .modifier(NowPlayingShelfAttachment())
+            .modifier(NowPlayingShelfAttachment(showsCard: statusColumn != nil))
+            // Outside the shelf's bottom inset, which would otherwise shorten
+            // the column and push its actions up into the system status.
+            .overlay {
+                if let statusColumn {
+                    statusColumnBar(statusColumn)
+                }
+            }
             #endif
         }
     }
+
+    #if os(iOS)
+    private func statusColumnBar(_ layout: StatusColumnLayout) -> some View {
+        // Fill the page first, then grow into the safe area, so the bar
+        // lands inside the column rather than at the edge of the page.
+        HStack(spacing: 0) {
+            if layout.edge == .trailing { Spacer(minLength: 0) }
+            StatusColumnBar(
+                layout: layout,
+                destinations: visibleDestinations,
+                selection: $selectedDestinationID,
+                topBarActions: TabTopBarActions(
+                    onSearch: { router.navigate(to: .search) },
+                    onOpenSettings: { router.navigate(to: .settings) },
+                    onOpenRequests: { router.navigate(to: .requestsHub) },
+                    onSwitchProfile: { router.switchProfile() },
+                    onSwitchServer: { router.navigate(to: .serverList) },
+                    onSignOut: { router.signOutAndReset() },
+                    axis: .vertical
+                )
+            )
+            if layout.edge == .leading { Spacer(minLength: 0) }
+        }
+        .ignoresSafeArea()
+    }
+    #endif
 
     /// iPad regular width: the native sidebar overlays the detail pane without
     /// changing its original system material or row-selection appearance.
@@ -2783,10 +2826,7 @@ struct MainTabView: View {
 
     private var iPadSidebarLayout: some View {
         NavigationSplitView(columnVisibility: $iPadColumnVisibility) {
-            sidebarList(
-                dismissAfterSelection: true,
-                nestsPinnedLibraries: true
-            )
+            sidebarList(dismissAfterSelection: true)
                 .navigationSplitViewColumnWidth(
                     min: iPadSidebarWidth,
                     ideal: iPadSidebarWidth,
@@ -2944,8 +2984,7 @@ struct MainTabView: View {
     }
 
     private func sidebarList(
-        dismissAfterSelection: Bool,
-        nestsPinnedLibraries: Bool
+        dismissAfterSelection: Bool
     ) -> some View {
         List(selection: Binding<MainTabDestinationID?>(
             get: { selectedDestinationID },
@@ -2957,8 +2996,7 @@ struct MainTabView: View {
                 }
             }
         )) {
-            ForEach(sidebarDestinations(nestingPinnedLibraries: nestsPinnedLibraries)) { item in
-                let destination = item.destination
+            ForEach(visibleDestinations) { destination in
                 let isSelected = selectedDestinationID == destination.id
                 Label {
                     Text(destination.title)
@@ -2970,7 +3008,6 @@ struct MainTabView: View {
                         .foregroundStyle(isSelected ? .primary : .secondary)
                         #endif
                 }
-                .padding(.leading, item.isNestedLibrary ? 24 : 0)
                 .tag(destination.id)
             }
         }
@@ -2982,39 +3019,6 @@ struct MainTabView: View {
         // system's white text, so the selected row gets a graphite fill.
         .tint(Color.prairieIconTile)
         #endif
-    }
-
-    private func sidebarDestinations(
-        nestingPinnedLibraries: Bool
-    ) -> [MainTabSidebarDestination] {
-        guard nestingPinnedLibraries else {
-            return visibleDestinations.map {
-                MainTabSidebarDestination(destination: $0, isNestedLibrary: false)
-            }
-        }
-
-        let availableLibraries = librarySnapshot.availableLibraries(
-            for: currentLibraryAuthority
-        )
-        return groupPinnedLibrariesUnderMediaTypes(
-            visibleDestinations,
-            libraries: availableLibraries,
-            libraryID: { destination in
-                guard case .library(let libraryID) = destination.id else { return nil }
-                return libraryID
-            },
-            mediaTypeCategory: { destination in
-                guard case .libraryCategory(let category) = destination.id else {
-                    return nil
-                }
-                return category
-            }
-        ).map {
-            MainTabSidebarDestination(
-                destination: $0.element,
-                isNestedLibrary: $0.isNestedLibrary
-            )
-        }
     }
 
     /// Collapses or re-expands the sidebar without moving the detail content.
@@ -3067,12 +3071,6 @@ struct MainTabView: View {
         switch destination.id {
         case .app(let tab):
             tabContent(for: tab)
-        case .libraryCategory(let category):
-            LibrariesTabView(
-                category: category,
-                libraryAuthority: currentLibraryAuthority,
-                onLibrariesLoaded: acceptLoadedLibraries
-            )
         case .library(let libraryId):
             LibrariesTabView(
                 fixedLibraryId: libraryId,
@@ -3152,6 +3150,10 @@ struct MainTabView: View {
             ItemDetailView(contentId: contentId, libraryId: libraryId, resumeContext: context)
         case .personDetail(let personId):
             PersonDetailView(personId: personId)
+        case .sectionCatalog(let target):
+            SectionCatalogView(target: target)
+        case .boxSet(let id, let libraryId):
+            BoxSetDetailView(id: id, libraryId: libraryId)
         case .player(let contentId, let startFromBeginning, let resumePosition, let prefersLastUsedVersion, let libraryId):
             #if os(macOS)
             PlayerView(
@@ -3170,6 +3172,7 @@ struct MainTabView: View {
         case .playerWithFile(
             let contentId,
             let fileId,
+            let pinsVersion,
             let audioTrackIndex,
             let subtitleTrackIndex,
             let startFromBeginning,
@@ -3181,6 +3184,7 @@ struct MainTabView: View {
                 contentId: contentId,
                 libraryId: libraryId,
                 preferredFileId: fileId,
+                pinsVersion: pinsVersion,
                 preferredAudioTrackIndex: audioTrackIndex,
                 preferredSubtitleTrackIndex: subtitleTrackIndex,
                 startFromBeginning: startFromBeginning,
@@ -3211,6 +3215,8 @@ struct MainTabView: View {
             RequestDetailView(mediaType: mediaType, tmdbId: tmdbId)
         case .myRequests:
             MyRequestsView()
+        case .requestDiscoverRow(let key, let title):
+            RequestDiscoverRowView(rowKey: key, title: title)
         case .search:
             #if os(iOS)
             SearchView(seededQuery: $siriSearchRequest)
@@ -3277,6 +3283,10 @@ private struct ItemDetailSheet: View {
                         width: geometry.size.width,
                         height: geometry.size.height + geometry.safeAreaInsets.bottom
                     )
+                    .detailSwipeBack(
+                        onProgress: { router.itemDetailSwipeProgress = $0 },
+                        onDismiss: router.dismissItemDetail
+                    )
             }
                 .navigationDestination(for: Route.self) { route in
                     destination(for: route)
@@ -3292,9 +3302,10 @@ private struct ItemDetailSheet: View {
         .ignoresSafeArea(.container, edges: .bottom)
         // A page-sized sheet avoids the narrow form-card treatment on iPad,
         // while the large detent raises the rounded card to the top safe area.
-        // A wide, short window (iPad or iPhone Duo in landscape) gets a sheet
-        // as large as the window instead, so the split page has room. Either
-        // way native pull-down dismissal returns to the exact source page.
+        // A wide, short iPad window gets a sheet as large as the window
+        // instead, so the split page has room; an iPhone in that shape gets a
+        // full-screen cover (see `itemDetailBinding`). Native pull-down
+        // dismissal returns to the exact source page.
         .presentationSizing(ItemDetailSheetSizing(fillsWindow: presentation.fillsWindow))
         .presentationDetents([.large])
         // Nested pages handle a top pull as Back. The sheet's native dismiss
@@ -3312,12 +3323,19 @@ private struct ItemDetailSheet: View {
                 tmdbId: request.tmdbId,
                 onClose: router.dismissItemDetail
             )
+        } else if let section = presentation.section {
+            SectionCatalogView(target: section, onClose: router.dismissItemDetail)
+        } else if let boxSet = presentation.boxSet {
+            BoxSetDetailView(id: boxSet.id, libraryId: boxSet.libraryId, onClose: router.dismissItemDetail)
         } else {
             ItemDetailView(
                 contentId: presentation.contentId,
                 libraryId: presentation.libraryId,
                 onClose: router.dismissItemDetail,
-                resumeContext: presentation.resumeContext
+                resumeContext: presentation.resumeContext,
+                // Unfolding the iPhone Duo rebuilds the detail (see
+                // `refitItemDetail`); it reopens on this selection.
+                onSeriesSelection: router.itemDetailSeriesSelectionDidChange
             )
         }
     }
@@ -3329,8 +3347,12 @@ private struct ItemDetailSheet: View {
             ItemDetailView(contentId: contentId, libraryId: libraryId, resumeContext: context)
         case .personDetail(let personId):
             PersonDetailView(personId: personId)
+        case .boxSet(let id, let libraryId):
+            BoxSetDetailView(id: id, libraryId: libraryId)
         case .requestDetail(let mediaType, let tmdbId):
             RequestDetailView(mediaType: mediaType, tmdbId: tmdbId)
+        case .sectionCatalog(let target):
+            SectionCatalogView(target: target)
         default:
             EmptyView()
         }

@@ -174,6 +174,10 @@ final class PlaybackNetworkQualityTests: XCTestCase {
     func testTheMenuLightsAutoOnlyForAnAutoPreference() {
         let model = PlayerViewModel()
         defer { model.cleanup() }
+        model.qualityOptions = ApplePlaybackQuality.playbackOptions(serverQualities: [
+            PlaybackV3AvailableQuality(label: "1080p-high", displayName: "1080p High", height: 1080, bitrateKbps: 10_000, preservesSource: false),
+            PlaybackV3AvailableQuality(label: "720p", displayName: "720p", height: 720, bitrateKbps: 2_000, preservesSource: false),
+        ])
 
         model.activeQualityId = ApplePlaybackQuality.autoId
         XCTAssertEqual(model.highlightedQualityOptionId, ApplePlaybackQuality.autoId)
@@ -186,6 +190,48 @@ final class PlaybackNetworkQualityTests: XCTestCase {
 
         model.recordViewerQualityPick("720p", forContentId: "episode-1", onMeteredNetwork: false)
         XCTAssertEqual(model.highlightedQualityOptionId, "720p", "the rung the viewer picked lights")
+    }
+
+    /// With `plan_active_quality_v1` the server names the row: a saved
+    /// setting lights the rung the plan delivers, Auto still lights only for
+    /// an auto preference, and a local id that shares a server rung's name
+    /// lights nothing when the server names no row.
+    func testTheServerNamesTheLitRow() {
+        let options = ApplePlaybackQuality.playbackOptions(serverQualities: [
+            PlaybackV3AvailableQuality(label: "1080p-medium", displayName: "1080p Medium", height: 1080, bitrateKbps: 6_000, preservesSource: false),
+            PlaybackV3AvailableQuality(label: "1080p-low", displayName: "1080p Low", height: 1080, bitrateKbps: 3_000, preservesSource: false),
+            PlaybackV3AvailableQuality(label: "720p-medium", displayName: "720p Medium", height: 720, bitrateKbps: 2_000, preservesSource: false),
+        ])
+        func lit(_ session: String, server: String?, reports: Bool = true, pick: String? = nil) -> String? {
+            ApplePlaybackQuality.highlightedOptionId(
+                sessionQualityId: session,
+                viewerPickId: pick,
+                planActiveQuality: server,
+                planReportsActiveQuality: reports,
+                options: options
+            )
+        }
+
+        // Saved 1080p at 3 Mbps joins as the local 8 Mbps rung.
+        XCTAssertEqual(lit("1080p-8", server: "1080p-low"), "1080p-low")
+        XCTAssertEqual(lit("1080p-8", server: "720p-medium"), "720p-medium", "a cap the server held to 720p")
+        XCTAssertNil(lit("1080p-8", server: nil), "the source plays, or an encode between rungs")
+        XCTAssertNil(lit("1080p-medium", server: nil), "Apple's 12 Mbps 1080p-medium is not the server's")
+        XCTAssertNil(lit("1080p-8", server: "480p"), "a row the menu doesn't list")
+        XCTAssertEqual(lit(ApplePlaybackQuality.autoId, server: "720p-medium"), ApplePlaybackQuality.autoId)
+
+        // An older server says nothing: only the viewer's own pick lights.
+        XCTAssertNil(lit("1080p-medium", server: nil, reports: false))
+        XCTAssertEqual(lit("720p-medium", server: nil, reports: false, pick: "720p-medium"), "720p-medium")
+    }
+
+    func testThePlanDecodesItsActiveQuality() throws {
+        var object = try PlaybackV3FixtureTestSupport.v2DecisionObject(bundleClass: Self.self)
+        var plan = try XCTUnwrap(object["playback_plan"] as? [String: Any])
+        XCTAssertNil(try PlaybackV3FixtureTestSupport.v2Plan(plan).activeQuality)
+        plan["active_quality"] = "1080p-low"
+        object["playback_plan"] = plan
+        XCTAssertEqual(try PlaybackV3FixtureTestSupport.v2Decision(object).playbackPlan?.activeQuality, "1080p-low")
     }
 
     /// One quality switch at a time: a pick while one is in flight is ignored
@@ -227,6 +273,7 @@ final class PlaybackNetworkQualityTests: XCTestCase {
 
     private func start(
         requestedFileId: Int? = nil,
+        pinsVersion: Bool = false,
         lastFileId: Int? = 2,
         resuming: Bool,
         override: String? = nil,
@@ -238,6 +285,7 @@ final class PlaybackNetworkQualityTests: XCTestCase {
             lastFileId: lastFileId,
             lastResolution: "1080p",
             prefersLastUsedVersion: resuming,
+            pinsRequestedVersion: pinsVersion,
             startsAtFirstPart: false,
             preferredQualityOverride: override,
             settingsQuality: settings
@@ -282,6 +330,30 @@ final class PlaybackNetworkQualityTests: XCTestCase {
         picked = start(requestedFileId: 1, resuming: true, override: "1080p", settings: .auto)
         XCTAssertEqual(picked.version.fileId, 1, "the requested file wins over the last-played one")
         XCTAssertEqual(picked.qualityPreference, "1080p")
+    }
+
+    /// Only a version the viewer picked, while it is the file starting,
+    /// keeps that file for the attempt (`allow_alternate_versions` false), so
+    /// the server cannot swap in a lower version for Auto's budget. Any other
+    /// start leaves the server free to.
+    func testOnlyAPickedVersionKeepsItsFile() {
+        let rows: [(name: String, requested: Int?, picked: Bool, resuming: Bool, keeps: Bool)] = [
+            ("picked version", 1, true, false, true),
+            ("picked version on a resume", 1, true, true, true),
+            ("picked file is gone, a ranked one starts", 99, true, false, false),
+            ("file sent only for a track pick", 1, false, false, false),
+            ("default play", nil, false, false, false),
+            ("Continue Watching's last-played file", nil, false, true, false),
+        ]
+        for row in rows {
+            let selection = start(
+                requestedFileId: row.requested,
+                pinsVersion: row.picked,
+                resuming: row.resuming,
+                settings: .auto
+            )
+            XCTAssertEqual(selection.keepsVersion, row.keeps, row.name)
+        }
     }
 
     /// When the last-played file is gone, a resume ranks the remaining
@@ -414,6 +486,30 @@ final class PlaybackNetworkQualityTests: XCTestCase {
         controller.connectionDidChange()
         try await waitUntil("the change's check runs") { !controller.hasPendingCheck }
         XCTAssertEqual(player.replans, [cellularPair])
+    }
+
+    /// Wi-Fi Assist or a roam between access points can put the phone's path
+    /// on cellular for several seconds while Wi-Fi stays connected. Each
+    /// follow is a full reload, so a blip of that length must reload nothing.
+    func testABlipOfSeveralSecondsReloadsNothing() async throws {
+        let player = FakePlayer(main: mainPair, cellular: cellularPair)
+        let controller = PlaybackNetworkQualityController(
+            isMetered: { player.metered },
+            pair: { player.pairs[$0]! },
+            replan: { player.replan($0) }
+        )
+        defer { controller.stop() }
+        controller.sessionStarted(onMeteredNetwork: false, keepsViewerPick: false)
+
+        player.metered = true
+        controller.connectionDidChange()
+        try await Task.sleep(for: .seconds(5))
+        XCTAssertTrue(player.replans.isEmpty, "a five-second blip did not hold long enough to follow")
+        XCTAssertTrue(controller.hasPendingCheck)
+
+        player.metered = false
+        controller.connectionDidChange()
+        XCTAssertTrue(player.replans.isEmpty)
     }
 
     func testPairsThatMatchNeedNoReplan() {

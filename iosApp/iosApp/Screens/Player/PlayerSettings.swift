@@ -172,6 +172,10 @@ extension SettingKey {
         .playbackCellularPreferredQuality,
         .playbackCellularMaxBitrateKbps,
     ]
+
+    /// `playback.buffering_quality_mode`, read in a batch of its own like the
+    /// cellular pair: it arrived in manifest revision 23.
+    static let playerBufferingQualitySettings: [SettingKey] = [.playbackBufferingQualityMode]
 }
 
 /// A Playback setting the profile can hold as well as this device, so the
@@ -191,12 +195,14 @@ enum ProfileBackedPlaybackSetting: CaseIterable {
     case autoSkipCredits
     case autoPlayNext
     case nextUpPrompt
+    case bufferingQualityMode
 
     var keys: [SettingKey] {
         switch self {
         case .resolution: return [.playbackPreferredQuality]
         case .maxBitrate: return [.playbackMaxBitrateKbps]
         case .cellularQuality: return SettingKey.playerCellularQualitySettings
+        case .bufferingQualityMode: return SettingKey.playerBufferingQualitySettings
         case .audioLanguage: return [.playbackAudioLanguage]
         case .introSkipMode: return [.playbackIntroSkipMode]
         case .autoSkipCredits: return [.playbackAutoSkipCredits]
@@ -218,6 +224,7 @@ private extension SettingKey {
     static var cellularMaxBitrateKbps: SettingKey { .playbackCellularMaxBitrateKbps }
     static var audioLanguage: SettingKey { .playbackAudioLanguage }
     static var introSkipMode: SettingKey { .playbackIntroSkipMode }
+    static var bufferingQualityMode: SettingKey { .playbackBufferingQualityMode }
     static var autoSkipCredits: SettingKey { .playbackAutoSkipCredits }
     static var autoSkipRecap: SettingKey { .playbackAutoSkipRecap }
     static var autoPlayNext: SettingKey { .playbackAutoPlayNext }
@@ -397,6 +404,16 @@ final class PlayerSettings {
     /// ``introSkipMode`` so the two can never disagree locally.
     var autoSkipIntro: Bool { introSkipMode.legacyAutoSkip }
 
+    /// What the player does on Auto when playback keeps buffering —
+    /// `playback.buffering_quality_mode`. On a server without the setting it
+    /// is the contract default (see ``serverLacksBufferingQualityMode``).
+    private(set) var bufferingQualityMode: BufferingQualityMode {
+        didSet {
+            guard !isLoadingCache else { return }
+            defaults.set(bufferingQualityMode.wireValue, forKey: Self.cacheKey(Keys.bufferingQualityMode))
+        }
+    }
+
     private(set) var autoSkipCredits: Bool {
         didSet {
             guard !isLoadingCache else { return }
@@ -500,13 +517,14 @@ final class PlayerSettings {
         }
     }
 
-    /// Device-local: whether TrueHD Atmos tracks keep their heights. Maps to
-    /// `LoadOptions.objectAudioRendering` through ``AetherObjectAudioPolicy``:
-    /// Aether renders the Atmos objects and delivers Apple Positional Audio,
-    /// which an Atmos receiver or soundbar gets as Dolby Atmos and AirPods or
-    /// the built-in speakers render as Spatial Audio. The trade is a compressed
-    /// stream in place of lossless 7.1, which is why Apple TV only uses it when
-    /// its output reports Dolby Atmos.
+    /// Device-local: whether TrueHD Atmos and DTS:X tracks keep their heights.
+    /// Maps to `LoadOptions.objectAudioRendering` through
+    /// ``AetherObjectAudioPolicy``: Aether decodes the Atmos objects exactly,
+    /// renders them into a 7.1.4 bed (DTS:X: its four heights one to one) and
+    /// delivers Apple Positional Audio, which an Atmos receiver or soundbar
+    /// gets as Dolby Atmos and AirPods or the built-in speakers render as
+    /// Spatial Audio. The trade is a compressed stream in place of
+    /// lossless 7.1, so a setup without Atmos is better with it off.
     ///
     /// Never synced to the server: what this device plays into is a fact about
     /// the room or the headphones, not the profile. Default on.
@@ -713,6 +731,8 @@ final class PlayerSettings {
         cellularMaxBitrateKbps = cellular.bitrateKbps
         audioLanguage = defaults.string(forKey: Self.cacheKey(Keys.audioLanguage)) ?? ""
         introSkipMode = Self.cachedIntroSkipMode(defaults)
+        bufferingQualityMode = Self.cachedBufferingQualityMode(defaults)
+        serverLacksBufferingQualityMode = defaults.bool(forKey: Self.cacheKey(Keys.bufferingQualityModeUndefined))
         autoSkipCredits = Self.cachedBool(defaults, key: Keys.autoSkipCredits, defaultValue: false)
         autoSkipRecap = Self.cachedBool(defaults, key: Keys.autoSkipRecap, defaultValue: false)
         hdrEnabled = Self.cachedBool(defaults, key: Keys.hdrEnabled, defaultValue: true)
@@ -807,6 +827,19 @@ final class PlayerSettings {
     /// scope was active), or nil when no revision is known.
     private var manifestRevisionScopeID: String?
 
+    /// The server's settings answered that `playback.buffering_quality_mode`
+    /// is not a key they define. Such a server plays `always`, so the player
+    /// uses the default and Settings hides the row. Decided by the key, not
+    /// the manifest revision, and kept per scope until a read answers the key,
+    /// so a switch back to that server or profile, or a launch offline,
+    /// remembers it.
+    private(set) var serverLacksBufferingQualityMode = false {
+        didSet {
+            guard !isLoadingCache else { return }
+            defaults.set(serverLacksBufferingQualityMode, forKey: Self.cacheKey(Keys.bufferingQualityModeUndefined))
+        }
+    }
+
     /// Whether to offer the subtitle text opacity control. Hidden only when the
     /// server is known to predate the member: such a server never receives it,
     /// so the choice would not survive the next refresh.
@@ -864,13 +897,16 @@ final class PlayerSettings {
             let scopeUnchanged = (scopeIdentifier() ?? "") == refreshScopeID
             manifestRevisionScopeID = knownManifestRevision != nil && scopeUnchanged ? refreshScopeID : nil
             var effectiveByKey = response.byKey
-            // A failed cellular read keeps this device's values for the pair.
+            // A failed cellular or buffering read keeps this device's values
+            // for those keys.
             let cellular = (try? await cellularQualityValues(atRevision: response.revision)) ?? [:]
+            let buffering = await bufferingQualityValues()
             // Applying caches under the scope active now. If it changed while
-            // either read awaited, neither response belongs to it, so nothing
-            // is adopted; that scope's own refresh paints its values.
+            // any read awaited, no response belongs to it, so nothing is
+            // adopted; that scope's own refresh paints its values.
             guard (scopeIdentifier() ?? "") == refreshScopeID else { return .unavailable }
             effectiveByKey.merge(cellular) { _, cellularValue in cellularValue }
+            effectiveByKey.merge(adopt(buffering) ?? [:]) { _, bufferingValue in bufferingValue }
             applyEffectiveSettings(overlayingUnsettledValues(on: effectiveByKey))
 
             if let scopeID, !isMigrationComplete(for: scopeID) {
@@ -918,6 +954,49 @@ final class PlayerSettings {
             return [:]
         }
         return try await flusher.effectiveValues(keys: keys).byKey.filter { keys.contains($0.key) }
+    }
+
+    /// What reading `playback.buffering_quality_mode` found.
+    private enum BufferingQualityRead {
+        /// The server defines the key; its row, if it sent one.
+        case served([SettingKey: EffectiveSettingValue])
+        /// The server's settings do not define the key.
+        case notDefined
+        /// The read failed for another reason, which says nothing either way.
+        case unread
+    }
+
+    /// `playback.buffering_quality_mode`'s row, read in its own batch for the
+    /// same reason as the cellular pair. Asked of every server rather than
+    /// gated on the manifest revision: whether the server has the setting is
+    /// decided by whether it knows the key. A missing row keeps this device's
+    /// own value.
+    @MainActor
+    private func bufferingQualityValues() async -> BufferingQualityRead {
+        let keys = SettingKey.playerBufferingQualitySettings
+        do {
+            return .served(try await flusher.effectiveValues(keys: keys).byKey.filter { keys.contains($0.key) })
+        } catch let error as SettingsAPIError where error.isUnknownKeyAnswer {
+            return .notDefined
+        } catch {
+            return .unread
+        }
+    }
+
+    /// Records whether the server has the setting, and returns its rows to
+    /// apply: none where it has no setting, nil when the read failed.
+    @MainActor
+    private func adopt(_ read: BufferingQualityRead) -> [SettingKey: EffectiveSettingValue]? {
+        switch read {
+        case .served(let rows):
+            serverLacksBufferingQualityMode = false
+            return rows
+        case .notDefined:
+            serverLacksBufferingQualityMode = true
+            return [:]
+        case .unread:
+            return nil
+        }
     }
 
     /// Set the quality from a shared preset; the settings screens set each
@@ -983,6 +1062,15 @@ final class PlayerSettings {
         enqueueDeviceValue(.introSkipMode, value: .string(mode.wireValue))
     }
 
+    /// Saved for this device like ``setIntroSkipMode(_:)``. Settings offers it
+    /// only where the server has the setting.
+    func setBufferingQualityMode(_ mode: BufferingQualityMode) {
+        // A picker opened before the read that found no setting stores nothing.
+        guard !serverLacksBufferingQualityMode else { return }
+        bufferingQualityMode = mode
+        enqueueDeviceValue(.bufferingQualityMode, value: .string(mode.wireValue))
+    }
+
     func setAutoSkipCredits(_ enabled: Bool) {
         autoSkipCredits = enabled
         enqueueDeviceValue(.autoSkipCredits, value: .bool(enabled))
@@ -1038,8 +1126,8 @@ final class PlayerSettings {
         deinterlaceMode = mode
     }
 
-    /// Choose whether TrueHD Atmos keeps its heights. Purely local — there is
-    /// no contract key to enqueue.
+    /// Choose whether TrueHD Atmos and DTS:X keep their heights. Purely local —
+    /// there is no contract key to enqueue.
     func setTrueHDAtmosEnabled(_ enabled: Bool) {
         trueHDAtmosEnabled = enabled
     }
@@ -1372,6 +1460,9 @@ final class PlayerSettings {
             }
             resetCellularQualityWhereNotServed()
         }
+        for key in SettingKey.playerBufferingQualitySettings {
+            enqueueDeviceClear(key)
+        }
         await flushPendingDeviceSettings()
         if await refreshFromServer() == .serverUpgradeRequired {
             // A pre-contract server has no inherited canonical rows to read
@@ -1457,13 +1548,18 @@ final class PlayerSettings {
         }
         guard scopeIdentifier() == discardScopeID else { return false }
         knownManifestRevision = flusher.knownManifestRevision
-        guard let cellular = try? await cellularQualityValues(atRevision: response.revision),
-              scopeIdentifier() == discardScopeID else {
+        guard let cellular = try? await cellularQualityValues(atRevision: response.revision) else {
+            return false
+        }
+        let bufferingRead = await bufferingQualityValues()
+        guard scopeIdentifier() == discardScopeID, let buffering = adopt(bufferingRead) else {
             return false
         }
         flusher.discardHeldChanges()
         applyEffectiveSettings(overlayingUnsettledValues(
-            on: response.byKey.merging(cellular) { _, cellularValue in cellularValue }
+            on: response.byKey
+                .merging(cellular) { _, cellularValue in cellularValue }
+                .merging(buffering) { _, bufferingValue in bufferingValue }
         ))
         return true
     }
@@ -1548,6 +1644,14 @@ final class PlayerSettings {
         introSkipMode = IntroSkipMode(
             wireValue: effectiveByKey[.introSkipMode]?.value.stringValue
         ) ?? .default
+        // Like the cellular pair: a row only from its own read or an owed
+        // change, and without one this device keeps its value. A server
+        // without the setting plays the default.
+        if serverLacksBufferingQualityMode {
+            bufferingQualityMode = .default
+        } else if let entry = effectiveByKey[.bufferingQualityMode] {
+            bufferingQualityMode = BufferingQualityMode(wireValue: entry.value.stringValue) ?? .default
+        }
         autoSkipCredits = effectiveBool(.autoSkipCredits, in: effectiveByKey, default: false)
         autoSkipRecap = effectiveBool(.autoSkipRecap, in: effectiveByKey, default: false)
         autoPlayNextEpisode = effectiveBool(.autoPlayNext, in: effectiveByKey, default: true)
@@ -1574,14 +1678,19 @@ final class PlayerSettings {
         // A clear still on its way has not reached the server, whose answer
         // therefore still shows the device value being removed.
         let clearing = flusher.unsettledClears
-        // A cellular key with no row keeps what this device last knew, like
-        // its value above.
-        let unreadCellular = Set(SettingKey.playerCellularQualitySettings).subtracting(effectiveByKey.keys)
+        // A cellular or buffering key with no row keeps what this device last
+        // knew, like its value above, unless the server doesn't define it:
+        // then this device has no value of its own there.
+        var unreadGated = Set(SettingKey.playerCellularQualitySettings + SettingKey.playerBufferingQualitySettings)
+            .subtracting(effectiveByKey.keys)
+        if serverLacksBufferingQualityMode {
+            unreadGated.subtract(SettingKey.playerBufferingQualitySettings)
+        }
         deviceOverriddenKeys = Set(
             effectiveByKey.compactMap { key, entry in
                 entry.scope == .profileDevice && !clearing.contains(key) ? key : nil
             }
-        ).union(deviceOverriddenKeys.intersection(unreadCellular))
+        ).union(deviceOverriddenKeys.intersection(unreadGated))
     }
 
     /// Split the resolved appearance between the device override and the
@@ -1754,6 +1863,8 @@ final class PlayerSettings {
         cellularMaxBitrateKbps = cellular.bitrateKbps
         audioLanguage = defaults.string(forKey: Self.cacheKey(Keys.audioLanguage)) ?? ""
         introSkipMode = Self.cachedIntroSkipMode(defaults)
+        bufferingQualityMode = Self.cachedBufferingQualityMode(defaults)
+        serverLacksBufferingQualityMode = defaults.bool(forKey: Self.cacheKey(Keys.bufferingQualityModeUndefined))
         autoSkipCredits = Self.cachedBool(defaults, key: Keys.autoSkipCredits, defaultValue: false)
         autoSkipRecap = Self.cachedBool(defaults, key: Keys.autoSkipRecap, defaultValue: false)
         autoPlayNextEpisode = Self.cachedBool(
@@ -1948,6 +2059,7 @@ final class PlayerSettings {
         defaults.set("", forKey: key(Keys.audioLanguage))
         defaults.set(false, forKey: key(Keys.autoSkipIntro))
         defaults.set(IntroSkipMode.default.wireValue, forKey: key(Keys.introSkipMode))
+        defaults.set(BufferingQualityMode.default.wireValue, forKey: key(Keys.bufferingQualityMode))
         defaults.set(false, forKey: key(Keys.autoSkipCredits))
         defaults.set(false, forKey: key(Keys.autoSkipRecap))
         defaults.set(true, forKey: key(Keys.autoPlayNextEpisode))
@@ -2049,6 +2161,10 @@ final class PlayerSettings {
         )
     }
 
+    private static func cachedBufferingQualityMode(_ defaults: UserDefaults) -> BufferingQualityMode {
+        BufferingQualityMode(wireValue: defaults.string(forKey: cacheKey(Keys.bufferingQualityMode))) ?? .default
+    }
+
     /// A scope a build from before this record already synced (its one-time
     /// import has run) has no record of which values are this device's own.
     /// Until its next refresh says, each synced key counts as the device's
@@ -2135,6 +2251,8 @@ final class PlayerSettings {
         static let audioLanguage = "preferredAudioLanguage"
         static let autoSkipIntro = "skipIntros"
         static let introSkipMode = "player.introSkipMode"
+        static let bufferingQualityMode = "playback.bufferingQualityMode"
+        static let bufferingQualityModeUndefined = "playback.bufferingQualityModeUndefined"
         static let autoSkipCredits = "skipCredits"
         static let autoSkipRecap = "player.autoSkipRecap"
         static let hdrEnabled = "player.hdrEnabled"

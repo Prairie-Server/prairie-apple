@@ -34,7 +34,7 @@ concurrency:
 
 jobs:
   validate:
-    runs-on: macos-15
+    runs-on: xcode-27
     timeout-minutes: 40
     strategy:
       fail-fast: false
@@ -52,7 +52,7 @@ jobs:
           ref: ${{ inputs.baseline_ref || github.sha }}
       - uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: '26.3'
+          xcode-version: '27.1'
       - name: Prepare simulator
         if: matrix.action == 'test'
         timeout-minutes: 10
@@ -82,23 +82,29 @@ jobs:
               exit 1
               ;;
           esac
-          runtime_version=$(xcrun --sdk "$sdk" --show-sdk-version)
+          sdk_version=$(xcrun --sdk "$sdk" --show-sdk-version)
           find_runtime() {
             xcrun simctl list runtimes --json | jq -r --arg version "$runtime_version" --arg prefix "$runtime_prefix" \
               '[.runtimes[] | select(.isAvailable and .version == $version and
                 (.identifier | startswith($prefix)))][0].identifier // empty'
           }
-          runtime_id=$(find_runtime)
-          if [ -z "$runtime_id" ]; then
-            xcodebuild -downloadPlatform "$PLATFORM" -buildVersion "$runtime_version"
+          # A point release's runtime may not run the test device (iOS 27.1
+          # runs only the iPhone Duo), so fall back to the release's .0.
+          simulator_id=
+          for runtime_version in "$sdk_version" "${sdk_version%%.*}.0"; do
             runtime_id=$(find_runtime)
-          fi
-          if [ -z "$runtime_id" ]; then
-            echo "::error::No available $PLATFORM $runtime_version simulator runtime"
+            if [ -z "$runtime_id" ]; then
+              xcodebuild -downloadPlatform "$PLATFORM" -buildVersion "$runtime_version" || true
+              runtime_id=$(find_runtime)
+            fi
+            [ -n "$runtime_id" ] || continue
+            simulator_id=$(xcrun simctl create "Prairie-Player-Regression-$PLATFORM" \
+              "$device_type" "$runtime_id") && break
+          done
+          if [ -z "$simulator_id" ]; then
+            echo "::error::No $PLATFORM simulator runtime for $sdk_version that runs $device_type"
             exit 1
           fi
-          simulator_id=$(xcrun simctl create "Prairie-Player-Regression-$PLATFORM" \
-            "$device_type" "$runtime_id")
           echo "PRAIRIE_SIMULATOR_ID=$simulator_id" >> "$GITHUB_ENV"
           echo "PRAIRIE_TEST_DESTINATION=platform=$destination_platform,id=$simulator_id" >> "$GITHUB_ENV"
           xcrun simctl boot "$simulator_id"

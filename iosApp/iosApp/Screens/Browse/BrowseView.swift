@@ -7,6 +7,8 @@ struct BrowseView: View {
     var showsSearchShortcut = true
     var libraryType: String? = nil
     var mediaScope: LibraryVideoScope? = nil
+    /// The library reports `box_sets_enabled`; browse it with `group=box_set`.
+    var groupsBoxSets = false
 
     @State private var viewModel = BrowseViewModel()
     @State private var showFilters = false
@@ -50,8 +52,12 @@ struct BrowseView: View {
         .sheet(isPresented: $showFilters) {
             FilterView(viewModel: viewModel)
         }
-        .task(id: BrowseConfigurationID(libraryId: libraryId, libraryType: libraryType, mediaScope: mediaScope)) {
-            guard await viewModel.configure(libraryId: libraryId, libraryType: libraryType, mediaScope: mediaScope) else { return }
+        .task(id: BrowseConfigurationID(
+            libraryId: libraryId, libraryType: libraryType, mediaScope: mediaScope, groupsBoxSets: groupsBoxSets
+        )) {
+            guard await viewModel.configure(
+                libraryId: libraryId, libraryType: libraryType, mediaScope: mediaScope, groupsBoxSets: groupsBoxSets
+            ) else { return }
             await viewModel.loadItems(reset: true)
             await viewModel.loadFacetsIfNeeded()
         }
@@ -322,6 +328,7 @@ private struct BrowseConfigurationID: Hashable {
     let libraryId: Int?
     let libraryType: String?
     let mediaScope: LibraryVideoScope?
+    let groupsBoxSets: Bool
 }
 
 enum LibraryPageTab: String, CaseIterable, Identifiable {
@@ -348,33 +355,43 @@ enum LibraryPageTab: String, CaseIterable, Identifiable {
 /// shared top-chrome `safeAreaInset` overlay.
 struct LibraryPageTabSelector: View {
     @Binding var selectedTab: LibraryPageTab
+    /// Off when the caller has already made sure every chip fits.
+    var scrolls = true
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(LibraryPageTab.allCases) { tab in
-                    Button {
-                        withAnimation(.easeInOut(duration: PrairieTheme.normalDuration)) {
-                            selectedTab = tab
-                        }
-                    } label: {
-                        Text(tab.title)
-                            .font(.prairieCaption)
-                            .fontWeight(selectedTab == tab ? .semibold : .regular)
-                            .foregroundColor(selectedTab == tab ? Color.prairieBackground : .prairieSecondaryText)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            .background(
-                                Capsule()
-                                    .fill(selectedTab == tab ? Color.prairieOnSurface : Color.prairieSurfaceElevated)
-                            )
-                    }
-                    .buttonStyle(.plain)
-                }
+        if scrolls {
+            ScrollView(.horizontal, showsIndicators: false) {
+                chips
             }
-            .padding(.horizontal, PrairieTheme.padding)
-            .padding(.vertical, PrairieTheme.smallPadding)
+        } else {
+            chips
         }
+    }
+
+    private var chips: some View {
+        HStack(spacing: 8) {
+            ForEach(LibraryPageTab.allCases) { tab in
+                Button {
+                    withAnimation(.easeInOut(duration: PrairieTheme.normalDuration)) {
+                        selectedTab = tab
+                    }
+                } label: {
+                    Text(tab.title)
+                        .font(.prairieCaption)
+                        .fontWeight(selectedTab == tab ? .semibold : .regular)
+                        .foregroundColor(selectedTab == tab ? Color.prairieBackground : .prairieSecondaryText)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(
+                            Capsule()
+                                .fill(selectedTab == tab ? Color.prairieOnSurface : Color.prairieSurfaceElevated)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, PrairieTheme.padding)
+        .padding(.vertical, PrairieTheme.smallPadding)
     }
 }
 
@@ -525,6 +542,11 @@ struct LibraryRecommendedView: View {
                                     libraryId: libraryId
                                 )
                             )
+                        },
+                        onExploreAll: {
+                            router.navigate(to: .sectionCatalog(SectionCatalogTarget(
+                                section, scope: .library(libraryId), mediaScope: mediaScope
+                            )))
                         }
                     )
                 }

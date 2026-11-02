@@ -105,30 +105,43 @@ So the target for TrueHD is not "TrueHD passthrough". It is:
 
 TrueHD Atmos object metadata is out of scope for this lossless target. Atmos may
 only be claimed when the source is already Apple-compatible E-AC-3/JOC and that
-track is preserved end to end, or when the TrueHD Atmos object path (3.3) is
-engaged and validated.
+track is preserved end to end, or when the heights path (3.3) is engaged and
+validated.
 
-### 3.3 TrueHD Atmos object path
+### 3.3 TrueHD Atmos and DTS:X heights
 
-The Playback setting "TrueHD Atmos" (device-local, default On) selects Aether's
-`LoadOptions.objectAudioRendering = .apac(.l714)` when the Apple TV's output
-reports Dolby Atmos (`AVAudioSession.renderingMode == .dolbyAtmos`) or does not
-report a mode. An output reporting stereo, multichannel PCM or Dolby Digital
-keeps the lossless channel path, since there the heights would only be folded
-back into channels. For a TrueHD track FFmpeg marks as Atmos, Aether then:
+The Playback setting "TrueHD Atmos and DTS:X" (device-local, default On) selects
+Aether's `LoadOptions.objectAudioRendering = .apac(.l714)` whenever it is on. Prairie does
+not check the output first: `AVAudioSession.renderingMode` resolves for the content
+already playing (stereo reads `monoStereo`, the lossless 7.1 bridge `surround`), not for
+what the receiver can carry, so before a load it cannot tell an Atmos receiver from one
+without Atmos. A setup without Atmos keeps the lossless channel path by turning the
+setting off.
 
-- decodes the TrueHD object presentation (beds, objects, object positions)
-- renders it into a 7.1.4 bed; the receiver or soundbar re-renders the Dolby
-  Atmos it receives onto its own speakers, so one bed serves every system
-- encodes the bed as Apple Positional Audio (APAC), `CODECS="apac.31.LL"`
-- lets tvOS decode APAC and send it to the receiver as Dolby MAT
+Upstream AetherEngine builds this path only with its `TrueHDObjectAudio` and
+`DTSXObjectAudio` package traits, off by default since 7.39.0 because the components may
+need third-party patent licenses. The Prairie fork turns those two traits on by default
+(XcodeGen cannot set package traits). With them, for a TrueHD track FFmpeg marks as
+Atmos (or whose major sync says Atmos), Aether (upstream #731, after 7.47.0):
 
-This keeps heights and object motion, but the audio is lossy (about 320 kbps per
-bed channel) instead of lossless 7.1, and the object-to-speaker rendering happens
-once in the app into 7.1.4 before the receiver maps it onto its speakers. The
-receiver should show Dolby Atmos (MAT or PCM + Atmos), never TrueHD. A TrueHD
-track without Atmos, an older OS, or a start-up failure keeps the lossless
-channel path above.
+- decodes the Atmos object presentation exactly, matrix interpolation included
+  (LibTrueHD 3.1.0): the bed, up to 15 dynamic objects and their metadata;
+- renders the objects into a 7.1.4 bed with their size, snap, zone masks, screen
+  anchoring and elevation switch;
+- encodes the bed as Apple Positional Audio (APAC), `CODECS="apac.31.LL"`, which tvOS
+  sends to the receiver as Dolby MAT. The Atmos output activator plays beside it only
+  on an HDMI route, which some soundbars and receivers need before they show Dolby Atmos.
+
+This replaces 7.40's bed split, which built every output from the stream's 7.1 channel
+presentation and left the heights 0.4 to 1.1 dB low.
+
+DTS:X in its standard presentation keeps its four heights one to one in Prairie's 7.1.4
+bed, decoded by FFmpegBuild's patched `dca` decoder (LibDTSX is gone since 7.44);
+presentations that carry objects are refused and play as 7.1.
+
+The audio is lossy (about 320 kbps per bed channel) instead of lossless 7.1. The
+receiver should show Dolby Atmos (MAT or PCM + Atmos), never TrueHD. A TrueHD track
+without Atmos, an older OS, or a start-up failure keeps the lossless channel path above.
 
 ## 4. Product contract
 
@@ -161,16 +174,16 @@ The route may claim Atmos only when:
 
 - selected source audio is E-AC-3/JOC and the output path preserves
   E-AC-3/JOC by copy or another validated Apple-native Atmos path, or
-- selected source audio is TrueHD Atmos, the object path (3.3) is engaged
-  (pipeline label `TRUEHD Atmos → APAC 7.1.4`), and
+- selected source audio is TrueHD Atmos or DTS:X and the heights path (3.3) is
+  engaged (pipeline label `TRUEHD Atmos → APAC 7.1.4` or `DTS:X → APAC 7.1.4`), and
 - in either case, an AVR/soundbar validation run confirms the Atmos indicator
 
-The route must not claim Atmos for TrueHD-derived PCM output.
+The heights path (3.3) must not be described as TrueHD passthrough, as lossless, or
+as Dolby's own decoding. The accurate description is that Prairie splits the track's
+channel presentation into a 7.1.4 layout and delivers that as compressed audio, which
+tvOS sends to the receiver as Dolby Atmos (MAT).
 
-The object path (3.3) must not be described as TrueHD passthrough, as lossless,
-or as Dolby's own decoding. The accurate description is that Prairie decodes the
-Atmos objects, mixes them into a 7.1.4 layout and delivers that as compressed
-audio, which tvOS sends to the receiver as Dolby Atmos (MAT).
+The route must not claim Atmos for TrueHD-derived PCM output.
 
 The route must not describe TrueHD-derived PCM as TrueHD passthrough. The honest
 label is "lossless multichannel PCM" or "multichannel LPCM".

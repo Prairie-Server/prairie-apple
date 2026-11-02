@@ -18,6 +18,8 @@ struct TabTopBarActions: View {
     let onSwitchProfile: () -> Void
     let onSwitchServer: () -> Void
     let onSignOut: () -> Void
+    /// Vertical in the iPhone Duo's status column (`StatusColumnBar`).
+    var axis: Axis = .horizontal
 
     /// Shared session cache so switching pages never refetches or flashes
     /// the avatar fallback.
@@ -25,6 +27,7 @@ struct TabTopBarActions: View {
     #if os(iOS)
     @Environment(PrairieControlClient.self) private var prairieControl
     @State private var isShowingControlPicker = false
+    @Environment(\.statusColumn) private var statusColumn
     #endif
 
     var body: some View {
@@ -32,8 +35,35 @@ struct TabTopBarActions: View {
         // The Mac sidebar carries Search and the profile menu.
         EmptyView()
         #else
+        if showsActions {
+            actions
+        } else {
+            // Holds the header row at its usual height so the page below
+            // doesn't move up.
+            Color.clear
+                .frame(width: 0, height: PrairieTheme.topBarIconHitSize)
+                .accessibilityHidden(true)
+        }
+        #endif
+    }
+
+    #if !os(macOS)
+    /// The header copy steps aside while the iPhone Duo's status column
+    /// shows the same actions.
+    private var showsActions: Bool {
+        #if os(iOS)
+        axis == .vertical || statusColumn == nil
+        #else
+        true
+        #endif
+    }
+
+    private var actions: some View {
         // Icons spaced evenly. Order is fixed: Search, Remote (iOS), Profile.
-        HStack(spacing: PrairieTheme.topBarIconSpacing) {
+        let layout = axis == .horizontal
+            ? AnyLayout(HStackLayout(spacing: PrairieTheme.topBarIconSpacing))
+            : AnyLayout(VStackLayout(spacing: 6))
+        return layout {
             TopBarIconButton(
                 systemImage: "magnifyingglass",
                 accessibilityLabel: "Search",
@@ -61,8 +91,8 @@ struct TabTopBarActions: View {
         // No-op once cached; covers a page shown before the session-level
         // load finished.
         .task { await profileStore.refresh() }
-        #endif
     }
+    #endif
 }
 
 /// Plain icon button used for utility actions (Search) in the top bar.
@@ -86,7 +116,7 @@ private struct TopBarIconButton: View {
     }
 }
 
-/// Profile avatar opening the account menu (Watch Party, Requests, Settings,
+/// Profile avatar opening the account menu (Requests, Watch Party, Settings,
 /// Switch Profile, Switch Server, Sign Out).
 struct ProfileAvatarMenu: View {
     @Environment(AppRouter.self) private var router
@@ -106,6 +136,49 @@ struct ProfileAvatarMenu: View {
         RequestsFeatureStore.shared.isEnabled
     }
 
+    private var showsWatchParty: Bool {
+        #if os(iOS) || os(tvOS)
+        WatchPartyEntry.isAvailable
+        #else
+        false
+        #endif
+    }
+
+    @ViewBuilder
+    private var featureActions: some View {
+        if requestsEnabled {
+            Button {
+                onOpenRequests()
+            } label: {
+                Label("Requests", systemImage: "sparkles")
+            }
+        }
+        #if os(iOS) || os(tvOS)
+        if showsWatchParty {
+            Button(WatchPartySession.shared.isEngaged ? "Return to Watch Party" : "Watch Party", systemImage: "person.3") { router.navigate(to: .watchParty) }
+        }
+        #endif
+    }
+
+    @ViewBuilder
+    private var accountActions: some View {
+        Button {
+            onOpenSettings()
+        } label: {
+            Label("Settings", systemImage: "gearshape")
+        }
+        Button {
+            onSwitchProfile()
+        } label: {
+            Label("Switch Profile", systemImage: "person.2")
+        }
+        Button {
+            onSwitchServer()
+        } label: {
+            Label("Switch Server", systemImage: "server.rack")
+        }
+    }
+
     private var avatarSize: CGFloat {
         #if os(macOS)
         PrairieTheme.macSidebarAvatarSize
@@ -120,45 +193,40 @@ struct ProfileAvatarMenu: View {
         showsName ? .prairieIconTile : .prairieSurfaceVariant
     }
 
+    /// Who is signed in and where, for the menu's header.
+    private var menuTitle: String? {
+        guard let profile else { return nil }
+        return [profile.name, ServerRegistry.shared.activeServer?.displayName]
+            .compactMap { $0 }
+            .joined(separator: " · ")
+    }
+
+    @ViewBuilder
+    private func titledSection<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        if let menuTitle {
+            Section(menuTitle, content: content)
+        } else {
+            Section(content: content)
+        }
+    }
+
     var body: some View {
+        // Same order as Android's phone menu: Requests and Watch Party, then
+        // the account actions, then Sign Out on its own. The header titles
+        // whichever group comes first.
         Menu {
-            #if os(iOS) || os(tvOS)
-            if WatchPartyEntry.isAvailable {
-                Button(WatchPartySession.shared.isEngaged ? "Return to Watch Party" : "Watch Party", systemImage: "person.3") { router.navigate(to: .watchParty) }
+            if requestsEnabled || showsWatchParty {
+                titledSection { featureActions }
+                Section { accountActions }
+            } else {
+                titledSection { accountActions }
             }
-            #endif
-            if requestsEnabled {
-                Button {
-                    onOpenRequests()
+            Section {
+                Button(role: .destructive) {
+                    onSignOut()
                 } label: {
-                    Label("Requests", systemImage: "sparkles")
+                    Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
                 }
-
-                Divider()
-            }
-
-            Button {
-                onOpenSettings()
-            } label: {
-                Label("Settings", systemImage: "gearshape")
-            }
-
-            Divider()
-
-            Button {
-                onSwitchProfile()
-            } label: {
-                Label("Switch Profile", systemImage: "person.2")
-            }
-            Button {
-                onSwitchServer()
-            } label: {
-                Label("Switch Server", systemImage: "server.rack")
-            }
-            Button(role: .destructive) {
-                onSignOut()
-            } label: {
-                Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
             }
         } label: {
             HStack(spacing: PrairieTheme.smallPadding) {

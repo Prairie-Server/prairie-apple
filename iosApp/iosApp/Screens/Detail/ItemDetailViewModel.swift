@@ -17,6 +17,10 @@ class ItemDetailViewModel {
 
     var detail: ItemDetail?
     var error: ErrorState?
+    /// The movie's box set, drawn as a row after the extras. Nil while it
+    /// loads, for a movie in no box set, and for anything but a movie.
+    private(set) var boxSet: CatalogBoxSetDetail?
+    @ObservationIgnored private var boxSetTask: Task<Void, Never>?
 
     // Catalog metadata and the hierarchy finish independently. An empty array
     // is only an empty result after its request has succeeded.
@@ -31,6 +35,7 @@ class ItemDetailViewModel {
     func cancelDetailLoading() {
         detailLoadGeneration += 1
         _ = beginDetailWrite()
+        boxSetTask?.cancel()
         seasonsLoadGeneration += 1
         episodeLoadGeneration += 1
         episodePersonalListRefreshGeneration += 1
@@ -233,6 +238,8 @@ class ItemDetailViewModel {
         detailLoadGeneration += 1
         let loadGeneration = detailLoadGeneration
         if let detail, detail.contentId != contentId {
+            boxSetTask?.cancel()
+            boxSet = nil
             seasonsLoadGeneration += 1
             episodeLoadGeneration += 1
             self.detail = nil
@@ -337,6 +344,8 @@ class ItemDetailViewModel {
                 isWatched = enriched.userData?.played ?? false
             }
 
+            refreshBoxSet(for: enriched)
+
             #if os(tvOS)
             if cachedDetailForRelatedStructure != nil {
                 await cachedRelatedStructureLoad
@@ -381,6 +390,29 @@ class ItemDetailViewModel {
             if detail == nil {
                 self.error = ErrorState(err)
             }
+        }
+    }
+
+    /// Reads the movie's box set beside the page's own refresh, so watched
+    /// badges follow the player and Mark as Watched. A failed reread keeps
+    /// the row on screen; the server answering "no box set" removes it.
+    private func refreshBoxSet(for item: ItemDetail) {
+        guard item.type == "movie" else {
+            boxSetTask?.cancel()
+            boxSet = nil
+            return
+        }
+        let contentId = item.contentId
+        boxSetTask?.cancel()
+        boxSetTask = Task { [weak self, libraryId] in
+            let fresh: CatalogBoxSetDetail?
+            do {
+                fresh = try await PrairieAPI.shared.itemBoxSet(contentId: contentId, libraryId: libraryId)
+            } catch {
+                return
+            }
+            guard let self, !Task.isCancelled, self.detail?.contentId == contentId else { return }
+            self.boxSet = fresh
         }
     }
 
@@ -662,6 +694,12 @@ class ItemDetailViewModel {
                 posterThumbhash: item.posterThumbhash,
                 backdropUrl: item.backdropUrl,
                 backdropThumbhash: item.backdropThumbhash,
+                seriesPosterUrl: item.seriesPosterUrl,
+                seriesPosterThumbhash: item.seriesPosterThumbhash,
+                seriesBackdropUrl: item.seriesBackdropUrl,
+                seriesBackdropThumbhash: item.seriesBackdropThumbhash,
+                seasonPosterUrl: item.seasonPosterUrl,
+                seasonPosterThumbhash: item.seasonPosterThumbhash,
                 logoUrl: item.logoUrl,
                 seasonCount: item.seasonCount,
                 seriesId: item.seriesId,
@@ -677,6 +715,8 @@ class ItemDetailViewModel {
                 subtitles: watchDetail.subtitles,
                 intro: watchDetail.intro,
                 credits: watchDetail.credits,
+                effectiveSubtitleLanguage: watchDetail.effectiveSubtitleLanguage,
+                hasWatchDetailSubtitlePolicy: true,
                 effectiveSubtitleMode: watchDetail.effectiveSubtitleMode,
                 effectiveShowForcedSubtitles: watchDetail.effectiveShowForcedSubtitles,
                 effectiveSubtitleTrackSignature: watchDetail.effectiveSubtitleTrackSignature,
@@ -690,7 +730,8 @@ class ItemDetailViewModel {
                 extras: item.extras,
                 machineTranslatedFields: item.machineTranslatedFields,
                 communityRating: item.communityRating,
-                userRating: item.userRating
+                userRating: item.userRating,
+                themes: item.themes
             )
     }
 
@@ -1602,6 +1643,9 @@ class ItemDetailViewModel {
             invalidateRelatedCaches(contentId: contentId)
             if isSeries {
                 await refreshWatchedSeries(seriesId: contentId)
+            } else if let detail, detail.contentId == contentId {
+                // The row's watched badges include this movie.
+                refreshBoxSet(for: detail)
             }
         } else {
             if toggleGeneration == watchedToggleGeneration, isWatched == requested {

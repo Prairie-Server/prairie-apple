@@ -178,6 +178,8 @@ final class AudioPlayerViewModel {
 
     func play() {
         guard context != nil else { return }
+        // Resuming is media starting again: a running speed test stops.
+        BandwidthProbeScheduler.shared.playbackStarting()
         engine.setRate(playbackRate, shouldResume: true)
         pushNowPlaying()
     }
@@ -481,6 +483,8 @@ final class AudioPlayerViewModel {
             )
         }
 
+        // A running bandwidth probe stops so it cannot slow the start.
+        BandwidthProbeScheduler.shared.playbackStarting()
         let snapshot = ApplePlaybackV3Capabilities.audiobookSnapshot()
         // A start refused because the server's playback installation changed
         // runs once more with the refreshed capability and a new attempt id.

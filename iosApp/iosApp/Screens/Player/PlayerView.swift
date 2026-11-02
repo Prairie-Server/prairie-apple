@@ -9,6 +9,8 @@ struct PlayerView: View {
     let contentId: String
     let libraryId: Int?
     let preferredFileId: Int?
+    /// The viewer picked `preferredFileId` in a version picker.
+    let pinsVersion: Bool
     let preferredAudioTrackIndex: Int?
     let preferredSubtitleTrackIndex: Int?
     /// `true` when the caller explicitly asked to restart from zero rather
@@ -39,6 +41,8 @@ struct PlayerView: View {
     }
     @State private var didNotifyPlaybackStarted = false
     @State private var showsPartyPanel = false
+    /// The loading spinner is up, on its show delay and minimum time.
+    @State private var showsLoadingSpinner = false
     @Environment(\.dismiss) var dismiss
     #if os(iOS)
     @State private var orientationCoordinator = PlayerOrientationCoordinator.shared
@@ -54,12 +58,23 @@ struct PlayerView: View {
     @State private var timelineSelectionRequest: UUID?
     @State private var timelinePreviewHideTask: Task<Void, Never>?
     @State private var timelinePreviewContactCanToggle = false
+    /// The buffering pill's buttons. Owned here because the pill is drawn at
+    /// the notice position; `TVPlayerControls` applies its focus rules.
+    @FocusState private var focusedBufferingAction: TVBufferingQualityPill.Action?
+    /// The prompt's button that a press capture's Select answers while the
+    /// controls are hidden. Left and Right move it between Lower quality and
+    /// Keep quality; each new pill starts on its primary action.
+    @State private var bufferingSelectTarget: TVBufferingQualityPill.Action = .primary
+    /// `TVPlayerControls`' explicit timeline scrub, which takes the buffering
+    /// pill out of the focus graph.
+    @State private var isTimelineScrubbing = false
     #endif
 
     init(
         contentId: String,
         libraryId: Int? = nil,
         preferredFileId: Int? = nil,
+        pinsVersion: Bool = false,
         preferredAudioTrackIndex: Int? = nil,
         preferredSubtitleTrackIndex: Int? = nil,
         startFromBeginning: Bool = false,
@@ -77,6 +92,7 @@ struct PlayerView: View {
         self.libraryId = libraryId
         _viewModelBox = StateObject(wrappedValue: PlayerViewModelBox(PlayerViewModel(libraryId: libraryId)))
         self.preferredFileId = preferredFileId
+        self.pinsVersion = pinsVersion
         self.preferredAudioTrackIndex = preferredAudioTrackIndex
         self.preferredSubtitleTrackIndex = preferredSubtitleTrackIndex
         self.startFromBeginning = startFromBeginning
@@ -92,7 +108,10 @@ struct PlayerView: View {
     }
 
     var body: some View {
-        PlayerSurfaceLayout(isPreview: viewModel.showNextUpScreen) {
+        PlayerSurfaceLayout(
+            isPreview: viewModel.showNextUpScreen,
+            fitsSafeArea: viewModel.settings.videoGravity == .fit
+        ) {
             playerSurface()
                 .opacity(viewModel.error == nil ? 1 : 0)
                 .accessibilityHidden(viewModel.error != nil)
@@ -103,7 +122,7 @@ struct PlayerView: View {
                     .onTapGesture {
                         // Loaded playback uses MobilePlayerGestureLayer.
                         // Keep tap-to-reveal available before it mounts too.
-                        if viewModel.isLoading || viewModel.error != nil {
+                        if viewModel.isStartingPlayback || viewModel.error != nil {
                             viewModel.toggleControls()
                         }
                     }
@@ -156,15 +175,18 @@ struct PlayerView: View {
                         //     the signed ladder, Tap Select = commit + exit,
                         //     Menu = cancel + exit (handled in onExitCommand).
                         //     Taps against Up/Down are ignored; holds are no-ops.
-                        // While the intro-skip pill is up the sink stays mounted
-                        // and Select acts on the pill (the spec's root-level
-                        // Select), so every other press keeps its playback
-                        // meaning and the pill's timer runs on regardless.
+                        // While a buffering or intro-skip pill is up the sink
+                        // stays mounted and Select acts on the pill (the spec's
+                        // root-level Select), so every other press keeps its
+                        // playback meaning and the pill's timer runs on regardless.
+                        // The buffering prompt is the exception: it has two
+                        // buttons, so Left and Right move between them instead
+                        // of skipping.
                         // Never while the HUD is presented: the sink and the HUD's
                         // focus graph would be two owners for the same presses
                         // (docs/tvos-focus.md), and the sink's Down handler
                         // force-switches the HUD tab underneath the user.
-                        if !viewModel.isLoading && !viewModel.isHUDPresented &&
+                        if !viewModel.isStartingPlayback && !viewModel.isHUDPresented &&
                             (!viewModel.showSegmentSkip || viewModel.isHoldSeeking) &&
                             (!viewModel.showControls || viewModel.isHoldSeeking) {
                             TVPressCaptureView(
@@ -175,7 +197,7 @@ struct PlayerView: View {
                                         case .right: viewModel.adjustHoldSeekRate(delta: +1)
                                         case .up, .down: break
                                         }
-                                    } else {
+                                    } else if !moveBufferingSelectTarget(direction) {
                                         switch direction {
                                         case .left:  viewModel.skipBackward()
                                         case .right: viewModel.skipForward()
@@ -209,6 +231,10 @@ struct PlayerView: View {
                                 onSelect: {
                                     if viewModel.isHoldSeeking {
                                         viewModel.commitHoldSeek()
+                                    } else if viewModel.showBufferingPill {
+                                        // Never up together with the intro
+                                        // pill: the controller holds one back.
+                                        selectBufferingTarget()
                                     } else if viewModel.showIntroSkip {
                                         viewModel.selectIntroSkipPrompt()
                                     } else if viewModel.isPlaying {
@@ -224,24 +250,41 @@ struct PlayerView: View {
                             .ignoresSafeArea()
                         }
 
-                        // `isLoading` also covers Protocol V3 replans (track or
-                        // quality changes made *from inside the HUD*). Unmounting
-                        // here for those would destroy the HUD's @State/@FocusState
-                        // mid-press and reseed focus on a reset tab, so the HUD
-                        // keeps its host mounted through a replan. A replacement
-                        // load closes the HUD in `resetPublishedLoadState`, so
-                        // cold starts and item changes still unmount as before.
-                        if (!viewModel.isLoading || viewModel.isHUDPresented) && !viewModel.isHoldSeeking {
+                        // A buffering pill can show while a load is starting and
+                        // nothing above is mounted. Give it a sink of its own
+                        // that answers Select, moves between the prompt's
+                        // buttons on Left and Right, and leaves every other
+                        // press inert, as during any start; Menu reaches
+                        // `onExitCommand` through it.
+                        if capturesSelectForBufferingPillWhileLoading {
+                            TVPressCaptureView(
+                                onArrowTap: { _ = moveBufferingSelectTarget($0) },
+                                onSelect: { selectBufferingTarget() }
+                            )
+                            .ignoresSafeArea()
+                        }
+
+                        // Mounted through every stall once the load has shown a
+                        // frame (rebuffers, seeks, and Protocol V3 replans for
+                        // track or quality changes made from inside the HUD), so
+                        // the transport and the HUD's @State/@FocusState survive
+                        // them. A replacement load closes the HUD in
+                        // `resetPublishedLoadState`, so cold starts and item
+                        // changes unmount until their first frame.
+                        if (!viewModel.isStartingPlayback || viewModel.isHUDPresented) && !viewModel.isHoldSeeking {
                             TVPlayerControls(
                                 viewModel: viewModel,
                                 showsTimelinePreview: isTimelinePreviewVisible,
                                 timeDisplayMode: timelineTimeDisplayMode,
                                 timelineSelectionRequest: timelineSelectionRequest,
+                                bufferingPillFocus: $focusedBufferingAction,
+                                showsCornerCapsule: showsWatchPartySyncCapsule,
                                 onToggleTimeDisplayMode: {
                                     withAnimation(.easeOut(duration: PrairieTheme.fastDuration)) {
                                         timelineTimeDisplayMode.toggle()
                                     }
                                 },
+                                onTimelineScrubbingChange: { isTimelineScrubbing = $0 },
                                 onDismiss: { dismissPlayer() }
                             )
                         }
@@ -263,21 +306,24 @@ struct PlayerView: View {
                         }
                         #else
                         // The full controls overlay (and its close button) only
-                        // mounts once the decoder opens the file, so a standalone
-                        // close control must remain available through a tap
-                        // during the load/buffer phase. tvOS gets this via Menu in
-                        // `onExitCommand`.
-                        if viewModel.isLoading {
+                        // mounts once the load shows its first frame, so a
+                        // standalone close control must remain available through
+                        // a tap while it starts. A later stall keeps the
+                        // controls. tvOS gets this via Menu in `onExitCommand`.
+                        if viewModel.isStartingPlayback {
                             loadingCloseButton
-                        }
-
-                        if !viewModel.isLoading {
+                        } else {
                             // Invisible gestures (tap-to-toggle, double-tap skip,
                             // hold-2×, edge swipes, pinch) live in a dedicated
                             // layer under the button overlay.
                             MobilePlayerGestureLayer(viewModel: viewModel)
+                                // Above the controls while they show, so the
+                                // volume buttons' chip isn't dimmed by the
+                                // scrim. The layer takes no touches then.
+                                .zIndex(viewModel.showControls ? 1 : 0)
                             MobilePlayerControls(
                                 viewModel: viewModel,
+                                showsLoadingSpinner: showsLoadingSpinner,
                                 onDismiss: { dismissPlayer() }
                             )
                         }
@@ -288,17 +334,44 @@ struct PlayerView: View {
 
                     // Outside the playback-only branch, so an end that stopped
                     // short explains itself on the end-of-playback screen too,
-                    // above that screen's video preview.
+                    // above that screen's video preview. The buffering pill
+                    // shares the notice stack, in its top-trailing corner and
+                    // below any notice.
                     #if os(tvOS)
-                    if let identity = remoteIdentityNotice {
-                        RemotePlaybackIdentityNotice(identity: identity)
-                            .transition(.opacity)
-                    } else if let notice = viewModel.presentedNotice {
-                        PlayerNoticeOverlay(notice: notice)
+                    // Below the player menu's panel while it is open, so the
+                    // pill never covers its tabs.
+                    PlayerNoticeStack(pillMinY: viewModel.isHUDPresented ? Self.playerMenuPanelBottom : PrairieTheme.safePadding) {
+                        if let identity = remoteIdentityNotice {
+                            RemotePlaybackIdentityNotice(identity: identity)
+                                .transition(.opacity)
+                        } else if let notice = viewModel.presentedNotice {
+                            PlayerNoticeOverlay(notice: notice)
+                        }
+                        tvBufferingPill
                     }
+                    // Slides in, and out when its timer runs out; an answer
+                    // takes it down at once (see `selectBufferingPrimary`).
+                    .animation(.easeOut(duration: 0.2), value: viewModel.showBufferingPill)
+                    .animation(.easeOut(duration: PrairieTheme.fastDuration), value: viewModel.isHUDPresented)
                     #else
-                    if let notice = viewModel.presentedNotice {
-                        PlayerNoticeOverlay(notice: notice)
+                    // Below the top bar while it shows (two rows in portrait,
+                    // one in landscape), so the pill never covers its buttons.
+                    GeometryReader { proxy in
+                        let portrait = proxy.size.width < proxy.size.height
+                        PlayerNoticeStack(
+                            pillMinY: viewModel.shouldShowMobilePlayerChrome
+                                ? Self.topBarBottom(portrait: portrait)
+                                : PrairieTheme.safePadding
+                        ) {
+                            if let notice = viewModel.presentedNotice {
+                                PlayerNoticeOverlay(notice: notice)
+                            }
+                            mobileBufferingPill
+                        }
+                        // Slides in, and out when its timer runs out; a tap
+                        // takes it down at once (see `selectBufferingPrimary`).
+                        .animation(.easeOut(duration: 0.2), value: viewModel.showBufferingPill)
+                        .animation(.easeOut(duration: 0.2), value: viewModel.shouldShowMobilePlayerChrome)
                     }
                     #endif
                     #if os(iOS)
@@ -306,20 +379,20 @@ struct PlayerView: View {
                     if viewModel.showNextUpScreen { loadingCloseButton }
                     #endif
 
+                    loadingSpinner
+
+                    // A party wait names its reason in the corner. The buffering
+                    // pill, which already says playback is buffering, takes its
+                    // place while it shows.
                     #if os(tvOS)
-                    if let message = watchPartySyncMessage {
-                        PlayerBufferingCapsule(message: message, delay: .milliseconds(500))
-                    } else if viewModel.isLoading || viewModel.isBuffering || viewModel.isReconnecting {
-                        PlayerBufferingCapsule()
-                    }
-                    #else
-                    if viewModel.isLoading || viewModel.isBuffering || viewModel.isReconnecting {
-                        PlayerBufferingCapsule()
+                    if showsWatchPartySyncCapsule, let message = watchPartySyncMessage {
+                        PlayerBufferingCapsule(message: message)
                     }
                     #endif
                 }
             }
         }
+        .playerLoadingSpinnerVisibility(isActive: isLoadingSpinnerActive, isVisible: $showsLoadingSpinner)
         #if os(iOS)
         .onGeometryChange(for: CGSize.self) { $0.size } action: { _ in
             orientationCoordinator.refreshInterfaceOrientation()
@@ -340,7 +413,7 @@ struct PlayerView: View {
                 .opacity(0)
                 .accessibilityHidden(true)
                 .disabled(
-                    viewModel.isLoading || viewModel.error != nil || viewModel.showNextUpScreen
+                    viewModel.isStartingPlayback || viewModel.error != nil || viewModel.showNextUpScreen
                         || showsPartyPanel || !viewModel.canRequestPlayPause
                 )
         }
@@ -355,8 +428,8 @@ struct PlayerView: View {
                 viewModel.togglePlayPause()
             }
         }
-        // Menu button: step seek-session → HUD → (loading: dismiss) → intro pill →
-        // overlay → dismiss.
+        // Menu button: step seek-session → HUD → buffering pill → (starting:
+        // dismiss) → intro pill → overlay → dismiss.
         // Matches the Infuse / Apple TV pattern. Runs at the shell level
         // so it fires even if focus has drifted — the HUD's own
         // `onExitCommand` handles the common case where focus is inside
@@ -369,20 +442,23 @@ struct PlayerView: View {
             } else if viewModel.isHoldSeeking {
                 viewModel.cancelHoldSeek()
             } else if viewModel.isHUDPresented {
-                // Before the `isLoading` escape: a replan issued from the HUD
-                // keeps the HUD mounted while `isLoading` is true, and Menu
-                // during that window must close the HUD, not exit the player.
-                // A genuinely stalled load is still escapable — the first
-                // Menu closes the HUD, the next one lands below.
+                // Before the starting escape: Menu with the HUD open closes
+                // the HUD, not the player. A start that never shows a frame
+                // is still escapable — the first Menu closes the HUD, the
+                // next one lands below.
                 viewModel.closeHUD()
-            } else if viewModel.isLoading {
+            } else if viewModel.dismissBufferingPill() {
+                // Before the starting escape too: the pill can show while a
+                // load starts, and Menu answers it instead of exiting. The
+                // press ends there; the next Menu behaves normally.
+            } else if viewModel.isStartingPlayback {
                 dismissPlayer()
             } else if viewModel.dismissIntroSkipPrompt() {
                 // The intro pill is the most transient thing on screen: Menu
                 // takes it down and the press ends there, so it can neither
                 // hide the controls nor exit. The next Menu behaves normally.
-                // Below the loading escape because the controls, pill
-                // included, are not drawn while a load is in flight.
+                // Below the starting escape because the controls, pill
+                // included, are not drawn while a load starts.
             } else if !viewModel.isPlaying {
                 // While paused, Menu exits the player instead of hiding the
                 // controls over a frozen frame.
@@ -406,6 +482,9 @@ struct PlayerView: View {
             } else {
                 timelineTimeDisplayMode = .elapsedRemaining
             }
+        }
+        .onChange(of: viewModel.bufferingPill?.kind) { _, _ in
+            bufferingSelectTarget = .primary
         }
         #endif
         #if os(iOS)
@@ -489,6 +568,7 @@ struct PlayerView: View {
             activeViewModel.loadAndPlay(
                 contentId: contentId,
                 preferredFileId: preferredFileId,
+                pinsVersion: pinsVersion,
                 preferredAudioTrackIndex: preferredAudioTrackIndex,
                 preferredSubtitleTrackIndex: preferredSubtitleTrackIndex,
                 startFromBeginning: startFromBeginning,
@@ -677,6 +757,12 @@ struct PlayerView: View {
     }
 
     #if os(tvOS)
+    /// The sync capsule is drawn in the top-trailing corner; the buffering
+    /// pill takes that corner while it shows.
+    private var showsWatchPartySyncCapsule: Bool {
+        !showsBufferingPill && watchPartySyncMessage != nil
+    }
+
     private var watchPartySyncMessage: LocalizedStringKey? {
         guard let context = watchPartyContext, viewModel.error == nil,
               let room = WatchPartySession.shared.room,
@@ -694,6 +780,173 @@ struct PlayerView: View {
     }
     #endif
 
+    // MARK: - Loading spinner
+
+    /// Over playback only: the Next Up screen shows its own progress.
+    private var isLoadingSpinnerActive: Bool {
+        viewModel.isWaitingToPlay && !viewModel.showNextUpScreen
+    }
+
+    #if os(iOS)
+    /// While the iPhone and iPad controls show, the spinner takes the
+    /// play/pause button's place instead.
+    private var loadingSpinnerSitsInControls: Bool {
+        !viewModel.isStartingPlayback && viewModel.showControls
+    }
+    #endif
+
+    /// Centered on the picture: above the fold in the tabletop posture, and
+    /// on tvOS below the player menu's panel while it is open.
+    private var loadingSpinner: some View {
+        ZStack {
+            #if os(iOS)
+            if showsLoadingSpinner && !loadingSpinnerSitsInControls {
+                GeometryReader { proxy in
+                    PlayerLoadingSpinner()
+                        .frame(width: proxy.size.width, height: pictureHeight(in: proxy))
+                }
+                .ignoresSafeArea()
+                .transition(.opacity)
+            }
+            #else
+            if showsLoadingSpinner {
+                PlayerLoadingSpinner()
+                    .padding(.top, viewModel.isHUDPresented ? Self.playerMenuPanelBottom : 0)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .ignoresSafeArea()
+                    .transition(.opacity)
+            }
+            #endif
+        }
+        #if os(iOS)
+        // Moves with the controls' own fade.
+        .animation(.easeOut(duration: 0.18), value: loadingSpinnerSitsInControls)
+        #else
+        .animation(.easeOut(duration: PrairieTheme.fastDuration), value: viewModel.isHUDPresented)
+        #endif
+        .allowsHitTesting(false)
+    }
+
+    #if os(iOS)
+    private func pictureHeight(in proxy: GeometryProxy) -> CGFloat {
+        guard let tabletopLayout else { return proxy.size.height }
+        let videoMaxY = tabletopLayout.videoMaxY - proxy.frame(in: .global).minY
+        return min(max(videoMaxY, 0), proxy.size.height)
+    }
+    #endif
+
+    // MARK: - Buffering pill
+
+    /// The buffering prompt or undo pill is drawn. Over playback only: the Next
+    /// Up screen's own controls own the input there.
+    private var showsBufferingPill: Bool {
+        viewModel.showBufferingPill && !viewModel.showNextUpScreen
+    }
+
+    #if os(tvOS)
+    /// A starting load mounts neither the press capture nor the controls, so
+    /// a buffering pill gets a Select-only sink of its own then.
+    private var capturesSelectForBufferingPillWhileLoading: Bool {
+        viewModel.isStartingPlayback && showsBufferingPill && !viewModel.isHUDPresented
+    }
+
+    /// Root Select acts on the pill: a press capture is mounted and no seek
+    /// session claims Select first.
+    private var bufferingPillIsSelectTarget: Bool {
+        if capturesSelectForBufferingPillWhileLoading { return true }
+        return !viewModel.isStartingPlayback && !viewModel.isHUDPresented && !viewModel.showControls &&
+            !viewModel.showSegmentSkip && !viewModel.isHoldSeeking
+    }
+
+    /// One focus owner at a time (docs/tvos-focus.md), as for the intro pill.
+    /// With the controls hidden, or a load starting, a press capture owns the
+    /// remote and routes Select to the pill, so the pill is not focusable. With
+    /// the transport up it is ordinary buttons in the native focus graph, and
+    /// Down moves on to the scrubber while its timer runs. It also leaves the
+    /// graph during a timeline scrub, so a drag that drifts upward cannot land
+    /// here and cancel the scrub, and while the player menu, whose focus graph
+    /// owns the top of the screen, is open.
+    private var bufferingPillTakesFocus: Bool {
+        viewModel.showControls && !viewModel.isStartingPlayback && !viewModel.isHUDPresented &&
+            !viewModel.isHoldSeeking && !isTimelineScrubbing
+    }
+
+    /// Left or Right while the buffering prompt is the Select target: picks
+    /// Lower quality or Keep quality. True when the press was the prompt's.
+    private func moveBufferingSelectTarget(_ direction: TVPressCaptureView.ArrowDirection) -> Bool {
+        guard bufferingPillIsSelectTarget, showsBufferingPill, viewModel.bufferingPill?.kind == .prompt else {
+            return false
+        }
+        switch direction {
+        case .left: bufferingSelectTarget = .primary
+        case .right: bufferingSelectTarget = .secondary
+        case .up, .down: return false
+        }
+        return true
+    }
+
+    /// Select at the player root: the prompt's chosen button, or the pill's
+    /// primary action.
+    private func selectBufferingTarget() {
+        if bufferingSelectTarget == .secondary, viewModel.bufferingPill?.kind == .prompt {
+            viewModel.selectBufferingKeep()
+        } else {
+            viewModel.selectBufferingPrimary()
+        }
+    }
+
+    @ViewBuilder
+    private var tvBufferingPill: some View {
+        if showsBufferingPill, let pill = viewModel.bufferingPill {
+            TVBufferingQualityPill(
+                pill: pill,
+                selectTarget: bufferingPillIsSelectTarget ? bufferingSelectTarget : nil,
+                focus: $focusedBufferingAction,
+                onPrimary: { viewModel.selectBufferingPrimary() },
+                onSecondary: { viewModel.selectBufferingKeep() }
+            )
+            .disabled(!bufferingPillTakesFocus)
+            // Its own focus region, sized to the card: Left and Right move
+            // between its buttons, and Down leaves it for the transport.
+            .focusSection()
+            // The top-trailing corner, below any notice.
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .padding(.horizontal, PrairieTheme.safePadding)
+            .transition(.move(edge: .top).combined(with: .opacity))
+            .playerNoticeStackPill()
+        }
+    }
+    #else
+    @ViewBuilder
+    private var mobileBufferingPill: some View {
+        if showsBufferingPill, let pill = viewModel.bufferingPill {
+            MobileBufferingQualityPill(
+                pill: pill,
+                onPrimary: { viewModel.selectBufferingPrimary() },
+                onSecondary: { viewModel.selectBufferingKeep() }
+            )
+            // The top-trailing corner, below any notice.
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .padding(.horizontal, PrairieTheme.safePadding)
+            .transition(.move(edge: .top).combined(with: .opacity))
+            .playerNoticeStackPill()
+        }
+    }
+    #endif
+
+    #if os(tvOS)
+    /// Where the open player menu's panel ends. The buffering pill and the
+    /// subtitle-sync card sit below it so they never cover its tabs.
+    private static let playerMenuPanelBottom: CGFloat = 560
+    #else
+    /// Where the top bar ends while it shows: two rows in portrait, one in
+    /// landscape. The buffering pill, the subtitle-sync card, and the volume
+    /// chip sit below it.
+    static func topBarBottom(portrait: Bool) -> CGFloat {
+        portrait ? 112 : 64
+    }
+    #endif
+
     /// The sync card for a subtitle sync this viewer started, in the
     /// top-trailing corner. On iOS it moves below the top bar while the
     /// controls show (two rows tall in portrait, one in landscape); on tvOS
@@ -705,7 +958,7 @@ struct PlayerView: View {
             // Below the player menu's panel while it is open, so the card
             // never covers its Options column.
             SubtitleSyncIndicator(notice: notice)
-                .padding(.top, viewModel.isHUDPresented ? 560 : 60)
+                .padding(.top, viewModel.isHUDPresented ? Self.playerMenuPanelBottom : 60)
                 .padding(.trailing, 80)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                 .transition(.opacity)
@@ -715,7 +968,7 @@ struct PlayerView: View {
                 SubtitleSyncIndicator(notice: notice) {
                     viewModel.subtitleSync.dismissNotice()
                 }
-                .padding(.top, viewModel.shouldShowMobilePlayerChrome ? (portrait ? 112 : 64) : 12)
+                .padding(.top, viewModel.shouldShowMobilePlayerChrome ? Self.topBarBottom(portrait: portrait) : 12)
                 .padding(.trailing, 16)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                 .animation(.easeOut(duration: 0.2), value: viewModel.shouldShowMobilePlayerChrome)
@@ -1344,6 +1597,8 @@ struct PlayerNextUpScreen: View {
             return viewModel.nextUpScreenVideoEnded ? "Finished" : "More To Watch"
         }
         if viewModel.shuffleState != nil { return "Up Next at Random" }
+        // An On Deck pick waits for Play Now, so it never reads as playing.
+        if viewModel.nextUpEpisode?.isFromOnDeck == true { return "Up Next" }
         return viewModel.nextUpScreenVideoEnded ? "Playing Next" : "Up Next"
     }
 

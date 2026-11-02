@@ -137,7 +137,7 @@ jobs:
 
   build:
     needs: [setup, release, source]
-    runs-on: macos-15
+    runs-on: xcode-27
     # Only the release-upload step (tag builds) needs write; scope it to the job
     # rather than the whole workflow to keep the rest at least privilege.
     permissions:
@@ -153,7 +153,7 @@ jobs:
           persist-credentials: false  # don't leave GITHUB_TOKEN in git config for xcodegen/SPM
 
       - name: Select Xcode 26
-        run: sudo xcode-select -s /Applications/Xcode_26.3.app
+        run: sudo xcode-select -s /Applications/Xcode_27.1.app
 
       - name: Install XcodeGen (pinned)
         run: |

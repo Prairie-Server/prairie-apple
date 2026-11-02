@@ -26,7 +26,7 @@ concurrency:
 
 jobs:
   unit-tests:
-    runs-on: macos-15
+    runs-on: xcode-27
     timeout-minutes: 30
 
     steps:
@@ -143,6 +143,10 @@ jobs:
             PrairieNetworkingTests/TitleArtPreferencesTests
             PrairieNetworkingTests/TitleArtWritePlanTests
             PrairieNetworkingTests/NetworkingUpstreamGateFillTests
+            PrairieNetworkingTests/SectionRowLimitTests
+            PrairieNetworkingTests/ThemeMusicPreferencesTests
+            PrairieNetworkingTests/ThemeSongsV2Tests
+            PrairieNetworkingTests/NetworkingBoxSetGateFillTests
             # Upstream's local-route and server trickplay suites (Nuke-linked host).
             PrairieNetworkingTests/LocalRouteTests
             PrairieNetworkingTests/LocalRouteControllerTests

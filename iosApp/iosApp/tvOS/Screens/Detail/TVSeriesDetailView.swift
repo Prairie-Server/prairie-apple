@@ -399,7 +399,8 @@ struct TVSeriesDetailView: View {
             // so the first viewport bottoms out on the episode rail: the season
             // row lands at ~690 and the rail finishes just above the bottom
             // safe area with Cast & Crew fully below the fold.
-            heroHeight: TVDetailLayout.heroHeight,
+            heroHeight: TVDetailLayout.heroHeight - heroLift,
+            topInset: TVDetailLayout.heroTopInset - heroLift,
             // Reserves the action controls plus the fixed three-line synopsis slot.
             editorialReservedHeight: 435,
             metadataReservedHeight: 36,
@@ -853,9 +854,12 @@ struct TVSeriesDetailView: View {
     private var episodeRailReservedHeight: CGFloat {
         TVEpisodeRail.anchoredHeight(
             cardWidth: PrairieTheme.thumbnailCardWidth * uiCustomization.cardPresentation.posterSize.scale,
-            cardHeightRatio: PrairieTheme.thumbnailCardHeight / PrairieTheme.thumbnailCardWidth,
-            showsTitle: uiCustomization.cardPresentation.caption.showsTitle
+            cardHeightRatio: PrairieTheme.thumbnailCardHeight / PrairieTheme.thumbnailCardWidth
         )
+    }
+
+    private var heroLift: CGFloat {
+        TVDetailLayout.seriesHeroLift(for: uiCustomization.cardPresentation.posterSize)
     }
 
     private func focusSupportingRail() {

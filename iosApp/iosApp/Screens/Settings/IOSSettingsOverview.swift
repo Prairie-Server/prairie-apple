@@ -118,9 +118,9 @@ struct IOSSettingsOverview: View {
                     } label: {
                         SettingsOverviewRow(
                             title: "Interface",
-                            subtitle: "Navigation, cards, and poster presentation",
+                            subtitle: "Cards, posters, and title pages",
                             systemImage: "rectangle.3.group.fill",
-                            value: uiCustomization.cardPresentation.preset?.title ?? "Custom"
+                            value: uiCustomization.cardPresentation.posterSize.title
                         )
                     }
                 }
@@ -348,7 +348,7 @@ struct IOSSettingsOverview: View {
             if matchesExperimentalName || matchesAudiobooks {
                 SettingsOverviewToggleRow(
                     title: "Show Audiobooks",
-                    subtitle: "Add Audiobooks to the main navigation",
+                    subtitle: "Show audiobook libraries in Libraries and Search",
                     systemImage: "book.closed.fill",
                     isOn: Binding(
                         get: { navPrefs.showAudiobooks },
@@ -388,11 +388,11 @@ struct IOSSettingsOverview: View {
     }
 
     private var matchesPlayback: Bool {
-        matches("playback", "quality", "resolution", "bitrate", "cellular", "mobile data", "audio", "dolby vision", "episodes", "skipping", "skip interval", "rewind", "fast forward", "audiobooks", "spoilers", "blur", "thumbnails", "descriptions")
+        matches("playback", "quality", "resolution", "bitrate", "buffering", "speed", "limit", "cellular", "mobile data", "audio", "dolby vision", "episodes", "skipping", "skip interval", "rewind", "fast forward", "audiobooks", "spoilers", "blur", "thumbnails", "descriptions")
     }
 
     private var matchesInterface: Bool {
-        matches("interface", "appearance", "navigation", "menu", "cards", "posters", "captions")
+        matches("interface", "appearance", "cards", "posters", "title art", "theme music", "theme song")
     }
 
     private var matchesGeneral: Bool {

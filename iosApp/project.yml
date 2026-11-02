@@ -63,7 +63,7 @@ packages:
   # reviewed revision; Package.resolved also freezes its binary dependencies.
   AetherEngine:
     url: https://github.com/Silo-Server/AetherEngine
-    revision: b0712217abb7399aeb21f875bcc7c26e7af92fd8
+    revision: df72cc59606ec823ce6a5231a53d7eee385ed72e
   SwiftAssRenderer:
     url: https://github.com/mihai8804858/swift-ass-renderer
     exactVersion: 1.3.1
@@ -72,9 +72,9 @@ packages:
     exactVersion: 1.4.0
   ViewInspector:
     url: https://github.com/nalexn/ViewInspector
-    # 0.10.4's manifest uses `.visionOS(.v2)` under swift-tools-version 5.9,
-    # which Xcode 26 rejects; stay on 0.10.3 until upstream fixes it.
-    exactVersion: 0.10.3
+    # 0.10.5 supports iOS 27's view tree (Xcode 27) and fixes the
+    # `.visionOS(.v2)` manifest that kept this on 0.10.3.
+    exactVersion: 0.10.5
   Nuke:
     url: https://github.com/kean/Nuke
     from: "13.2.0"
@@ -293,6 +293,7 @@ targets:
       - path: NotificationService
       - path: iosApp/Notifications/ApplePushDisplayMetadata.swift
       - path: iosApp/Notifications/ApplePushDisplayTargets.swift
+      - path: iosApp/Shared/InsecureRedirectGuard.swift
       - path: iosApp/Shared/KeychainAudience.swift
       - path: iosApp/Shared/SharedStorage.swift
     configFiles:
@@ -359,6 +360,8 @@ targets:
       - path: Tests/Fixtures/SettingsContract/SOURCE
         buildPhase: none
       - path: Tests/Fixtures/PlaybackV3/SOURCE
+        buildPhase: none
+      - path: Tests/Fixtures/BufferingQuality/SOURCE
         buildPhase: none
       - path: Tests/Fixtures/APIv2/SOURCE
         buildPhase: none
@@ -466,6 +469,15 @@ targets:
       - path: iosApp/WatchParty/WatchPartySocket.swift
       - path: iosApp/Shared/PrairieURLScheme.swift
       - path: iosApp/Components/Ratings/DisplayRating.swift
+      # HTTPClient, APIv2Client and LocalRouteTrust refuse insecure redirects.
+      - path: iosApp/Shared/InsecureRedirectGuard.swift
+      # PlaybackProtocolV3Models sends the buffering-quality mode and plan summary.
+      - path: iosApp/Screens/Player/BufferingQualityMode.swift
+      - path: iosApp/Screens/Player/BufferingQualityController.swift
+      - path: iosApp/Screens/Player/PlayerPromptClock.swift
+      # TrackSelectionPersistence identifies untagged subtitle picks.
+      - path: iosApp/Screens/Detail/SubtitleTrackCandidates.swift
+      - path: iosApp/Screens/Player/Subtitles/SubtitleTrackIdentity.swift
       - path: CI/NetworkingHost
     dependencies:
       # ServerTrickplaySheets and LocalRouteDataLoader load through Nuke
@@ -587,6 +599,13 @@ targets:
           - ResponseCacheWriteFenceTests.swift
           # Covers the upstream Networking models those app-level suites test.
           - NetworkingUpstreamGateFillTests.swift
+          # Upstream's theme music, theme songs and row-limit suites run on host
+          # types only; box sets' suite drives app view models, so its models and
+          # client reads are covered by the gate-fill suite beside them.
+          - SectionRowLimitTests.swift
+          - ThemeMusicPreferencesTests.swift
+          - ThemeSongsV2Tests.swift
+          - NetworkingBoxSetGateFillTests.swift
       - path: Tests/Fixtures/SettingsContract/conformance.json
         buildPhase: resources
       - path: Tests/Fixtures/APIv2
@@ -648,6 +667,8 @@ targets:
       - path: Tests/Fixtures/SettingsContract/SOURCE
         buildPhase: none
       - path: Tests/Fixtures/PlaybackV3/SOURCE
+        buildPhase: none
+      - path: Tests/Fixtures/BufferingQuality/SOURCE
         buildPhase: none
       - path: Tests/Fixtures/APIv2/SOURCE
         buildPhase: none

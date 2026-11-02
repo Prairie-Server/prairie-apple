@@ -3,11 +3,67 @@ import Foundation
 enum PrairieControlProtocol {
     static let version = 2
     static let supportedVersions = [1, 2]
-    static let serviceType = "_silocast._tcp"
+    static let serviceType = "_prairiecast._tcp"
+    /// The Roku receiver's own advertisement. A separate type, because a
+    /// Roku can't speak TLS and phones that only do aren't to list it.
+    static let rokuServiceType = "_prairiecast-roku._tcp"
 
     static func negotiatedVersion(with peer: [Int]) -> Int? {
         supportedVersions.filter(peer.contains).max()
     }
+}
+
+/// Optional behaviors a peer lists in its hello. Each side uses one only when
+/// the other side listed it too, so new fields, payloads and reasons never
+/// reach a build that would misread them. Peers ignore names they don't know.
+enum PrairieControlFeature {
+    /// The receiver keeps other controllers connected. A `close` from it
+    /// concerns this controller alone, never a takeover.
+    static let multiController = "multi_controller"
+    /// `close` may carry a reason (`PrairieControlCloseReason`).
+    static let closeReason = "close_reason"
+    /// The receiver issues `resumeToken` in `handoff_ready`; the controller
+    /// sends it back to reuse that identity from a later connection.
+    static let resumeToken = "resume_token"
+    /// The receiver refuses a handoff that would replace another profile's
+    /// title with `handoff_cancel` reason `replace_confirmation_required`,
+    /// and the controller resends with `replaceConfirmed` after asking.
+    static let replaceConfirmation = "replace_confirmation"
+    /// The receiver accepts `presence`, so a controller can change its
+    /// `passive` flag without reconnecting.
+    static let presence = "presence"
+    /// The receiver can only mute, not set a level (Roku), so the
+    /// controller offers a mute toggle instead of a volume slider.
+    static let volumeMuteOnly = "volume_mute_only"
+    /// The receiver can't change playback speed (Roku), so the controller
+    /// hides its speed menu.
+    static let noPlaybackSpeed = "no_playback_speed"
+
+    static let receiverFeatures = [multiController, closeReason, resumeToken, replaceConfirmation, presence]
+    static let phoneFeatures = [closeReason, resumeToken, replaceConfirmation]
+}
+
+/// Why a peer closed the session. Sent only to peers that list
+/// `PrairieControlFeature.closeReason`.
+enum PrairieControlCloseReason {
+    /// A newer connection from the same device took this one's place.
+    static let replaced = "replaced"
+    /// Someone disconnected remote control on the TV.
+    static let tvDisconnected = "tv_disconnected"
+    /// The receiver is at its controller limit.
+    static let tooManyControllers = "too_many_controllers"
+    /// The peer never sent hello, or stopped answering pings.
+    static let timeout = "timeout"
+    /// The peer can't be authorized (version or server mismatch).
+    static let unauthorized = "unauthorized"
+    /// A borrowed profile was never used and has been handed back.
+    static let launchTimeout = "launch_timeout"
+}
+
+/// Values for `PrairieControlHello.clientKind`. Absent means a Prairie app.
+enum PrairieControlClientKind {
+    /// A home-automation or other third-party integration.
+    static let integration = "integration"
 }
 
 enum PrairieControlPeerRole: String, Codable, Equatable, Sendable {
@@ -26,6 +82,19 @@ struct PrairieControlHello: Codable, Equatable, Sendable {
     /// it. Lets a phone and a TV on different addresses of one server
     /// recognise each other. Optional on the wire: older peers omit it.
     var serverIdentity: String? = nil
+    /// `PrairieControlFeature` names this peer supports. Absent from older
+    /// peers, which support none of them.
+    var features: [String]? = nil
+    /// A controller that only watches state: a phone's silent auto-resume or
+    /// an integration. It never puts up the TV's standby screen.
+    var passive: Bool? = nil
+    /// `PrairieControlClientKind`. `role` stays `phone` for integrations,
+    /// because shipped receivers fail to decode any other role.
+    var clientKind: String? = nil
+
+    func supports(_ feature: String) -> Bool {
+        features?.contains(feature) == true
+    }
 }
 
 struct PrairieControlPlaybackRequest: Codable, Equatable, Sendable {
@@ -35,6 +104,9 @@ struct PrairieControlPlaybackRequest: Codable, Equatable, Sendable {
     let subtitleTrackIndex: Int?
     let startFromBeginning: Bool
     let resumePosition: Double?
+    /// The viewer picked `fileId` in a version picker: the TV keeps that
+    /// version. Older phones, and Android phones, omit it.
+    var pinsVersion: Bool? = nil
 }
 
 struct PrairieControlLaunchRequest: Codable, Equatable, Sendable {
@@ -54,6 +126,9 @@ struct PrairieControlHandoffOffer: Codable, Equatable, Sendable {
     let profileId: String
     /// Display-only label for the verified profile ID. Older peers omit it.
     let profileName: String?
+    /// Display-only: what the phone is about to launch, for a TV that shows
+    /// it while the handoff runs. Older peers omit and ignore it.
+    var title: String? = nil
     /// The deployment identity the phone verified at `serverURL`. When
     /// present the TV may reach the server through any candidate address
     /// that reports the same identity. Absent from older phones, in which
@@ -62,6 +137,16 @@ struct PrairieControlHandoffOffer: Codable, Equatable, Sendable {
     /// Other addresses the deployment offers, from its connections document.
     /// Public first, then providers. Reachability is the TV's to test.
     var serverEndpoints: [ServerEndpoint]? = nil
+    /// The token from an earlier `handoff_ready`, to reuse that identity
+    /// from a new connection without another approval.
+    var resumeToken: String? = nil
+    /// The user agreed to replace a title another profile started, after the
+    /// TV answered `replace_confirmation_required`.
+    var replaceConfirmed: Bool? = nil
+    /// With `replaceConfirmed`: the `contentId` of the title the user agreed
+    /// to replace. The TV honors the confirmation only while that title is
+    /// still the one on screen.
+    var replacingContentId: String? = nil
 
     /// Whether `serverId` is the registry key of `serverURL`
     /// (`ServerRegistry.serverId(for:)`). A TV refuses an offer that fails
@@ -85,12 +170,51 @@ struct PrairieControlHandoffReady: Codable, Equatable, Sendable {
     let profileId: String
     let sessionExpiresAt: String
     let reused: Bool
+    /// Proof for reusing this identity from a later connection. Sent only to
+    /// controllers that list `PrairieControlFeature.resumeToken`, over the
+    /// session's TLS channel; never shared with other controllers.
+    var resumeToken: String? = nil
 }
 
 struct PrairieControlHandoffCancel: Codable, Equatable, Sendable {
     let requestId: String
     let reason: String
     let message: String?
+    /// With reason `replace_confirmation_required`: the title the handoff
+    /// would replace, so the controller can ask its user.
+    var nowPlaying: PrairieControlNowPlayingSummary? = nil
+}
+
+enum PrairieControlHandoffCancelReason {
+    /// A newer handoff from another controller replaced this one, or another
+    /// controller's identity is now active.
+    static let superseded = "superseded"
+    /// The handoff would replace a title another profile started. Resend the
+    /// offer with `replaceConfirmed` once the user agrees.
+    static let replaceConfirmationRequired = "replace_confirmation_required"
+}
+
+/// What a controller needs to ask "Replace what Alex is watching?".
+struct PrairieControlNowPlayingSummary: Codable, Equatable, Sendable {
+    let contentId: String?
+    let title: String
+    let subtitle: String?
+    let profileName: String?
+    let controllerName: String?
+}
+
+/// The user's agreement to replace one particular title on the TV, carried
+/// from the prompt to the offer's `replacingContentId`.
+struct PrairieControlReplaceConsent: Equatable, Sendable {
+    /// The title the user saw when agreeing; nil when the TV didn't say.
+    let contentId: String?
+}
+
+/// A controller's `passive` flag after hello. Sent only to receivers that
+/// list `PrairieControlFeature.presence`; older receivers drop the connection
+/// on a message type they don't know.
+struct PrairieControlPresence: Codable, Equatable, Sendable {
+    let passive: Bool
 }
 
 struct PrairieControlTrack: Codable, Equatable, Identifiable, Sendable {
@@ -146,6 +270,13 @@ struct PrairieControlPlaybackState: Codable, Equatable, Sendable {
     let hasNextEpisode: Bool
     let nextEpisodeTitle: String?
     let error: String?
+    /// Absolute, signed poster URL for the playing title (the series poster
+    /// for an episode), so an integration can fetch artwork without its own
+    /// Prairie sign-in. The TV re-signs it before it expires. Omitted when
+    /// unknown; older peers ignore it.
+    var posterUrl: String? = nil
+    /// Synopsis of the playing title. Omitted when unknown.
+    var overview: String? = nil
 }
 
 /// Thrown by `PrairieControlCommand.init(from:)` for a command name this build
@@ -298,17 +429,30 @@ enum PrairieControlMessage: Equatable, Sendable {
     /// implement — typically a v2 peer that predates the command's removal.
     /// Receivers ignore it; the connection survives.
     case unsupportedControl(name: String)
+    /// A frame whose `type` this build doesn't know — typically a newer peer
+    /// using a message added after this build shipped. Receivers ignore it;
+    /// the connection survives. A known `type` with a malformed payload is
+    /// still a decode error.
+    case unsupported(type: String)
     case state(PrairieControlPlaybackState)
     case error(PrairieControlErrorMessage)
+    case presence(PrairieControlPresence)
     case ping
     case pong
-    case close
+    /// `reason` is a `PrairieControlCloseReason`, sent only to peers that list
+    /// `PrairieControlFeature.closeReason`; older peers get a bare `close`.
+    case close(reason: String?)
+}
+
+/// The optional `close` payload.
+private struct PrairieControlClosePayload: Codable {
+    let reason: String
 }
 
 extension PrairieControlMessage: Codable {
     private enum CodingKeys: String, CodingKey {
         case type, v
-        case hello, launch, control, state, error
+        case hello, launch, control, state, error, close, presence
         case handoffOffer, handoffChallenge, handoffReady, handoffCancel
     }
 
@@ -322,6 +466,7 @@ extension PrairieControlMessage: Codable {
         case control
         case state
         case error
+        case presence
         case ping
         case pong
         case close
@@ -366,18 +511,36 @@ extension PrairieControlMessage: Codable {
         case .error(let error):
             try c.encode(Kind.error, forKey: .type)
             try c.encode(error, forKey: .error)
+        case .presence(let presence):
+            try c.encode(Kind.presence, forKey: .type)
+            try c.encode(presence, forKey: .presence)
         case .ping:
             try c.encode(Kind.ping, forKey: .type)
         case .pong:
             try c.encode(Kind.pong, forKey: .type)
-        case .close:
+        case .close(let reason):
             try c.encode(Kind.close, forKey: .type)
+            if let reason {
+                try c.encode(PrairieControlClosePayload(reason: reason), forKey: .close)
+            }
+        case .unsupported(let type):
+            // Re-emit the original type so the frame round-trips back to
+            // `.unsupported`. The payload is dropped: this build can't
+            // interpret it.
+            try c.encode(type, forKey: .type)
         }
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        let kind = try c.decode(Kind.self, forKey: .type)
+        // Decode `type` as a raw string rather than letting the `Kind` enum
+        // reject it: `FramedJSONSession` tears the connection down on any
+        // decode error, so one frame from a newer peer would end the session.
+        let rawType = try c.decode(String.self, forKey: .type)
+        guard let kind = Kind(rawValue: rawType) else {
+            self = .unsupported(type: rawType)
+            return
+        }
         switch kind {
         case .hello:
             self = .hello(try c.decode(PrairieControlHello.self, forKey: .hello))
@@ -401,12 +564,15 @@ extension PrairieControlMessage: Codable {
             self = .state(try c.decode(PrairieControlPlaybackState.self, forKey: .state))
         case .error:
             self = .error(try c.decode(PrairieControlErrorMessage.self, forKey: .error))
+        case .presence:
+            self = .presence(try c.decode(PrairieControlPresence.self, forKey: .presence))
         case .ping:
             self = .ping
         case .pong:
             self = .pong
         case .close:
-            self = .close
+            let payload = try? c.decodeIfPresent(PrairieControlClosePayload.self, forKey: .close)
+            self = .close(reason: payload?.reason)
         }
     }
 }
