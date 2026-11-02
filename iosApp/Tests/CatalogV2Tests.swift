@@ -50,9 +50,11 @@ final class CatalogV2Tests: XCTestCase {
 
         // A search result opens its series; the loading frame keeps the
         // series backdrop, which spoiler protection never hides.
+#if !PRAIRIE_NETWORKING_HOST
         let seed = TVItemDetailRouteSeed(browse)
         XCTAssertEqual(seed.backdropUrl, "https://img.example/series-bg.jpg")
         XCTAssertEqual(seed.backdropIsEpisodeStill, false)
+#endif
 
         var body = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(detailJSON.utf8)) as? [String: Any])
         body["type"] = "episode"
@@ -75,7 +77,9 @@ final class CatalogV2Tests: XCTestCase {
         let episode = try decoder.decode(SectionItem.self, from: Data(#"{"content_id":"e1","type":"episode","title":"Pilot","backdrop_url":"https://img.example/still.jpg"}"#.utf8))
         XCTAssertNil(episode.episodeSeriesBackdrop)
         XCTAssertNil(episode.episodeShowPoster)
+#if !PRAIRIE_NETWORKING_HOST
         XCTAssertEqual(TVItemDetailRouteSeed(episode).backdropUrl, "https://img.example/still.jpg")
+#endif
         let movie = try decoder.decode(SectionItem.self, from: Data(#"{"content_id":"m1","type":"movie","title":"Film","series_backdrop_url":"https://img.example/other.jpg"}"#.utf8))
         XCTAssertNil(movie.episodeSeriesBackdrop)
     }

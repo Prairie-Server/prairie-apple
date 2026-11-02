@@ -157,7 +157,7 @@ final class APIv2WireModelsTests: XCTestCase {
         XCTAssertEqual(mapped["subtitle_mode"] as? String, "always")
 
         let create = try object(APIv2ProfileCreate(name: "Kids", avatar: "🐯", pin: nil, isChild: true,
-            maxContentRating: "PG", libraryRestrictionsEnabled: false, allowedLibraryIds: []))
+            maxContentRating: "PG", libraryRestrictionsEnabled: false, allowedLibraryIds: [], requestsAllowed: nil))
         XCTAssertEqual(create["name"] as? String, "Kids")
         XCTAssertEqual(create["is_child"] as? Bool, true)
         XCTAssertNil(create["pin"])
