@@ -5,6 +5,8 @@ import XCTest
 /// Level `sealed` against the vectors in prairie-roku's
 /// `tests/control/sealed.spec.bs`, which come from Node's crypto module, so
 /// the phone, the Roku and the Node controller all build the same frames.
+/// Recomputed for the `prairie-cast-sealed-1` label (upstream uses
+/// `silo-cast-sealed-1`).
 final class PrairieControlSealedTests: XCTestCase {
     private func hex(_ text: String) -> Data {
         var out = Data()
@@ -33,9 +35,9 @@ final class PrairieControlSealedTests: XCTestCase {
 
     func testNamesTheKeyAndDerivesTheSessionKeys() {
         XCTAssertEqual(PrairieControlSealed.keyId(key), "be45cb26")
-        XCTAssertEqual(hexString(keys.encryption), "239a09219f1c09a91e710d3c90e16a4d")
-        XCTAssertEqual(hexString(keys.authentication), "066768a42738a935b7ff4148306d0aaf4650844fbfa39191e41e9cdfea22fafe")
-        XCTAssertEqual(hexString(keys.iv), "3816333626975d56fe75bbe953ab0834")
+        XCTAssertEqual(hexString(keys.encryption), "de4408ef0430df2420f995f133eefda8")
+        XCTAssertEqual(hexString(keys.authentication), "893dad33d613cc5e388b578ff53a9b8f27e9d3af04088f907b5690c5026d8e86")
+        XCTAssertEqual(hexString(keys.iv), "3f808d9779b57fb50f67a59dac88e257")
     }
 
     func testReadsTheKeyFromThePairingLinksBase32() {
@@ -49,11 +51,11 @@ final class PrairieControlSealedTests: XCTestCase {
             Data(#"{"type":"pong","v":2}"#.utf8), keys: keys, direction: PrairieControlSealed.fromPhone,
             seq: 1, iv: hex("ffeeddccbbaa99887766554433221100")
         )
-        XCTAssertEqual(hexString(body), "0000000000000001ffeeddccbbaa99887766554433221100d6cffafe6c10c438a7bb4a4418b0e3e7e1ba097b39d777647df0c04ad0d79684d56990d6c483611bdfc4acf0b7d16c06ff0c50c169f9739cd58a17445e0daeec")
+        XCTAssertEqual(hexString(body), "0000000000000001ffeeddccbbaa998877665544332211001e5a6529eac949e50135295d2a2db70480347b2340c8493d25ac3f86bac2b586dc5c559e11e77ec302821eb802b3273d530a9e835850c3a4d1702602e6bc20f5")
     }
 
     func testOpensARokuFrame() throws {
-        let body = hex("0000000000000000e3c9c8e329cba6d9317f6e0442a21dd98277e1fd6de898e0832b3578392e71044f28b35fe6b56267e20d49e56e19cf095275faead9fe27b5d6cd3e7cba162cf9d3e5dead6001a4eb0e596a8ac45b2011")
+        let body = hex("0000000000000000e3c9c8e329cba6d9317f6e0442a21dd969b8d650fe4663789e80397f935b3a8497c3ce913b7b0d69f33ea9f748ca5be64600b830e4719704f026113ebd311fe164773a1d17b2ea8c66800574f614cbf0")
         let text = try PrairieControlSealed.open(body, keys: keys, direction: PrairieControlSealed.fromTV, seq: 0)
         XCTAssertEqual(String(decoding: text, as: UTF8.self), #"{"type":"ping","v":2}"#)
     }

@@ -356,7 +356,7 @@ final class BufferingQualityContractTests: XCTestCase {
         XCTAssertEqual(stub.requestedPaths, ["/api/v2/playback/connection", "/api/v2/playback/connection/learned-limit"])
         for request in stub.requests {
             XCTAssertEqual(request.header("x-profile-id"), "profile-one")
-            XCTAssertEqual(request.header("x-silo-device-id"), AppleDeviceIdentity.current.id)
+            XCTAssertEqual(request.header("x-prairie-device-id"), AppleDeviceIdentity.current.id)
             XCTAssertNil(request.body.flatMap { $0.isEmpty ? nil : $0 }, "neither request has a body")
         }
 

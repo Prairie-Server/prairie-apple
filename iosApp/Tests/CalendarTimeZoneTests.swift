@@ -14,10 +14,11 @@ final class CalendarTimeZoneTests: XCTestCase {
             requests.append((start, end, timezone))
             throw CancellationError()
         }
-        // Monday 2 November 2026 in Auckland is still Sunday in Los Angeles.
+        // A past week, so the selected day is the week's start, not today.
+        // Monday 2 November 2020 in Auckland is still Sunday in Los Angeles.
         var calendar = Calendar(identifier: .iso8601)
         calendar.timeZone = auckland
-        let wednesday = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 11, day: 4, hour: 12)))
+        let wednesday = try XCTUnwrap(calendar.date(from: DateComponents(year: 2020, month: 11, day: 4, hour: 12)))
         viewModel.week = CalendarWeek(containing: wednesday, timeZone: auckland)
 
         await viewModel.load()
@@ -25,8 +26,8 @@ final class CalendarTimeZoneTests: XCTestCase {
         await viewModel.load()
 
         XCTAssertEqual(requests.map(\.timezone), ["Pacific/Auckland", "America/Los_Angeles"])
-        XCTAssertEqual(requests.map(\.start), ["2026-11-02", "2026-11-02"])
-        XCTAssertEqual(requests.map(\.end), ["2026-11-08", "2026-11-08"])
+        XCTAssertEqual(requests.map(\.start), ["2020-11-02", "2020-11-02"])
+        XCTAssertEqual(requests.map(\.end), ["2020-11-08", "2020-11-08"])
         XCTAssertEqual(viewModel.week.days.count, 7)
         XCTAssertEqual(viewModel.selectedDay, viewModel.week.startDate)
     }
