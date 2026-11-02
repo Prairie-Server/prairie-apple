@@ -6,9 +6,12 @@ import SwiftUI
 /// rows live in a `List` instead of a native `Menu`.
 struct TrackSelectionSheet: View {
     let viewModel: PlayerViewModel
+    /// A sheet this one opened covers the whole player.
+    @Binding var nestedSheetCoversPlayer: Bool
     let onDismiss: () -> Void
 
     @State private var showAITranslateMenu = false
+    @State private var translateDetent: PresentationDetent = .medium
     @State private var showSubtitleSearchMenu = false
 
     private var aiSubtitlesAvailable: Bool {
@@ -34,12 +37,15 @@ struct TrackSelectionSheet: View {
                     }
                 }
 
-                if aiSubtitlesAvailable || viewModel.subtitleSearchVisible {
+                if aiSubtitlesAvailable || viewModel.subtitleSearchEnabled {
                     subtitleToolsSection
                 }
             }
             .listStyle(.insetGrouped)
-            .onAppear { viewModel.refreshSubtitleSync() }
+            .onAppear {
+                viewModel.refreshSubtitleSync()
+                viewModel.refreshSubtitleProviders()
+            }
             .navigationTitle("Audio & Subtitles")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -57,7 +63,7 @@ struct TrackSelectionSheet: View {
                     onDismiss()
                 }
             )
-            .presentationDetents([.medium, .large])
+            .presentationDetents([.medium, .large], selection: $translateDetent)
         }
         .sheet(isPresented: $showSubtitleSearchMenu) {
             SubtitleSearchMenu(
@@ -70,6 +76,16 @@ struct TrackSelectionSheet: View {
             )
             .presentationDetents([.large])
         }
+        .onChange(of: showAITranslateMenu) { _, shown in
+            if !shown { translateDetent = .medium }
+        }
+        .onChange(of: nestedCovers, initial: true) { _, covers in
+            nestedSheetCoversPlayer = covers
+        }
+    }
+
+    private var nestedCovers: Bool {
+        showSubtitleSearchMenu || (showAITranslateMenu && translateDetent == .large)
     }
 
     @ViewBuilder
@@ -111,13 +127,16 @@ struct TrackSelectionSheet: View {
             let isSelected = isSecondary
                 ? viewModel.selectedSecondarySubtitleId == track.trackId
                 : viewModel.selectedSubtitleId == track.trackId
-            let isDisabled = isSecondary && viewModel.selectedSubtitleId == track.trackId
+            let isDisabled = track.hasUnsupportedFormat
+                || isSecondary && viewModel.selectedSubtitleId == track.trackId
 
             TrackSelectionRow(
                 name: track.primaryLabel,
                 detail: track.detailLabel,
                 pills: track.attributePillLabels(),
-                status: viewModel.subtitleSyncStatus(for: track),
+                status: track.hasUnsupportedFormat
+                    ? PlayerTrack.unsupportedFormatLabel
+                    : viewModel.subtitleSyncStatus(for: track),
                 isSelected: isSelected,
                 isDisabled: isDisabled
             ) {
@@ -208,20 +227,12 @@ struct TrackSelectionSheet: View {
                 }
             }
 
-            if viewModel.subtitleSearchVisible {
+            if viewModel.subtitleSearchEnabled {
                 Button {
                     showSubtitleSearchMenu = true
                 } label: {
-                    Label {
-                        Text("Search Subtitles…")
-                        if let reason = viewModel.subtitleSearchUnavailableReason {
-                            Text(reason)
-                        }
-                    } icon: {
-                        Image(systemName: "magnifyingglass")
-                    }
+                    Label("Search Subtitles…", systemImage: "magnifyingglass")
                 }
-                .disabled(!viewModel.subtitleSearchEnabled)
             }
         }
     }

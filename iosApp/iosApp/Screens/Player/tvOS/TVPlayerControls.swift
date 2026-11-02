@@ -27,7 +27,18 @@ struct TVPlayerControls: View {
     let showsTimelinePreview: Bool
     let timeDisplayMode: TVPlayerTimeDisplayMode
     let timelineSelectionRequest: UUID?
+    /// The buffering pill's buttons. The shell draws the pill at the notice
+    /// position, outside this overlay, but it follows the intro pill's focus
+    /// rules, which live here.
+    let bufferingPillFocus: FocusState<TVBufferingQualityPill.Action?>.Binding
+    /// The shell's Watch Party sync capsule holds the top-trailing corner,
+    /// so the status column starts below it.
+    let showsCornerCapsule: Bool
     let onToggleTimeDisplayMode: () -> Void
+    /// Reports the explicit timeline scrub, so the shell can take the
+    /// buffering pill out of the focus graph during it as `introSkipLayer`
+    /// does for the intro pill.
+    let onTimelineScrubbingChange: (Bool) -> Void
     let onDismiss: () -> Void
 
     @Environment(\.scenePhase) private var scenePhase
@@ -167,9 +178,33 @@ struct TVPlayerControls: View {
                 // Hand focus back to the transport when the pill disappears
                 // while controls are still up, instead of leaving nothing
                 // focused. A viewer who already moved onto the transport keeps
-                // their place.
+                // their place. A buffering pill that was waiting on this one
+                // shows in the same update and takes the hand-off itself.
                 if viewModel.showControls && !isHUDPresented &&
-                    focusedTransportButton == nil && !isScrubberFocused {
+                    focusedTransportButton == nil && !isScrubberFocused &&
+                    !viewModel.showBufferingPill {
+                    isScrubberFocused = true
+                }
+            }
+        }
+        // The buffering pill follows the intro pill's rules: it takes focus as
+        // it appears unless the viewer is mid-interaction, and hands it back
+        // to the transport when it goes. Keyed on the kind, so a prompt that
+        // becomes an undo pill lands on its new primary action.
+        .onChange(of: viewModel.bufferingPill?.kind) { _, kind in
+            if kind != nil {
+                if viewModel.showControls && !isHUDPresented &&
+                    !isTimelineScrubbing && !viewModel.isScrubbing {
+                    bufferingPillFocus.wrappedValue = .primary
+                }
+            } else {
+                bufferingPillFocus.wrappedValue = nil
+                // The controller holds a buffering pill back while a skip pill
+                // shows, so a skip pill appearing in the same update takes the
+                // hand-off instead.
+                if viewModel.showControls && !isHUDPresented &&
+                    focusedTransportButton == nil && !isScrubberFocused &&
+                    !viewModel.showIntroSkip && !viewModel.showSegmentSkip {
                     isScrubberFocused = true
                 }
             }
@@ -185,8 +220,11 @@ struct TVPlayerControls: View {
                 isSegmentSkipFocused = false
                 // A recap ends where the intro pill often appears. Keep the
                 // viewer on the intro pill or a transport button they moved to.
+                // A buffering pill held back by this one shows in the same
+                // update and takes the hand-off itself.
                 if viewModel.showControls && !isHUDPresented &&
-                    focusedTransportButton == nil && !isIntroSkipFocused {
+                    focusedTransportButton == nil && !isIntroSkipFocused &&
+                    !viewModel.showBufferingPill {
                     isScrubberFocused = true
                 }
             }
@@ -206,6 +244,14 @@ struct TVPlayerControls: View {
         }
         .onChange(of: viewModel.showControls) { _, _ in
             fullHUDContactCanToggle = false
+        }
+        .onChange(of: isTimelineScrubbing) { _, scrubbing in
+            onTimelineScrubbingChange(scrubbing)
+        }
+        // The scrub state goes with this overlay; don't leave the shell's copy
+        // holding the pill out of the focus graph after an unmount mid-scrub.
+        .onDisappear {
+            if isTimelineScrubbing { onTimelineScrubbingChange(false) }
         }
         // Select during the AI subtitles "Preparing" pause lands on the
         // scrubber and opens a scrub preview. When the AI job then resumes
@@ -227,8 +273,14 @@ struct TVPlayerControls: View {
         .onChange(of: focusedTransportButton) { _, target in
             if target != nil { rearmAutoHideOnFocusMove() }
         }
-        // TV sleep discards the app's focus state, and the background-suspend
-        // path keeps `showControls` true — so on wake the idle overlay is
+        // The buffering pill's buttons too: controls that hid with focus on
+        // Keep quality would let the next Select send Lower quality.
+        .onChange(of: bufferingPillFocus.wrappedValue) { _, target in
+            if target != nil { rearmAutoHideOnFocusMove() }
+        }
+        // TV sleep discards the app's focus state, and a Watch Party player
+        // stays open through it (others close when the app leaves the
+        // foreground) with `showControls` true — so on wake the idle overlay is
         // already mounted, its `onAppear` seed never re-fires, and nothing is
         // focused. With no focused descendant, Menu presses never reach the
         // shell-level `onExitCommand` in PlayerView, stranding the user until
@@ -251,7 +303,11 @@ struct TVPlayerControls: View {
         } else if viewModel.showControls {
             // The skip pills are disabled during a timeline scrub, so a claim
             // on them would land nowhere; the scrubber owns focus then.
-            if viewModel.showIntroSkip && !isTimelineScrubbing && !isIntroSkipFocused {
+            if viewModel.showBufferingPill && !isTimelineScrubbing {
+                if bufferingPillFocus.wrappedValue == nil {
+                    bufferingPillFocus.wrappedValue = .primary
+                }
+            } else if viewModel.showIntroSkip && !isTimelineScrubbing && !isIntroSkipFocused {
                 isIntroSkipFocused = true
             } else if viewModel.showSegmentSkip && !isTimelineScrubbing && !isSegmentSkipFocused {
                 isSegmentSkipFocused = true
@@ -286,7 +342,7 @@ struct TVPlayerControls: View {
         ZStack(alignment: .bottom) {
             bottomGradient.ignoresSafeArea()
             statusColumn
-                .padding(.top, viewModel.isBuffering ? 120 : 64)
+                .padding(.top, showsCornerCapsule ? 120 : 64)
                 .padding(.horizontal, 80)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             TVScrubPreviewLayer(viewModel: viewModel)
@@ -296,13 +352,17 @@ struct TVPlayerControls: View {
         }
         .onAppear {
             focusedTransportButton = nil
-            // When the intro-skip pill is showing, let it own first focus
-            // instead of racing this scrubber seed — otherwise revealing the
-            // controls while it is up lands focus nondeterministically on the
-            // scrubber or the pill. A timeline selection that revealed the
-            // controls keeps the scrubber: the pills are disabled mid-scrub.
+            // When a buffering or intro-skip pill is showing, let it own
+            // first focus instead of racing this scrubber seed — otherwise
+            // revealing the controls while it is up lands focus
+            // nondeterministically on the scrubber or the pill. A timeline
+            // selection that revealed the controls keeps the scrubber: the
+            // pills are disabled mid-scrub.
             if isTimelineScrubbing {
                 isScrubberFocused = true
+            } else if viewModel.showBufferingPill {
+                isScrubberFocused = false
+                bufferingPillFocus.wrappedValue = .primary
             } else if viewModel.showIntroSkip {
                 isScrubberFocused = false
                 isIntroSkipFocused = true
@@ -430,8 +490,9 @@ struct TVPlayerControls: View {
                     }
                 },
                 onExitWhenIdle: {
-                    // The intro pill is the most transient thing on screen, so
-                    // Menu takes it down first and the press ends there.
+                    // The pills are the most transient things on screen, so
+                    // Menu takes one down first and the press ends there.
+                    if viewModel.dismissBufferingPill() { return }
                     if viewModel.dismissIntroSkipPrompt() { return }
                     // While paused, Menu exits the player instead of hiding
                     // the controls over a frozen frame.

@@ -231,7 +231,8 @@ enum OfflinePlaybackBuilder {
             chapters: manifest.chapters,
             intro: manifest.intro,
             credits: manifest.credits,
-            recap: manifest.recap
+            recap: manifest.recap,
+            markerSegments: manifest.markerSegments
         )
 
         let watchDetail = WatchDetail(

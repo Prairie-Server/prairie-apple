@@ -2,6 +2,38 @@
 import Foundation
 import SwiftUI
 
+extension View {
+    /// Shows the TV remote as a sheet, or over the whole window where an
+    /// iPhone sheet can't fill it. On the iPhone Duo's open display iOS 27.1
+    /// caps a sheet at about 650pt wide, and on its folded screen the sheet
+    /// is an inset card with the page showing at its edges, so on both the
+    /// remote covers the window. Its Minimize button closes it.
+    ///
+    /// When `coversWindow` changes while the remote is up, it moves between
+    /// the two, and the one it leaves must not close it.
+    func prairieRemoteControl(
+        isPresented: Binding<Bool>,
+        coversWindow: Bool,
+        controller: PrairieControlClient,
+        onDismiss: (() -> Void)? = nil
+    ) -> some View {
+        let covers = coversWindow && UIDevice.current.userInterfaceIdiom == .phone
+        return sheet(isPresented: Binding(
+            get: { isPresented.wrappedValue && !covers },
+            set: { if $0 || !covers { isPresented.wrappedValue = $0 } }
+        ), onDismiss: onDismiss) {
+            PrairieControlRemoteView(controller: controller)
+                .presentationDetents([.large])
+        }
+        .fullScreenCover(isPresented: Binding(
+            get: { isPresented.wrappedValue && covers },
+            set: { if $0 || covers { isPresented.wrappedValue = $0 } }
+        ), onDismiss: onDismiss) {
+            PrairieControlRemoteView(controller: controller)
+        }
+    }
+}
+
 /// Full-screen TV remote: connection states, toolbar, and hardware-volume
 /// interception around `RemoteNowPlayingContent`.
 struct PrairieControlRemoteView: View {
@@ -54,6 +86,21 @@ struct PrairieControlRemoteView: View {
             .sheet(isPresented: $isShowingPicker) {
                 PrairieControlTargetPickerView(request: nil, controller: controller)
             }
+            .alert(
+                "Replace What's Playing?",
+                isPresented: Binding(
+                    get: { controller.pendingReplace != nil },
+                    // Buttons run before the alert dismisses, so Replace has
+                    // already taken the pending launch by the time this fires.
+                    set: { if !$0 { controller.cancelReplace() } }
+                ),
+                presenting: controller.pendingReplace
+            ) { _ in
+                Button("Replace") { controller.confirmReplace() }
+                Button("Cancel", role: .cancel) { controller.cancelReplace() }
+            } message: { pending in
+                Text(pending.message)
+            }
         }
         .preferredColorScheme(.dark)
         .onAppear {
@@ -65,6 +112,7 @@ struct PrairieControlRemoteView: View {
         .onDisappear { volumeButtons.stop() }
         .onChange(of: scenePhase) { updateVolumeInterception() }
         .onChange(of: hasActivePlayback) { updateVolumeInterception() }
+        .onChange(of: controller.volumeIsMuteOnly) { updateVolumeInterception() }
         .task(id: controller.state?.contentId) {
             await artwork.resolve(contentId: controller.state?.contentId)
         }
@@ -79,9 +127,10 @@ struct PrairieControlRemoteView: View {
 
     /// Hardware-volume interception is live only while the scene is active and
     /// the TV is actually playing something: an inactive scene must return the
-    /// buttons to the phone, and without playback a press reaches nothing.
+    /// buttons to the phone, and without playback a press reaches nothing. A
+    /// TV that can only mute has no level for the buttons to step.
     private func updateVolumeInterception() {
-        if scenePhase == .active, hasActivePlayback {
+        if scenePhase == .active, hasActivePlayback, !controller.volumeIsMuteOnly {
             volumeButtons.start()
         } else {
             volumeButtons.stop()
@@ -105,6 +154,8 @@ struct PrairieControlRemoteView: View {
                 skipIntervals: controller.skipIntervals,
                 onSeek: { controller.seekOptimistic(to: $0) },
                 onPlayNext: { controller.playNext() },
+                volumeIsMuteOnly: controller.volumeIsMuteOnly,
+                supportsPlaybackSpeed: controller.supportsPlaybackSpeed,
                 onSetVolume: { controller.setVolume($0) },
                 onSetMuted: { controller.setMuted($0) }
             )
@@ -135,7 +186,9 @@ struct PrairieControlRemoteView: View {
             Text("Reconnecting to \(controller.lastTarget?.name ?? "Prairie TV")…")
                 .font(.headline)
                 .foregroundStyle(Color.prairieSecondaryText)
-            Text("Make sure the TV is on and on the same network.")
+            Text(controller.lastTarget?.transport.isRoku == true
+                 ? "Make sure Prairie is open on the Roku and it's on the same network."
+                 : "Make sure the TV is on and on the same network.")
                 .font(.subheadline)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(Color.prairieSecondaryText)
@@ -197,6 +250,10 @@ private struct RemoteNowPlayingContent: View {
     let skipIntervals: SeekIntervalPair
     let onSeek: (Double) -> Void
     let onPlayNext: () -> Void
+    /// The TV can mute but not set a level: a mute toggle replaces the slider.
+    var volumeIsMuteOnly = false
+    /// False for a TV that can't change speed: the speed menu is hidden.
+    var supportsPlaybackSpeed = true
     let onSetVolume: (Double) -> Void
     let onSetMuted: (Bool) -> Void
 
@@ -204,6 +261,24 @@ private struct RemoteNowPlayingContent: View {
     @State private var scrubSettleTask: Task<Void, Never>?
 
     var body: some View {
+        GeometryReader { proxy in
+            if Self.splits(proxy.size) {
+                splitLayout
+            } else {
+                stackedLayout
+            }
+        }
+    }
+
+    /// A wide, short iPhone window (the iPhone Duo's open display) puts
+    /// what's playing beside the controls instead of stacking them in its
+    /// height. iPad keeps the stacked remote.
+    static func splits(_ size: CGSize) -> Bool {
+        UIDevice.current.userInterfaceIdiom == .phone
+            && size.width >= 700 && size.width >= size.height * 1.2
+    }
+
+    private var stackedLayout: some View {
         VStack(spacing: 0) {
             artwork
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -214,12 +289,44 @@ private struct RemoteNowPlayingContent: View {
             transport.padding(.top, 20)
             volumeRow.padding(.top, 20)
             secondaryControls.padding(.top, 20)
-            if let error = state.error, !error.isEmpty {
-                errorBanner(error).padding(.top, 12)
-            }
+            errorRow
         }
         .padding(.horizontal, 24)
         .padding(.bottom, 12)
+    }
+
+    private var splitLayout: some View {
+        HStack(spacing: 48) {
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                artwork
+                titleBlock.padding(.top, 20)
+                playingOnPill.padding(.top, 10)
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity)
+
+            // Controls sit at the bottom, within reach of the thumbs.
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                scrubber
+                transport.padding(.top, 32)
+                volumeRow.padding(.top, 32)
+                secondaryControls.padding(.top, 32)
+                errorRow
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .padding(.horizontal, 32)
+        .padding(.top, 16)
+        .padding(.bottom, 24)
+    }
+
+    @ViewBuilder
+    private var errorRow: some View {
+        if let error = state.error, !error.isEmpty {
+            errorBanner(error).padding(.top, 12)
+        }
     }
 
     private var artwork: some View {
@@ -402,7 +509,29 @@ private struct RemoteNowPlayingContent: View {
         .buttonStyle(.plain)
     }
 
+    @ViewBuilder
     private var volumeRow: some View {
+        if volumeIsMuteOnly {
+            muteToggle
+        } else {
+            volumeSlider
+        }
+    }
+
+    private var muteToggle: some View {
+        Button { onSetMuted(!state.isMuted) } label: {
+            Label(state.isMuted ? "Unmute" : "Mute",
+                  systemImage: state.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, 18)
+                .padding(.vertical, 10)
+                .background(Capsule().fill(Color.prairieChromeRestingFill))
+        }
+        .foregroundStyle(Color.prairieOnSurface)
+        .buttonStyle(.plain)
+    }
+
+    private var volumeSlider: some View {
         HStack(spacing: 14) {
             Button { onSetMuted(!state.isMuted) } label: {
                 Image(systemName: state.isMuted || state.volume <= 0.001
@@ -434,7 +563,8 @@ private struct RemoteNowPlayingContent: View {
     }
 
     private var secondaryControls: some View {
-        RemoteOptionMenus(model: RemoteMenuModel(state: state), onCommand: onCommand)
+        RemoteOptionMenus(model: RemoteMenuModel(state: state, supportsPlaybackSpeed: supportsPlaybackSpeed),
+                          onCommand: onCommand)
             .equatable()
     }
 
@@ -464,12 +594,9 @@ struct RemoteMenuModel: Equatable {
     let activeQualityId: String
     let isQualitySwitching: Bool
     let playbackSpeed: Double
-    let subtitleSyncMs: Int?
-    let subtitlePosition: String?
-    let supportsSubtitleDelay: Bool?
-    let supportsSubtitlePosition: Bool?
+    let supportsPlaybackSpeed: Bool
 
-    init(state: PrairieControlPlaybackState) {
+    init(state: PrairieControlPlaybackState, supportsPlaybackSpeed: Bool = true) {
         audioTracks = state.audioTracks
         subtitleTracks = state.subtitleTracks
         selectedAudioTrackId = state.selectedAudioTrackId
@@ -478,10 +605,7 @@ struct RemoteMenuModel: Equatable {
         activeQualityId = state.activeQualityId
         isQualitySwitching = state.isQualitySwitching
         playbackSpeed = state.playbackSpeed
-        subtitleSyncMs = state.subtitleSyncMs
-        subtitlePosition = state.subtitlePosition
-        supportsSubtitleDelay = state.supportsSubtitleDelay
-        supportsSubtitlePosition = state.supportsSubtitlePosition
+        self.supportsPlaybackSpeed = supportsPlaybackSpeed
     }
 }
 
@@ -493,7 +617,6 @@ private struct RemoteOptionMenus: View, Equatable {
     let onCommand: (PrairieControlCommand) -> Void
 
     private let speedOptions: [Double] = [0.75, 1.0, 1.25, 1.5, 2.0]
-    private let subtitleDelayOptions = [-2_000, -1_500, -1_000, -500, -250, 0, 250, 500, 1_000, 1_500, 2_000]
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.model == rhs.model
@@ -503,15 +626,14 @@ private struct RemoteOptionMenus: View, Equatable {
         HStack(alignment: .top, spacing: 8) {
             if !model.qualityOptions.isEmpty { qualityMenu }
             if !model.audioTracks.isEmpty { audioMenu }
-            if hasSubtitleControls { subtitleMenu }
-            speedMenu
+            // Subtitle delay and position stay on the TV's own player menu;
+            // from the couch the remote only switches the language.
+            if !model.subtitleTracks.isEmpty { subtitleMenu }
+            if model.supportsPlaybackSpeed { speedMenu }
         }
-    }
-
-    private var hasSubtitleControls: Bool {
-        !model.subtitleTracks.isEmpty
-            || model.supportsSubtitleDelay == true
-            || model.supportsSubtitlePosition == true
+        // These menus open upward from the bottom of the screen, where iOS
+        // would otherwise list their items in reverse.
+        .menuOrder(.fixed)
     }
 
     private var audioMenu: some View {
@@ -527,71 +649,16 @@ private struct RemoteOptionMenus: View, Equatable {
 
     private var subtitleMenu: some View {
         Menu {
-            if !model.subtitleTracks.isEmpty {
-                Section("Track") {
-                    Button { onCommand(.selectSubtitleTrack(nil)) } label: {
-                        Label("Off", systemImage: model.selectedSubtitleTrackId == nil ? "checkmark" : "captions.bubble")
-                    }
-                    ForEach(model.subtitleTracks) { track in
-                        Button { onCommand(.selectSubtitleTrack(track.trackId)) } label: {
-                            Label(track.title, systemImage: model.selectedSubtitleTrackId == track.trackId ? "checkmark" : "captions.bubble")
-                        }
-                    }
-                }
+            Button { onCommand(.selectSubtitleTrack(nil)) } label: {
+                Label("Off", systemImage: model.selectedSubtitleTrackId == nil ? "checkmark" : "captions.bubble")
             }
-
-            if model.supportsSubtitleDelay == true {
-                Section("Delay") {
-                    ForEach(subtitleDelayMenuOptions, id: \.self) { milliseconds in
-                        Button { onCommand(.setSubtitleSyncMs(milliseconds)) } label: {
-                            Label(
-                                subtitleDelayLabel(milliseconds),
-                                systemImage: subtitleDelaySelectionSystemImage(milliseconds)
-                            )
-                        }
-                    }
-                }
-            }
-
-            if model.supportsSubtitlePosition == true {
-                Section("Position") {
-                    ForEach(SubtitlePositionPreset.allCases) { position in
-                        Button { onCommand(.setSubtitlePosition(position.rawValue)) } label: {
-                            Label(
-                                position.label,
-                                systemImage: model.subtitlePosition == position.rawValue ? "checkmark" : "textformat"
-                            )
-                        }
-                    }
+            ForEach(model.subtitleTracks) { track in
+                Button { onCommand(.selectSubtitleTrack(track.trackId)) } label: {
+                    Label(track.title, systemImage: model.selectedSubtitleTrackId == track.trackId ? "checkmark" : "captions.bubble")
                 }
             }
         } label: { RemoteChipLabel(systemImage: "captions.bubble", caption: "Subtitles") }
-        .accessibilityValue(subtitleAccessibilityValue)
-    }
-
-    private var subtitleDelayMenuOptions: [Int] {
-        let current = model.subtitleSyncMs ?? 0
-        if subtitleDelayOptions.contains(current) {
-            return subtitleDelayOptions
-        }
-        return (subtitleDelayOptions + [current]).sorted()
-    }
-
-    private var subtitleAccessibilityValue: String {
-        var values: [String] = [
-            model.subtitleTracks.first(where: { $0.trackId == model.selectedSubtitleTrackId })?.title ?? "Off"
-        ]
-        if model.supportsSubtitleDelay == true {
-            values.append("Delay \(subtitleDelayLabel(model.subtitleSyncMs ?? 0))")
-        }
-        if model.supportsSubtitlePosition == true {
-            values.append(SubtitlePositionPreset(rawValue: model.subtitlePosition ?? "")?.label ?? "Bottom")
-        }
-        return values.joined(separator: ", ")
-    }
-
-    private func subtitleDelaySelectionSystemImage(_ milliseconds: Int) -> String {
-        (model.subtitleSyncMs ?? 0) == milliseconds ? "checkmark" : "timer"
+        .accessibilityValue(model.subtitleTracks.first(where: { $0.trackId == model.selectedSubtitleTrackId })?.title ?? "Off")
     }
 
     private var qualityMenu: some View {
@@ -619,12 +686,6 @@ private struct RemoteOptionMenus: View, Equatable {
 
     private func speedLabel(_ speed: Double) -> String {
         "\(speed)×"
-    }
-
-    private func subtitleDelayLabel(_ milliseconds: Int) -> String {
-        guard milliseconds != 0 else { return "0.0s" }
-        let seconds = Double(milliseconds) / 1000.0
-        return String(format: "%+.1fs", seconds)
     }
 }
 

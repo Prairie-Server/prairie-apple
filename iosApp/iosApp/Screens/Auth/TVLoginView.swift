@@ -187,38 +187,45 @@ struct TVLoginView: View {
     }
 
     private var codeLead: String {
-        let page = typedURL ?? "your server's /activate page"
-        return "Scan the code with your phone's camera, or go to \(page) and enter it. Approve on your phone and this Apple TV signs in by itself."
+        TVSignInPresentation.codeLead(for: qrVM.status, typedURL: typedURL)
     }
 
+    /// One row when it fits the 900-point copy column, else one button per
+    /// line: the labels never truncate.
     private var codeActions: some View {
-        HStack(spacing: 22) {
-            if let action = TVSignInPresentation.stateAction(for: qrVM.status) {
-                Button {
-                    Task { await qrVM.retry() }
-                } label: {
-                    Label(action == .tryAgain ? "Try again" : "Show a new code", systemImage: "arrow.clockwise")
-                }
-                .buttonStyle(.marquee(.primary, fullWidth: false))
-                .focused($focusedField, equals: .stateAction)
-            }
-
-            if !isUpdateRequired && offersPassword {
-                Button {
-                    showPasswordForm = true
-                    focusedField = .username
-                } label: {
-                    Label("Sign in with a password", systemImage: "key")
-                }
-                .buttonStyle(.marquee(.glass, fullWidth: false))
-                .focused($focusedField, equals: .usePassword)
-            }
-
-            Button("Change server", systemImage: "server.rack") { changeServer() }
-                .buttonStyle(.marquee(.plain, fullWidth: false))
-                .focused($focusedField, equals: .changeServer)
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 22) { codeActionButtons }
+            VStack(alignment: .leading, spacing: 22) { codeActionButtons }
         }
         .focusSection()
+    }
+
+    @ViewBuilder
+    private var codeActionButtons: some View {
+        if let action = TVSignInPresentation.stateAction(for: qrVM.status) {
+            Button {
+                Task { await qrVM.retry() }
+            } label: {
+                Label(action == .tryAgain ? "Try again" : "Show a new code", systemImage: "arrow.clockwise")
+            }
+            .buttonStyle(.marquee(.primary, fullWidth: false))
+            .focused($focusedField, equals: .stateAction)
+        }
+
+        if !isUpdateRequired && offersPassword {
+            Button {
+                showPasswordForm = true
+                focusedField = .username
+            } label: {
+                Label("Sign in with a password", systemImage: "key")
+            }
+            .buttonStyle(.marquee(.glass, fullWidth: false))
+            .focused($focusedField, equals: .usePassword)
+        }
+
+        Button("Change server", systemImage: "server.rack") { changeServer() }
+            .buttonStyle(.marquee(.plain, fullWidth: false))
+            .focused($focusedField, equals: .changeServer)
     }
 
     /// Whether "Sign in with a password" is offered: not on a server whose
@@ -329,7 +336,8 @@ struct TVLoginView: View {
                     text: $loginVM.username,
                     focus: $focusedField,
                     equals: .username,
-                    content: .username
+                    content: .username,
+                    isError: loginVM.error?.field == .username
                 )
                 // Advance to the password field once the username is entered.
                 .submitLabel(.next)
@@ -343,7 +351,7 @@ struct TVLoginView: View {
                         equals: .password,
                         content: .password,
                         isSecure: !showPassword,
-                        isError: loginVM.error != nil
+                        isError: loginVM.error != nil && loginVM.error?.field != .username
                     )
                     // Hand focus to the Sign In button once the password is entered.
                     .submitLabel(.done)
@@ -570,7 +578,7 @@ struct TVLoginView: View {
             qrVM.finishPasswordSignIn(succeeded: succeeded)
             if !succeeded {
                 passwordFailures += 1
-                focusedField = .password
+                focusedField = loginVM.error?.field == .username ? .username : .password
             }
         }
     }

@@ -290,3 +290,26 @@ enum ApplePlaybackV3Capabilities {
     static func normalizedSubtitleCodec(_ codec: String) -> String { codec.lowercased() }
     static func nativeEmbeddedSubtitleCapabilities(containers: [String]) -> [PlaybackV3NativeEmbeddedSubtitleCapability] { [] }
 }
+
+/// LocalRouteController tells the speed scheduler when the route changes; the
+/// real scheduler (Screens/Player/BandwidthProbeScheduler.swift) pulls the
+/// network-quality monitor and player settings into the host.
+@MainActor
+final class BandwidthProbeScheduler {
+    static let shared = BandwidthProbeScheduler()
+    func localRouteChanged() {}
+}
+
+/// `APIv2CatalogQuery.sectionItems` reads a section page's target; the real
+/// type sits beside the full Route enum (Navigation/Route.swift), which this
+/// host stubs above.
+struct SectionCatalogTarget: Hashable {
+    enum Scope: Hashable {
+        case home
+        case library(Int)
+    }
+
+    let scope: Scope
+    let sectionId: String
+    let title: String
+}

@@ -15,6 +15,7 @@ struct PlayerView: View {
         contentId: String,
         libraryId: Int? = nil,
         preferredFileId: Int? = nil,
+        pinsVersion: Bool = false,
         preferredAudioTrackIndex: Int? = nil,
         preferredSubtitleTrackIndex: Int? = nil,
         startFromBeginning: Bool = false,
@@ -26,6 +27,7 @@ struct PlayerView: View {
         request = MacPlayerRequest(
             contentId: contentId,
             preferredFileId: preferredFileId,
+            pinsVersion: pinsVersion,
             preferredAudioTrackIndex: preferredAudioTrackIndex,
             preferredSubtitleTrackIndex: preferredSubtitleTrackIndex,
             startFromBeginning: startFromBeginning,
@@ -49,6 +51,8 @@ struct PlayerView: View {
 private struct MacPlayerRequest {
     let contentId: String
     let preferredFileId: Int?
+    /// The viewer picked `preferredFileId` in a version picker.
+    let pinsVersion: Bool
     let preferredAudioTrackIndex: Int?
     let preferredSubtitleTrackIndex: Int?
     let startFromBeginning: Bool
@@ -70,6 +74,8 @@ private struct MacPlayerScreen: View {
     @Environment(\.dismiss) private var dismiss
     @State private var isOptionsPresented = false
     @State private var selectedOptionsTab: MacPlayerOptionsPanel.Tab = .audio
+    /// The loading spinner is up, on its show delay and minimum time.
+    @State private var showsLoadingSpinner = false
 
     var body: some View {
         ZStack {
@@ -113,14 +119,31 @@ private struct MacPlayerScreen: View {
                     .transition(.opacity)
                 }
 
-                if viewModel.isLoading || viewModel.isBuffering || viewModel.isReconnecting {
-                    PlayerBufferingCapsule()
+                if showsLoadingSpinner {
+                    PlayerLoadingSpinner()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .transition(.opacity)
                 }
 
-                if let notice = viewModel.presentedNotice {
-                    PlayerNoticeOverlay(notice: notice)
-                        .padding(.top, 72)
+                // The notice position, below the window's title bar. The
+                // buffering pill shares it, below any notice.
+                PlayerNoticeStack {
+                    if let notice = viewModel.presentedNotice {
+                        PlayerNoticeOverlay(notice: notice)
+                    }
+                    if let pill = viewModel.bufferingPill {
+                        MacBufferingQualityPill(
+                            pill: pill,
+                            onPrimary: { viewModel.selectBufferingPrimary() },
+                            onSecondary: { viewModel.selectBufferingKeep() }
+                        )
+                        .padding(.horizontal, PrairieTheme.safePadding)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .playerNoticeStackPill()
+                    }
                 }
+                .padding(.top, 72)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
                 if let notice = viewModel.subtitleSync.notice {
                     SubtitleSyncIndicator(notice: notice) {
@@ -138,6 +161,7 @@ private struct MacPlayerScreen: View {
                 .frame(width: 0, height: 0)
             }
         }
+        .playerLoadingSpinnerVisibility(isActive: viewModel.isWaitingToPlay, isVisible: $showsLoadingSpinner)
         .onHover { hovering in
             if hovering {
                 viewModel.revealControls()
@@ -156,6 +180,7 @@ private struct MacPlayerScreen: View {
             viewModel.loadAndPlay(
                 contentId: request.contentId,
                 preferredFileId: request.preferredFileId,
+                pinsVersion: request.pinsVersion,
                 preferredAudioTrackIndex: request.preferredAudioTrackIndex,
                 preferredSubtitleTrackIndex: request.preferredSubtitleTrackIndex,
                 startFromBeginning: request.startFromBeginning,
@@ -167,6 +192,8 @@ private struct MacPlayerScreen: View {
         .onDisappear {
             viewModel.cleanup()
         }
+        // Pills and notices wait while this window can't be seen.
+        .background(MacWindowVisibilityReader { viewModel.playerWindowVisibilityChanged($0) })
         .preferredColorScheme(.dark)
         // One header: the window's title bar carries what is playing and its
         // format beside the back button.
@@ -175,14 +202,14 @@ private struct MacPlayerScreen: View {
         .animation(.easeOut(duration: 0.16), value: shouldShowControls)
         .animation(.easeOut(duration: 0.16), value: isOptionsPresented)
         .animation(.easeOut(duration: 0.2), value: viewModel.showIntroSkip)
+        .animation(.easeOut(duration: 0.2), value: viewModel.showBufferingPill)
     }
 
+    /// The controls come in at the first frame; a later stall leaves them as
+    /// they are.
     private var shouldShowControls: Bool {
-        viewModel.showControls
-            || !viewModel.isPlaying
-            || viewModel.isLoading
-            || viewModel.isBuffering
-            || isOptionsPresented
+        guard !viewModel.isStartingPlayback else { return false }
+        return viewModel.showControls || !viewModel.isPlaying || isOptionsPresented
     }
 
     private var playerSurface: some View {
@@ -221,6 +248,9 @@ private struct MacPlayerScreen: View {
         case .escape:
             if isOptionsPresented {
                 isOptionsPresented = false
+            } else if viewModel.dismissBufferingPill() {
+                // Back on the buffering pill, before the window takes Escape;
+                // the next Escape closes the player as usual.
             } else if viewModel.dismissIntroSkipPrompt() {
                 // The intro pill takes Escape before the window does; the next
                 // Escape closes the player as usual.
@@ -228,8 +258,13 @@ private struct MacPlayerScreen: View {
                 dismiss()
             }
         case .confirm:
-            // Return acts on the intro pill; with none showing it does nothing.
-            viewModel.selectIntroSkipPrompt()
+            // Return acts on the pill that is up; with none showing it does
+            // nothing. The controller never shows the two pills together.
+            if viewModel.showBufferingPill {
+                viewModel.selectBufferingPrimary()
+            } else {
+                viewModel.selectIntroSkipPrompt()
+            }
         case .speedDown:
             viewModel.setPlaybackSpeed(nextSpeed(offset: -1))
         case .speedUp:

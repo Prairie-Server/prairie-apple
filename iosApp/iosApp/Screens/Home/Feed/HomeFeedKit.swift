@@ -10,17 +10,10 @@ import SwiftUI
 /// reasoning survives the experiment.
 enum HomeFeedMetrics {
     /// True 2:3, the ratio every poster source (TMDB, TVDB, Fanart) ships.
-    /// The shipping card is 120×198 — a 1.65 ratio — so `.fill` + `.clipped()`
-    /// currently shaves roughly 10% off both sides of every poster in the app.
     static let posterAspect: CGFloat = 3.0 / 2.0
 
-    /// Wider than today's 120pt. At 120 the cards read as thumbnails against
-    /// 24pt row gaps; the screen ends up feeling sparse rather than spacious.
-    #if os(macOS)
+    /// The app-wide poster width, so Home's rows match every other page.
     static let posterWidth: CGFloat = PrairieTheme.posterCardWidth
-    #else
-    static let posterWidth: CGFloat = 132
-    #endif
     /// 16:9 still used by resume rows. Continue Watching is the row people
     /// act on most, so it reads as "one card plus a peek" rather than matching
     /// the poster rows' density — at 184 the stills felt like thumbnails and
@@ -236,7 +229,7 @@ private struct HomeCardMenu: ViewModifier {
 
         if let onRemoveFromContinueWatching {
             Button(role: .destructive, action: onRemoveFromContinueWatching) {
-                Label("Remove from Continue Watching", systemImage: "xmark.circle")
+                Label(HomeDismissal.menuTitle(for: item), systemImage: "xmark.circle")
             }
         }
     }
@@ -281,8 +274,6 @@ private struct HomeWatchedCheck: View {
 struct HomePosterCard: View {
     let item: SectionItem
     var width: CGFloat = HomeFeedMetrics.posterWidth
-    var showsCaption: Bool = true
-    var showsMetadata: Bool = true
     /// Draws the resume rail across the bottom of the artwork.
     var showsProgress: Bool = false
     var opensResumeContext = false
@@ -326,7 +317,7 @@ struct HomePosterCard: View {
         ) {
             VStack(alignment: .leading, spacing: 7) {
                 artwork
-                if showsCaption { caption }
+                caption
             }
             .frame(width: width, alignment: .leading)
         }
@@ -409,7 +400,7 @@ struct HomePosterCard: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
 
-            if showsMetadata, let secondLine = secondLineOverride ?? HomeFeedMeta.cardSecondLine(for: item) {
+            if let secondLine = secondLineOverride ?? HomeFeedMeta.cardSecondLine(for: item) {
                 Text(secondLine)
                     .font(HomeFeedMetrics.captionMetadataFont)
                     .foregroundStyle(Color.prairieOnSurface.opacity(0.5))
@@ -443,8 +434,6 @@ struct HomePosterCard: View {
 struct HomeStillCard: View {
     let item: SectionItem
     var width: CGFloat = HomeFeedMetrics.stillWidth
-    var showsCaption: Bool = true
-    var showsMetadata: Bool = true
     var opensResumeContext = false
     var onRemoveFromContinueWatching: (() -> Void)? = nil
     var onSetWatched: ((Bool) async -> Bool)? = nil
@@ -495,7 +484,7 @@ struct HomeStillCard: View {
         ) {
             VStack(alignment: .leading, spacing: 8) {
                 artwork
-                if showsCaption { caption }
+                caption
             }
             .frame(width: width, alignment: .leading)
         }
@@ -619,6 +608,18 @@ struct HomeStillCard: View {
         )
     }
 
+    /// Keep iOS resume cards the same height when only some items have a
+    /// remaining-time caption, including as lazy cards enter/leave. iPad rails
+    /// centre their cards, so a shorter card sits lower. macOS rails align to
+    /// the top and need no placeholder line.
+    private var reservesResumeCaption: Bool {
+        #if os(iOS)
+        opensResumeContext
+        #else
+        false
+        #endif
+    }
+
     private var caption: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(HomeFeedMeta.cardTitle(for: item))
@@ -626,23 +627,17 @@ struct HomeStillCard: View {
                 .foregroundStyle(Color.prairieOnSurface)
                 .lineLimit(1)
 
-            if showsMetadata {
-                // Episode code + title (or the year for movies). Space is
-                // reserved even when empty so a row mixing episodes and
-                // movies keeps one caption height.
-                Text(HomeFeedMeta.cardSecondLine(for: item) ?? "")
-                    .font(HomeFeedMetrics.captionMetadataFont)
-                    .foregroundStyle(Color.prairieOnSurface.opacity(0.7))
-                    .monospacedDigit()
-                    .lineLimit(1, reservesSpace: true)
-                    .truncationMode(.tail)
-            }
+            // Episode code + title (or the year for movies). Space is
+            // reserved even when empty so a row mixing episodes and
+            // movies keeps one caption height.
+            Text(HomeFeedMeta.cardSecondLine(for: item) ?? "")
+                .font(HomeFeedMetrics.captionMetadataFont)
+                .foregroundStyle(Color.prairieOnSurface.opacity(0.7))
+                .monospacedDigit()
+                .lineLimit(1, reservesSpace: true)
+                .truncationMode(.tail)
 
-            if showsMetadata,
-               (opensResumeContext && HorizontalMediaRailLayout.isPhone)
-                   || HomeFeedMeta.resumeCaption(for: item) != nil {
-                // Keep phone resume cards the same height when only some items have
-                // a remaining-time caption, including as lazy cards enter/leave.
+            if reservesResumeCaption || HomeFeedMeta.resumeCaption(for: item) != nil {
                 Text(HomeFeedMeta.resumeCaption(for: item) ?? "0m left")
                     .font(HomeFeedMetrics.captionMetadataFont)
                     .foregroundStyle(Color.prairieOnSurface.opacity(0.55))
@@ -678,24 +673,44 @@ struct HomeStillCard: View {
 struct HomeSectionHeader: View {
     let title: String
     var icon: String? = nil
+    /// Makes the title a link with a chevron, as on web.
+    var action: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 7) {
-            if let icon {
-                Image(systemName: icon)
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(Color.prairieOnSurface.opacity(0.85))
+            if let action {
+                Button(action: action) {
+                    HStack(spacing: 7) {
+                        label
+                        Image(systemName: "chevron.right")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(Color.prairieOnSurface.opacity(0.5))
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint(SectionExploreAllCard.label)
+            } else {
+                label
             }
-
-            Text(title)
-                .font(.prairieHeadline)
-                .tracking(-0.3)
-                .foregroundStyle(Color.prairieOnSurface)
-                .lineLimit(1)
 
             Spacer(minLength: 8)
         }
         .padding(.horizontal, HomeFeedMetrics.gutter)
+    }
+
+    @ViewBuilder
+    private var label: some View {
+        if let icon {
+            Image(systemName: icon)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(Color.prairieOnSurface.opacity(0.85))
+        }
+
+        Text(title)
+            .font(.prairieHeadline)
+            .tracking(-0.3)
+            .foregroundStyle(Color.prairieOnSurface)
+            .lineLimit(1)
     }
 }
 

@@ -526,6 +526,7 @@ struct LibraryCollectionsView: View {
     @State private var viewModel = LibraryCollectionsViewModel()
     @State private var uiCustomization = UICustomizationPreferences.shared
     @State private var gridWidth: CGFloat = 0
+    @Environment(AppRouter.self) private var router
     @Environment(\.horizontalSizeClass) private var hSize
     @Environment(\.verticalSizeClass) private var vSize
 
@@ -535,7 +536,7 @@ struct LibraryCollectionsView: View {
         }
         if usesThreeColumnPhoneLayout {
             return Array(
-                repeating: GridItem(.flexible(), spacing: 12),
+                repeating: GridItem(.flexible(), spacing: 8),
                 count: 3
             )
         }
@@ -589,15 +590,19 @@ struct LibraryCollectionsView: View {
             }
             LazyVGrid(columns: columns, spacing: 16) {
                 ForEach(section.collections) { collection in
-                    NavigationLink(
-                        value: Route.libraryCollection(
+                    // Through the router, not NavigationLink(value:), so the
+                    // router's record of pushed routes stays in step with the
+                    // stack: the Mac sidebar highlights from it, and closing
+                    // Requests screens reads it.
+                    Button {
+                        router.navigate(to: .libraryCollection(
                             libraryId: libraryId,
                             collectionId: collection.id,
                             title: collection.name,
                             kind: collection.kind,
                             mediaScope: mediaScope
-                        )
-                    ) {
+                        ))
+                    } label: {
                         LibraryCollectionCard(
                             collection: collection,
                             cardWidthOverride: libraryCollectionCardWidthOverride,
@@ -646,7 +651,7 @@ struct LibraryCollectionsView: View {
         return AdaptiveColumns.fittedPosterWidth(
             containerWidth: gridWidth,
             columnCount: 3,
-            spacing: 12
+            spacing: 8
         )
     }
 }
@@ -684,19 +689,20 @@ private struct LibraryCollectionCard: View {
             .frame(width: cardWidth, height: cardHeight)
             .clipShape(RoundedRectangle(cornerRadius: PrairieTheme.smallCornerRadius))
 
-            if uiCustomization.cardPresentation.caption.showsTitle {
-                Text(collection.name)
-                    .font(.prairieCaption)
-                    .foregroundStyle(Color.prairieOnSurface)
-                    .lineLimit(2, reservesSpace: true)
-            }
+            Text(collection.name)
+                .font(.prairieCaption)
+                .foregroundStyle(Color.prairieOnSurface)
+                #if os(iOS)
+                // One line, like the 2:3 cards in the other iOS grids.
+                .lineLimit(1)
+                #else
+                .lineLimit(2, reservesSpace: true)
+                #endif
 
-            if uiCustomization.cardPresentation.caption.showsMetadata {
-                Text(typeLabel)
-                    .font(.prairieSmall)
-                    .foregroundStyle(Color.prairieSecondaryText)
-                    .lineLimit(1)
-            }
+            Text(typeLabel)
+                .font(.prairieSmall)
+                .foregroundStyle(Color.prairieSecondaryText)
+                .lineLimit(1)
         }
         .frame(width: cardWidth, alignment: .leading)
     }

@@ -1,6 +1,7 @@
 #if os(iOS)
 import Foundation
 import OSLog
+import os
 import UIKit
 
 /// Who initiated a connection attempt. Drives how failures surface (user
@@ -20,6 +21,8 @@ private struct PersistedControlTarget: Codable {
     let serverId: String
     let serverName: String?
     var serverIdentity: String? = nil
+    /// Nil for targets saved before Rokus could be controlled: all TLS.
+    var transport: PrairieControlTransport? = nil
 }
 
 @MainActor
@@ -32,6 +35,17 @@ final class PrairieControlClient {
     private(set) var isConnecting = false
     var errorMessage: String?
     var isShowingRemoteControl = false
+    /// A launch waiting for the user to agree to replace another profile's
+    /// title on the TV.
+    private(set) var pendingReplace: PrairieControlPendingReplace?
+    private var resumeTokens = PrairieControlResumeTokens()
+    private let pairingKeys = PrairieControlPairingKeys()
+    /// The connected TV can mute but not set a volume level (a Roku's
+    /// `volume_mute_only`), so the remote shows a mute toggle and leaves the
+    /// phone's volume buttons alone.
+    private(set) var volumeIsMuteOnly = false
+    /// False when the connected TV lists `no_playback_speed` (a Roku).
+    private(set) var supportsPlaybackSpeed = true
 
     let clock = RemotePlaybackClock()
 
@@ -85,7 +99,15 @@ final class PrairieControlClient {
     /// The current session was attached silently (auto-resume) and the user
     /// hasn't engaged with it yet. Such a session lets go quietly when the TV
     /// goes idle, so it never flips the TV into the standby takeover screen.
-    private var sessionIsAutoResumed = false
+    /// The hello tells the TV so (`passive`); once the user engages, the TV
+    /// hears about it through `presence` where it supports that.
+    private var sessionIsAutoResumed = false {
+        didSet {
+            guard oldValue, !sessionIsAutoResumed, isHandshakeComplete,
+                  handshake.tvSupports(PrairieControlFeature.presence) else { return }
+            session?.enqueue(.presence(PrairieControlPresence(passive: false)))
+        }
+    }
     /// Guards against a double-tap on the remote button sending two `.launch`
     /// frames (and presenting the player twice) for the same in-flight
     /// connection.
@@ -109,7 +131,10 @@ final class PrairieControlClient {
     /// How long a launch waits for each of the TV's handoff replies. Identity
     /// probing on the TV can precede its challenge.
     private static let handoffReplyWait: Duration = .seconds(30)
+    /// How long the offer waits for its display title; prairie-android waits as long.
+    private static let offerTitleWait: Duration = .milliseconds(300)
     private static let persistedTargetKey = "prairiecontrol.lastTarget"
+    private static let lostConnection = "Lost connection to the TV."
     private static let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "org.prairieserver.prairie",
         category: "control.client"
@@ -138,7 +163,10 @@ final class PrairieControlClient {
     /// Never falls through to local playback on its own: once the user has a
     /// TV engaged, a failed launch is reported on the remote cover instead.
     @discardableResult
-    func launchOnEngagedTV(_ request: PrairieControlPlaybackRequest) async -> Bool {
+    func launchOnEngagedTV(
+        _ request: PrairieControlPlaybackRequest,
+        replaceConsent: PrairieControlReplaceConsent? = nil
+    ) async -> Bool {
         guard remotePlaybackEngaged else { return false }
         if isReconnecting {
             isShowingRemoteControl = true
@@ -154,7 +182,7 @@ final class PrairieControlClient {
                 return true
             }
         }
-        await launch(request)
+        await launch(request, replaceConsent: replaceConsent)
         return true
     }
 
@@ -168,6 +196,7 @@ final class PrairieControlClient {
             errorMessage = "Choose a server before controlling a TV."
             return false
         }
+        let target = pairingKeys.pinned(target)
         let targetsActiveServer = target.targetsActiveServer
         guard targetsActiveServer || (allowCrossServer && target.protocolVersion >= 2) else {
             errorMessage = "That TV is connected to a different server."
@@ -196,17 +225,31 @@ final class PrairieControlClient {
 
         await closeCurrentSession()
 
-        Self.logger.info("control: connecting origin=\(String(describing: origin), privacy: .public)")
+        Self.logger.info("control: connecting origin=\(String(describing: origin), privacy: .public) transport=\(target.transport.rawValue, privacy: .public)")
         isConnecting = true
         errorMessage = nil
         activeTarget = target
         lastTarget = target
         state = nil
+        volumeIsMuteOnly = false
+        supportsPlaybackSpeed = true
         // Connecting alone doesn't take over the screen — the mini-bar surfaces
         // the session. The full remote only auto-presents once content launches
         // (see `launch()`) or when the user taps the mini-bar.
 
-        let session = PrairieControlSession(endpoint: target.endpoint)
+        let session: PrairieControlSession
+        switch target.transport {
+        case .tls:
+            session = PrairieControlSession(endpoint: target.endpoint)
+        case .plain:
+            session = PrairieControlSession(rokuEndpoint: target.endpoint, sealing: nil)
+        case .sealed:
+            guard let key = pairingKeys.key(for: target) else {
+                fail(Self.pairingNeededMessage(for: target), connectionId: nil, quiet: origin != .user)
+                return false
+            }
+            session = PrairieControlSession(rokuEndpoint: target.endpoint, sealing: PrairieControlSealedChannel(key: key))
+        }
         let connectionId = UUID()
         self.session = session
         self.connectionId = connectionId
@@ -226,7 +269,7 @@ final class PrairieControlClient {
             }
         } catch {
             let message = error is PrairieControlConnectTimeout
-                ? "Couldn't reach \(target.name)."
+                ? Self.unreachableMessage(for: target)
                 : error.localizedDescription
             fail(message, connectionId: connectionId, quiet: origin != .user)
             await session.close()
@@ -241,6 +284,39 @@ final class PrairieControlClient {
         return connected
     }
 
+    /// Connects to the Roku a scanned pairing link names, first keeping its
+    /// pairing key, or dropping the old one when the link says `plain`. The
+    /// remote opens to show how it went.
+    func connect(pairingLink link: PrairieControlPairingLink) async {
+        if let key = link.key {
+            pairingKeys.store(key, forTV: link.deviceId)
+        } else {
+            pairingKeys.forget(tv: link.deviceId)
+        }
+        isShowingRemoteControl = true
+        await connect(to: link.target)
+    }
+
+    /// What the phone says when a Roku doesn't answer: the phone can't open
+    /// Prairie there (Roku forbids phone apps its control protocol), so the
+    /// viewer has to.
+    nonisolated static func unreachableMessage(for target: PrairieControlTarget) -> String {
+        target.transport.isRoku
+            ? "Couldn't reach \(target.name). Open Prairie on your Roku."
+            : "Couldn't reach \(target.name)."
+    }
+
+    nonisolated static func pairingNeededMessage(for target: PrairieControlTarget) -> String {
+        "\(target.name) requires pairing. On the Roku, open Connect a Phone in Prairie's profile menu and scan its code with this iPhone's camera."
+    }
+
+    /// The last controlled TV when it was a Roku, for the TV picker to say
+    /// how to bring it back.
+    static var rememberedRoku: (id: String, name: String)? {
+        guard let persisted = loadPersistedTarget(), persisted.transport?.isRoku == true else { return nil }
+        return (persisted.id, persisted.name)
+    }
+
     func play(on target: PrairieControlTarget, request: PrairieControlPlaybackRequest) async {
         // Sending content to a TV always opens the remote — show it up front so
         // the connect handshake renders inside the cover, not behind a mini-bar.
@@ -249,7 +325,7 @@ final class PrairieControlClient {
         await launch(request)
     }
 
-    func launch(_ request: PrairieControlPlaybackRequest) async {
+    func launch(_ request: PrairieControlPlaybackRequest, replaceConsent: PrairieControlReplaceConsent? = nil) async {
         guard let activeServer = ServerRegistry.shared.activeServer,
               let profileId = ServerRegistry.shared.activeProfileId,
               !profileId.isEmpty else {
@@ -268,11 +344,21 @@ final class PrairieControlClient {
 
         isConnecting = true
         errorMessage = nil
+        pendingReplace = nil
         isShowingRemoteControl = true
+        // Sending a title is engaging with the TV, even on a session that
+        // attached silently; the TV hears it through `presence`.
+        sessionIsAutoResumed = false
 
         let connectionId = self.connectionId
         let handshake = self.handshake
+        let isRoku = activeTarget?.transport.isRoku == true
         do {
+            let playback = isRoku
+                ? try await Self.rokuPlayback(request, ensureIdentity: {
+                    try self.ensureActiveIdentity(serverId: activeServer.id, profileId: profileId)
+                })
+                : request
             // Display name only; the shared store has it cached after launch.
             await CurrentProfileStore.shared.refresh()
             let profileName = CurrentProfileStore.shared.profile
@@ -281,6 +367,8 @@ final class PrairieControlClient {
                 server: activeServer,
                 profileId: profileId,
                 profileName: profileName,
+                contentId: request.contentId,
+                replaceConsent: replaceConsent,
                 session: session,
                 handshake: handshake
             )
@@ -289,25 +377,80 @@ final class PrairieControlClient {
                 throw PrairieControlHandoffError.invalidResponse
             }
             adoptEffectiveTarget(server: activeServer)
-            try await session.send(.launch(PrairieControlLaunchRequest(serverId: activeServer.id, playback: request)))
+            try await session.send(.launch(PrairieControlLaunchRequest(serverId: activeServer.id, playback: playback)))
             isConnecting = false
+        } catch PrairieControlHandoffError.replaceConfirmationRequired(let nowPlaying, let message) {
+            // Nothing changed on the TV; the session stays up while the user
+            // decides.
+            guard self.connectionId == connectionId else { return }
+            isConnecting = false
+            pendingReplace = PrairieControlPendingReplace(
+                request: request, nowPlaying: nowPlaying,
+                tvName: activeTarget?.name ?? "the TV", fallbackMessage: message
+            )
+        } catch PrairieControlHandoffError.cancelled(let message)
+                    where handshake.tvSupports(PrairieControlFeature.multiController) {
+            // A TV that keeps several controllers keeps this one too when it
+            // turns a handoff down, e.g. because another device's play
+            // superseded it. Report it; the session stays.
+            guard self.connectionId == connectionId else { return }
+            isConnecting = false
+            errorMessage = message
         } catch {
             fail(error.localizedDescription, connectionId: connectionId)
         }
+    }
+
+    /// `request` as a Roku reads it (`PrairieControlRokuLaunch`). Only a
+    /// subtitle pick needs the version's track list, from the cached detail
+    /// or one read. `ensureIdentity` runs after the read and throws when the
+    /// server or profile changed meanwhile, so the launch stops rather than
+    /// map the subtitle with another scope's track list.
+    static func rokuPlayback(
+        _ request: PrairieControlPlaybackRequest,
+        fetchDetail: (String) async -> ItemDetail? = { try? await PrairieAPI.shared.itemDetail(contentId: $0) },
+        ensureIdentity: () throws -> Void
+    ) async throws -> PrairieControlPlaybackRequest {
+        var version: FileVersion?
+        if let fileId = request.fileId, let subtitle = request.subtitleTrackIndex, subtitle >= 0 {
+            var detail: ItemDetail? = ResponseCache.shared.get(CacheKey.itemDetail(request.contentId))
+            if detail == nil {
+                detail = await fetchDetail(request.contentId)
+                try ensureIdentity()
+            }
+            version = detail?.versions?.first { $0.fileId == fileId }
+        }
+        return PrairieControlRokuLaunch.playback(request, version: version)
+    }
+
+    /// The user agreed to replace what the TV is playing.
+    func confirmReplace() {
+        guard let pending = pendingReplace else { return }
+        pendingReplace = nil
+        let consent = PrairieControlReplaceConsent(contentId: pending.nowPlaying?.contentId)
+        Task { await launch(pending.request, replaceConsent: consent) }
+    }
+
+    func cancelReplace() {
+        pendingReplace = nil
     }
 
     private func prepareRemoteIdentity(
         server: ServerEntry,
         profileId: String,
         profileName: String?,
+        contentId: String,
+        replaceConsent: PrairieControlReplaceConsent?,
         session: PrairieControlSession,
         handshake: PrairieControlHandshake
     ) async throws -> PrairieControlHandoffReady {
+        let tvId = activeTarget?.id
         // The deployment's other addresses let a TV that can't reach the
         // phone's URL still prepare the profile. Best effort: without them
         // the TV uses `serverURL` as-is. Fetched while the version settles.
         async let endpointsFetch = Self.offeredEndpoints(for: server)
-        guard try await handshake.negotiatedVersion(within: Self.helloWait) == 2 else {
+        async let titleFetch = Self.offerTitle(contentId: contentId)
+        guard let version = try await handshake.negotiatedVersion(within: Self.helloWait), version >= 2 else {
             throw PrairieControlHandoffError.updateRequired
         }
         // The server-side approval runs under the owner captured here: the
@@ -325,6 +468,7 @@ final class PrairieControlClient {
         handshake.beginHandoff(requestId: requestId)
 
         let endpoints = await endpointsFetch
+        let title = await titleFetch
         try ensureActiveIdentity(serverId: server.id, profileId: profileId)
         try await session.send(.handoffOffer(PrairieControlHandoffOffer(
             requestId: requestId,
@@ -333,9 +477,17 @@ final class PrairieControlClient {
             serverName: server.displayName,
             profileId: profileId,
             profileName: profileName,
+            title: title,
             serverIdentity: server.verifiedServerId,
-            serverEndpoints: endpoints
+            serverEndpoints: endpoints,
+            resumeToken: tvId.flatMap { resumeTokens.token(tvId: $0, serverId: server.id, profileId: profileId) },
+            replaceConfirmed: replaceConsent != nil ? true : nil,
+            replacingContentId: replaceConsent?.contentId
         )))
+        func remember(_ ready: PrairieControlHandoffReady) {
+            guard let tvId else { return }
+            resumeTokens.store(ready.resumeToken, tvId: tvId, serverId: server.id, profileId: profileId)
+        }
 
         // A TV that already holds this phone's profile answers `handoff_ready`
         // (reused) without a challenge.
@@ -344,6 +496,7 @@ final class PrairieControlClient {
         case .ready(let ready):
             try ensureActiveIdentity(serverId: server.id, profileId: profileId)
             handshake.endHandoff()
+            remember(ready)
             return ready
         case .challenge(let issued):
             challenge = issued
@@ -367,6 +520,7 @@ final class PrairieControlClient {
             }
             try ensureActiveIdentity(serverId: server.id, profileId: profileId)
             handshake.endHandoff()
+            remember(ready)
             return ready
         } catch {
             // Best effort: a deny that fails (or is refused because the owner
@@ -403,6 +557,43 @@ final class PrairieControlClient {
         return endpoints.isEmpty ? nil : endpoints
     }
 
+    /// What the TV may show while the handoff runs. Display-only, so the
+    /// offer waits at most `offerTitleWait`; a slower lookup is cancelled and
+    /// not awaited (a task group would wait for it to finish).
+    private static func offerTitle(contentId: String) async -> String? {
+        if let cached: ItemDetail = ResponseCache.shared.get(CacheKey.itemDetail(contentId)) {
+            return PrairieControlOfferTitle.make(for: cached)
+        }
+        let wait = offerTitleWait
+        return await withCheckedContinuation { continuation in
+            let first = FirstResult(continuation)
+            let lookup = Task {
+                first.resume((try? await PrairieAPI.shared.itemDetail(contentId: contentId)).flatMap(PrairieControlOfferTitle.make(for:)))
+            }
+            Task {
+                try? await Task.sleep(for: wait)
+                lookup.cancel()
+                first.resume(nil)
+            }
+        }
+    }
+
+    /// Resumes a continuation with whichever result arrives first.
+    private final class FirstResult: Sendable {
+        private let continuation: OSAllocatedUnfairLock<CheckedContinuation<String?, Never>?>
+
+        init(_ continuation: CheckedContinuation<String?, Never>) {
+            self.continuation = OSAllocatedUnfairLock(initialState: continuation)
+        }
+
+        func resume(_ value: String?) {
+            continuation.withLock { pending in
+                pending?.resume(returning: value)
+                pending = nil
+            }
+        }
+    }
+
     private func ensureActiveIdentity(serverId: String, profileId: String) throws {
         guard ServerRegistry.shared.activeServerId == serverId,
               ServerRegistry.shared.activeProfileId == profileId else {
@@ -420,7 +611,9 @@ final class PrairieControlClient {
             serverName: server.displayName,
             protocolVersion: target.protocolVersion,
             isPlaying: true,
-            serverIdentity: server.verifiedServerId
+            serverIdentity: server.verifiedServerId,
+            transport: target.transport,
+            keyId: target.keyId
         )
         activeTarget = effective
         lastTarget = effective
@@ -434,9 +627,12 @@ final class PrairieControlClient {
         session?.enqueue(.control(command))
     }
 
+    /// Sends the explicit command for what the remote shows, never the
+    /// toggle: two people pressing at once must not cancel each other out.
     func togglePlayPauseOptimistic() {
-        clock.setOptimisticPlaying(!clock.isPlaying())
-        send(.playPause)
+        let wasPlaying = clock.isPlaying()
+        clock.setOptimisticPlaying(!wasPlaying)
+        send(wasPlaying ? .pause : .play)
     }
 
     func seekOptimistic(to seconds: Double) {
@@ -477,7 +673,7 @@ final class PrairieControlClient {
     /// down while muted is therefore a no-op — the TV is already silent, and the
     /// only thing a command could do there is destroy the stored level.
     func stepVolumeOptimistic(_ step: Int) {
-        guard let s = state, !(s.isMuted && step < 0) else { return }
+        guard !volumeIsMuteOnly, let s = state, !(s.isMuted && step < 0) else { return }
         if s.isMuted { setMuted(false) }
         setVolume(s.volume + Double(step) / 16)
     }
@@ -554,7 +750,7 @@ final class PrairieControlClient {
         wasBackgroundedWithActiveSession = false
 
         if session == nil {
-            beginReconnect(reason: "Lost connection to the TV.")
+            beginReconnect(reason: Self.lostConnection)
         } else {
             session?.enqueue(.ping)
         }
@@ -636,7 +832,7 @@ final class PrairieControlClient {
                     self?.handle(message, connectionId: connectionId)
                 }
                 guard let self, self.isLiveConnection(connectionId) else { return }
-                self.beginReconnect(reason: "Lost connection to the TV.")
+                self.beginReconnect(reason: Self.lostConnection)
             } catch {
                 guard let self, self.isLiveConnection(connectionId) else { return }
                 self.beginReconnect(reason: error.localizedDescription)
@@ -651,7 +847,11 @@ final class PrairieControlClient {
         // path dead, send path alive) keeps the session pinned open. See the
         // matching note in TVControlReceiver.handle.
         switch message {
-        case .hello, .handoffChallenge, .handoffReady, .handoffCancel:
+        case .hello(let hello):
+            handshake.receive(message)
+            volumeIsMuteOnly = hello.supports(PrairieControlFeature.volumeMuteOnly)
+            supportsPlaybackSpeed = !hello.supports(PrairieControlFeature.noPlaybackSpeed)
+        case .handoffChallenge, .handoffReady, .handoffCancel:
             handshake.receive(message)
         case .state(let inbound):
             let state = reconcileOptimisticVolume(inbound)
@@ -678,19 +878,35 @@ final class PrairieControlClient {
             }
             errorMessage = error.message
             isConnecting = false
-        case .close:
-            // The TV ended the session deliberately (user pressed Disconnect,
-            // or another controller took over). Respect that intent: also
-            // forget the persisted target so no later foreground probe or
-            // reconnect silently reattaches.
-            Self.logger.info("control: received close from TV; clearing session")
-            forgetPersistedTarget()
-            clearSession()
+        case .close(let reason):
+            // The TV ended the session deliberately. An older TV only does
+            // that for a takeover or Disconnect, so the phone forgets it and
+            // never silently reattaches; a TV that keeps several controllers
+            // says why (see `PrairieControlClosePolicy`).
+            Self.logger.info("control: received close from TV reason=\(reason ?? "none", privacy: .public)")
+            switch PrairieControlClosePolicy.response(
+                reason: reason,
+                tvKeepsOtherControllers: handshake.tvSupports(PrairieControlFeature.multiController)
+            ) {
+            case .reconnect:
+                beginReconnect(reason: Self.lostConnection)
+            case .letGo(let forgetTarget):
+                if forgetTarget { forgetPersistedTarget() }
+                // A TV that keeps the target (full, refused, unused profile)
+                // usually sent an error first: keep an open cover up to show
+                // it, as a reconnect that gives up does.
+                let keepCoverVisible = !forgetTarget && isShowingRemoteControl
+                clearSession()
+                isShowingRemoteControl = keepCoverVisible
+            }
         case .ping:
             session?.enqueue(.pong)
         case .pong:
             missedHeartbeats = 0
-        case .launch, .control, .unsupportedControl, .handoffOffer:
+        case .unsupported(let type):
+            // A newer TV sent a message type this build predates.
+            Self.logger.info("control: ignoring unsupported message type \(type, privacy: .public)")
+        case .launch, .control, .unsupportedControl, .handoffOffer, .presence:
             break
         }
     }
@@ -704,7 +920,7 @@ final class PrairieControlClient {
                 guard let self, self.isLiveConnection(connectionId) else { return }
                 self.missedHeartbeats += 1
                 if self.missedHeartbeats > Self.maxMissedHeartbeats {
-                    self.beginReconnect(reason: "Lost connection to the TV.")
+                    self.beginReconnect(reason: Self.lostConnection)
                     return
                 }
                 self.session?.enqueue(.ping)
@@ -769,7 +985,11 @@ final class PrairieControlClient {
             // foreground can still silently resume if the TV comes back.
             let keepCoverVisible = self.isShowingRemoteControl
             self.clearSession()
-            self.errorMessage = reason
+            // A Roku that stops answering has usually left Prairie, which only
+            // the viewer can open again.
+            self.errorMessage = target.transport.isRoku && reason == Self.lostConnection
+                ? "Lost connection to \(target.name). Open Prairie on your Roku."
+                : reason
             self.isShowingRemoteControl = keepCoverVisible
         }
     }
@@ -857,6 +1077,7 @@ final class PrairieControlClient {
         lastTarget = nil
         activeTarget = nil
         state = nil
+        pendingReplace = nil
         isConnecting = false
         isShowingRemoteControl = false
     }
@@ -894,7 +1115,8 @@ final class PrairieControlClient {
             name: target.name,
             serverId: target.serverId,
             serverName: target.serverName,
-            serverIdentity: target.serverIdentity
+            serverIdentity: target.serverIdentity,
+            transport: target.transport
         )
         guard let data = try? JSONEncoder().encode(value) else { return }
         UserDefaults.standard.set(data, forKey: Self.persistedTargetKey)
@@ -919,7 +1141,10 @@ final class PrairieControlClient {
             serverId: server?.id,
             serverName: server?.displayName,
             supportedVersions: PrairieControlProtocol.supportedVersions,
-            serverIdentity: server?.verifiedServerId
+            serverIdentity: server?.verifiedServerId,
+            features: PrairieControlFeature.phoneFeatures,
+            // A silent auto-resume never puts up the TV's standby screen.
+            passive: sessionIsAutoResumed ? true : nil
         ))
     }
 

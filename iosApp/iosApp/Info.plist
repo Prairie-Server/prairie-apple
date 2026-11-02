@@ -58,17 +58,19 @@
 	<true/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
-		<key>NSAllowsLocalNetworking</key>
+		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Prairie uses your local network to find Prairie servers, and to set up and control Prairie on your Apple TV.</string>
+	<string>Prairie uses your local network to find Prairie servers, and to set up, find, and control Prairie on your TV.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_prairiepair._tcp</string>
+		<string>_prairiepair-roku._tcp</string>
 		<string>_prairiecast._tcp</string>
+		<string>_prairiecast-roku._tcp</string>
 		<string>_prairie._tcp</string>
 	</array>
 	<key>PrairieBuildChannel</key>

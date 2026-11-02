@@ -25,6 +25,9 @@ struct PlaybackSettingsView: View {
             #if os(iOS)
             cellularQualitySection
             #endif
+            if viewModel.showsConnectionGroup {
+                connectionSection
+            }
             streamingSection
             behaviorSection
             // Hidden entirely on servers that do not serve the two keys.
@@ -35,6 +38,8 @@ struct PlaybackSettingsView: View {
             resetSection
         }
         .task { await spoilers.refresh() }
+        // Reloads on another network, whose speed and limit differ.
+        .task(id: BandwidthProbeScheduler.shared.connectionRevision) { await viewModel.loadPlaybackConnection() }
         .settingsListChrome()
         .navigationTitle("Playback")
         .prairieNavigationTitleDisplayMode(.inline)
@@ -62,14 +67,91 @@ struct PlaybackSettingsView: View {
             choiceRow("Resolution", .resolution, value: viewModel.qualityResolutionLabel, options: resolutionChoices)
 
             choiceRow("Maximum Bitrate", .maxBitrate, value: viewModel.maxBitrateLabel, options: maxBitrateChoices)
+
+            // Three-way (labels fixed by the contract).
+            if viewModel.showsBufferingQualityMode {
+                choiceRow(
+                    SettingsViewModel.bufferingQualityTitle,
+                    .bufferingQualityMode,
+                    value: viewModel.bufferingQualityMode.label,
+                    options: BufferingQualityMode.allCases.map { SettingsChoice(id: $0.wireValue, label: $0.label) }
+                )
+            }
+
+            // The sentence wraps, so Reset takes its own row rather than
+            // sitting under it inside the same cell.
+            if let limit = viewModel.learnedConnectionLimitText {
+                Text(limit)
+                    .foregroundStyle(Color.prairieOnSurface)
+                Button("Reset") {
+                    Task { await viewModel.resetLearnedConnectionLimit() }
+                }
+            }
         } header: {
             Text("Quality")
                 .foregroundStyle(Color.prairieSecondaryText)
         } footer: {
-            Text(viewModel.qualityFooterText)
+            Text(qualityFooterText)
                 .foregroundStyle(Color.prairieSecondaryText)
         }
         .listRowBackground(Color.prairieGroupedCell)
+    }
+
+    /// The quality note, the buffering description, then a failed Reset, one
+    /// line each.
+    private var qualityFooterText: String {
+        var lines = [viewModel.qualityFooterText]
+        if viewModel.showsBufferingQualityMode {
+            lines.append(SettingsViewModel.bufferingQualityDescription)
+        }
+        if let error = viewModel.learnedLimitResetError {
+            lines.append(error)
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    // MARK: - Connection
+
+    /// The speed the bandwidth probe measured on this connection, a test on
+    /// demand, and what Auto plays as-is at that speed.
+    private var connectionSection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(SettingsViewModel.connectionSpeedTitle)
+                    .foregroundStyle(Color.prairieOnSurface)
+                // "measured 3 minutes ago" moves on while the page is open.
+                TimelineView(.everyMinute) { context in
+                    Text(viewModel.connectionSpeedLine(at: context.date))
+                        .font(.footnote)
+                        .foregroundStyle(Color.prairieSecondaryText)
+                }
+            }
+            if viewModel.connectionSpeedSkippedText == nil {
+                Button {
+                    Task { await viewModel.testConnectionSpeed() }
+                } label: {
+                    Text(viewModel.isTestingConnectionSpeed
+                         ? SettingsViewModel.testingSpeedLabel
+                         : SettingsViewModel.testSpeedAction)
+                }
+                .disabled(viewModel.isTestingConnectionSpeed)
+            }
+        } header: {
+            Text(SettingsViewModel.connectionSectionTitle)
+                .foregroundStyle(Color.prairieSecondaryText)
+        } footer: {
+            if let footer = connectionFooterText {
+                Text(footer)
+                    .foregroundStyle(Color.prairieSecondaryText)
+            }
+        }
+        .listRowBackground(Color.prairieGroupedCell)
+    }
+
+    /// The budget, then the last test's answer, one line each.
+    private var connectionFooterText: String? {
+        let lines = [viewModel.autoBudgetText, viewModel.connectionSpeedMessage].compactMap { $0 }
+        return lines.isEmpty ? nil : lines.joined(separator: "\n")
     }
 
     #if os(iOS)
@@ -122,7 +204,7 @@ struct PlaybackSettingsView: View {
                 .foregroundStyle(Color.prairieOnSurface)
                 .tint(.prairieSwitchOn)
 
-            Toggle("TrueHD Atmos", isOn: $viewModel.trueHDAtmosEnabled)
+            Toggle("TrueHD Atmos and DTS:X", isOn: $viewModel.trueHDAtmosEnabled)
                 .foregroundStyle(Color.prairieOnSurface)
                 .tint(.prairieSwitchOn)
 
@@ -163,7 +245,7 @@ struct PlaybackSettingsView: View {
     private var streamingFooterText: String {
         var text = SettingsViewModel.hdrFooterText
         text += " If surround plays as stereo, turn off Lossless Multichannel Audio."
-        text += " TrueHD Atmos adds height channels but plays those tracks as compressed audio."
+        text += " With TrueHD Atmos and DTS:X on, those tracks keep their height channels but play as compressed audio."
         return text
     }
 

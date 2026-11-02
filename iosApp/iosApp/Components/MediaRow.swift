@@ -23,7 +23,9 @@ struct MediaRow: View {
     /// tvOS-only direct-play action for focused leaf items. Container items
     /// intentionally receive no Play/Pause command and retain normal focus.
     var onItemPlay: ((SectionItem) -> Void)? = nil
-    var onSeeAll: (() -> Void)? = nil
+    /// Opens the row's full page: a trailing Explore all card on every
+    /// platform, and the title on touch platforms.
+    var onExploreAll: (() -> Void)? = nil
     var showProgress: Bool = false
     var icon: String? = nil
     var layout: MediaRowLayout = .poster
@@ -69,6 +71,9 @@ struct MediaRow: View {
     /// Select opens detail. Other rows keep Play/Pause as a remote shortcut
     /// only, avoiding a redundant menu entry on ordinary discovery cards.
     var showsPlayInContextMenu = false
+    /// tvOS thumbnail cards show the version saved with their progress. Only
+    /// Home's Continue Watching row asks for it; see `EpisodeThumbCard`.
+    var showsSavedPlaybackMetadata = false
     var onSetWatched: ((SectionItem, Bool) async -> Bool)? = nil
     var onMoveUp: (() -> Void)? = nil
     /// tvOS-only: reports which of the row's items holds card focus —
@@ -76,6 +81,8 @@ struct MediaRow: View {
     /// focus leaving the row (nil) is deliberately not reported so the
     /// marquee retains the last previewed item while focus is in chrome.
     var onItemFocus: ((SectionItem) -> Void)? = nil
+    /// tvOS-only: the trailing Explore all card took focus.
+    var onExploreAllFocus: (() -> Void)? = nil
     /// Optional width for poster/square cards — Skyline's dense landing
     /// rows (§5.6) pass a compact width. Episode thumbs are unaffected.
     var cardWidth: CGFloat? = nil
@@ -123,6 +130,11 @@ struct MediaRow: View {
         .focusSection()
         .modifier(TVRowMoveHandler(onMoveUp: onMoveUp, onMoveDown: onMoveDown))
         .modifier(TVRowFocusObserver(focusedItemId: $focusedItemId) { newValue in
+            if newValue == SectionExploreAllCard.focusId {
+                lastFocusedItemId = newValue
+                onExploreAllFocus?()
+                return
+            }
             guard let index = items.firstIndex(where: { $0.contentId == newValue }) else { return }
             let item = items[index]
             lastFocusedItemId = newValue
@@ -286,7 +298,7 @@ struct MediaRow: View {
               request != lastAppliedDetailReturnFocusRequest,
               focusRestorationOwner?.wrappedValue == true,
               let targetId = lastFocusedItemId,
-              let targetItem = items.first(where: { $0.contentId == targetId }) else { return }
+              isFocusTarget(targetId) else { return }
 
         lastAppliedDetailReturnFocusRequest = request
         focusRestorationGeneration += 1
@@ -295,39 +307,47 @@ struct MediaRow: View {
         proxy.scrollTo(targetId, anchor: .center)
         DispatchQueue.main.async {
             claimDetailReturnFocus(
-                targetItem,
+                targetId,
                 generation: generation
             )
         }
+    }
+
+    /// A card this row still shows: one of its items, or its Explore all card.
+    private func isFocusTarget(_ id: String) -> Bool {
+        if id == SectionExploreAllCard.focusId { return onExploreAll != nil }
+        return items.contains(where: { $0.contentId == id })
     }
 
     /// Reassert only while the same row and same card still own restoration.
     /// If the user moves after focus lands, `lastFocusedItemId` changes and the
     /// bounded retry immediately yields instead of fighting their navigation.
     private func claimDetailReturnFocus(
-        _ targetItem: SectionItem,
+        _ targetId: String,
         generation: Int,
         attempt: Int = 0
     ) {
         guard generation == focusRestorationGeneration,
               focusRestorationOwner?.wrappedValue == true,
-              lastFocusedItemId == targetItem.contentId,
-              items.contains(where: { $0.contentId == targetItem.contentId }) else { return }
+              lastFocusedItemId == targetId,
+              isFocusTarget(targetId) else { return }
 
-        focusedItemId = targetItem.contentId
-        onItemFocus?(targetItem)
+        focusedItemId = targetId
+        if let targetItem = items.first(where: { $0.contentId == targetId }) {
+            onItemFocus?(targetItem)
+        }
 
         guard attempt < 4 else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
             guard generation == focusRestorationGeneration,
                   focusRestorationOwner?.wrappedValue == true,
-                  lastFocusedItemId == targetItem.contentId,
-                  focusedItemId != targetItem.contentId else { return }
+                  lastFocusedItemId == targetId,
+                  focusedItemId != targetId else { return }
             Self.focusLogger.debug(
                 "mediaRow.reclaimDetailReturnFocus attempt=\(attempt + 1, privacy: .public)"
             )
             claimDetailReturnFocus(
-                targetItem,
+                targetId,
                 generation: generation,
                 attempt: attempt + 1
             )
@@ -339,30 +359,46 @@ struct MediaRow: View {
 
     private var header: some View {
         HStack(spacing: headerIconSpacing) {
-            if let icon {
-                Image(systemName: icon)
-                    .font(.system(size: headerIconSize, weight: .semibold))
-                    .foregroundColor(.prairieOnSurface)
+            #if os(tvOS)
+            // A focusable title would add a stop above every row; the
+            // trailing card is the row's only way to its page.
+            headerTitle
+            #else
+            if let onExploreAll {
+                Button(action: onExploreAll) {
+                    HStack(spacing: headerIconSpacing) {
+                        headerTitle
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: headerIconSize * 0.8, weight: .semibold))
+                            .foregroundColor(.prairieOnSurface.opacity(0.6))
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint(SectionExploreAllCard.label)
+            } else {
+                headerTitle
             }
-
-            // Server headings can be long ("Because You Watched {title}"); a
-            // second line would push the cards down out of the row band.
-            Text(title)
-                .font(.prairieHeadline)
-                .foregroundColor(.prairieOnSurface)
-                .lineLimit(1)
+            #endif
 
             Spacer()
-
-            if let onSeeAll {
-                Button("See All", systemImage: "chevron.right") {
-                    onSeeAll()
-                }
-                .font(.prairieCaption)
-                .foregroundColor(.prairieOnSurface.opacity(0.6))
-            }
         }
         .padding(.horizontal, PrairieTheme.safePadding)
+    }
+
+    @ViewBuilder
+    private var headerTitle: some View {
+        if let icon {
+            Image(systemName: icon)
+                .font(.system(size: headerIconSize, weight: .semibold))
+                .foregroundColor(.prairieOnSurface)
+        }
+
+        // Server headings can be long ("Because You Watched {title}"); a
+        // second line would push the cards down out of the row band.
+        Text(title)
+            .font(.prairieHeadline)
+            .foregroundColor(.prairieOnSurface)
+            .lineLimit(1)
     }
 
     // MARK: - Content
@@ -385,6 +421,15 @@ struct MediaRow: View {
                             }
                         }
                         #endif
+                }
+                if let onExploreAll, !items.isEmpty {
+                    SectionExploreAllCard(
+                        size: exploreAllCardSize,
+                        rowTitle: title,
+                        focusedItemId: rowFocusBinding,
+                        action: onExploreAll
+                    )
+                    .id(SectionExploreAllCard.focusId)
                 }
             }
             #if !os(tvOS)
@@ -501,8 +546,18 @@ struct MediaRow: View {
                 onOpenContextDetail: contextDetailAction(for: item),
                 onRemoveFromContinueWatching: continueWatchingRemovalAction(for: item),
                 onSetWatched: watchedToggleAction(for: item),
+                showsSavedPlaybackMetadata: showsSavedPlaybackMetadata,
                 baseCardWidth: thumbnailCardWidth
             )
+        }
+    }
+
+    /// The artwork size of the row's cards.
+    private var exploreAllCardSize: CGSize {
+        switch layout {
+        case .poster: MediaCard.artworkSize(cardWidthOverride: cardWidth, aspect: .poster)
+        case .square: MediaCard.artworkSize(cardWidthOverride: cardWidth, aspect: .square)
+        case .thumbnail: EpisodeThumbCard.artworkSize(baseWidth: thumbnailCardWidth)
         }
     }
 
@@ -539,7 +594,7 @@ struct MediaRow: View {
     }
 
     private func continueWatchingRemovalAction(for item: SectionItem) -> (() -> Void)? {
-        guard let onRemoveFromContinueWatching else { return nil }
+        guard let onRemoveFromContinueWatching, HomeDismissal(item) != nil else { return nil }
         return {
             #if os(tvOS)
             preserveFocusForContextMutation(on: item)

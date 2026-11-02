@@ -671,9 +671,12 @@ enum TVSettingsDetailFocus: Hashable {
     case generalAppleTVUser
     case generalProfileLaunch
     case generalAdvisoryAge
-    case generalCardPreset
+    case generalPosterSize
     case generalTopMenu
     case playbackMaxBitrate
+    case playbackBufferingQualityMode
+    case playbackLearnedLimitReset
+    case playbackConnectionSpeedTest
     case playbackAudioLanguage
     case playbackBufferAhead
     case playbackDeinterlaceMode

@@ -58,6 +58,13 @@ enum APIv2CatalogRead {
         let seasonCount: Int64?
         let seasonNumber: Int64?
         let seriesId: String?
+        /// Episode detail from servers with `episode_parent_artwork`.
+        @ArtworkURL var seriesPosterUrl: String?
+        let seriesPosterThumbhash: String?
+        @ArtworkURL var seriesBackdropUrl: String?
+        let seriesBackdropThumbhash: String?
+        @ArtworkURL var seasonPosterUrl: String?
+        let seasonPosterThumbhash: String?
         let seriesTitle: String?
         let showStatus: String?
         let sortTitle: String?
@@ -65,6 +72,9 @@ enum APIv2CatalogRead {
         let studios: [String]?
         let subtitles: [SubtitleInfo]
         let tagline: String?
+        /// The server-resolved local theme set (inheritance already applied);
+        /// absent when the server's optional theme lookup fails.
+        let themes: ThemeSongSet?
         let title: String
         let tmdbId: String?
         let tvdbId: String?
@@ -320,6 +330,8 @@ enum APIv2CatalogRead {
         let fileSize: Int64
         let hdr: Bool
         let intro: WatchMarker?
+        /// Absent from servers that predate marker collections.
+        let markerSegments: [PlaybackMarkerSegment]?
         let presentationGroupKey: String?
         let presentationKind: String?
         let presentationPartIndex: Int64?
@@ -359,6 +371,8 @@ enum APIv2CatalogRead {
         // Current embedded extras schema uses a numeric ID; distinct from FileVersion.
         let fileId: Int64?
         let kind: String
+        let stillThumbhash: String?
+        @ArtworkURL var stillUrl: String?
         let title: String?
     }
 
@@ -487,6 +501,8 @@ struct APIv2UserLibrary: Decodable {
     let type: String
     let sortOrder: Int
     @ArtworkURL var posterUrl: String?
+    /// Browse the library with `group=box_set`; absent before box sets.
+    let boxSetsEnabled: Bool?
 }
 
 /// Complete Discover rows use the same flat catalog-card fields as section shelves.

@@ -5,6 +5,12 @@ extension ResolvedSection {
         let type = sectionType.lowercased()
         return type == "continue_watching" || type == "in_progress"
     }
+
+    /// Rows whose cards Home can dismiss: Continue Watching, and Next Up
+    /// when the profile shows it as its own row.
+    var offersHomeDismissal: Bool {
+        isContinueWatchingSection || sectionType.lowercased() == "next_up"
+    }
 }
 
 /// A single section row on the home screen.
@@ -17,7 +23,8 @@ struct SectionRow: View {
     /// Watching may substitute a parent Series ID while retaining the episode
     /// card as context for the detail route seed.
     let onItemTap: (_ destinationContentId: String, _ item: SectionItem) -> Void
-    var onSeeAll: (() -> Void)? = nil
+    /// Opens the row's full page; see `MediaRow.onExploreAll`.
+    var onExploreAll: (() -> Void)? = nil
     var onRemoveFromContinueWatching: ((SectionItem) -> Void)? = nil
     var onSetWatched: ((SectionItem, Bool) async -> Bool)? = nil
     var prefersDefaultFocusOnFirstItem: Bool = false
@@ -36,6 +43,8 @@ struct SectionRow: View {
     /// tvOS-only: card-focus reports forwarded from `MediaRow` so hosts
     /// can drive the Skyline focus marquee with `(item, row title)`.
     var onItemFocus: ((SectionItem) -> Void)? = nil
+    /// tvOS-only: forwarded to `MediaRow.onExploreAllFocus`.
+    var onExploreAllFocus: (() -> Void)? = nil
     /// Optional poster/square card width forwarded to `MediaRow` —
     /// Skyline's dense landing rows (§5.6) pass a compact width.
     var cardWidth: CGFloat? = nil
@@ -127,6 +136,7 @@ struct SectionRow: View {
         if isContinueWatching {
             HomeFeedRow(
                 section: section,
+                onExploreAll: onExploreAll,
                 onRemoveFromContinueWatching: onRemoveFromContinueWatching,
                 onSetWatched: { item, played in
                     await setWatched(item, played: played)
@@ -145,7 +155,7 @@ struct SectionRow: View {
             items: section.items,
             onItemTap: selectItem,
             onItemPlay: allowsDirectPlayback ? playItem : nil,
-            onSeeAll: onSeeAll,
+            onExploreAll: onExploreAll,
             showProgress: showProgress,
             icon: isContinueWatching ? "play.circle.fill" : nil,
             layout: layout,
@@ -154,14 +164,17 @@ struct SectionRow: View {
             focusRequest: focusRequest,
             focusRequestItemId: focusRequestItemId,
             detailReturnFocusRequest: detailReturnFocusRequest,
-            onRemoveFromContinueWatching: isContinueWatching ? onRemoveFromContinueWatching : nil,
+            onRemoveFromContinueWatching: section.offersHomeDismissal ? onRemoveFromContinueWatching : nil,
             onOpenContextDetail: nil,
             showsPlayInContextMenu: isContinueWatching,
+            // Home is the only caller with a removal handler.
+            showsSavedPlaybackMetadata: isContinueWatching && onRemoveFromContinueWatching != nil,
             onSetWatched: { item, played in
                 await setWatched(item, played: played)
             },
             onMoveUp: onMoveUp,
             onItemFocus: onItemFocus,
+            onExploreAllFocus: onExploreAllFocus,
             cardWidth: cardWidth,
             thumbnailCardWidth: Self.thumbnailCardWidth,
             cardVerticalPadding: cardVerticalPadding,

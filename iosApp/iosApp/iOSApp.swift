@@ -4,6 +4,8 @@ import SwiftUI
 struct PrairieApp: App {
     #if os(iOS)
     @UIApplicationDelegateAdaptor(PrairieAppDelegate.self) private var appDelegate
+    #elseif os(macOS)
+    @NSApplicationDelegateAdaptor(PrairieMacAppDelegate.self) private var appDelegate
     #endif
 
     init() {
@@ -39,6 +41,10 @@ struct PrairieApp: App {
         // Started at launch so the first playback already knows whether it
         // is on mobile data (the cellular quality pair).
         PlaybackNetworkMonitor.shared.start()
+        #endif
+        BandwidthProbeScheduler.shared.followNetwork()
+        #if os(macOS)
+        BandwidthProbeScheduler.shared.followMacVisibility()
         #endif
     }
 

@@ -302,6 +302,16 @@ private struct PhoneDetailParallaxArtwork: View {
     }
 }
 
+/// The parts of `PhoneDetailHero` a split page lays out separately.
+enum PhoneDetailHeroPane {
+    /// The artwork, spread behind the whole page.
+    case artwork
+    /// Title, facts, and actions, for the glass sidebar.
+    case sidebar
+    /// Overview and credits, at the top of the content pane.
+    case overview
+}
+
 /// Chooses between `PhoneDetailHero`'s compact and expanded compositions.
 /// Shared with the floating top chrome, which times its backing strip to the
 /// hero it sits over.
@@ -322,14 +332,23 @@ enum PhoneDetailHeroLayout {
         return horizontalSizeClass == .regular
     }
 
+    /// How far a split page's sidebar floats in from the window's edges.
+    static let splitSidebarMargin: CGFloat = 14
+
+    /// Where the Close button sits in a split page's sidebar: 10pt inside
+    /// both edges, so the 44pt button is concentric with the sidebar's 32pt
+    /// corner (22 + 10).
+    static let splitCloseButtonInset: CGFloat = splitSidebarMargin + 10
+
     /// Narrowest page that splits into a hero pane and a content pane.
     static let splitMinimumWidth: CGFloat = 760
 
     /// A wide, short page — the iPhone Duo's open inner display held in
     /// landscape — leaves a single hero-first column showing little more
-    /// than artwork. It splits instead: the hero holds the leading half and
-    /// the rest of the page scrolls in the trailing half, so the halves meet
-    /// at the fold, and an iPad window in landscape splits the same way.
+    /// than artwork. It splits instead: the artwork spans the window, the
+    /// title and actions hold still in a sidebar, and the rest of the page
+    /// scrolls beside it (see `PhoneDetailPageLayout`). An iPad window in
+    /// landscape splits the same way.
     /// Taller pages (portrait, including iPad page sheets) keep one column,
     /// and so do compact-height ones: an iPhone turned to landscape for the
     /// player also rotates the pages beneath it, which must not re-lay out.
@@ -372,21 +391,30 @@ struct PhoneDetailHero<Actions: View, BelowOverview: View>: View {
     let overlayData: OverlayData?
     var enablesArtworkParallax = false
     var artworkStyle: PhoneDetailArtworkStyle = .backdrop
-    /// Set when the hero fills the leading pane of a split page (see
-    /// `PhoneDetailHeroLayout.usesSplitLayout`); `belowOverview` then moves to
-    /// the content pane and is not drawn here.
-    var paneHeight: CGFloat? = nil
+    /// Set when the hero supplies one part of a split page (see
+    /// `PhoneDetailHeroLayout.usesSplitLayout`). `belowOverview` is not drawn
+    /// in any part; the page places it in the content pane.
+    var pane: PhoneDetailHeroPane? = nil
+    /// Scales the compact (iPhone) artwork's height. A page whose content
+    /// matters more than its art, such as a box set's movies, passes less
+    /// than 1 so that content starts in the first screen.
+    var compactArtworkHeightFactor: CGFloat = 1
+    /// Sizes the regular-width (iPad and Mac) hero to its text and actions
+    /// rather than the fixed backdrop height, with the backdrop filling
+    /// whatever height that is. For the same pages as
+    /// `compactArtworkHeightFactor`.
+    var fitsRegularHeroToContent = false
     @ViewBuilder let actions: () -> Actions
     @ViewBuilder let belowOverview: () -> BelowOverview
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    #if os(iOS)
+    @Environment(\.statusColumn) private var statusColumn
+    #endif
     /// Rating scores follow Dynamic Type from their 15pt default.
     @ScaledMetric(relativeTo: .subheadline) private var ratingSize: CGFloat = 15
-    /// How much larger than default the overview text is drawn; the "MORE"
-    /// estimate fits fewer characters into three lines as text grows.
-    @ScaledMetric(relativeTo: .subheadline) private var overviewTextScale: CGFloat = 1
     @State private var availableWidth: CGFloat = 0
     @State private var showFullOverview = false
     @ObservedObject private var advisoryAgePreference = AdvisoryAgePreferenceStore.shared
@@ -396,8 +424,12 @@ struct PhoneDetailHero<Actions: View, BelowOverview: View>: View {
             #if os(macOS)
             macHeader
             #else
-            if let paneHeight {
-                paneHeader(height: paneHeight)
+            if let pane {
+                switch pane {
+                case .artwork: paneArtwork
+                case .sidebar: paneSidebar
+                case .overview: paneOverview
+                }
             } else if usesExpandedLayout {
                 expandedHeader
             } else {
@@ -466,131 +498,134 @@ struct PhoneDetailHero<Actions: View, BelowOverview: View>: View {
 
             titleBlock(textAlignment: .center, logoHeight: compactLogoHeight)
                 .padding(.horizontal, 28)
+                .padding(statusColumnEdge, statusColumnWidth)
                 .padding(.bottom, 6)
         }
         .frame(height: compactArtworkHeight)
         .clipped()
+        // The artwork runs under the iPhone Duo's status column; the title
+        // stays centred on the page beside it.
+        .padding(statusColumnEdge, -statusColumnWidth)
         .accessibilityElement(children: .contain)
+    }
+
+    private var statusColumnEdge: Edge.Set {
+        #if os(iOS)
+        statusColumn?.edgeSet ?? .trailing
+        #else
+        .trailing
+        #endif
+    }
+
+    private var statusColumnWidth: CGFloat {
+        #if os(iOS)
+        statusColumn?.width ?? 0
+        #else
+        0
+        #endif
     }
 
     private var compactArtworkHeight: CGFloat {
         let width = availableWidth > 0 ? availableWidth : 390
-        return min(max(width * 1.18, 430), 540)
+        return min(max(width * 1.18, 430), 540) * compactArtworkHeightFactor
     }
 
     private var compactLogoHeight: CGFloat {
         min(max(compactArtworkHeight * 0.24, 104), 138)
     }
 
-    // MARK: - Split page hero pane
+    // MARK: - Split page parts
 
-    /// The leading pane of a split page, composed like the compact hero:
-    /// artwork fills the pane and the title, facts, actions, and overview sit
-    /// over its lower part. The pane scrolls only when that block outgrows it
-    /// (large Dynamic Type); otherwise it holds still beside the content pane.
-    private func paneHeader(height: CGFloat) -> some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(spacing: 16) {
-                // Smaller than the compact logo: the pane is a landscape
-                // display's full height, about 670pt, and shares it with
-                // the facts, actions, and overview.
-                titleBlock(textAlignment: .center, logoHeight: 100)
-                metadataBlock(alignment: .center, textAlignment: .center, isCompact: true)
-                actions()
-                    .padding(.top, 2)
-                overviewBlock
-                creditBlock(alignment: .leading)
-            }
-            .padding(.horizontal, 28)
-            // Keeps the top of the artwork clear when the text block is tall
-            // enough to scroll.
-            .padding(.top, height * 0.22)
-            .padding(.bottom, 24)
-            .frame(maxWidth: .infinity, minHeight: height, alignment: .bottom)
+    /// The sidebar of a split page: title, facts, and actions, aligned to
+    /// the leading edge of the glass panel the page draws around them.
+    private var paneSidebar: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            // Smaller than the compact logo: the sidebar is narrow and shares
+            // the display's height with the facts, actions, and selectors.
+            titleBlock(textAlignment: .leading, logoHeight: 84)
+            metadataBlock(alignment: .leading, textAlignment: .leading, isCompact: true)
+            actions()
+                .padding(.top, 2)
         }
-        .scrollBounceBehavior(.basedOnSize)
-        .background { paneArtwork }
     }
 
-    /// Darkened under the text, and faded at the trailing edge into the page
-    /// surface that continues behind the content pane.
+    /// The overview and credits, which open the content pane.
+    private var paneOverview: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            overviewBlock
+            creditBlock(alignment: .leading)
+        }
+    }
+
+    /// The artwork the page spreads across the whole window, from edge to
+    /// edge under the sidebar and the content pane.
     private var paneArtwork: some View {
-        ZStack {
-            artwork
-            LinearGradient(
-                stops: [
-                    .init(color: .black.opacity(0.34), location: 0),
-                    .init(color: .clear, location: 0.2),
-                    .init(color: .clear, location: 0.36),
-                    .init(color: .black.opacity(0.7), location: 0.64),
-                    .init(color: .black.opacity(0.88), location: 1),
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-        }
-        .clipped()
-        .mask {
-            LinearGradient(
-                stops: [
-                    .init(color: .black, location: 0),
-                    .init(color: .black, location: 0.8),
-                    .init(color: .clear, location: 1),
-                ],
-                startPoint: .leading,
-                endPoint: .trailing
-            )
-        }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
+        artwork
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 
     // MARK: - Expanded iPad layout
 
+    @ViewBuilder
     private var expandedHeader: some View {
-        ZStack(alignment: .topLeading) {
-            expandedArtwork
-
-            VStack(alignment: .leading, spacing: 15) {
-                if let eyebrow, !eyebrow.isEmpty {
-                    Text(eyebrow.uppercased())
-                        .prairieScaledFont(size: 11, weight: .bold, relativeTo: .caption2)
-                        .tracking(1.2)
-                        .foregroundStyle(Color.prairieOnSurface.opacity(0.7))
-                }
-
-                titleBlock(textAlignment: .leading, logoHeight: 122)
-                    .frame(maxWidth: 430, alignment: .leading)
-
-                metadataBlock(alignment: .leading, textAlignment: .leading, isCompact: false)
-                overviewBlock
-                creditBlock(alignment: .leading)
-                belowOverview()
-
-                actions()
-                    .padding(.top, 2)
+        if fitsRegularHeroToContent {
+            expandedText
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .background(alignment: .topLeading) { expandedArtwork(fillsHeight: true) }
+                .clipped()
+        } else {
+            ZStack(alignment: .topLeading) {
+                expandedArtwork(fillsHeight: false)
+                expandedText
             }
-            .frame(maxWidth: expandedEditorialWidth, alignment: .leading)
-            .padding(.leading, expandedHorizontalPadding)
-            .padding(.top, 88)
-            .padding(.bottom, 38)
+            .frame(maxWidth: .infinity, minHeight: 550, alignment: .topLeading)
+            .clipped()
         }
-        .frame(maxWidth: .infinity, minHeight: 550, alignment: .topLeading)
-        .clipped()
     }
 
-    private var expandedArtwork: some View {
+    private var expandedText: some View {
+        VStack(alignment: .leading, spacing: 15) {
+            if let eyebrow, !eyebrow.isEmpty {
+                Text(eyebrow.uppercased())
+                    .prairieScaledFont(size: 11, weight: .bold, relativeTo: .caption2)
+                    .tracking(1.2)
+                    .foregroundStyle(Color.prairieOnSurface.opacity(0.7))
+            }
+
+            titleBlock(textAlignment: .leading, logoHeight: 122)
+                .frame(maxWidth: 430, alignment: .leading)
+
+            metadataBlock(alignment: .leading, textAlignment: .leading, isCompact: false)
+            overviewBlock
+            creditBlock(alignment: .leading)
+            belowOverview()
+
+            actions()
+                .padding(.top, 2)
+        }
+        .frame(maxWidth: expandedEditorialWidth, alignment: .leading)
+        .padding(.leading, expandedHorizontalPadding)
+        .padding(.top, 88)
+        .padding(.bottom, 38)
+    }
+
+    /// `fillsHeight` stretches the artwork to the hero's full height; otherwise
+    /// it keeps a 16:9 frame inside the fixed 550pt hero.
+    private func expandedArtwork(fillsHeight: Bool) -> some View {
         GeometryReader { geometry in
             artwork
                 .frame(
                     width: geometry.size.width * 0.66,
-                    height: min(550, geometry.size.width * 0.66 * 9 / 16)
+                    height: fillsHeight
+                        ? geometry.size.height
+                        : min(550, geometry.size.width * 0.66 * 9 / 16)
                 )
                 .clipped()
                 .mask(expandedArtworkMask)
                 .frame(
                     width: geometry.size.width,
-                    height: 550,
+                    height: fillsHeight ? geometry.size.height : 550,
                     alignment: .topTrailing
                 )
         }
@@ -634,38 +669,48 @@ struct PhoneDetailHero<Actions: View, BelowOverview: View>: View {
     /// Desktop composition: the backdrop runs the full width behind the
     /// header, with the poster on the leading side and the title, facts,
     /// synopsis, and actions in a column beside it.
+    @ViewBuilder
     private var macHeader: some View {
-        ZStack(alignment: .topLeading) {
-            macBackdrop
-
-            HStack(alignment: .top, spacing: PrairieTheme.largePadding) {
-                macPoster
-
-                VStack(alignment: .leading, spacing: 15) {
-                    if let eyebrow, !eyebrow.isEmpty {
-                        Text(eyebrow.uppercased())
-                            .font(.prairieCaption.weight(.bold))
-                            .tracking(PrairieTheme.macSidebarHeadingTracking)
-                            .foregroundStyle(Color.prairieOnSurface.opacity(0.7))
-                    }
-
-                    macTitle
-                    metadataBlock(alignment: .leading, textAlignment: .leading, isCompact: false)
-                    overviewBlock
-                    creditBlock(alignment: .leading)
-                    belowOverview()
-
-                    actions()
-                        .padding(.top, 2)
-                }
-                .frame(maxWidth: PrairieTheme.macDetailTextWidth, alignment: .leading)
+        if fitsRegularHeroToContent {
+            macContent
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .background(alignment: .top) { macBackdrop }
+        } else {
+            ZStack(alignment: .topLeading) {
+                macBackdrop
+                macContent
             }
-            // Same gutter as the rows below, so the poster lines up with them.
-            .padding(.horizontal, PrairieTheme.padding)
-            .padding(.top, PrairieTheme.macDetailTopInset)
-            .padding(.bottom, PrairieTheme.largePadding)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private var macContent: some View {
+        HStack(alignment: .top, spacing: PrairieTheme.largePadding) {
+            macPoster
+
+            VStack(alignment: .leading, spacing: 15) {
+                if let eyebrow, !eyebrow.isEmpty {
+                    Text(eyebrow.uppercased())
+                        .font(.prairieCaption.weight(.bold))
+                        .tracking(PrairieTheme.macSidebarHeadingTracking)
+                        .foregroundStyle(Color.prairieOnSurface.opacity(0.7))
+                }
+
+                macTitle
+                metadataBlock(alignment: .leading, textAlignment: .leading, isCompact: false)
+                overviewBlock
+                creditBlock(alignment: .leading)
+                belowOverview()
+
+                actions()
+                    .padding(.top, 2)
+            }
+            .frame(maxWidth: PrairieTheme.macDetailTextWidth, alignment: .leading)
+        }
+        // Same gutter as the rows below, so the poster lines up with them.
+        .padding(.horizontal, PrairieTheme.padding)
+        .padding(.top, PrairieTheme.macDetailTopInset)
+        .padding(.bottom, PrairieTheme.largePadding)
     }
 
     /// The backdrop behind the header, faded out at the bottom and dimmed on
@@ -676,7 +721,9 @@ struct PhoneDetailHero<Actions: View, BelowOverview: View>: View {
         if case .backdrop = artworkStyle, let url = nonEmpty(backdropUrl) {
             AsyncImageView(url: url, thumbhash: backdropThumbhash, contentMode: .fill)
                 .frame(maxWidth: .infinity)
-                .frame(height: PrairieTheme.macDetailBackdropHeight)
+                // Fills the header when it fits its content, else a fixed height.
+                .frame(height: fitsRegularHeroToContent ? nil : PrairieTheme.macDetailBackdropHeight)
+                .frame(maxHeight: fitsRegularHeroToContent ? .infinity : nil)
                 .clipped()
                 .overlay {
                     LinearGradient(
@@ -927,24 +974,7 @@ struct PhoneDetailHero<Actions: View, BelowOverview: View>: View {
     @ViewBuilder
     private var overviewBlock: some View {
         if let overview, !overview.isEmpty {
-            Text(overview)
-                .prairieScaledFont(size: 15, relativeTo: .subheadline)
-                .foregroundStyle(Color.prairieOnSurface.opacity(0.80))
-                .lineSpacing(3)
-                .lineLimit(showFullOverview ? nil : 3)
-                .multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .overlay(alignment: .bottomTrailing) {
-                    if !showFullOverview, isOverviewClipped {
-                        morePill
-                    }
-                }
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    withAnimation(.easeInOut(duration: PrairieTheme.normalDuration)) {
-                        showFullOverview.toggle()
-                    }
-                }
+            PhoneDetailOverview(text: overview, isExpanded: $showFullOverview)
         }
     }
 
@@ -958,11 +988,111 @@ struct PhoneDetailHero<Actions: View, BelowOverview: View>: View {
                 .frame(maxWidth: .infinity, alignment: alignment)
         }
     }
+}
+
+// MARK: - Overview
+
+/// The overview, cut to three lines until tapped. When the text runs past
+/// three lines, the end of the last visible line fades out before a MORE pill,
+/// as the App Store does, so the pill never sits on top of words. Truncation
+/// is measured against an unclipped copy at the same width, so the pill shows
+/// only when text is actually hidden, at any Dynamic Type size.
+private struct PhoneDetailOverview: View {
+    let text: String
+    @Binding var isExpanded: Bool
+
+    private static let collapsedLineLimit = 3
+    private static let lineSpacing: CGFloat = 3
+    private static let pillGap: CGFloat = 4
+
+    @ScaledMetric(relativeTo: .subheadline) private var fadeWidth: CGFloat = 32
+    @State private var collapsedHeight: CGFloat = 0
+    @State private var fullHeight: CGFloat = 0
+    @State private var pillWidth: CGFloat = 0
+
+    var body: some View {
+        styledText
+            .lineLimit(isExpanded ? nil : Self.collapsedLineLimit)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.size.height
+            } action: { height in
+                collapsedHeight = height
+            }
+            .background {
+                styledText
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .onGeometryChange(for: CGFloat.self) { proxy in
+                        proxy.size.height
+                    } action: { height in
+                        fullHeight = height
+                    }
+                    .hidden()
+            }
+            .mask { visibleTextMask }
+            .overlay(alignment: .bottomTrailing) {
+                if isTruncated {
+                    morePill
+                        .onGeometryChange(for: CGFloat.self) { proxy in
+                            proxy.size.width
+                        } action: { width in
+                            pillWidth = width
+                        }
+                        .frame(height: lastLineHeight)
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                withAnimation(.easeInOut(duration: PrairieTheme.normalDuration)) {
+                    isExpanded.toggle()
+                }
+            }
+    }
+
+    private var styledText: some View {
+        Text(text)
+            .prairieScaledFont(size: 15, relativeTo: .subheadline)
+            .foregroundStyle(Color.prairieOnSurface.opacity(0.80))
+            .lineSpacing(Self.lineSpacing)
+            .multilineTextAlignment(.leading)
+    }
+
+    private var isTruncated: Bool {
+        !isExpanded && fullHeight > collapsedHeight + 1
+    }
+
+    /// Height of one line of the collapsed text, without the spacing between lines.
+    private var lastLineHeight: CGFloat {
+        let lines = CGFloat(Self.collapsedLineLimit)
+        return max((collapsedHeight - Self.lineSpacing * (lines - 1)) / lines, 0)
+    }
+
+    /// Opaque over the text, except for the end of the last line, which fades
+    /// out and leaves clear space for the pill.
+    @ViewBuilder
+    private var visibleTextMask: some View {
+        if isTruncated {
+            VStack(spacing: 0) {
+                Color.black
+                HStack(spacing: 0) {
+                    Color.black
+                    LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: fadeWidth)
+                    Color.clear
+                        .frame(width: pillWidth + Self.pillGap)
+                }
+                .frame(height: lastLineHeight + Self.lineSpacing / 2)
+            }
+        } else {
+            Color.black
+        }
+    }
 
     private var morePill: some View {
         Button {
             withAnimation(.easeInOut(duration: PrairieTheme.normalDuration)) {
-                showFullOverview = true
+                isExpanded = true
             }
         } label: {
             Text("MORE")
@@ -974,11 +1104,6 @@ struct PhoneDetailHero<Actions: View, BelowOverview: View>: View {
                 .background(Capsule().fill(Color.black.opacity(0.54)))
         }
         .buttonStyle(.plain)
-    }
-
-    /// About 140 characters fill three lines at the default text size.
-    private var isOverviewClipped: Bool {
-        CGFloat(overview?.count ?? 0) > 140 / max(overviewTextScale, 1)
     }
 }
 

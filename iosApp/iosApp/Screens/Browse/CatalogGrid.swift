@@ -13,6 +13,10 @@ struct CatalogGrid: View {
     var forcesThreeColumnsOnPhone = false
     let onItemTap: (BrowseItem) -> Void
     let onLoadMore: () -> Void
+    /// The grid asks for more when the card this far from the end appears,
+    /// so a load that adds fewer cards leaves the trigger on a card that is
+    /// already showing.
+    static let loadMoreLead = 6
     @Environment(\.browseLibraryId) private var browseLibraryId
     @Environment(AppRouter.self) private var router
     @State private var uiCustomization = UICustomizationPreferences.shared
@@ -60,6 +64,7 @@ struct CatalogGrid: View {
 
     var body: some View {
         let widthOverride = cardWidthOverride
+        let columns = columns
         LazyVGrid(columns: columns, spacing: rowSpacing) {
             if items.isEmpty && isLoading {
                 // First page still loading: the grid's own shape, unfilled.
@@ -67,31 +72,14 @@ struct CatalogGrid: View {
                     PosterSkeletonCard()
                 }
             }
-            ForEach(items) { item in
+            ForEach(IndexedItems(items: items)) { entry in
+                let item = entry.item
                 // Search can return episodes: caption them with the series
                 // name and "S01E02 · Pilot", as on Home.
-                MediaCard(
-                    title: EpisodeCardCaption.cardTitle(for: item),
-                    posterUrl: item.posterUrl ?? "",
-                    thumbhash: item.posterThumbhash,
-                    episodeWatchState: item.isEpisodeItem ? EpisodeWatchState(browseItem: item) : nil,
-                    imageIsEpisodeStill: item.posterIsEpisodeStill,
-                    mediaType: item.type,
-                    year: item.year,
-                    subtitle: EpisodeCardCaption.line(for: item),
-                    userState: item.userState,
-                    overlayData: OverlayData.from(item),
-                    action: { onItemTap(item) },
-                    playAction: playAction(for: item),
-                    contentId: item.contentId,
-                    seriesContext: SeriesDetailContext(item: SectionItem(browseItem: item)),
-                    aspect: item.isAudiobook ? .square : .poster,
-                    cardWidthOverride: widthOverride,
-                    episodeAccessibilityLabel: EpisodeCardCaption.accessibilityLabel(for: item)
-                )
+                card(for: item, widthOverride: widthOverride, rowTitles: rowTitles(at: entry.index, columnCount: columns.count))
                 .frame(maxWidth: .infinity)
                 .onAppear {
-                    if item.id == items.suffix(6).first?.id, hasMore {
+                    if item.id == items.suffix(Self.loadMoreLead).first?.id, hasMore {
                         onLoadMore()
                     }
                 }
@@ -117,6 +105,49 @@ struct CatalogGrid: View {
         }
     }
 
+    @ViewBuilder
+    private func card(for item: BrowseItem, widthOverride: CGFloat?, rowTitles: [String]?) -> some View {
+        if let boxSet = item.boxSet, item.isBoxSet {
+            // A box set opens its own page and has no title menu or Play.
+            MediaCard(
+                title: item.title,
+                posterUrl: item.posterUrl ?? boxSet.posterUrl ?? "",
+                thumbhash: item.posterThumbhash ?? boxSet.posterThumbhash,
+                mediaType: "movie",
+                subtitle: boxSet.cardCaption,
+                progress: boxSet.watchedProgress,
+                action: {
+                    if let route = Route.boxSet(boxSet) { router.navigate(to: route) }
+                },
+                aspect: .poster,
+                cardWidthOverride: widthOverride,
+                rowTitles: rowTitles,
+                boxSet: boxSet
+            )
+        } else {
+            MediaCard(
+                title: EpisodeCardCaption.cardTitle(for: item),
+                posterUrl: item.posterUrl ?? "",
+                thumbhash: item.posterThumbhash,
+                episodeWatchState: item.isEpisodeItem ? EpisodeWatchState(browseItem: item) : nil,
+                imageIsEpisodeStill: item.posterIsEpisodeStill,
+                mediaType: item.type,
+                year: item.year,
+                subtitle: EpisodeCardCaption.line(for: item),
+                userState: item.userState,
+                overlayData: OverlayData.from(item),
+                action: { onItemTap(item) },
+                playAction: playAction(for: item),
+                contentId: item.contentId,
+                seriesContext: SeriesDetailContext(item: SectionItem(browseItem: item)),
+                aspect: item.isAudiobook ? .square : .poster,
+                cardWidthOverride: widthOverride,
+                episodeAccessibilityLabel: EpisodeCardCaption.accessibilityLabel(for: item),
+                rowTitles: rowTitles
+            )
+        }
+    }
+
     private func playAction(for item: BrowseItem) -> (() -> Void)? {
         #if os(tvOS)
         guard PrairieMediaType.isDirectlyPlayable(item.type) else { return nil }
@@ -128,6 +159,20 @@ struct CatalogGrid: View {
                 backdropURL: item.backdropUrl
             )
         }
+        #else
+        return nil
+        #endif
+    }
+
+    /// Card titles in the grid row holding `index`, so each card sizes its
+    /// title to the row's tallest. Nil on macOS and tvOS, whose cards draw
+    /// one-line titles.
+    private func rowTitles(at index: Int, columnCount: Int) -> [String]? {
+        #if os(iOS)
+        guard columnCount > 0 else { return nil }
+        let rowStart = index - index % columnCount
+        let rowEnd = min(rowStart + columnCount, items.count)
+        return items[rowStart..<rowEnd].map { EpisodeCardCaption.cardTitle(for: $0) }
         #else
         return nil
         #endif
@@ -180,13 +225,41 @@ struct CatalogGrid: View {
         if let fit = widthFittedPosterFit {
             return fit.cardWidth / uiCustomization.cardPresentation.posterSize.scale
         }
-        #endif
-        guard usesThreeColumnPhoneLayout else { return nil }
+        // Phone cards shrink to their column rather than spilling into the
+        // gaps, as they would in a window narrower than three standard
+        // posters, such as the iPhone Duo's cover screen beside its status
+        // column.
+        guard UIDevice.current.userInterfaceIdiom == .phone else { return nil }
+        let scale = uiCustomization.cardPresentation.posterSize.scale
         let fittedWidth = AdaptiveColumns.fittedPosterWidth(
             containerWidth: gridWidth,
-            columnCount: 3,
-            spacing: 8
+            columnCount: columns.count,
+            spacing: 8,
+            maximumWidth: usesThreeColumnPhoneLayout
+                ? PrairieTheme.posterCardWidth
+                : PrairieTheme.posterCardWidth * scale
         )
-        return fittedWidth / uiCustomization.cardPresentation.posterSize.scale
+        return fittedWidth / scale
+        #else
+        return nil
+        #endif
+    }
+}
+
+/// The grid's items with their positions, without copying the array: a card
+/// finds its row from its position, and stays keyed by its item's ID.
+private struct IndexedItems: RandomAccessCollection {
+    struct Entry: Identifiable {
+        let index: Int
+        let item: BrowseItem
+        var id: String { item.id }
+    }
+
+    let items: [BrowseItem]
+    var startIndex: Int { items.startIndex }
+    var endIndex: Int { items.endIndex }
+
+    subscript(position: Int) -> Entry {
+        Entry(index: position, item: items[position])
     }
 }

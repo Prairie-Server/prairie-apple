@@ -138,6 +138,14 @@ struct PhonePlaybackSelectorRow: View {
     let selectedVersionFileId: Int?
     let selectedAudioTrackIndex: Int?
     let selectedSubtitleTrackIndex: Int?
+    /// The title's effective subtitle settings, for previewing what "Auto"
+    /// plays. Off after the viewer picks Auto on the page: the title then
+    /// inherits settings the page hasn't read yet, so the row says "Auto".
+    var previewsAutoSubtitle = false
+    var subtitleLanguage: String? = nil
+    var subtitleMode: String? = nil
+    var subtitleSignature: SubtitleTrackSignature? = nil
+    var showForcedSubtitles = true
     let onSelectVersion: (Int?) -> Void
     let onSelectAudioTrack: (Int?) -> Void
     let onSelectSubtitleTrack: (Int?) -> Void
@@ -145,6 +153,7 @@ struct PhonePlaybackSelectorRow: View {
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @Environment(\.detailSelectorPopover) private var selectorPopover
     #endif
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ScaledMetric(relativeTo: .subheadline) private var rowHeight = PhonePlaybackSelectorMetrics.rowHeight
@@ -163,7 +172,7 @@ struct PhonePlaybackSelectorRow: View {
                     .popover(
                         item: $activeSelector,
                         attachmentAnchor: .rect(.bounds),
-                        arrowEdge: .top
+                        arrowEdge: selectorPopover.arrowEdge
                     ) { kind in
                         selectorPresentation(for: kind)
                     }
@@ -182,6 +191,22 @@ struct PhonePlaybackSelectorRow: View {
         }
     }
 
+    /// The "Auto" preview, or nil for a bare "Auto". Also nil when the
+    /// player follows the device's caption settings, which the detail page
+    /// can't predict.
+    private var subtitleAutoContext: DetailPlaybackFormatting.SubtitleAutoContext? {
+        guard previewsAutoSubtitle,
+              !PlayerSettings.shared.subtitleMatchesSystemAppearance else { return nil }
+        return DetailPlaybackFormatting.SubtitleAutoContext(
+            version: currentVersion,
+            selectedAudioTrackIndex: selectedAudioTrackIndex,
+            preferredLanguage: subtitleLanguage,
+            mode: subtitleMode,
+            signature: subtitleSignature,
+            showForced: showForcedSubtitles
+        )
+    }
+
     private func selectorPresentation(
         for kind: PhonePlaybackSelectorKind
     ) -> PhonePlaybackSelectorSheet {
@@ -192,11 +217,20 @@ struct PhonePlaybackSelectorRow: View {
             selectedVersionFileId: selectedVersionFileId,
             selectedAudioTrackIndex: selectedAudioTrackIndex,
             selectedSubtitleTrackIndex: selectedSubtitleTrackIndex,
-            usesPopoverLayout: usesPopoverLayout,
+            popover: presentedPopover,
             onSelectVersion: onSelectVersion,
             onSelectAudioTrack: onSelectAudioTrack,
             onSelectSubtitleTrack: onSelectSubtitleTrack
         )
+    }
+
+    /// Nil when the selectors present a sheet.
+    private var presentedPopover: DetailSelectorPopover? {
+        #if os(iOS)
+        usesPopoverLayout ? selectorPopover : nil
+        #else
+        nil
+        #endif
     }
 
     private var usesPopoverLayout: Bool {
@@ -393,7 +427,8 @@ struct PhonePlaybackSelectorRow: View {
         case .subtitles:
             return DetailPlaybackFormatting.subtitleValueLabel(
                 version: currentVersion,
-                selectedSubtitleTrackIndex: selectedSubtitleTrackIndex
+                selectedSubtitleTrackIndex: selectedSubtitleTrackIndex,
+                autoContext: subtitleAutoContext
             )
         }
     }
@@ -405,7 +440,8 @@ private struct PhonePlaybackSelectorSheet: View {
     let selectedVersionFileId: Int?
     let selectedAudioTrackIndex: Int?
     let selectedSubtitleTrackIndex: Int?
-    let usesPopoverLayout: Bool
+    /// Nil when presented as a sheet.
+    let popover: DetailSelectorPopover?
     let onSelectVersion: (Int?) -> Void
     let onSelectAudioTrack: (Int?) -> Void
     let onSelectSubtitleTrack: (Int?) -> Void
@@ -425,6 +461,46 @@ private struct PhonePlaybackSelectorSheet: View {
     }
 
     var body: some View {
+        #if os(iOS)
+        if isCompactPopover {
+            compactList
+        } else {
+            titledList
+        }
+        #else
+        titledList
+        #endif
+    }
+
+    #if os(iOS)
+    /// Just the options, sized to fit and scrolling once they outgrow the
+    /// space above the selectors. Choosing one or tapping outside dismisses.
+    private var compactList: some View {
+        let rows = VStack(alignment: .leading, spacing: 0) {
+            optionContent
+        }
+        .padding(.vertical, 6)
+        return ViewThatFits(in: .vertical) {
+            rows
+            ScrollView { rows }
+        }
+        .frame(width: 300)
+        .frame(maxHeight: 360)
+        .task { await loadPreferredSubtitleLanguage() }
+        .presentationCompactAdaptation(.popover)
+    }
+    #endif
+
+    private var isCompactPopover: Bool {
+        popover?.isCompact == true
+    }
+
+    private func loadPreferredSubtitleLanguage() async {
+        await ProfilePrefsStore.shared.hydrateIfNeeded()
+        preferredSubtitleLanguage = ProfilePrefsStore.shared.preferredSubtitleLanguage
+    }
+
+    private var titledList: some View {
         NavigationStack {
             List {
                 optionContent
@@ -436,10 +512,7 @@ private struct PhonePlaybackSelectorSheet: View {
             #endif
             .scrollContentBackground(.hidden)
             .prairieSheetBackground(legacyColor: .prairieBackground)
-            .task {
-                await ProfilePrefsStore.shared.hydrateIfNeeded()
-                preferredSubtitleLanguage = ProfilePrefsStore.shared.preferredSubtitleLanguage
-            }
+            .task { await loadPreferredSubtitleLanguage() }
             .navigationTitle(kind.title)
             #if !os(macOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -462,8 +535,8 @@ private struct PhonePlaybackSelectorSheet: View {
         // Regular-width iPad uses this view as an anchored popover instead
         // of forcing a phone detent into the split-view detail column.
         .frame(
-            width: usesPopoverLayout ? 440 : nil,
-            height: usesPopoverLayout ? 480 : nil
+            width: popover == nil ? nil : 440,
+            height: popover == nil ? nil : 480
         )
         .presentationCompactAdaptation(.sheet)
         #endif
@@ -643,7 +716,8 @@ private struct PhonePlaybackSelectorSheet: View {
                         .foregroundColor(.prairieOnSurface)
                 }
             }
-            .padding(.vertical, 4)
+            .padding(.vertical, isCompactPopover ? 10 : 4)
+            .padding(.horizontal, isCompactPopover ? 16 : 0)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

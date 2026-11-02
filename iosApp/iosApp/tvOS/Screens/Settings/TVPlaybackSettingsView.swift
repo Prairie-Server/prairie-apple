@@ -15,6 +15,9 @@ struct TVPlaybackSettingsPane: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             qualitySection
+            if viewModel.showsConnectionGroup {
+                connectionSection
+            }
             streamingSection
             episodesSection
             // Hidden entirely on servers that do not serve the two keys.
@@ -37,6 +40,8 @@ struct TVPlaybackSettingsPane: View {
         }
         .task { await seekIntervals.refresh() }
         .task { await spoilers.refresh() }
+        // Reloads on another network, whose speed and limit differ.
+        .task(id: BandwidthProbeScheduler.shared.connectionRevision) { await viewModel.loadPlaybackConnection() }
         .alert(
             SettingsViewModel.useProfileSettingsTitle,
             isPresented: $showUseProfileSettingsConfirmation
@@ -71,7 +76,97 @@ struct TVPlaybackSettingsPane: View {
         ) { showPicker(.maxBitrate) }
         .focused(detailFocus, equals: .playbackMaxBitrate)
 
-        TVSettingsFooter(viewModel.qualityFooterText)
+        if viewModel.showsBufferingQualityMode {
+            TVSettingsPickerRow(
+                title: SettingsViewModel.bufferingQualityTitle,
+                value: viewModel.bufferingQualityMode.label
+            ) { showPicker(.bufferingQualityMode) }
+            .focused(detailFocus, equals: .playbackBufferingQualityMode)
+        }
+
+        if let limit = viewModel.learnedConnectionLimitText {
+            Button {
+                Task { await resetLearnedLimit() }
+            } label: {
+                HStack(spacing: 16) {
+                    Text(limit)
+                        .font(.system(size: 26))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    Spacer(minLength: 16)
+                    Text("Reset")
+                        .font(.system(size: 24, weight: .semibold))
+                }
+            }
+            .buttonStyle(TVSettingsPaneRowStyle())
+            .focused(detailFocus, equals: .playbackLearnedLimitReset)
+        }
+
+        TVSettingsFooter(
+            viewModel.showsBufferingQualityMode
+                ? "\(viewModel.qualityFooterText) \(SettingsViewModel.bufferingQualityDescription)"
+                : viewModel.qualityFooterText
+        )
+        if let error = viewModel.learnedLimitResetError {
+            TVSettingsWarningFooter(error)
+        }
+    }
+
+    /// Resets the limit. The row then disappears, so focus moves up to the
+    /// row above instead of being left on nothing.
+    private func resetLearnedLimit() async {
+        await viewModel.resetLearnedConnectionLimit()
+        if viewModel.learnedConnectionLimit == nil,
+           detailFocus.wrappedValue == .playbackLearnedLimitReset {
+            detailFocus.wrappedValue = viewModel.showsBufferingQualityMode
+                ? .playbackBufferingQualityMode
+                : .playbackMaxBitrate
+        }
+    }
+
+    /// The speed the bandwidth probe measured on this connection, a test on
+    /// demand, and what Auto plays as-is at that speed. Apple TV is never on
+    /// cellular, so the row always offers the test unless the network is
+    /// metered.
+    @ViewBuilder
+    private var connectionSection: some View {
+        TVSettingsSectionHeader(SettingsViewModel.connectionSectionTitle.uppercased())
+
+        Button {
+            Task { await viewModel.testConnectionSpeed() }
+        } label: {
+            HStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(SettingsViewModel.connectionSpeedTitle)
+                        .font(.system(size: 26))
+                    // "measured 3 minutes ago" moves on while the page is open.
+                    TimelineView(.everyMinute) { context in
+                        Text(viewModel.connectionSpeedLine(at: context.date))
+                            .font(.system(size: 22))
+                            .opacity(0.7)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                    }
+                }
+                Spacer(minLength: 16)
+                if viewModel.connectionSpeedSkippedText == nil {
+                    Text(viewModel.isTestingConnectionSpeed
+                         ? SettingsViewModel.testingSpeedLabel
+                         : SettingsViewModel.testSpeedAction)
+                        .font(.system(size: 24, weight: .semibold))
+                }
+            }
+        }
+        .buttonStyle(TVSettingsPaneRowStyle())
+        .disabled(viewModel.connectionSpeedSkippedText != nil)
+        .focused(detailFocus, equals: .playbackConnectionSpeedTest)
+
+        if let budget = viewModel.autoBudgetText {
+            TVSettingsFooter(budget)
+        }
+        if let message = viewModel.connectionSpeedMessage {
+            TVSettingsWarningFooter(message)
+        }
     }
 
     @ViewBuilder
@@ -129,7 +224,7 @@ struct TVPlaybackSettingsPane: View {
         }
 
         TVSettingsToggleRow(
-            title: "TrueHD Atmos",
+            title: "TrueHD Atmos and DTS:X",
             isOn: viewModel.trueHDAtmosEnabled
         ) {
             let value = !viewModel.trueHDAtmosEnabled
@@ -154,7 +249,8 @@ struct TVPlaybackSettingsPane: View {
     private var streamingFooterText: String {
         var text = SettingsViewModel.hdrFooterText
         text += " If surround plays as stereo, turn off Lossless Multichannel Audio."
-        text += " TrueHD Atmos adds height channels but plays those tracks as compressed audio."
+        text += " With TrueHD Atmos and DTS:X on, those tracks keep their height channels but play as compressed audio."
+        text += " Turn it off if your receiver or soundbar doesn't support Dolby Atmos."
         return text
     }
 
@@ -341,6 +437,13 @@ struct TVPlaybackSettingsPane: View {
                 selection: selection(.maxBitrate),
                 returnFocus: .playbackMaxBitrate
             )
+        case .bufferingQualityMode:
+            TVSettingsPickerRequest(
+                title: SettingsViewModel.bufferingQualityTitle,
+                options: [TVSettingsOptions.useProfileSetting] + TVSettingsOptions.bufferingQualityMode,
+                selection: selection(.bufferingQualityMode),
+                returnFocus: .playbackBufferingQualityMode
+            )
         case .audioLanguage:
             TVSettingsPickerRequest(
                 title: "Audio Language",
@@ -448,6 +551,7 @@ struct TVPlaybackSettingsPane: View {
     enum PickerKind {
         case resolution
         case maxBitrate
+        case bufferingQualityMode
         case audioLanguage
         case autoPlayNext
         case skipCredits

@@ -76,6 +76,20 @@ final class SettingsViewModel {
     var cellularQualityLabel: String { PlayerSettings.shared.cellularQualityLabel }
     static let cellularQualityFooterText = "Used on mobile data and metered networks, such as a phone hotspot."
 
+    var bufferingQualityMode: BufferingQualityMode {
+        get { PlayerSettings.shared.bufferingQualityMode }
+        set { PlayerSettings.shared.setBufferingQualityMode(newValue) }
+    }
+
+    /// Hidden where the server's settings don't define
+    /// `playback.buffering_quality_mode`; the player then plays `always`.
+    var showsBufferingQualityMode: Bool { !PlayerSettings.shared.serverLacksBufferingQualityMode }
+
+    /// The manifest's label and description for `playback.buffering_quality_mode`.
+    static let bufferingQualityTitle = "Lower quality when buffering"
+    static let bufferingQualityDescription =
+        "What Prairie does on Auto when playback keeps buffering. Prairie always asks before lowering a quality you picked."
+
     var preferredAudioLanguage: String {
         get { PlayerSettings.shared.audioLanguage }
         set { PlayerSettings.shared.setAudioLanguage(newValue) }
@@ -406,6 +420,290 @@ final class SettingsViewModel {
         await PlayerSettings.shared.resetAllDeviceSettings()
     }
 
+    // MARK: Learned connection limit
+
+    /// The limit the server learned for this device on its current
+    /// connection, shown under the buffering row with a Reset action. Nil
+    /// hides the row: a server without `buffering_quality_v1`, no limit, or a
+    /// failed read.
+    private(set) var learnedConnectionLimit: APIv2PlaybackConnection.LearnedLimit?
+
+    /// Set when Reset failed, until the next Reset or load.
+    private(set) var learnedLimitResetError: String?
+    @ObservationIgnored private var connectionReadGeneration: UInt64 = 0
+
+    static let learnedLimitResetFailedMessage = "Couldn't reset the limit. Try again."
+
+    /// Nil in `never`, whose starts ignore the limit.
+    var learnedConnectionLimitText: String? {
+        guard bufferingQualityMode != .never else { return nil }
+        return learnedConnectionLimit.map { Self.learnedLimitText($0) }
+    }
+
+    /// "Limited to 44 Mbps after buffering on Oct 17": the rate as Settings
+    /// shows rates, and the date of the most recent lowering, as month and
+    /// day in the viewer's locale.
+    static func learnedLimitText(
+        _ limit: APIv2PlaybackConnection.LearnedLimit,
+        locale: Locale = .autoupdatingCurrent,
+        timeZone: TimeZone = .autoupdatingCurrent
+    ) -> String {
+        var style = Date.FormatStyle.dateTime.month(.abbreviated).day().locale(locale)
+        style.timeZone = timeZone
+        return "Limited to \(connectionRateText(kbps: limit.kbps)) after buffering on \(limit.observedAt.formatted(style))"
+    }
+
+    /// Reads `GET /api/v2/playback/connection` for the learned-limit row and,
+    /// with `connection_speed_v1`, the Connection group.
+    @MainActor
+    func loadPlaybackConnection() async {
+        learnedLimitResetError = nil
+        // Only the latest read publishes: a cancelled one, or one a newer
+        // read overtook, changes nothing.
+        connectionReadGeneration &+= 1
+        let generation = connectionReadGeneration
+        func isLatest() -> Bool { generation == connectionReadGeneration && !Task.isCancelled }
+        // Fresh, so a feature the server adds or withdraws while the app runs
+        // shows or hides its rows on the next visit.
+        let capability = try? await PlaybackV3CapabilityGate.shared.requireNeutralProtocolV3(fresh: true)
+        guard isLatest() else { return }
+        let showsLearnedLimit = capability?.bufferingQuality ?? false
+        showsConnectionGroup = capability?.connectionSpeed ?? false
+        let auth = showsLearnedLimit || showsConnectionGroup
+            ? await TokenStore.shared.captureOrdinaryRequestAuth()
+            : nil
+        let connection: APIv2PlaybackConnection? = if let auth {
+            try? await PrairieAPI.shared.apiV2Client.playbackConnection(auth: auth)
+        } else {
+            nil
+        }
+        guard isLatest() else { return }
+        guard let connection else {
+            learnedConnectionLimit = nil
+            connectionProbe = nil
+            connectionSample = nil
+            autoBudgetKbps = nil
+            return
+        }
+        learnedConnectionLimit = showsLearnedLimit ? connection.learnedLimit : nil
+        connectionProbe = showsConnectionGroup ? connection.probe : nil
+        connectionSample = showsConnectionGroup ? connection.playbackSample : nil
+        autoBudgetKbps = showsConnectionGroup ? connection.autoBudgetKbps : nil
+    }
+
+    @MainActor
+    func resetLearnedConnectionLimit() async {
+        learnedLimitResetError = nil
+        do {
+            guard let auth = await TokenStore.shared.captureOrdinaryRequestAuth() else {
+                throw HTTPError.requestIdentityChanged
+            }
+            try await PrairieAPI.shared.apiV2Client.resetPlaybackLearnedLimit(auth: auth)
+            learnedConnectionLimit = nil
+            // The server's Auto budget counted the limit. Not awaited, so the
+            // caller can move focus off the Reset row before it can vanish.
+            if showsConnectionGroup { Task { await loadPlaybackConnection() } }
+        } catch {
+            learnedLimitResetError = Self.learnedLimitResetFailedMessage
+        }
+    }
+
+    // MARK: Connection speed
+
+    /// The server advertises `connection_speed_v1`: Playback settings show a
+    /// Connection group with the measured speed, **Test speed**, and the Auto
+    /// budget.
+    private(set) var showsConnectionGroup = false
+    /// The server's latest probe for this device on this connection.
+    private(set) var connectionProbe: APIv2PlaybackConnection.Probe?
+    /// The server's playback sample for this device on this connection.
+    private(set) var connectionSample: APIv2PlaybackConnection.PlaybackSample?
+    /// `auto_budget_kbps`, computed by the server; nil hides the line.
+    private(set) var autoBudgetKbps: Int?
+    private(set) var isTestingConnectionSpeed = false
+    /// The answer to the last **Test speed**, until the next one. "Try again
+    /// in N seconds" clears itself once the N seconds have passed.
+    private(set) var connectionSpeedMessage: String?
+    @ObservationIgnored private var connectionSpeedMessageExpiry: Task<Void, Never>?
+    /// When the measurement the server didn't save was taken. Settings keeps
+    /// showing the server's reading rather than that one.
+    @ObservationIgnored private var unsavedMeasurementAt: Date?
+
+    static let connectionSectionTitle = "Connection"
+    static let connectionSpeedTitle = "Connection speed"
+    static let testSpeedAction = "Test speed"
+    static let testingSpeedLabel = "Testing…"
+    static let notMeasuredText = "Not measured yet"
+    static let stopPlaybackToTestMessage = "Stop playback before testing, then try again."
+    static let speedTestFailedMessage = "Couldn't measure the connection speed. Try again."
+    /// The test measured, but the server did not store the result.
+    static let speedTestNotSavedMessage = "Couldn't save the speed test result. Try again."
+
+    /// The Connection speed row's line as of `now`: why speed tests are
+    /// skipped on this network, which replaces the speed, or the speed.
+    @MainActor
+    func connectionSpeedLine(at now: Date) -> String {
+        connectionSpeedSkippedText ?? connectionSpeedText(at: now)
+    }
+
+    /// "48 Mbps · measured 3 minutes ago on Wi-Fi", or "Faster than 115 Mbps
+    /// · …" for a lower bound: the newer of the server's speed test and this
+    /// device's own, unless the server didn't save this device's. Without
+    /// one, the playback sample: "Faster than 51 Mbps · seen during playback
+    /// 2 hours ago". Else "Not measured yet".
+    @MainActor
+    func connectionSpeedText(at now: Date) -> String {
+        let own = BandwidthProbeScheduler.shared.probeReading
+        let server = connectionProbe
+        if let own, case .probe(let transport) = own.source, own.measuredAt != unsavedMeasurementAt,
+           server.map({ own.measuredAt >= $0.measuredAt }) ?? true {
+            return Self.connectionSpeedText(
+                kbps: own.kbps, lowerBound: own.lowerBound, measuredAt: own.measuredAt, transport: transport, now: now
+            )
+        }
+        if let server {
+            return Self.connectionSpeedText(
+                kbps: server.kbps, lowerBound: server.lowerBound, measuredAt: server.measuredAt,
+                transport: server.transport, now: now
+            )
+        }
+        if let sample = connectionSample {
+            return Self.playbackSampleText(kbps: sample.kbps, measuredAt: sample.measuredAt, now: now)
+        }
+        return Self.notMeasuredText
+    }
+
+    /// Why speed tests are skipped on the network in use, or nil when they
+    /// run. With a note, neither **Test speed** nor the budget shows.
+    @MainActor
+    var connectionSpeedSkippedText: String? {
+        Self.connectionSpeedSkippedText(
+            network: BandwidthProbeScheduler.shared.network,
+            cellularQualityApplies: PlayerSettings.offersCellularQuality
+        )
+    }
+
+    /// "Auto plays videos up to 35 Mbps without converting them." Nil in
+    /// `never` while a limit is learned: the server's budget counts the
+    /// limit, which that mode's starts ignore.
+    @MainActor
+    var autoBudgetText: String? {
+        guard connectionSpeedSkippedText == nil, let autoBudgetKbps,
+              bufferingQualityMode != .never || learnedConnectionLimit == nil else { return nil }
+        return "Auto plays videos up to \(Self.connectionRateText(kbps: autoBudgetKbps)) without converting them."
+    }
+
+    /// **Test speed**: runs the probe now, reports it, then reads the
+    /// connection again for the server's budget.
+    @MainActor
+    func testConnectionSpeed() async {
+        guard !isTestingConnectionSpeed else { return }
+        isTestingConnectionSpeed = true
+        setConnectionSpeedMessage(nil)
+        defer { isTestingConnectionSpeed = false }
+        switch await BandwidthProbeScheduler.shared.runNow() {
+        case .measured:
+            unsavedMeasurementAt = nil
+            await loadPlaybackConnection()
+        case .notSaved(let measurement):
+            unsavedMeasurementAt = measurement.reading.measuredAt
+            setConnectionSpeedMessage(Self.speedTestNotSavedMessage)
+            await loadPlaybackConnection()
+        case .rateLimited(let seconds):
+            setConnectionSpeedMessage(Self.tryAgainMessage(seconds: seconds), for: .seconds(seconds))
+        case .playbackActive:
+            setConnectionSpeedMessage(Self.stopPlaybackToTestMessage)
+        case .metered:
+            // The row already says speed tests are skipped here.
+            break
+        case .unavailable, .tooLittleData, .networkError, .offline, .notSupported, .interrupted:
+            setConnectionSpeedMessage(Self.speedTestFailedMessage)
+        }
+    }
+
+    /// "Try again in 12 seconds", "1 second" at one.
+    static func tryAgainMessage(seconds: Int) -> String {
+        "Try again in \(seconds) \(seconds == 1 ? "second" : "seconds")"
+    }
+
+    /// Shows `message`, for `lifetime` when one is given.
+    @MainActor
+    private func setConnectionSpeedMessage(_ message: String?, for lifetime: Duration? = nil) {
+        connectionSpeedMessageExpiry?.cancel()
+        connectionSpeedMessageExpiry = nil
+        connectionSpeedMessage = message
+        guard let lifetime else { return }
+        connectionSpeedMessageExpiry = Task { [weak self] in
+            try? await Task.sleep(for: lifetime)
+            guard !Task.isCancelled else { return }
+            self?.connectionSpeedMessage = nil
+        }
+    }
+
+    /// "48 Mbps · measured 3 minutes ago on Wi-Fi", or "Faster than 115 Mbps ·
+    /// measured …" for a lower bound.
+    static func connectionSpeedText(
+        kbps: Int, lowerBound: Bool = false, measuredAt: Date, transport: String, now: Date = Date()
+    ) -> String {
+        let network = switch transport {
+        case "wifi": "Wi-Fi"
+        case "ethernet": "Ethernet"
+        case "cellular": "cellular"
+        default: "this connection"
+        }
+        return "\(speedText(kbps: kbps, lowerBound: lowerBound)) · measured \(ageText(since: measuredAt, now: now)) on \(network)"
+    }
+
+    /// "Faster than 51 Mbps · seen during playback 2 hours ago": a playback
+    /// sample, always a lower bound.
+    static func playbackSampleText(kbps: Int, measuredAt: Date, now: Date = Date()) -> String {
+        "\(speedText(kbps: kbps, lowerBound: true)) · seen during playback \(ageText(since: measuredAt, now: now))"
+    }
+
+    private static func speedText(kbps: Int, lowerBound: Bool) -> String {
+        lowerBound ? "Faster than \(connectionRateText(kbps: kbps))" : connectionRateText(kbps: kbps)
+    }
+
+    /// Under a minute is "just now"; then whole minutes, hours and days,
+    /// rounded down. A clock that reads before `date` counts as just now.
+    private static func ageText(since date: Date, now: Date) -> String {
+        let minutes = max(0, Int(now.timeIntervalSince(date) / 60))
+        switch minutes {
+        case ..<1:
+            return "just now"
+        case ..<60:
+            return "\(minutes) \(minutes == 1 ? "minute" : "minutes") ago"
+        case ..<(24 * 60):
+            let hours = minutes / 60
+            return "\(hours) \(hours == 1 ? "hour" : "hours") ago"
+        default:
+            let days = minutes / (24 * 60)
+            return "\(days) \(days == 1 ? "day" : "days") ago"
+        }
+    }
+
+    /// A rate as Settings shows it, rounded down so a lower bound or the
+    /// budget never overstates the link: kbps below 1 Mbps, one decimal
+    /// below 10 Mbps ("4.5 Mbps", "4 Mbps" for a whole one), whole Mbps from
+    /// 10, with no digit grouping.
+    static func connectionRateText(kbps: Int) -> String {
+        let kbps = max(kbps, 0)
+        if kbps < 1_000 { return "\(kbps) kbps" }
+        if kbps >= 10_000 { return "\(kbps / 1_000) Mbps" }
+        let tenths = kbps / 100
+        return tenths % 10 == 0 ? "\(tenths / 10) Mbps" : "\(tenths / 10).\(tenths % 10) Mbps"
+    }
+
+    static func connectionSpeedSkippedText(network: BandwidthProbeNetwork, cellularQualityApplies: Bool) -> String? {
+        guard network.isConnected, network.isMetered else { return nil }
+        if network.usesCellular {
+            return "Speed tests are skipped on cellular, and the Cellular Quality settings apply."
+        }
+        return cellularQualityApplies
+            ? "Speed tests are skipped on metered networks, and the Cellular Quality settings apply."
+            : "Speed tests are skipped on metered networks."
+    }
+
     // MARK: Device value or profile value
 
     /// Picker tag for "Use Profile Setting": selected while this device has
@@ -434,6 +732,7 @@ final class SettingsViewModel {
         case .resolution: return PlayerSettings.shared.preferredQualityResolution
         case .maxBitrate: return PlayerSettings.shared.maxBitrateKbps.map(String.init) ?? Self.noBitrateLimitTag
         case .cellularQuality: return cellularQualityPresetId ?? Self.customQualityTag
+        case .bufferingQualityMode: return bufferingQualityMode.wireValue
         case .audioLanguage: return preferredAudioLanguage
         case .introSkipMode: return introSkipMode.wireValue
         case .autoSkipCredits: return skipCredits ? Self.onTag : Self.offTag
@@ -466,6 +765,9 @@ final class SettingsViewModel {
         case .cellularQuality:
             guard tag != Self.customQualityTag else { return }
             setCellularQualityPreset(tag)
+        case .bufferingQualityMode:
+            guard let mode = BufferingQualityMode(wireValue: tag) else { return }
+            bufferingQualityMode = mode
         case .audioLanguage:
             preferredAudioLanguage = tag
         case .introSkipMode:

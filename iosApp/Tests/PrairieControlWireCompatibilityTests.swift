@@ -117,6 +117,36 @@ final class PrairieControlWireCompatibilityTests: XCTestCase {
         XCTAssertThrowsError(try JSONDecoder().decode(PrairieControlMessage.self, from: data))
     }
 
+    // MARK: - Messages: unknown types from newer peers
+
+    /// A newer peer's message type decodes as unsupported instead of throwing,
+    /// which would drop the connection.
+    func testUnknownMessageTypeDecodesAsUnsupported() throws {
+        let data = Data(
+            #"{"type":"controllers","v":2,"controllers":{"list":[{"deviceName":"Kitchen"}]}}"#.utf8
+        )
+        let message = try JSONDecoder().decode(PrairieControlMessage.self, from: data)
+        XCTAssertEqual(message, .unsupported(type: "controllers"))
+    }
+
+    func testUnsupportedMessageRoundTrips() throws {
+        let message = PrairieControlMessage.unsupported(type: "controllers")
+        let data = try JSONEncoder().encode(message)
+        XCTAssertEqual(try JSONDecoder().decode(PrairieControlMessage.self, from: data), message)
+    }
+
+    /// A known type with a malformed payload is still a real decode error.
+    /// Tolerance is scoped to unknown types, not to junk.
+    func testKnownMessageTypeWithBadPayloadStillFailsToDecode() {
+        let data = Data(#"{"type":"error","v":2,"error":{"code":42}}"#.utf8)
+        XCTAssertThrowsError(try JSONDecoder().decode(PrairieControlMessage.self, from: data))
+    }
+
+    func testMessageWithoutTypeStillFailsToDecode() {
+        let data = Data(#"{"v":2}"#.utf8)
+        XCTAssertThrowsError(try JSONDecoder().decode(PrairieControlMessage.self, from: data))
+    }
+
     // MARK: - Commands: argument round trip
 
     /// `PrairieControlCommand` decodes by hand, so every argument field must
@@ -155,6 +185,28 @@ final class PrairieControlWireCompatibilityTests: XCTestCase {
         let control = try XCTUnwrap(json["control"] as? [String: Any])
         XCTAssertEqual(control["name"] as? String, "set_video_gravity")
         XCTAssertEqual(control["value"] as? String, "fill")
+    }
+
+    // MARK: - Launch: the picked-version pin
+
+    /// Older phones, and Android phones, send a launch without `pinsVersion`;
+    /// it must still decode (as a default play) or the session drops.
+    func testLaunchDecodesWithAndWithoutThePickedVersionPin() throws {
+        let rows: [(extraKeys: String, pins: Bool?)] = [
+            ("", nil),
+            (#","pinsVersion":true"#, true),
+        ]
+        for row in rows {
+            let json = #"{"type":"launch","v":2,"launch":{"serverId":"s1","playback":{"#
+                + #""contentId":"c1","fileId":42,"startFromBeginning":false"#
+                + row.extraKeys + "}}}"
+            let message = try JSONDecoder().decode(PrairieControlMessage.self, from: Data(json.utf8))
+            guard case .launch(let launch) = message else {
+                return XCTFail("Expected a launch message")
+            }
+            XCTAssertEqual(launch.playback.fileId, 42)
+            XCTAssertEqual(launch.playback.pinsVersion, row.pins)
+        }
     }
 
     // MARK: - Fixtures

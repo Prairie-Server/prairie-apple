@@ -84,9 +84,13 @@ struct MacFeaturedHero: View {
 
     private func backdrop(for item: SectionItem) -> some View {
         Group {
-            // An empty URL is no artwork: fall back as for a missing one.
-            let backdropURL = item.backdropUrl?.nonEmpty
-            if let url = backdropURL ?? item.posterUrl?.nonEmpty {
+            if let seriesBackdrop = item.episodeSeriesBackdrop {
+                // An episode's own backdrop is usually a small still; its
+                // series backdrop fills the hero and is never a spoiler.
+                AsyncImageView(url: seriesBackdrop.url, thumbhash: seriesBackdrop.thumbhash, contentMode: .fill)
+            } else if let url = item.backdropUrl?.nonEmpty ?? item.posterUrl?.nonEmpty {
+                // An empty URL is no artwork: fall back as for a missing one.
+                let backdropURL = item.backdropUrl?.nonEmpty
                 AsyncImageView(
                     url: url,
                     thumbhash: backdropURL == nil ? item.posterThumbhash : item.backdropThumbhash,

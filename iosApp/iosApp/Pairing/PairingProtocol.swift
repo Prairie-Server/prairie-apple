@@ -7,20 +7,19 @@ enum PairingProtocol {
     static let version = 1
     /// Bonjour service type the TV advertises and the phone browses for.
     static let serviceType = "_prairiepair._tcp"
+    /// What a Roku advertises instead. Roku has no TLS on sockets an app
+    /// listens on, so it takes the same messages over plain TCP; the
+    /// separate type keeps phones that only dial TLS from offering it.
+    /// prairie-roku `docs/companion-pairing.md`.
+    static let rokuServiceType = "_prairiepair-roku._tcp"
 
     /// Rollout gate for sign-in TVs: whether the TV sign-in screen
     /// advertises `st=login`. Both phone apps must accept `login` TVs before
     /// either TV advertises one; a phone that predates them offers a
     /// sign-in TV the setup chooser and pushes servers without an identity.
-    /// On in Debug builds for development; turn it on for release once the
-    /// iOS and Android phone apps that handle `login` have shipped.
-    static let advertisesSignInTVs: Bool = {
-        #if DEBUG
-        return true
-        #else
-        return false
-        #endif
-    }()
+    /// On in every build: the iOS and Android phone apps that handle `login`
+    /// have shipped.
+    static let advertisesSignInTVs = true
 
     /// TXT keys. `st` is the receiver state; `srv` is the deployment
     /// identity of a `login` TV's server (absent for `setup`).

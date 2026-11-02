@@ -26,6 +26,9 @@ struct DownloadCapability: Codable, Hashable, Sendable {
     let bulkQuality: Bool
     /// Monitors store a quality; without it they download originals.
     let monitorQuality: Bool
+    /// A `revoked` entry was revoked by an administrator: delete the local
+    /// copy, then the entry. Without it revoked files stay playable.
+    let revokedRemovesLocal: Bool
 
     /// Downloads are usable only when the capability is available and this
     /// principal may use it.
@@ -51,6 +54,7 @@ struct DownloadCapability: Codable, Hashable, Sendable {
         case monitoringModes
         case bulkQuality
         case monitorQuality
+        case revokedRemovesLocal
     }
 
     init(_ wire: APIv2DownloadCapability) {
@@ -69,6 +73,7 @@ struct DownloadCapability: Codable, Hashable, Sendable {
         monitoringModes = wire.monitoringModes
         bulkQuality = wire.bulkQuality ?? false
         monitorQuality = wire.monitorQuality ?? false
+        revokedRemovesLocal = wire.revokedRemovesLocal ?? false
     }
 
     /// Reads the cached copy. A copy cached before `state` and `allowed`
@@ -88,6 +93,7 @@ struct DownloadCapability: Codable, Hashable, Sendable {
         monitoringModes = try container.decode([String].self, forKey: .monitoringModes)
         bulkQuality = try container.decodeIfPresent(Bool.self, forKey: .bulkQuality) ?? false
         monitorQuality = try container.decodeIfPresent(Bool.self, forKey: .monitorQuality) ?? false
+        revokedRemovesLocal = try container.decodeIfPresent(Bool.self, forKey: .revokedRemovesLocal) ?? false
     }
 }
 
@@ -280,6 +286,9 @@ struct OfflineManifest: Codable, Hashable, Sendable {
     let credits: TimeRange?
     let recap: TimeRange?
     let preview: TimeRange?
+    /// Every marker occurrence; absent from manifests saved before the
+    /// server sent it, which then fall back to the singular fields.
+    let markerSegments: [PlaybackMarkerSegment]?
 
     let subtitles: [OfflineSubtitle]?
     let stableIdentity: StableIdentity?
@@ -337,6 +346,7 @@ struct OfflineManifest: Codable, Hashable, Sendable {
         case credits
         case recap
         case preview
+        case markerSegments
         case subtitles
         case stableIdentity
         case integrity
@@ -386,6 +396,7 @@ struct OfflineManifest: Codable, Hashable, Sendable {
         credits = try keyed.decodeIfPresent(TimeRange.self, forKey: .credits)
         recap = try keyed.decodeIfPresent(TimeRange.self, forKey: .recap)
         preview = try keyed.decodeIfPresent(TimeRange.self, forKey: .preview)
+        markerSegments = try keyed.decodeIfPresent([PlaybackMarkerSegment].self, forKey: .markerSegments)
         subtitles = try keyed.decodeIfPresent([OfflineSubtitle].self, forKey: .subtitles)
         stableIdentity = try keyed.decodeIfPresent(StableIdentity.self, forKey: .stableIdentity)
         integrity = try keyed.decodeIfPresent(OfflineIntegrity.self, forKey: .integrity)
@@ -433,6 +444,7 @@ struct OfflineManifest: Codable, Hashable, Sendable {
         try keyed.encodeIfPresent(credits, forKey: .credits)
         try keyed.encodeIfPresent(recap, forKey: .recap)
         try keyed.encodeIfPresent(preview, forKey: .preview)
+        try keyed.encodeIfPresent(markerSegments, forKey: .markerSegments)
         try keyed.encodeIfPresent(subtitles, forKey: .subtitles)
         try keyed.encodeIfPresent(stableIdentity, forKey: .stableIdentity)
         try keyed.encodeIfPresent(integrity, forKey: .integrity)

@@ -131,6 +131,19 @@ enum AppleDecodeCapabilities {
     /// playback use the engine manifest below and its per-source probe.
     static let audioContainers = ["mp3", "m4a", "m4b", "aac", "flac", "wav"]
 
+    /// Theme music plays through AVFoundation, not Aether, so it narrows the
+    /// bare audio containers to what AVPlayer opens over HTTP. AVFoundation
+    /// has no Ogg demuxer, so Vorbis and Opus themes arrive converted to AAC in
+    /// MP4. `mp4`/`aac` is also the pair that lets the server convert at all.
+    static let themeAudioFormats: [(container: String, codec: String)] = [
+        ("mp3", "mp3"),
+        ("mp4", "aac"), ("mp4", "alac"),
+        ("m4a", "aac"), ("m4a", "alac"),
+        ("aac", "aac"),
+        ("flac", "flac"),
+        ("wav", "pcm"),
+    ]
+
     /// Prairie's declared containers for online original HTTP.
     /// Prairie's scanner records MPEG program streams (`.mpg`/`.vob`) as `mpeg`,
     /// so that token is what carries FFmpegBuild's `mpegps` demuxer claim.

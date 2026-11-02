@@ -6,20 +6,23 @@ texts are bundled beside this file and are available from Settings > About >
 Acknowledgements.
 
 AetherEngine
-  Revision: b0712217abb7399aeb21f875bcc7c26e7af92fd8 (upstream release
-  7.36.0, through upstream commit 74c81b3c, plus Prairie patches for subtitle renditions,
-  source timing, primary ASS routing with normalized secondary/PiP text,
-  refreshable authorization for native HLS, sidecar subtitles and fonts,
-  dense subtitle catch-up, audio-switch tracking, playback recovery, and
-  resuming forward-only sources)
+  Revision: df72cc59606ec823ce6a5231a53d7eee385ed72e (upstream release
+  7.47.0 and upstream main through commit def48fe8, plus Prairie patches for
+  subtitle renditions, source timing, primary ASS routing with normalized
+  secondary/PiP text, refreshable authorization for native HLS, sidecar
+  subtitles and fonts, truncated sidecar refetch, dense subtitle catch-up,
+  audio-switch tracking, playback recovery, and resuming forward-only
+  sources)
   License: GNU LGPL version 3 with the upstream Apple Store / DRM exception
-  Source (modified, as built): https://github.com/Silo-Server/AetherEngine/tree/b0712217abb7399aeb21f875bcc7c26e7af92fd8
-  Upstream base: https://github.com/superuser404notfound/AetherEngine/tree/74c81b3c5a0047e1b0229805c20562910367b0e5
-  Rebuild: the Package.swift and source tree at that revision
+  Source (modified, as built): https://github.com/Silo-Server/AetherEngine/tree/df72cc59606ec823ce6a5231a53d7eee385ed72e
+  Upstream base: https://github.com/superuser404notfound/AetherEngine/tree/def48fe8ada812002c3d7b49d5d111c7d125f106
+  Rebuild: the Package.swift and source tree at that revision, with its
+  default package traits: TrueHD Atmos and DTS:X object rendering are built;
+  Dolby Vision Profile 7 FEL composition and Profile 5 still reshaping are not
 
 FFmpegBuild and embedded media frameworks
-  Revision: 013c48bd4d3073428f31cade039ec4ed958d0ceb (release 3.7.1)
-  Source and rebuild script: https://github.com/superuser404notfound/FFmpegBuild/tree/013c48bd4d3073428f31cade039ec4ed958d0ceb
+  Revision: 28cd8757ff5338396326d9eea296c33e777b05cc (release 3.10.0)
+  Source and rebuild script: https://github.com/superuser404notfound/FFmpegBuild/tree/28cd8757ff5338396326d9eea296c33e777b05cc
 
   Components built by that revision:
   - FFmpeg n8.1.3, currently 1041abdc962f4cc4f394aa8de9dc5236c0c3b9e7:
@@ -36,7 +39,8 @@ FFmpegBuild and embedded media frameworks
   The exact build is configured without --enable-gpl, --enable-version3, or
   nonfree components. FFmpegBuild removes the three GPL libzvbi source files
   before compilation and publishes the replacement stubs and patches in its
-  build.sh. The app embeds these nine libraries as separate dynamic
+  build.sh and patches/, including the patch that lets FFmpeg's dca decoder
+  read DTS:X heights. The app embeds these nine libraries as separate dynamic
   frameworks: AetherLibavcodec, AetherLibavformat, AetherLibavutil,
   AetherLibswresample, AetherLibswscale, AetherLibavfilter, AetherLibdav1d,
   AetherLibzimg, and AetherLibzvbi.
@@ -48,26 +52,16 @@ FFmpegBuild and embedded media frameworks
   those tags ever move.
 
 LibTrueHD / truehd (formerly SiloObjectAudio)
-  Revision: 577de495184254e2c660ebfd6ce3f7d97f45899d (release 2.3.0)
+  Revision: 73bee84d7ac7b8619db570e36490b92761fe91a6 (release 3.1.0)
   License: MIT for the C API, framer, and build and verification scripts
   (LibTrueHD-MIT.txt)
-  Source and rebuild script: https://github.com/superuser404notfound/LibTrueHD/tree/577de495184254e2c660ebfd6ce3f7d97f45899d
+  Source and rebuild script: https://github.com/superuser404notfound/LibTrueHD/tree/73bee84d7ac7b8619db570e36490b92761fe91a6
   Embeds the truehd crate from the truehdd project (Apache-2.0), built from
   https://github.com/superuser404notfound/truehdd at commit
-  5c8b880405946e7ff1aee884cf9988415fe2c3a9 (upstream 02d29cd0 with harletty's
-  decoder performance changes), the oamd crate
-  0.1.0 from crates.io (https://github.com/truehdd/oamd, Apache-2.0), and the
-  Rust standard library and crates listed in its NOTICE (MIT or Apache-2.0).
+  33bae1657ceb25b5fe0347f42c544c3414e2760e, the oamd crate 0.1.0 from
+  crates.io (https://github.com/truehdd/oamd, Apache-2.0), and the Rust
+  standard library and crates listed in its NOTICE (MIT or Apache-2.0).
   The NOTICE and the Apache License 2.0 are in truehd-Apache-2.0.txt.
-
-LibDTSX / dca
-  Revision: 9906f8fe9b72eb4d79a85754adbba6fa52cfe7b2 (release 1.0.1)
-  License: Apache-2.0 (LibDTSX-Apache-2.0.txt, with its NOTICE)
-  Source and rebuild script: https://github.com/superuser404notfound/LibDTSX/tree/9906f8fe9b72eb4d79a85754adbba6fa52cfe7b2
-  Embeds, unmodified, the dca crate 0.8.0 from
-  https://github.com/harletty/harletty-bridge (Apache-2.0), commit
-  a717bae441b116485f0254603dc20a6ede65d8c6, and the Rust standard library and
-  crates listed in its NOTICE (MIT or Apache-2.0).
 
 LibDovi / libdovi
   Packaging revision: 0d7cce1d6836a30d13a3a2326e50a153af53f014
