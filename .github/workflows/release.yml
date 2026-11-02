@@ -96,14 +96,14 @@ jobs:
     # No status function in the if -> implicit success() gate on needs, so a
     # failed build-numbers job skips this build.
     if: ${{ needs.setup.outputs.platform != 'tvos' }}
-    runs-on: macos-15
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0   # tags + history for changelog fallback
 
       - name: Select Xcode 26
-        run: sudo xcode-select -s /Applications/Xcode_26.3.app
+        run: sudo xcode-select -s /Applications/Xcode_27.1.app
 
       - name: Install XcodeGen (pinned)
         run: |
@@ -156,14 +156,14 @@ jobs:
     needs: [setup, build-numbers, source]
     # Skip only when the selection is iOS-only. Implicit success() gate on needs.
     if: ${{ needs.setup.outputs.platform != 'ios' }}
-    runs-on: macos-15
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Select Xcode 26
-        run: sudo xcode-select -s /Applications/Xcode_26.3.app
+        run: sudo xcode-select -s /Applications/Xcode_27.1.app
 
       - name: Install XcodeGen (pinned)
         run: |
