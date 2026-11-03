@@ -268,6 +268,22 @@ final class AuthService: @unchecked Sendable {
         return await apiV2Client.signInOptions(serverURL: url)
     }
 
+    /// Whether the login screen offers "Forgot password?" on the active
+    /// server: it emails reset links on request. False on a server that
+    /// predates the capability; nil when it could not be read.
+    func passwordResetAvailable() async -> Bool? {
+        let url = serverUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !url.isEmpty else { return false }
+        return await apiV2Client.passwordResetAvailable(serverURL: url)
+    }
+
+    /// Asks the active server to email a reset link to the account `login`
+    /// names (`POST /api/v2/password-resets`). Succeeds whether or not an
+    /// account matched.
+    func requestPasswordReset(login: String) async throws {
+        try await apiV2Client.requestPasswordReset(login: login)
+    }
+
     /// Validate a Keychain-restored account without changing the remembered
     /// server entry. Temporary failures return `indeterminate`; only the
     /// existing HTTP refresh policy may invalidate a terminally rejected
@@ -375,6 +391,41 @@ final class AuthService: @unchecked Sendable {
 
     func getProfiles() async throws -> [UserProfile] {
         try await PrairieAPI.shared.listProfiles()
+    }
+
+    // MARK: - Temporary password
+
+    /// `GET /api/v2/account/me`, which a session holding a temporary
+    /// password may read.
+    func currentAccount() async throws -> APIv2Account {
+        try await apiV2Client.currentUser()
+    }
+
+    /// The active account's limits for a new password, from the server's
+    /// capability document; the server's documented defaults when that
+    /// can't be read.
+    func passwordRequirements() async -> PasswordRequirements {
+        guard let expectedAccount = await tokenStore.refreshAccountIdentity(),
+              let capability = try? await apiV2Client.passwordCapability(expectedAccount: expectedAccount) else {
+            return .serverDefault
+        }
+        return PasswordRequirements(capability)
+    }
+
+    /// Replaces the active account's password. For an account holding a
+    /// temporary password, `refreshSessionAfterPasswordChange` must follow
+    /// before anything else succeeds.
+    func changePassword(current: String, new: String) async throws {
+        guard let expectedAccount = await tokenStore.refreshAccountIdentity() else {
+            throw HTTPError.requestIdentityChanged
+        }
+        try await apiV2Client.changePassword(current: current, new: new, expectedAccount: expectedAccount)
+    }
+
+    /// Swaps the access token that changed a temporary password for one the
+    /// server no longer restricts. False when the refresh did not complete.
+    func refreshSessionAfterPasswordChange() async -> Bool {
+        (try? await httpClient.refreshActiveSession()) ?? false
     }
 
     func selectProfile(
