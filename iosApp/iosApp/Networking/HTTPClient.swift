@@ -1913,6 +1913,7 @@ actor HTTPClient {
         "/api/v2/auth/device/start", "/api/v2/auth/device/poll",
         "/api/v2/auth/device/capability", "/api/v2/auth/oauth/complete",
         "/api/v2/system/setup", "/api/v2/auth/signup",
+        "/api/v2/password-resets",
     ]
 
     /// Whether a 401 may refresh the session and re-send the request. Reads
@@ -2242,6 +2243,20 @@ actor HTTPClient {
         guard let current = await tokenStore.currentOrdinaryRequestAuth(matchingIdentityOf: expected),
               current.accessToken != nil, current.accessToken != expected.accessToken else { return nil }
         return current
+    }
+
+    /// Replaces the active account's access token now, through the shared
+    /// refresh flight, however long it has left. A changed temporary password
+    /// needs this: the token that changed it keeps the server's restriction
+    /// until it is replaced. Returns false when no persistent session is
+    /// active, or the token did not rotate: the server was unreachable, or it
+    /// rejected the session, which signs it out as any rejected refresh does.
+    func refreshActiveSession() async throws -> Bool {
+        let revision = try captureRequestDispatchRevision()
+        guard let current = await tokenStore.captureOrdinaryRequestAuth(),
+              case .persistentServer = current.credentialOwner,
+              current.accessToken != nil else { return false }
+        return try await refreshTokens(expected: current, dispatchRevision: revision) != nil
     }
 
     private static func performRefresh(
