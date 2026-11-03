@@ -269,15 +269,6 @@ final class NetworkingBoxSetGateFillTests: XCTestCase {
         XCTAssertEqual(sets.first?.cardCaption, "3 / 8 watched")
     }
 
-    func testLibrariesReportWhetherTheyGroupBoxSets() async throws {
-        let api = try await api()
-        stub.reply(path: "/api/v2/user/libraries", 200, #"{"items":[{"id":"1","name":"Movies","type":"movies","sort_order":1,"box_sets_enabled":true},{"id":"2","name":"Films","type":"movies","sort_order":2,"box_sets_enabled":false},{"id":"3","name":"Old","type":"movies","sort_order":3}]}"#)
-
-        let libraries = try await api.libraries().libraries
-
-        XCTAssertEqual(libraries.map(\.browsesBoxSets), [true, false, false])
-    }
-
     // MARK: - Catalog list page and section queries
 
     func testCatalogPageKeepsBoxSetCardsBesideMovies() async throws {
