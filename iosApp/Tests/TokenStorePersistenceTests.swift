@@ -44,9 +44,9 @@ final class TokenStorePersistenceTests: XCTestCase {
             "https://home.example",
         ] {
             let serverId = ServerRegistry.serverId(for: url)
-            keychain.delete(TokenStore.accessTokenKey(for: serverId))
-            keychain.delete(TokenStore.refreshTokenKey(for: serverId))
-            keychain.delete(TokenStore.profileTokenKey(for: serverId))
+            keychain.delete(SharedStorage.accessTokenAccount(for: serverId))
+            keychain.delete(SharedStorage.refreshTokenAccount(for: serverId))
+            keychain.delete(SharedStorage.profileTokenAccount(for: serverId))
         }
         suite.removePersistentDomain(forName: suiteName)
         standard.removePersistentDomain(forName: standardName)
@@ -55,6 +55,13 @@ final class TokenStorePersistenceTests: XCTestCase {
         keychain = nil
         defaults = nil
         super.tearDown()
+    }
+
+    /// The access token persisted in the server's most recent account record
+    /// (upstream moved credentials from per-server keys into `AccountStore`).
+    private func persistedAccessToken(onServer serverId: String) -> String? {
+        let accounts = try? AccountStore(keychain: keychain, defaults: defaults).accounts(onServer: serverId)
+        return accounts?.first?.accessToken
     }
 
     private func makeStore() -> TokenStore {
@@ -195,7 +202,7 @@ final class TokenStorePersistenceTests: XCTestCase {
         XCTAssertEqual(scope.accessToken, "TEMP2")
         let value22 = await store.getAccessToken()
         XCTAssertEqual(value22, "PERM")
-        XCTAssertEqual(keychain.get(TokenStore.accessTokenKey(for: serverId)), "PERM")
+        XCTAssertEqual(persistedAccessToken(onServer: serverId), "PERM")
     }
 
     func testTemporaryScopeClearDropsOverrideWithoutTouchingKeychain() async {
@@ -219,7 +226,7 @@ final class TokenStorePersistenceTests: XCTestCase {
         XCTAssertFalse(stillScoped)
         let restored = await store.getAccessToken()
         XCTAssertEqual(restored, "PERM")
-        XCTAssertEqual(keychain.get(TokenStore.accessTokenKey(for: serverId)), "PERM")
+        XCTAssertEqual(persistedAccessToken(onServer: serverId), "PERM")
     }
 
     func testHasAccessTokenForActiveServer() async {
@@ -235,10 +242,11 @@ final class TokenStorePersistenceTests: XCTestCase {
         XCTAssertTrue(value24)
     }
 
-    func testKeyDerivationHelpers() {
-        XCTAssertEqual(TokenStore.accessTokenKey(for: "abc"), "org.prairieserver.prairie.abc.accessToken")
-        XCTAssertEqual(TokenStore.refreshTokenKey(for: "abc"), "org.prairieserver.prairie.abc.refreshToken")
-        XCTAssertEqual(TokenStore.profileTokenKey(for: "abc"), "org.prairieserver.prairie.abc.profileToken")
+    func testLegacyCredentialSlotNamesAreStable() {
+        // Pre-accounts per-server slots; AccountMigration reads them on upgrade.
+        XCTAssertEqual(SharedStorage.accessTokenAccount(for: "abc"), "org.prairieserver.prairie.abc.accessToken")
+        XCTAssertEqual(SharedStorage.refreshTokenAccount(for: "abc"), "org.prairieserver.prairie.abc.refreshToken")
+        XCTAssertEqual(SharedStorage.profileTokenAccount(for: "abc"), "org.prairieserver.prairie.abc.profileToken")
     }
 
     func testSharedStorageIdentitiesAreStable() {
