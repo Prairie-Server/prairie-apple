@@ -259,9 +259,10 @@ final class TokenStoreSessionTests: XCTestCase {
         let store = try await signedInStore()
         await store.setProfileToken("proof-1")
         let session = await store.accountSessionSnapshot(for: serverA)
-        guard case .session(let value, let proof) = session else { return XCTFail("\(session)") }
-        XCTAssertEqual(value.accessToken, "access-1")
-        XCTAssertEqual(proof, "proof-1")
+        guard case .saved(let value, let proofs) = session else { return XCTFail("\(session)") }
+        XCTAssertEqual(value.accounts.map(\.accessToken), ["access-1"])
+        let account = try XCTUnwrap(value.accounts.first)
+        XCTAssertEqual(proofs[account.localAccountId], "proof-1")
         let unreadable = await store.accountSessionSnapshot(for: "")
         XCTAssertEqual(unreadable, .unreadable)
 
@@ -270,7 +271,8 @@ final class TokenStoreSessionTests: XCTestCase {
         let afterClear = await store.getAccessToken()
         XCTAssertNil(afterClear)
         let signedOut = await store.accountSessionSnapshot(for: serverA)
-        guard case .signedOut = signedOut else { return XCTFail("\(signedOut)") }
+        guard case .saved(let empty, _) = signedOut else { return XCTFail("\(signedOut)") }
+        XCTAssertTrue(empty.accounts.isEmpty)
 
         let restored = await store.restoreAccountSession(session, for: serverA)
         XCTAssertTrue(restored)
@@ -283,17 +285,6 @@ final class TokenStoreSessionTests: XCTestCase {
         XCTAssertTrue(backToSignedOut)
         let signedOutAccess = await store.getAccessToken()
         XCTAssertNil(signedOutAccess)
-
-        let legacy = TokenStore.AccountSessionSnapshot.legacy(accessToken: "legacy-a", refreshToken: "legacy-r",
-                                                              epoch: nil, profileToken: nil)
-        let legacyRestored = await store.restoreAccountSession(legacy, for: serverA)
-        XCTAssertTrue(legacyRestored)
-        let legacyAccess = await store.getAccessToken()
-        XCTAssertEqual(legacyAccess, "legacy-a")
-        let legacyEpoch = await store.getOrCreateAccountEpoch()
-        XCTAssertNotNil(legacyEpoch, "a legacy session gets an epoch on first use")
-        let legacyEpochAgain = await store.getOrCreateAccountEpoch(for: serverA)
-        XCTAssertEqual(legacyEpochAgain, legacyEpoch)
 
         let failed = await store.restoreAccountSession(.unreadable, for: serverA)
         XCTAssertFalse(failed)

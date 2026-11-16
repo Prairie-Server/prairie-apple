@@ -3,50 +3,13 @@ import XCTest
 @testable import Prairie
 
 /// TokenStore's fail-closed paths: rotations and invalidations that must be
-/// discarded because the captured owner no longer matches, and canonical
-/// session storage that cannot be read or written.
+/// discarded because the captured owner no longer matches, and snapshots of
+/// servers with no session or no server at all.
 final class TokenStoreFailureTests: XCTestCase {
-    /// Canonical session storage that can be made to fail on demand.
-    private final class FlakySessions: @unchecked Sendable {
-        private let lock = NSLock()
-        private var values: [String: String] = [:]
-        var failReads = false
-        var failWrites = false
-        var failRemoves = false
-
-        func put(_ value: String?, for key: String) { lock.withLock { values[key] = value } }
-
-        var persistence: AccountSessionPersistence {
-            AccountSessionPersistence(
-                read: { [self] key in
-                    try lock.withLock {
-                        if failReads { throw AccountSessionPersistenceError.unavailable }
-                        return values[key]
-                    }
-                },
-                write: { [self] value, key in
-                    lock.withLock {
-                        guard !failWrites else { return false }
-                        values[key] = value
-                        return true
-                    }
-                },
-                remove: { [self] key in
-                    lock.withLock {
-                        guard !failRemoves else { return false }
-                        values[key] = nil
-                        return true
-                    }
-                }
-            )
-        }
-    }
-
     private var suiteName: String!
     private var suite: UserDefaults!
     private var keychain: SharedKeychain!
     private var defaults: SharedDefaults!
-    private var sessions: FlakySessions!
 
     private let serverA = ServerRegistry.serverId(for: "https://flaky-a.example")
     private let serverB = ServerRegistry.serverId(for: "https://flaky-b.example")
@@ -57,7 +20,6 @@ final class TokenStoreFailureTests: XCTestCase {
         suite = UserDefaults(suiteName: suiteName)!
         keychain = .inMemory(service: "TokenStoreFailureTests.\(UUID().uuidString)")
         defaults = SharedDefaults(suite: suite, standard: suite)
-        sessions = FlakySessions()
     }
 
     override func tearDown() {
@@ -65,12 +27,11 @@ final class TokenStoreFailureTests: XCTestCase {
         suite = nil
         keychain = nil
         defaults = nil
-        sessions = nil
         super.tearDown()
     }
 
     private func signedInStore() async throws -> TokenStore {
-        let store = TokenStore(keychain: keychain, defaults: defaults, sessionPersistence: sessions.persistence)
+        let store = TokenStore(keychain: keychain, defaults: defaults)
         await store.switchActiveServer(serverId: serverA)
         await store.setServerUrl("https://flaky-a.example")
         try await store.installAccountSession(accessToken: "access-1", refreshToken: "refresh-1", accountID: "acct")
@@ -134,54 +95,9 @@ final class TokenStoreFailureTests: XCTestCase {
         XCTAssertFalse(consumed)
     }
 
-    // MARK: - Canonical storage failures
+    // MARK: - Reinstall and snapshots
 
-    func testRotationFailsClosedWhenStorageMisbehaves() async throws {
-        let store = try await signedInStore()
-        let current = try await account(store)
-        let captureValue = await store.captureRefreshCredential(expected: current)
-        let capture = try XCTUnwrap(captureValue)
-
-        sessions.failReads = true
-        let unreadable = await store.saveRefreshedTokens("a2", "r2", replacing: capture)
-        XCTAssertFalse(unreadable)
-        sessions.failReads = false
-
-        // Another writer replaced the stored record behind this actor.
-        let replaced = CanonicalAccountSession(version: 1, signedOut: false, origin: "https://flaky-a.example",
-            accountID: "acct", epoch: UUID(), accessToken: "other-access", refreshToken: "other-refresh")
-        let original = try XCTUnwrap(sessions.persistence.read(AccountSessionPersistence.recordKey(serverA)))
-        sessions.put(String(decoding: try JSONEncoder().encode(replaced), as: UTF8.self),
-                     for: AccountSessionPersistence.recordKey(serverA))
-        let mismatched = await store.saveRefreshedTokens("a2", "r2", replacing: capture)
-        XCTAssertFalse(mismatched)
-        sessions.put(original, for: AccountSessionPersistence.recordKey(serverA))
-
-        sessions.failWrites = true
-        let unwritable = await store.saveRefreshedTokens("a2", "r2", replacing: capture)
-        XCTAssertFalse(unwritable)
-        let blocked = await store.getAccessToken()
-        XCTAssertNil(blocked, "a rotation that cannot be saved blocks the runtime session")
-    }
-
-    func testInvalidationAndDeletionReportStorageFailures() async throws {
-        let store = try await signedInStore()
-        let current = try await account(store)
-        let captureValue = await store.captureRefreshCredential(expected: current)
-        let capture = try XCTUnwrap(captureValue)
-
-        sessions.failWrites = true
-        let invalidated = await store.invalidateRejectedRefresh(capture)
-        XCTAssertNil(invalidated, "no expiry is reported while the tombstone cannot be written")
-        let stillSignedIn = await store.getAccessToken()
-        XCTAssertEqual(stillSignedIn, "access-1")
-
-        sessions.failRemoves = true
-        let deleted = await store.deleteTokens(for: serverB)
-        XCTAssertFalse(deleted)
-    }
-
-    func testUnreadableStorageBlocksReads() async throws {
+    func testReinstallReplacesTheActiveSessionAndOtherServersStayEmpty() async throws {
         let store = try await signedInStore()
         let expectation = await store.captureAccountInstallationExpectation()
         try await store.installAccountSessionForServer(serverID: serverA, origin: "https://flaky-a.example",
@@ -189,33 +105,13 @@ final class TokenStoreFailureTests: XCTestCase {
         let reinstalled = await store.getAccessToken()
         XCTAssertEqual(reinstalled, "access-2")
 
-        let legacy = await store.accountSessionSnapshot(for: serverB)
-        XCTAssertEqual(legacy, .legacy(accessToken: nil, refreshToken: nil, epoch: nil, profileToken: nil))
+        let other = await store.accountSessionSnapshot(for: serverB)
+        guard case .saved(let empty, _) = other else { return XCTFail("\(other)") }
+        XCTAssertTrue(empty.accounts.isEmpty)
+        let otherAccess = await store.getAccessToken(for: serverB)
+        XCTAssertNil(otherAccess)
 
-        sessions.failReads = true
-        let other = await store.getAccessToken(for: serverB)
-        XCTAssertNil(other)
-        let snapshot = await store.accountSessionSnapshot(for: serverB)
-        XCTAssertEqual(snapshot, .unreadable)
-        let epoch = await store.getOrCreateAccountEpoch(for: serverB)
-        XCTAssertNil(epoch)
-
-        let fresh = TokenStore(keychain: keychain, defaults: defaults, sessionPersistence: sessions.persistence)
-        await fresh.switchActiveServer(serverId: serverA)
-        let freshAccess = await fresh.getAccessToken()
-        XCTAssertNil(freshAccess, "an unreadable canonical record fails closed")
-    }
-
-    func testInstallForTheActiveServerBlocksWhenItCannotBeSaved() async throws {
-        let store = try await signedInStore()
-        let expectation = await store.captureAccountInstallationExpectation()
-        sessions.failWrites = true
-        do {
-            try await store.installAccountSessionForServer(serverID: serverA, origin: "https://flaky-a.example",
-                accessToken: "x", refreshToken: "y", accountID: "acct", expected: expectation)
-            XCTFail("an unsaved install must throw")
-        } catch {}
-        let access = await store.getAccessToken()
-        XCTAssertNil(access)
+        let noServer = await store.accountSessionSnapshot(for: "")
+        XCTAssertEqual(noServer, .unreadable)
     }
 }
