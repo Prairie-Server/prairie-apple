@@ -61,6 +61,20 @@ actor DiagnosticsCoordinator {
     func purgeDiagnosticsForCurrentBinding() async -> Bool { false }
 
     func purgeDiagnosticsForServerRegistryID(_ serverId: String) async {}
+
+    // Test hooks ServerIdentityMatchingTests drives. The stand-in never
+    // evaluates the capture gate, so the evaluation count stays 0.
+    nonisolated(unsafe) private static var breadcrumbDecisionInEffect = false
+
+    nonisolated static func installBreadcrumbDecisionInEffectForTests(_ inEffect: Bool) {
+        breadcrumbDecisionInEffect = inEffect
+    }
+
+    nonisolated static var breadcrumbDecisionInEffectForTests: Bool { breadcrumbDecisionInEffect }
+
+    nonisolated static var captureGateAuthoritativeEvaluationCountForTests: Int { 0 }
+
+    nonisolated static func resetCaptureGateCacheForTests() {}
 }
 
 @MainActor
@@ -227,8 +241,9 @@ struct PlaybackV3TerminalFailure: LocalizedError, Equatable {
     let reason: String
     let message: String
     let retryable: Bool
+    var displayMessage: String? = nil
 
-    var errorDescription: String? { message }
+    var errorDescription: String? { displayMessage ?? message }
 }
 
 /// Only the destination CalendarModels builds; the full Route enum pulls
@@ -263,6 +278,9 @@ final class DownloadSessionDelegate {
 @MainActor
 final class SeekIntervalPreferences {
     static func activeRequestIdentity() -> HTTPRequestIdentity? { nil }
+
+    /// Same prefix as the real store; AccountLocalData adopts and purges it.
+    nonisolated static let cachePrefix = "prairie.seekIntervals"
 }
 
 /// The real enum (Screens/Auth/NetworkSignIn.swift) also drives the sign-in
