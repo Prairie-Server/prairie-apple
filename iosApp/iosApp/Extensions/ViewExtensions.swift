@@ -231,12 +231,12 @@ extension View {
     }
 
     /// Keeps the native minimizing tab bar on iOS 26 while leaving the fixed
-    /// iOS 18 tab bar unchanged.
+    /// iOS 18 tab bar unchanged. `isEnabled` false keeps it expanded.
     @ViewBuilder
-    func prairieTabBarMinimizeOnScroll() -> some View {
+    func prairieTabBarMinimizeOnScroll(isEnabled: Bool = true) -> some View {
         #if os(iOS)
         if #available(iOS 26.0, *) {
-            self.tabBarMinimizeBehavior(.onScrollDown)
+            self.tabBarMinimizeBehavior(isEnabled ? .onScrollDown : .never)
         } else {
             self
         }

@@ -10,7 +10,7 @@ struct PrairieWordmarkView: View {
                 .resizable()
                 .scaledToFit()
                 .frame(width: width)
-                .accessibilityLabel("Prairie")
+                .accessibilityLabel("Prairie") // i18n-ignore: brand name
 
             if let subtitle {
                 Text(subtitle)

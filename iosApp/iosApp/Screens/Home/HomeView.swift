@@ -40,6 +40,7 @@ struct HomeView: View {
     #endif
     @Environment(AppRouter.self) private var router
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.locale) private var locale
 
     var body: some View {
         @Bindable var viewModel = viewModel
@@ -80,19 +81,19 @@ struct HomeView: View {
                     .tvPageFocusOwner(
                         focusRequest: homeFocusRequest,
                         isTopMenuFocused: isTopMenuFocused,
-                        accessibilityLabel: "Loading home",
+                        accessibilityLabel: AppLanguage.string(.homeLoading, locale: locale),
                         onMoveUp: onTopMenuFocusRequest
                     )
             } else {
                 EmptyStateView(
                     icon: "play.rectangle.on.rectangle",
-                    title: "Nothing to watch yet",
-                    subtitle: "Add media to your libraries or start watching to see it here."
+                    title: AppLanguage.string(.homeEmpty, locale: locale),
+                    subtitle: AppLanguage.string(.homeEmptyBody, locale: locale)
                 )
                 .tvPageFocusOwner(
                     focusRequest: homeFocusRequest,
                     isTopMenuFocused: isTopMenuFocused,
-                    accessibilityLabel: "Nothing to watch yet",
+                    accessibilityLabel: AppLanguage.string(.homeEmpty, locale: locale),
                     onMoveUp: onTopMenuFocusRequest
                 )
             }
@@ -124,15 +125,15 @@ struct HomeView: View {
                 } else {
                     EmptyStateView(
                         icon: "play.rectangle.on.rectangle",
-                        title: "Nothing to watch yet",
-                        subtitle: "Add media to your libraries or start watching to see it here."
+                        title: AppLanguage.string(.homeEmpty, locale: locale),
+                        subtitle: AppLanguage.string(.homeEmptyBody, locale: locale)
                     )
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             HStack(alignment: .center, spacing: 12) {
-                SidebarToggleButton()
+                SidebarToggleButton(chromeScrollState: chromeScrollState)
                 // The wordmark is pinned with the utilities so it stays put
                 // over the glass strip instead of scrolling away with the feed.
                 // It occupies the same 44pt row as the icon buttons so its
@@ -158,8 +159,8 @@ struct HomeView: View {
                     onSwitchProfile: {
                         router.switchProfile()
                     },
-                    onSwitchServer: { router.navigate(to: .serverList) },
-                    onSignOut: { router.signOutAndReset() }
+                    onSignOut: { router.signOutAndReset() },
+                    chromeScrollState: chromeScrollState
                 )
             }
             .clearsWindowControls()
@@ -211,12 +212,16 @@ struct HomeView: View {
             }
         }
         .alert(
-            "Couldn’t Update Item",
+            Text(.homeUpdateFailedTitle),
             isPresented: $viewModel.isShowingActionError
         ) {
-            Button("OK", role: .cancel) {}
+            Button(.homeUpdateFailedOk, role: .cancel) {}
         } message: {
-            Text(viewModel.actionError?.message ?? "The item could not be updated. Try again.")
+            if let message = viewModel.actionError?.message {
+                Text(message)
+            } else {
+                Text(.homeUpdateFailedMessage)
+            }
         }
         .personalStateNoticeAlert($viewModel.personalStateNotice)
     }

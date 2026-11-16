@@ -27,6 +27,11 @@ struct AsyncImageView: View {
     /// film reel. Nil draws no mark, for cards that centre a play button over
     /// the artwork.
     var placeholderSymbol: String? = ArtworkPlaceholderSymbol.fallback
+    /// Artwork this slot showed before `url`, such as a detail hero's card
+    /// art before the page's own. A decode of it already in memory stands in
+    /// while `url` loads, as a smaller decode of `url` itself would, so the
+    /// slot never falls back to the ThumbHash.
+    var fallbackUrl: String? = nil
     var onImageLoaded: (() -> Void)? = nil
 
     @Environment(\.displayScale) private var displayScale
@@ -94,6 +99,9 @@ struct AsyncImageView: View {
         let resolved = resolveArtwork(resolvedURL, drawnAt: pointSize)
         if let cached = resolved.cached, cached.isSufficient {
             artworkImage(cached.image, frame: frame)
+                #if DEBUG
+                .onAppear { DetailLoadTrace.artworkShown(url: url, request: resolved.request, isFullSize: true) }
+                #endif
         } else if resolvedURL.isEmpty || URL(string: resolvedURL) == nil {
             // Nothing to load, so draw what stands in for the artwork on the
             // first frame rather than after an empty request fails.
@@ -146,8 +154,16 @@ struct AsyncImageView: View {
                 .clipped()
                 .transition(.opacity)
                 .onAppear(perform: notifyImageLoaded)
+                #if DEBUG
+                .onAppear { DetailLoadTrace.artworkShown(url: url, request: resolved.request, isFullSize: true) }
+                #endif
         } else if let cached = resolved.cached {
             artworkImage(cached.image, frame: frame)
+                #if DEBUG
+                .onAppear {
+                    DetailLoadTrace.artworkShown(url: resolved.cachedURL ?? url, request: nil, isFullSize: false)
+                }
+                #endif
         } else if let error = state.error, !Self.isUnstartedRequest(error), !retryIsPending {
             // Only once no retry is waiting, so a blip keeps the ThumbHash up
             // rather than flashing the missing artwork.
@@ -220,6 +236,8 @@ struct AsyncImageView: View {
     private struct ResolvedArtwork {
         var request: ImageRequest?
         var cached: (image: PlatformImage, isSufficient: Bool)?
+        /// Set when `cached` is a decode of `fallbackUrl`, not of `url`.
+        var cachedURL: String?
     }
 
     private func resolveArtwork(_ urlString: String, drawnAt pointSize: CGSize) -> ResolvedArtwork {
@@ -227,10 +245,16 @@ struct AsyncImageView: View {
               let pixelSize = PosterImageCache.decodePixelSize(forPointSize: pointSize, scale: displayScale) else {
             return ResolvedArtwork()
         }
-        return ResolvedArtwork(
-            request: PosterImageCache.displayRequest(url: url, pointSize: pointSize, scale: displayScale),
-            cached: PosterImageCache.cachedVariant(of: url, for: pixelSize)
-        )
+        let request = PosterImageCache.displayRequest(url: url, pointSize: pointSize, scale: displayScale)
+        if let cached = PosterImageCache.cachedVariant(of: url, for: pixelSize) {
+            return ResolvedArtwork(request: request, cached: cached)
+        }
+        // Another URL's decode is never enough: `url` still loads over it.
+        if let fallbackUrl, fallbackUrl != self.url, let fallback = URL(string: fallbackUrl),
+           let cached = PosterImageCache.cachedVariant(of: fallback, for: pixelSize) {
+            return ResolvedArtwork(request: request, cached: (cached.image, false), cachedURL: fallbackUrl)
+        }
+        return ResolvedArtwork(request: request)
     }
 
     private func artworkImage(_ image: PlatformImage, frame: CGSize?) -> some View {

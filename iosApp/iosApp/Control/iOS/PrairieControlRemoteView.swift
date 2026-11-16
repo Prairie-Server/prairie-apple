@@ -66,7 +66,7 @@ struct PrairieControlRemoteView: View {
                         Image(systemName: "chevron.down")
                             .font(.system(size: 16, weight: .semibold))
                     }
-                    .accessibilityLabel("Minimize")
+                    .accessibilityLabel(Text(.castRemoteMinimize))
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     RemoteMoreOptionsMenu(
@@ -87,7 +87,7 @@ struct PrairieControlRemoteView: View {
                 PrairieControlTargetPickerView(request: nil, controller: controller)
             }
             .alert(
-                "Replace What's Playing?",
+                Text(.remoteReplaceAlertTitle),
                 isPresented: Binding(
                     get: { controller.pendingReplace != nil },
                     // Buttons run before the alert dismisses, so Replace has
@@ -96,8 +96,8 @@ struct PrairieControlRemoteView: View {
                 ),
                 presenting: controller.pendingReplace
             ) { _ in
-                Button("Replace") { controller.confirmReplace() }
-                Button("Cancel", role: .cancel) { controller.cancelReplace() }
+                Button(.castReplaceConfirm) { controller.confirmReplace() }
+                Button(.commonCancel, role: .cancel) { controller.cancelReplace() }
             } message: { pending in
                 Text(pending.message)
             }
@@ -122,7 +122,7 @@ struct PrairieControlRemoteView: View {
     /// no player to route volume at, so commands come back `player_not_ready`;
     /// interception there would only cost the phone its own volume buttons.
     private var hasActivePlayback: Bool {
-        !(controller.state?.contentId ?? "").isEmpty
+        controller.hasRemotePlayback
     }
 
     /// Hardware-volume interception is live only while the scene is active and
@@ -169,10 +169,10 @@ struct PrairieControlRemoteView: View {
             Image(systemName: "appletvremote.gen4")
                 .font(.system(size: 44, weight: .medium))
                 .foregroundStyle(Color.prairieOnSurface)
-            Text("Connected to \(controller.activeTarget?.name ?? "Prairie TV")")
+            Text(.castRemoteConnectedTo(controller.activeTarget?.name ?? "Prairie TV"))
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(Color.prairieOnSurface)
-            Text("Pick something from your library to start playing.")
+            Text(.castRemoteIdleHint)
                 .font(.subheadline)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(Color.prairieSecondaryText)
@@ -183,12 +183,12 @@ struct PrairieControlRemoteView: View {
     private var reconnectingView: some View {
         VStack(spacing: 18) {
             ProgressView()
-            Text("Reconnecting to \(controller.lastTarget?.name ?? "Prairie TV")…")
+            Text(.remoteReconnectingTo(controller.lastTarget?.name ?? "Prairie TV"))
                 .font(.headline)
                 .foregroundStyle(Color.prairieSecondaryText)
-            Text(controller.lastTarget?.transport.isRoku == true
-                 ? "Make sure Prairie is open on the Roku and it's on the same network."
-                 : "Make sure the TV is on and on the same network.")
+            (controller.lastTarget?.transport.isRoku == true
+             ? Text(.remoteReconnectRokuHint)
+             : Text(.remoteReconnectTvHint))
                 .font(.subheadline)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(Color.prairieSecondaryText)
@@ -196,7 +196,7 @@ struct PrairieControlRemoteView: View {
                 controller.cancelReconnect()
                 dismiss()
             } label: {
-                Text("Stop Reconnecting")
+                Text(.remoteReconnectStop)
                     .font(.subheadline.weight(.semibold))
             }
             .buttonStyle(.bordered)
@@ -221,14 +221,14 @@ struct PrairieControlRemoteView: View {
                 Button {
                     isShowingPicker = true
                 } label: {
-                    Label("Choose a TV", systemImage: "tv")
+                    Label(.castRemoteChooseTv, systemImage: "tv")
                         .font(.subheadline.weight(.semibold))
                 }
                 .buttonStyle(.bordered)
                 .tint(Color.prairieOnSurface)
             } else {
                 ProgressView()
-                Text("Connecting to \(controller.activeTarget?.name ?? "Prairie TV")…")
+                Text(.castRemoteConnectingTo(controller.activeTarget?.name ?? "Prairie TV"))
                     .font(.headline)
                     .foregroundStyle(Color.prairieSecondaryText)
             }
@@ -351,7 +351,7 @@ private struct RemoteNowPlayingContent: View {
 
     private var titleBlock: some View {
         VStack(spacing: 4) {
-            Text(state.title.isEmpty ? "Loading" : state.title)
+            (state.title.isEmpty ? Text(.commonLoading) : Text(state.title))
                 .font(.title2.weight(.semibold))
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
@@ -372,7 +372,7 @@ private struct RemoteNowPlayingContent: View {
             HStack(spacing: 6) {
                 Image(systemName: "appletvremote.gen4")
                     .font(.system(size: 12, weight: .semibold))
-                Text("Playing on \(targetName)")
+                Text(.castPlayingOn(targetName))
                     .font(.caption.weight(.medium))
             }
             .foregroundStyle(Color.prairieSecondaryText)
@@ -382,7 +382,10 @@ private struct RemoteNowPlayingContent: View {
         }
     }
 
-    private var scrubber: some View {
+    /// The timeline and transport read left to right in every language.
+    private var scrubber: some View { scrubberContent.mediaLayoutDirection() }
+
+    private var scrubberContent: some View {
         // Ticks only while playing; a paused clock's time doesn't move.
         TimelineView(.animation(minimumInterval: 0.25, paused: !clock.isPlaying())) { ctx in
             let live = scrubPreview ?? clock.displayTime(asOf: ctx.date)
@@ -396,7 +399,7 @@ private struct RemoteNowPlayingContent: View {
                 )
                 .tint(Color.prairieOnSurface)
                 .disabled(state.duration <= 0)
-                .accessibilityLabel("Playback position")
+                .accessibilityLabel(Text(.playerProgressPosition))
                 .accessibilityValue(PlayerTimeFormatter.formatHMS(live))
 
                 HStack {
@@ -458,7 +461,9 @@ private struct RemoteNowPlayingContent: View {
         ))
     }
 
-    private var transport: some View {
+    private var transport: some View { transportContent.mediaLayoutDirection() }
+
+    private var transportContent: some View {
         HStack(spacing: 28) {
             if state.hasNextEpisode {
                 Image(systemName: "forward.end.fill")
@@ -488,7 +493,7 @@ private struct RemoteNowPlayingContent: View {
                     }
                 }
             }
-            .accessibilityLabel(clock.isPlaying() ? "Pause" : "Play")
+            .accessibilityLabel(clock.isPlaying() ? Text(.playerAudioPause) : Text(.playerAudioPlay))
 
             Button {
                 skip(.forward)
@@ -502,7 +507,7 @@ private struct RemoteNowPlayingContent: View {
                 Button { onPlayNext() } label: {
                     Image(systemName: "forward.end.fill").font(.system(size: 24, weight: .regular))
                 }
-                .accessibilityLabel(state.nextEpisodeTitle.map { "Next: \($0)" } ?? "Next episode")
+                .accessibilityLabel(state.nextEpisodeTitle.map { Text(.castRemoteNextNamed($0)) } ?? Text(.castRemoteNextEpisode))
             }
         }
         .foregroundStyle(Color.prairieOnSurface)
@@ -520,7 +525,7 @@ private struct RemoteNowPlayingContent: View {
 
     private var muteToggle: some View {
         Button { onSetMuted(!state.isMuted) } label: {
-            Label(state.isMuted ? "Unmute" : "Mute",
+            Label(state.isMuted ? LocalizedStringResource.castRemoteUnmute : .castRemoteMute,
                   systemImage: state.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                 .font(.subheadline.weight(.semibold))
                 .padding(.horizontal, 18)
@@ -539,7 +544,7 @@ private struct RemoteNowPlayingContent: View {
                     .font(.system(size: 18, weight: .medium))
                     .frame(width: 28)
             }
-            .accessibilityLabel(state.isMuted ? "Unmute" : "Mute")
+            .accessibilityLabel(state.isMuted ? Text(.castRemoteUnmute) : Text(.castRemoteMute))
 
             Slider(
                 value: Binding(
@@ -549,8 +554,8 @@ private struct RemoteNowPlayingContent: View {
                 in: 0...1
             )
             .tint(Color.prairieOnSurface)
-            .accessibilityLabel("Volume")
-            .accessibilityValue("\(Int((state.isMuted ? 0 : state.volume) * 100)) percent")
+            .accessibilityLabel(Text(.remoteVolume))
+            .accessibilityValue(Text(.remoteVolumePercent(LocaleFormat.integer(Int((state.isMuted ? 0 : state.volume) * 100)))))
 
             Image(systemName: "speaker.wave.3.fill")
                 .font(.system(size: 18, weight: .medium))
@@ -643,22 +648,22 @@ private struct RemoteOptionMenus: View, Equatable {
                     Label(track.title, systemImage: model.selectedAudioTrackId == track.trackId ? "checkmark" : "waveform")
                 }
             }
-        } label: { RemoteChipLabel(systemImage: "waveform", caption: "Audio") }
-        .accessibilityValue(model.audioTracks.first(where: { $0.trackId == model.selectedAudioTrackId })?.title ?? "None")
+        } label: { RemoteChipLabel(systemImage: "waveform", caption: .castRemoteAudio) }
+        .accessibilityValue(model.audioTracks.first(where: { $0.trackId == model.selectedAudioTrackId }).map { Text($0.title) } ?? Text(.remoteAudioNone))
     }
 
     private var subtitleMenu: some View {
         Menu {
             Button { onCommand(.selectSubtitleTrack(nil)) } label: {
-                Label("Off", systemImage: model.selectedSubtitleTrackId == nil ? "checkmark" : "captions.bubble")
+                Label(.castSubtitlesOff, systemImage: model.selectedSubtitleTrackId == nil ? "checkmark" : "captions.bubble")
             }
             ForEach(model.subtitleTracks) { track in
                 Button { onCommand(.selectSubtitleTrack(track.trackId)) } label: {
                     Label(track.title, systemImage: model.selectedSubtitleTrackId == track.trackId ? "checkmark" : "captions.bubble")
                 }
             }
-        } label: { RemoteChipLabel(systemImage: "captions.bubble", caption: "Subtitles") }
-        .accessibilityValue(model.subtitleTracks.first(where: { $0.trackId == model.selectedSubtitleTrackId })?.title ?? "Off")
+        } label: { RemoteChipLabel(systemImage: "captions.bubble", caption: .castSubtitlesTitle) }
+        .accessibilityValue(model.subtitleTracks.first(where: { $0.trackId == model.selectedSubtitleTrackId }).map { Text($0.title) } ?? Text(.castSubtitlesOff))
     }
 
     private var qualityMenu: some View {
@@ -668,7 +673,7 @@ private struct RemoteOptionMenus: View, Equatable {
                     Label(option.label, systemImage: model.activeQualityId == option.id ? "checkmark" : "slider.horizontal.3")
                 }
             }
-        } label: { RemoteChipLabel(systemImage: "slider.horizontal.3", caption: "Quality") }
+        } label: { RemoteChipLabel(systemImage: "slider.horizontal.3", caption: .castRemoteQuality) }
         .accessibilityValue(model.qualityOptions.first(where: { $0.id == model.activeQualityId })?.label ?? model.activeQualityId)
         .disabled(model.isQualitySwitching)
     }
@@ -680,12 +685,12 @@ private struct RemoteOptionMenus: View, Equatable {
                     Label(speedLabel(speed), systemImage: abs(model.playbackSpeed - speed) < 0.01 ? "checkmark" : "speedometer")
                 }
             }
-        } label: { RemoteChipLabel(systemImage: "speedometer", caption: "Speed") }
+        } label: { RemoteChipLabel(systemImage: "speedometer", caption: .playerSettingsSpeed) }
         .accessibilityValue(speedLabel(model.playbackSpeed))
     }
 
     private func speedLabel(_ speed: Double) -> String {
-        "\(speed)×"
+        LocaleFormat.localized("\(speed)") + "×"
     }
 }
 
@@ -708,10 +713,10 @@ private struct RemoteMoreOptionsMenu: View, Equatable {
     var body: some View {
         Menu {
             Button(action: onChooseTV) {
-                Label("Choose a Different TV", systemImage: "tv")
+                Label(.castRemoteChooseDifferentTv, systemImage: "tv")
             }
             Button(action: onStop) {
-                Label("Stop Playback", systemImage: "stop.fill")
+                Label(.castRemoteStopPlayback, systemImage: "stop.fill")
             }
             if supportsVideoGravity {
                 Menu {
@@ -721,24 +726,24 @@ private struct RemoteMoreOptionsMenu: View, Equatable {
                         }
                     }
                 } label: {
-                    Label("Aspect Ratio", systemImage: "rectangle.inset.filled")
+                    Label(.castRemoteAspectRatio, systemImage: "rectangle.inset.filled")
                 }
             }
             Divider()
             Button(role: .destructive, action: onDisconnect) {
-                Label("Disconnect", systemImage: "tv.slash")
+                Label(.castRemoteDisconnect, systemImage: "tv.slash")
             }
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: 16, weight: .semibold))
         }
-        .accessibilityLabel("More options")
+        .accessibilityLabel(Text(.castRemoteMoreOptions))
     }
 }
 
 private struct RemoteChipLabel: View {
     let systemImage: String
-    let caption: String
+    let caption: LocalizedStringResource
 
     var body: some View {
         VStack(spacing: 5) {
@@ -757,15 +762,15 @@ private struct RemoteChipLabel: View {
 private extension PrairieControlPlaybackState {
     static func previewPlaying() -> PrairieControlPlaybackState {
         PrairieControlPlaybackState(
-            contentId: "preview", sessionId: "s1", title: "The Bear",
-            subtitle: "Season 3 · Episode 4 · Children",
+            contentId: "preview", sessionId: "s1", title: "The Bear", // i18n-ignore: debug preview data
+            subtitle: "Season 3 · Episode 4 · Children", // i18n-ignore: debug preview data
             isPlaying: true, isLoading: false, isBuffering: false,
             currentTime: 1104, duration: 2895,
-            audioTracks: [PrairieControlTrack(kind: "audio", trackId: 1, title: "English 5.1", detail: "AC-3")],
-            subtitleTracks: [PrairieControlTrack(kind: "subtitle", trackId: 10, title: "English", detail: nil)],
+            audioTracks: [PrairieControlTrack(kind: "audio", trackId: 1, title: "English 5.1", detail: "AC-3")], // i18n-ignore: debug preview data
+            subtitleTracks: [PrairieControlTrack(kind: "subtitle", trackId: 10, title: "English", detail: nil)], // i18n-ignore: debug preview data
             selectedAudioTrackId: 1, selectedSubtitleTrackId: nil,
-            qualityOptions: [PrairieControlOption(id: "auto", label: "Auto", detail: nil),
-                             PrairieControlOption(id: "1080", label: "1080p", detail: nil)],
+            qualityOptions: [PrairieControlOption(id: "auto", label: "Auto", detail: nil), // i18n-ignore: debug preview data
+                             PrairieControlOption(id: "1080", label: "1080p", detail: nil)], // i18n-ignore: debug preview data
             activeQualityId: "auto", isQualitySwitching: false,
             playbackSpeed: 1.0, videoGravity: VideoGravity.fit.rawValue, hdrEnabled: false,
             supportsVideoGravity: true,

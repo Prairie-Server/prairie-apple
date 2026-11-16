@@ -200,6 +200,8 @@ struct TVSeriesDetailView: View {
     let hierarchyError: String?
     let onRetryHierarchy: () async -> Void
     let selectedNextUpFileId: Int?
+    /// The edition picked for the selected episode on this visit.
+    let selectedNextUpEditionId: String?
     let selectedNextUpAudioTrackIndex: Int?
     let selectedNextUpSubtitleTrackIndex: Int?
     let nextUpPlaybackDetail: ItemDetail?
@@ -223,6 +225,7 @@ struct TVSeriesDetailView: View {
     let onSetEpisodeFavorite: (_ contentId: String, _ isFavorite: Bool) async -> PersonalStateOutcome
     let onSetEpisodeWatchlist: (_ contentId: String, _ inWatchlist: Bool) async -> PersonalStateOutcome
     let onSelectNextUpVersion: (Int?) -> Void
+    let onSelectNextUpEdition: (String) -> Void
     let onSelectNextUpAudioTrack: (Int?) -> Void
     let onSelectNextUpSubtitleTrack: (Int?) -> Void
     let onToggleFavorite: () -> Void
@@ -269,6 +272,7 @@ struct TVSeriesDetailView: View {
     @State private var shuffleLauncher = ShuffleLauncher()
     @ObservedObject private var profilePrefsStore = ProfilePrefsStore.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.locale) private var locale
 
     private let noSeasonModeId = "series-season-none"
     private let heroScrollId = "series-hero"
@@ -344,10 +348,10 @@ struct TVSeriesDetailView: View {
             seasonSelection.cancel()
             pageScrollCoordinator.detach()
         }
-        .alert("Couldn't Update Watched Status", isPresented: $seasonWatchedUpdateFailed) {
-            Button("OK", role: .cancel) {}
+        .alert(Text(.detailWatchedErrorTitle), isPresented: $seasonWatchedUpdateFailed) {
+            Button(role: .cancel) {} label: { Text(.detailWatchedErrorOk) }
         } message: {
-            Text("Please check your connection and try again.")
+            Text(.detailWatchedErrorBody)
         }
         .personalStateNoticeAlert($seasonWatchedNotice)
         .shuffleFailureAlert(shuffleLauncher)
@@ -378,7 +382,7 @@ struct TVSeriesDetailView: View {
             // and episode focus. Episode credits are almost always identical;
             // retaining this value avoids a blank/load/change flash in the
             // bottom-locked disclosure block.
-            starringText: TVHeroMetadata.starringText(from: detail),
+            starringText: TVHeroMetadata.starringText(from: detail, locale: locale),
             playbackSummary: TVPlaybackSelectionSummary.make(
                 currentVersion: effectiveNextUpVersion,
                 selectedVersionFileId: selectedNextUpFileId,
@@ -391,7 +395,8 @@ struct TVSeriesDetailView: View {
                     ? nil
                     : matchingPlaybackDetail?.effectiveSubtitleTrackSignature,
                 preferredSubtitleLanguage: profilePrefsStore.preferredSubtitleLanguage,
-                showForcedSubtitles: matchingPlaybackDetail?.showsForcedSubtitles ?? true
+                showForcedSubtitles: matchingPlaybackDetail?.showsForcedSubtitles ?? true,
+                locale: locale
             ),
             showsPlaybackSummary: isLoadingEpisodes || playbackEpisode != nil,
             backdropHeight: TVDetailLayout.heroHeight,
@@ -451,7 +456,7 @@ struct TVSeriesDetailView: View {
         guard !isShowingSeriesOverview else { return detail.overview }
         let episodeTitle = matchingPlaybackDetail?.title
             ?? displayedEpisode?.title
-            ?? displayedEpisode.map { "Episode \($0.episodeNumber)" }
+            ?? displayedEpisode.map { AppLanguage.string(.detailEpisode(LocaleFormat.integer($0.episodeNumber, locale: locale)), locale: locale) }
         let overview = heroEpisodeOverview?.text
         switch (episodeTitle, overview) {
         case let (.some(title), .some(line)) where !title.isEmpty && !line.isEmpty:
@@ -469,13 +474,16 @@ struct TVSeriesDetailView: View {
         guard !isShowingSeriesOverview, let episode = displayedEpisode else {
             return TVHeroMetadata.seriesSourceTokens(from: detail)
         }
-        let season = episode.seasonNumber == 0 ? "Specials" : "Season \(episode.seasonNumber)"
-        return [season, "Episode \(episode.episodeNumber)"]
+        let season = AppLanguage.string(
+            episode.seasonNumber == 0 ? .detailSpecials : .detailSeason(LocaleFormat.integer(episode.seasonNumber)),
+            locale: locale
+        )
+        return [season, AppLanguage.string(.detailEpisode(LocaleFormat.integer(episode.episodeNumber, locale: locale)), locale: locale)]
     }
 
     private var heroFactsLine: [TVHeroFactToken] {
         guard !isShowingSeriesOverview, let episode = displayedEpisode else {
-            return TVHeroMetadata.seriesFactsLine(from: detail, seasons: seasons)
+            return TVHeroMetadata.seriesFactsLine(from: detail, seasons: seasons, locale: locale)
         }
         return TVHeroMetadata.seriesEpisodeFactsLine(
             episode: episode,
@@ -531,7 +539,7 @@ struct TVSeriesDetailView: View {
             tracksInitialFocusNavigation: true,
             userRating: detail.userRating,
             onSetRating: onSetRating,
-            playbackSelectors: {
+            playbackSelectors: { focusedAction in
                 // Keep all three triggers mounted while a newly focused
                 // episode's playback detail loads. They disable themselves
                 // until a valid version arrives, preserving every x-position.
@@ -550,8 +558,10 @@ struct TVSeriesDetailView: View {
                     showForcedSubtitles: matchingPlaybackDetail?.showsForcedSubtitles ?? true,
                     preferredSubtitleLanguage: profilePrefsStore.preferredSubtitleLanguage,
                     onSelectVersion: onSelectNextUpVersion,
+                    onSelectEdition: onSelectNextUpEdition,
                     onSelectAudioTrack: onSelectNextUpAudioTrack,
-                    onSelectSubtitleTrack: onSelectNextUpSubtitleTrack
+                    onSelectSubtitleTrack: onSelectNextUpSubtitleTrack,
+                    focusedAction: focusedAction
                 )
             },
             moreMenu: { moreMenu }
@@ -559,8 +569,21 @@ struct TVSeriesDetailView: View {
     }
 
     private func showPlayTitle(for episode: EpisodeListItem) -> String {
-        let verb = episode.userData?.isInProgress == true ? "Resume" : "Play"
-        return "\(verb) S\(episode.seasonNumber):E\(episode.episodeNumber)"
+        let season = LocaleFormat.codeNumber(episode.seasonNumber)
+        let number = LocaleFormat.codeNumber(episode.episodeNumber)
+        // A position saved on another edition than the one shown isn't
+        // resumed: Play starts the shown one at 0.
+        let shown = matchingPlaybackDetail?.contentId == episode.contentId ? effectiveNextUpVersion : nil
+        let resumes = episode.userData?.isInProgress == true
+            && DetailVersionSelection.savedPositionIsInEdition(
+                of: shown, in: nextUpVersions, userData: episode.userData
+            )
+        return AppLanguage.string(
+            resumes
+                ? .detailResumeEpisode(season, number)
+                : .detailPlayEpisode(season, number),
+            locale: locale
+        )
     }
 
     // MARK: - Show / Season modes and episode carousel
@@ -578,7 +601,7 @@ struct TVSeriesDetailView: View {
                 .frame(height: 60)
                 .opacity(isLoadingEpisodes ? 1 : 0)
                 .accessibilityHidden(!isLoadingEpisodes)
-                .accessibilityLabel("Loading seasons")
+                .accessibilityLabel(Text(.detailSeasonsLoading))
             } else {
                 modeRow
             }
@@ -586,12 +609,12 @@ struct TVSeriesDetailView: View {
             if let hierarchyError, !episodeWindow.episodes.isEmpty {
                 HStack {
                     Text(hierarchyError)
-                    Button("Retry", action: retryHierarchy)
+                    Button(.commonRetry, action: retryHierarchy)
                 }
                 .font(.system(size: 18))
             }
             if carouselLoadFailed {
-                Text("Couldn't load more episodes. Move away and back to retry.")
+                Text(.detailEpisodesLoadMoreFailed)
                     .font(.system(size: 18))
                     .foregroundStyle(Color.prairieSecondaryText)
             }
@@ -626,7 +649,9 @@ struct TVSeriesDetailView: View {
                                 setSeasonWatched(season)
                             } label: {
                                 Label(
-                                    season.userData?.played == true ? "Mark Season Unwatched" : "Mark Season Watched",
+                                    season.userData?.played == true
+                                        ? LocalizedStringResource.detailMoreMarkSeasonUnwatched
+                                        : .detailMoreMarkSeasonWatched,
                                     systemImage: season.userData?.played == true ? "circle" : "checkmark.circle"
                                 )
                             }
@@ -806,7 +831,7 @@ struct TVSeriesDetailView: View {
             VStack(alignment: .leading, spacing: 18) {
                 Text(hierarchyError)
                     .font(.system(size: 22))
-                Button("Retry", action: retryHierarchy)
+                Button(.commonRetry, action: retryHierarchy)
             }
             .frame(maxWidth: .infinity, minHeight: episodeRailReservedHeight, alignment: .topLeading)
             .focusSection()
@@ -819,7 +844,7 @@ struct TVSeriesDetailView: View {
             )
             .frame(height: episodeRailReservedHeight)
         } else if carouselEpisodes.isEmpty {
-            Text("No episodes available")
+            Text(.detailEpisodesEmpty)
                 .font(.system(size: 22))
                 .foregroundStyle(Color.prairieSecondaryText)
                 .frame(maxWidth: .infinity, minHeight: episodeRailReservedHeight, alignment: .topLeading)
@@ -945,8 +970,8 @@ struct TVSeriesDetailView: View {
 
     private var moreMenu: some View {
         TVCircleMenuButton(
-            title: "More",
-            accessibilityLabel: "More options",
+            title: AppLanguage.string(.detailMore, locale: locale),
+            accessibilityLabel: AppLanguage.string(.detailMoreOptions, locale: locale),
             stabilizesFocusMotion: true,
             items: {
                 var items: [TVActionPopoverItem] = []
@@ -954,7 +979,7 @@ struct TVSeriesDetailView: View {
                 if let season = shuffleSeason {
                     items.append(TVActionPopoverItem(
                         id: MoreAction.shuffleSeason.rawValue,
-                        title: "Shuffle \(season.downloadDisplayName)",
+                        title: AppLanguage.string(.detailMoreShuffleSeason(season.displayName(locale: locale)), locale: locale),
                         systemImage: "shuffle",
                         isEnabled: !shuffleLauncher.isStarting
                     ))
@@ -962,7 +987,7 @@ struct TVSeriesDetailView: View {
                 if canShuffleSeries {
                     items.append(TVActionPopoverItem(
                         id: MoreAction.shuffleSeries.rawValue,
-                        title: "Shuffle Series",
+                        title: AppLanguage.string(.detailMoreShuffleSeries, locale: locale),
                         systemImage: "shuffle",
                         isEnabled: !shuffleLauncher.isStarting
                     ))
@@ -970,38 +995,47 @@ struct TVSeriesDetailView: View {
                 if !isShowingSeriesOverview {
                     items.append(TVActionPopoverItem(
                         id: MoreAction.overview.rawValue,
-                        title: "Show Series Info",
+                        title: AppLanguage.string(.detailMoreShowSeriesInfo, locale: locale),
                         systemImage: "info.circle"
                     ))
                 }
                 items.append(TVActionPopoverItem(
                     id: MoreAction.favorite.rawValue,
-                    title: isFavorite ? "Remove from Favorites" : "Add to Favorites",
+                    title: AppLanguage.string(
+                        isFavorite ? .detailMoreRemoveFavorite : .detailMoreAddFavorite,
+                        locale: locale
+                    ),
                     systemImage: isFavorite ? "heart.fill" : "heart"
                 ))
                 items.append(TVActionPopoverItem(
                     id: MoreAction.seriesWatched.rawValue,
-                    title: isSeriesWatched ? "Mark Series Unwatched" : "Mark Series Watched",
+                    title: AppLanguage.string(
+                        isSeriesWatched ? .detailMoreMarkSeriesUnwatched : .detailMoreMarkSeriesWatched,
+                        locale: locale
+                    ),
                     systemImage: isSeriesWatched ? "checkmark.circle.fill" : "checkmark.circle"
                 ))
                 if selectedSeason != nil {
                     items.append(TVActionPopoverItem(
                         id: MoreAction.watched.rawValue,
-                        title: isSeasonWatched ? "Mark Season Unwatched" : "Mark Season Watched",
+                        title: AppLanguage.string(
+                            isSeasonWatched ? .detailMoreMarkSeasonUnwatched : .detailMoreMarkSeasonWatched,
+                            locale: locale
+                        ),
                         systemImage: isSeasonWatched ? "checkmark.circle.fill" : "checkmark.circle"
                     ))
                 }
                 if supportsTrailerFetch {
                     items.append(TVActionPopoverItem(
                         id: MoreAction.trailers.rawValue,
-                        title: "Find Trailers",
+                        title: AppLanguage.string(.detailMoreFindTrailers, locale: locale),
                         systemImage: "film.stack"
                     ))
                 }
                 if onTranslateDescription != nil {
                     items.append(TVActionPopoverItem(
                         id: MoreAction.translate.rawValue,
-                        title: "Translate Description",
+                        title: AppLanguage.string(.detailMoreTranslate, locale: locale),
                         systemImage: MachineTranslation.symbol
                     ))
                 }
@@ -1024,8 +1058,8 @@ struct TVSeriesDetailView: View {
                     )
                 case .watchParty:
                     if let episode = displayedEpisode {
-                        WatchPartyEntry.open(contentId: episode.contentId, title: episode.title ?? "Episode", type: "episode",
-                            fileId: selectedFileId(for: episode), libraryId: partyLibraryId,
+                        WatchPartyEntry.open(contentId: episode.contentId, title: episode.title ?? "Episode", type: "episode", // i18n-ignore: watch-party payload (D44)
+                            fileId: watchPartyFileId(for: episode), libraryId: partyLibraryId,
                             preview: WatchPartySelectedItem(previewing: episode, series: detail, seasons: seasons),
                             router: partyRouter)
                     }
@@ -1084,8 +1118,21 @@ struct TVSeriesDetailView: View {
             versions: nextUpVersions,
             selectedFileId: selectedNextUpFileId,
             lastFileId: matchingPlaybackDetail?.userData?.lastFileId,
-            preferredQualityId: PlayerSettings.shared.preferredQuality
+            lastFileInProgress: matchingPlaybackDetail?.userData?.hasResumePoint ?? false,
+            preferredQualityId: PlayerSettings.shared.connectionPreferredQuality,
+            editionId: selectedNextUpEditionId,
+            lastEditionKey: matchingPlaybackDetail?.userData?.lastEditionKey,
+            variants: matchingPlaybackDetail?.playbackVariants
         )
+    }
+
+    /// The file a party starts from: the one the page shows once the viewer
+    /// picked an edition or a version for this episode, else the server's.
+    private func watchPartyFileId(for episode: EpisodeListItem) -> Int? {
+        if let pinned = selectedFileId(for: episode) { return pinned }
+        guard selectedNextUpEditionId != nil,
+              matchingPlaybackDetail?.contentId == episode.contentId else { return nil }
+        return effectiveNextUpVersion?.fileId
     }
 
     private func selectedFileId(for episode: EpisodeListItem) -> Int? {
@@ -1100,8 +1147,8 @@ struct TVSeriesDetailView: View {
 
     private func seasonLabel(_ season: Season) -> String {
         if let title = season.title, !title.isEmpty { return title }
-        if season.seasonNumber == 0 { return "Specials" }
-        return "Season \(season.seasonNumber)"
+        if season.seasonNumber == 0 { return AppLanguage.string(.detailSpecials, locale: locale) }
+        return AppLanguage.string(.detailSeason(LocaleFormat.integer(season.seasonNumber, locale: locale)), locale: locale)
     }
 
     // MARK: - Supporting rails
@@ -1118,7 +1165,7 @@ struct TVSeriesDetailView: View {
     private var similarSection: some View {
         TVSimilarRail(
             contentId: detail.contentId,
-            title: "Recommended Series",
+            title: AppLanguage.string(.detailRecommendedSeries, locale: locale),
             onSelect: onNavigateToItem,
             focusRequest: !hasCast && trailerEntries.isEmpty ? supportingRailFocusRequest : 0,
             onFocusChange: { focused in
@@ -1153,7 +1200,7 @@ struct TVSeriesDetailView: View {
 
     private func castSection(cast: [CastMember]) -> some View {
         VStack(alignment: .leading, spacing: TVDetailLayout.sectionHeaderSpacing) {
-            TVSectionHeader(title: "Cast & Crew")
+            TVSectionHeader(title: AppLanguage.string(.detailCast, locale: locale))
             TVDetailCastRail(
                 cast: cast,
                 onTap: onPersonTap,
@@ -1176,7 +1223,7 @@ struct TVSeriesDetailView: View {
 
     private var detailsSection: some View {
         VStack(alignment: .leading, spacing: TVDetailLayout.sectionHeaderSpacing) {
-            TVSectionHeader(title: "Details")
+            TVSectionHeader(title: AppLanguage.string(.detailDetails, locale: locale))
             TVDetailFactsSection(detail: detail)
         }
     }

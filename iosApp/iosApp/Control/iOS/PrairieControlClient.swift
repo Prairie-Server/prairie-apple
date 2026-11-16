@@ -96,6 +96,8 @@ final class PrairieControlClient {
     /// next foreground so the attempt budget isn't burned against suspended
     /// sockets.
     private var pendingReconnectReason: String?
+    /// What the screen shows if the deferred reconnect gives up; nil shows the reason.
+    private var pendingReconnectDisplay: String?
     /// The current session was attached silently (auto-resume) and the user
     /// hasn't engaged with it yet. Such a session lets go quietly when the TV
     /// goes idle, so it never flips the TV into the standby takeover screen.
@@ -134,6 +136,8 @@ final class PrairieControlClient {
     /// How long the offer waits for its display title; prairie-android waits as long.
     private static let offerTitleWait: Duration = .milliseconds(300)
     private static let persistedTargetKey = "prairiecontrol.lastTarget"
+    /// Reconnect reason for a dropped connection. Stays English: it is
+    /// logged and compared; the remote shows `castRemoteErrorLostTv`.
     private static let lostConnection = "Lost connection to the TV."
     private static let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "org.prairieserver.prairie",
@@ -154,6 +158,22 @@ final class PrairieControlClient {
         (hasActiveSession && !isAutoResuming) || isReconnecting
     }
 
+    /// The engaged TV's name, kept through a reconnect.
+    var engagedTargetName: String? {
+        activeTarget?.name ?? lastTarget?.name
+    }
+
+    /// The TV is playing a title. A connected TV with nothing on still
+    /// publishes state, with no content id.
+    var hasRemotePlayback: Bool {
+        !(state?.contentId ?? "").isEmpty
+    }
+
+    /// Counts the times the user ended the session (`disconnect`,
+    /// `cancelReconnect`), so a Play waiting out a reconnect can tell their
+    /// choice from a reconnect that gave up.
+    @ObservationIgnored private var userEndedSessionCount = 0
+
     /// How long a Play tapped during a reconnect waits for the link before
     /// giving up and reporting the failure in the remote cover.
     private static let launchReconnectWait: Duration = .seconds(45)
@@ -170,13 +190,21 @@ final class PrairieControlClient {
         guard remotePlaybackEngaged else { return false }
         if isReconnecting {
             isShowingRemoteControl = true
+            let endedByUser = userEndedSessionCount
             let deadline = ContinuousClock.now + Self.launchReconnectWait
             while isReconnecting, ContinuousClock.now < deadline, !Task.isCancelled {
                 await reconnectSettled.nextChange(before: deadline)
             }
+            // The user stopped the reconnect or turned control mode off
+            // while this Play waited. That closed the remote, so the Play
+            // goes with it: reopening the remote on a reconnect error would
+            // undo their choice, and a TV they connected since never asked
+            // for this title.
+            if userEndedSessionCount != endedByUser { return true }
             guard hasActiveSession else {
                 if errorMessage == nil {
-                    errorMessage = "Couldn't reconnect to \(lastTarget?.name ?? "the TV"). Choose a TV to keep playing there, or turn off control mode to play here."
+                    errorMessage = lastTarget.map { AppLanguage.string(.remoteErrorReconnectFailed($0.name)) }
+                        ?? AppLanguage.string(.remoteErrorReconnectFailedUnnamed)
                 }
                 isShowingRemoteControl = true
                 return true
@@ -193,13 +221,13 @@ final class PrairieControlClient {
         allowCrossServer: Bool = false
     ) async -> Bool {
         guard ServerRegistry.shared.activeServer != nil else {
-            errorMessage = "Choose a server before controlling a TV."
+            errorMessage = AppLanguage.string(.castRemoteErrorChooseServer)
             return false
         }
         let target = pairingKeys.pinned(target)
         let targetsActiveServer = target.targetsActiveServer
         guard targetsActiveServer || (allowCrossServer && target.protocolVersion >= 2) else {
-            errorMessage = "That TV is connected to a different server."
+            errorMessage = AppLanguage.string(.castRemoteErrorDifferentServer)
             return false
         }
 
@@ -209,6 +237,7 @@ final class PrairieControlClient {
             reconnectTask = nil
             isReconnecting = false
             pendingReconnectReason = nil
+            pendingReconnectDisplay = nil
             cancelAutoResumeProbe()
             isAutoResuming = false
             sessionIsAutoResumed = false
@@ -302,12 +331,12 @@ final class PrairieControlClient {
     /// viewer has to.
     nonisolated static func unreachableMessage(for target: PrairieControlTarget) -> String {
         target.transport.isRoku
-            ? "Couldn't reach \(target.name). Open Prairie on your Roku."
-            : "Couldn't reach \(target.name)."
+            ? AppLanguage.string(.remoteErrorUnreachableRoku(target.name))
+            : AppLanguage.string(.remoteErrorUnreachable(target.name))
     }
 
     nonisolated static func pairingNeededMessage(for target: PrairieControlTarget) -> String {
-        "\(target.name) requires pairing. On the Roku, open Connect a Phone in Prairie's profile menu and scan its code with this iPhone's camera."
+        AppLanguage.string(.remoteErrorRequiresPairing(target.name))
     }
 
     /// The last controlled TV when it was a Roku, for the TV picker to say
@@ -329,11 +358,11 @@ final class PrairieControlClient {
         guard let activeServer = ServerRegistry.shared.activeServer,
               let profileId = ServerRegistry.shared.activeProfileId,
               !profileId.isEmpty else {
-            errorMessage = "Choose a server before controlling a TV."
+            errorMessage = AppLanguage.string(.castRemoteErrorChooseServer)
             return
         }
         guard let session, activeTarget != nil else {
-            errorMessage = "Choose a TV from Home before playing."
+            errorMessage = AppLanguage.string(.remoteErrorChooseTvFirst)
             return
         }
         // De-dup a double-tap: a second launch while one is already in flight
@@ -386,7 +415,7 @@ final class PrairieControlClient {
             isConnecting = false
             pendingReplace = PrairieControlPendingReplace(
                 request: request, nowPlaying: nowPlaying,
-                tvName: activeTarget?.name ?? "the TV", fallbackMessage: message
+                tvName: activeTarget?.name, fallbackMessage: message
             )
         } catch PrairieControlHandoffError.cancelled(let message)
                     where handshake.tvSupports(PrairieControlFeature.multiController) {
@@ -699,6 +728,7 @@ final class PrairieControlClient {
     /// User-initiated disconnect: also forgets the persisted target so a
     /// future launch doesn't silently reattach to a TV the user let go of.
     func disconnect() {
+        userEndedSessionCount += 1
         forgetPersistedTarget()
         quietDisconnect()
     }
@@ -708,6 +738,7 @@ final class PrairieControlClient {
     func cancelReconnect() {
         guard isReconnecting else { return }
         Self.logger.info("control: reconnect cancelled by user")
+        userEndedSessionCount += 1
         forgetPersistedTarget()
         clearSession()
     }
@@ -737,9 +768,11 @@ final class PrairieControlClient {
         if let reason = pendingReconnectReason {
             // The session dropped while backgrounded; run the reconnect now
             // that sockets work again, with a fresh attempt budget.
+            let display = pendingReconnectDisplay
             pendingReconnectReason = nil
+            pendingReconnectDisplay = nil
             wasBackgroundedWithActiveSession = false
-            beginReconnect(reason: reason)
+            beginReconnect(reason: reason, display: display)
             return
         }
 
@@ -835,7 +868,12 @@ final class PrairieControlClient {
                 self.beginReconnect(reason: Self.lostConnection)
             } catch {
                 guard let self, self.isLiveConnection(connectionId) else { return }
-                self.beginReconnect(reason: error.localizedDescription)
+                // The reason is logged, so English (D44); the screen shows
+                // the error in the app's language if reconnecting fails.
+                self.beginReconnect(
+                    reason: AppLanguage.inEnglish { error.localizedDescription },
+                    display: error.localizedDescription
+                )
             }
         }
     }
@@ -934,7 +972,9 @@ final class PrairieControlClient {
         connectionId == id && isHandshakeComplete
     }
 
-    private func beginReconnect(reason: String) {
+    /// `reason` is English: it is logged and compared. `display` is the text
+    /// the remote shows if every attempt fails; nil shows `reason`.
+    private func beginReconnect(reason: String, display: String? = nil) {
         guard let target = lastTarget else { clearSession(); return }
         // A reconnect attempt's own read loop / heartbeat reports the failed
         // connection through here too. Restarting would cancel the running
@@ -957,9 +997,11 @@ final class PrairieControlClient {
         // attempt budget and wiping the session state.
         if UIApplication.shared.applicationState == .background {
             pendingReconnectReason = reason
+            pendingReconnectDisplay = display
             return
         }
         pendingReconnectReason = nil
+        pendingReconnectDisplay = nil
 
         reconnectTask?.cancel()
         reconnectTask = Task { @MainActor [weak self] in
@@ -987,9 +1029,15 @@ final class PrairieControlClient {
             self.clearSession()
             // A Roku that stops answering has usually left Prairie, which only
             // the viewer can open again.
-            self.errorMessage = target.transport.isRoku && reason == Self.lostConnection
-                ? "Lost connection to \(target.name). Open Prairie on your Roku."
-                : reason
+            // `reason` is English when the phone itself lost the TV (it is
+            // compared and logged), so that one is shown from the catalog.
+            if reason == Self.lostConnection {
+                self.errorMessage = target.transport.isRoku
+                    ? AppLanguage.string(.castRemoteErrorLostRoku(target.name))
+                    : AppLanguage.string(.castRemoteErrorLostTv)
+            } else {
+                self.errorMessage = display ?? reason
+            }
             self.isShowingRemoteControl = keepCoverVisible
         }
     }
@@ -1074,6 +1122,7 @@ final class PrairieControlClient {
         isAutoResuming = false
         sessionIsAutoResumed = false
         pendingReconnectReason = nil
+        pendingReconnectDisplay = nil
         lastTarget = nil
         activeTarget = nil
         state = nil
@@ -1156,13 +1205,13 @@ final class PrairieControlClient {
 
         attachNowPlayingIfNeeded()
         nowPlaying.update(
-            title: state.title.isEmpty ? "Prairie TV" : state.title,
+            title: state.title.isEmpty ? "Prairie TV" : state.title, // i18n-ignore: product name on the lock screen
             duration: state.duration,
             position: clock.displayTime(),
             isPlaying: clock.isPlaying(),
             mediaKind: .video,
             artist: state.subtitle,
-            albumTitle: activeTarget.map { "Playing on \($0.name)" },
+            albumTitle: activeTarget.map { AppLanguage.string(.castPlayingOn($0.name)) },
             playbackRate: state.playbackSpeed
         )
         updateNowPlayingArtwork(contentId: contentId)

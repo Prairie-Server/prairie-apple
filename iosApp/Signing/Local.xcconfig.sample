@@ -1,5 +1,5 @@
 // Copy this file to `Local.xcconfig` (gitignored) to override the signing
-// defaults in `Prairie.xcconfig`, `PrairieTV.xcconfig`,
+// defaults in `Prairie.xcconfig`, `PrairieTV.xcconfig`, `PrairieMac.xcconfig`,
 // `PrairieTVTopShelf.xcconfig`, and `PrairieNotificationService.xcconfig`. Use
 // this when you don't have access to the Prairie Media L.L.C Apple Developer
 // team that owns `org.prairieserver.prairie` and the `group.org.prairieserver.prairie`
@@ -20,13 +20,13 @@
 // ----- Bundle IDs ---------------------------------------------------------
 //
 // Personal Teams can't register identifiers that another team already
-// owns, so give each target a unique prefix. All three must differ from
-// the defaults; the two app targets may share an ID (iOS and tvOS apps
-// are allowed to), but Top Shelf must be distinct.
+// owns, so give each target a unique prefix. All of them must differ from
+// the defaults; the three app targets may share an ID (iOS, tvOS, and
+// macOS apps are allowed to), but Top Shelf must be distinct.
 //
 // PRAIRIE_IOS_BUNDLE_ID      = com.example.prairie
 // PRAIRIE_TV_BUNDLE_ID       = com.example.prairie
-// PRAIRIE_MAC_BUNDLE_ID      = com.example.prairie.mac
+// PRAIRIE_MAC_BUNDLE_ID      = com.example.prairie
 // PRAIRIE_TOPSHELF_BUNDLE_ID = com.example.prairie.topshelf
 //
 // The Notification Service and Downloads Live Activity extensions are
@@ -43,12 +43,13 @@
 //
 // Personal Teams can't join App Groups or sign the `aps-environment` push
 // entitlement. The iOS app, the Notification Service extension, the tvOS
-// app, and Top Shelf all need stripped `.personal.entitlements` variants:
+// app, the Mac app, and Top Shelf all need stripped `.personal.entitlements` variants:
 //
 // PRAIRIE_IOS_ENTITLEMENTS                  = Prairie.personal.entitlements
 // PRAIRIE_NOTIFICATION_SERVICE_ENTITLEMENTS = NotificationService/NotificationService.personal.entitlements
 // PRAIRIE_TV_ENTITLEMENTS                   = PrairieTV.personal.entitlements
 // PRAIRIE_TOPSHELF_ENTITLEMENTS             = TopShelf/TopShelf.personal.entitlements
+// PRAIRIE_MAC_ENTITLEMENTS                  = PrairieMac.personal.entitlements
 // PRAIRIE_USER_INDEPENDENT_KEYCHAIN          = NO
 //
 // Note: Top Shelf → host-app state handoff uses that App Group, so the

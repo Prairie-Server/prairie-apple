@@ -10,17 +10,17 @@ struct HeldSettingChangesSection: View {
 
     var body: some View {
         Section {
-            Button("Try Again") {
+            Button(.settingsHeldChangeTryAgain) {
                 Task { await retry() }
             }
-            Button("Discard Held Change", role: .destructive) {
+            Button(.settingsHeldChangeDiscard, role: .destructive) {
                 Task { await discard() }
             }
         } header: {
-            Text("Not Saved")
+            Text(.settingsHeldChangeHeader)
                 .foregroundStyle(Color.prairieSecondaryText)
         } footer: {
-            Text(message)
+            Text(verbatim: message)
                 .foregroundStyle(Color.prairieSecondaryText)
         }
         .listRowBackground(Color.prairieGroupedCell)

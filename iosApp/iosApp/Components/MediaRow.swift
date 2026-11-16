@@ -17,6 +17,11 @@ enum MediaRowLayout {
 /// A horizontal scrolling row of media cards with a title header (optional
 /// icon) and safe-area leading padding.
 struct MediaRow: View {
+    @Environment(\.locale) private var locale
+    #if !os(tvOS)
+    @Environment(AppRouter.self) private var router
+    @Environment(\.browseLibraryId) private var browseLibraryId
+    #endif
     let title: String
     let items: [SectionItem]
     let onItemTap: (String) -> Void
@@ -228,7 +233,7 @@ struct MediaRow: View {
         }
     }
 
-    /// Context-menu mutations can immediately remove the focused card from a
+    /// Context-menu mutations can remove the focused card from a
     /// membership-driven row (Continue Watching, Next Up). Preserve its old
     /// position and claim the card that slid into that slot, falling back to
     /// the preceding card when the removed item was last.
@@ -246,6 +251,7 @@ struct MediaRow: View {
         claimReplacementFocus(
             replacementId,
             removedId: removedId,
+            engineFallbackId: newIds.first,
             generation: generation
         )
     }
@@ -254,16 +260,24 @@ struct MediaRow: View {
     /// verify on a later turn after the focus engine has processed the write.
     /// A bounded retry covers the context-menu dismissal repair without
     /// fighting a legitimate focus move to another card.
+    ///
+    /// When the removal lands after the context menu has closed (any real
+    /// network round trip), focus is still on the removed card and tvOS moves
+    /// it to the row's first card itself, which scrolls the row back to its
+    /// start. Take focus back from that card during the first two attempts,
+    /// before a person could have pressed anything.
     private func claimReplacementFocus(
         _ replacementId: String,
         removedId: String,
+        engineFallbackId: String?,
         generation: Int,
         attempt: Int = 0
     ) {
         DispatchQueue.main.asyncAfter(deadline: .now() + (attempt == 0 ? 0 : 0.08)) {
+            let movedByEngine = attempt < 2 && focusedItemId == engineFallbackId
             guard generation == focusRestorationGeneration,
                   focusRestorationOwner?.wrappedValue == true,
-                  focusedItemId == nil || focusedItemId == removedId else { return }
+                  focusedItemId == nil || focusedItemId == removedId || movedByEngine else { return }
 
             focusedItemId = replacementId
             lastFocusedItemId = replacementId
@@ -279,6 +293,7 @@ struct MediaRow: View {
                 claimReplacementFocus(
                     replacementId,
                     removedId: removedId,
+                    engineFallbackId: engineFallbackId,
                     generation: generation,
                     attempt: attempt + 1
                 )
@@ -368,13 +383,13 @@ struct MediaRow: View {
                 Button(action: onExploreAll) {
                     HStack(spacing: headerIconSpacing) {
                         headerTitle
-                        Image(systemName: "chevron.right")
+                        Image(systemName: "chevron.forward")
                             .font(.system(size: headerIconSize * 0.8, weight: .semibold))
                             .foregroundColor(.prairieOnSurface.opacity(0.6))
                     }
                 }
                 .buttonStyle(.plain)
-                .accessibilityHint(SectionExploreAllCard.label)
+                .accessibilityHint(Text(SectionExploreAllCard.label))
             } else {
                 headerTitle
             }
@@ -419,6 +434,13 @@ struct MediaRow: View {
                             if let index = items.firstIndex(where: { $0.id == item.id }) {
                                 warmCards(after: index)
                             }
+                            // The card opens its own page in this library.
+                            DetailPrewarmer.shared.offer(
+                                .rowCard(item, libraryId: browseLibraryId), router: router
+                            )
+                        }
+                        .onDisappear {
+                            DetailPrewarmer.shared.withdraw(.rowCard(item, libraryId: browseLibraryId))
                         }
                         #endif
                 }
@@ -437,6 +459,7 @@ struct MediaRow: View {
             #endif
             .padding(.vertical, verticalCardPadding)
             .phoneMediaRailBounds()
+            .mouseDragScrolling()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         #if !os(tvOS)
@@ -516,7 +539,8 @@ struct MediaRow: View {
                 imageIsEpisodeStill: item.posterIsEpisodeStill,
                 mediaType: item.type,
                 year: item.year,
-                subtitle: EpisodeCardCaption.line(for: item),
+                subtitle: EpisodeCardCaption.line(for: item, locale: locale)
+                    ?? CardYears.caption(for: item, locale: locale),
                 progress: progressValue(for: item),
                 userState: item.userState,
                 overlayData: OverlayData.from(item),
@@ -524,6 +548,7 @@ struct MediaRow: View {
                 playAction: playAction(for: item),
                 focusedItemId: rowFocusBinding,
                 contentId: item.contentId,
+                detailSeedSource: .section(item),
                 contextPlayTitle: contextPlayTitle(for: item),
                 contextDetailTitle: contextDetailTitle(for: item),
                 onOpenContextDetail: contextDetailAction(for: item),
@@ -697,7 +722,7 @@ struct MediaRow: View {
     /// Episode context for accessibility when a poster is captioned with its
     /// series title.
     private func episodeAccessibilityLabel(for item: SectionItem) -> String? {
-        EpisodeCardCaption.accessibilityLabel(for: item)
+        EpisodeCardCaption.accessibilityLabel(for: item, locale: locale)
     }
 
     // MARK: - Metrics

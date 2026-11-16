@@ -4,8 +4,10 @@ import SwiftUI
 /// since a row shows at most `SectionRowLimit.cards` cards.
 ///
 /// Drawn at the row's artwork size so it lines up with the cards before it;
-/// it has no caption. Every such row ends with one: Home drops titles another
+/// it has no caption. A short row ends with one too: Home drops titles another
 /// row already shows, so a row can look complete while its page holds more.
+/// Only a Continue Watching row that is known to show its whole page goes
+/// without; see `ResolvedSection.showsWholeSection`.
 struct SectionExploreAllCard: View {
     /// The row's card artwork size.
     let size: CGSize
@@ -15,11 +17,12 @@ struct SectionExploreAllCard: View {
     /// the row's native focus graph.
     var focusedItemId: FocusState<String?>.Binding? = nil
     let action: () -> Void
+    @Environment(\.locale) private var locale
 
     /// Focus identity inside a row's `focusedItemId`. Content IDs never take
     /// this form.
     static let focusId = "prairie.row.exploreAll"
-    static let label = "Explore all"
+    static let label: LocalizedStringResource = .rowsExploreAll
 
     var body: some View {
         button
@@ -35,17 +38,22 @@ struct SectionExploreAllCard: View {
         Button(action: action) { tile }
             .buttonStyle(TVCardOutlineButtonStyle(cornerRadius: cornerRadius))
             .applyRowFocus(focusedItemId)
-            .accessibilityLabel("\(Self.label), \(rowTitle)")
+            .accessibilityLabel(accessibilityText)
         #else
         Button(action: action) { tile }
             .buttonStyle(.plain)
-            .accessibilityLabel("\(Self.label), \(rowTitle)")
+            .accessibilityLabel(accessibilityText)
         #endif
+    }
+
+    /// "Explore all, Movies".
+    private var accessibilityText: String {
+        "\(AppLanguage.string(Self.label, locale: locale)), \(rowTitle)"
     }
 
     private var tile: some View {
         VStack(spacing: iconSpacing) {
-            Image(systemName: "arrow.right")
+            Image(systemName: "arrow.forward")
                 .font(.system(size: iconSize, weight: .semibold))
                 .frame(width: iconSize * 2.2, height: iconSize * 2.2)
                 .background(Circle().fill(Color.prairieOnSurface.opacity(0.12)))

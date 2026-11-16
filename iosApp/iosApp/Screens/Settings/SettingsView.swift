@@ -16,7 +16,9 @@ struct SettingsView: View {
     @State private var viewModel = SettingsViewModel()
     @State private var uiCustomization = UICustomizationPreferences.shared
     @Environment(AppRouter.self) private var router
-    @State private var showSignOutConfirm = false
+    /// Rows show view-model text resolved in the app language; reading the
+    /// locale re-renders them when it changes.
+    @Environment(\.locale) private var locale
     #if os(iOS)
     @State private var diagnosticsModel = DiagnosticsViewModel()
     #endif
@@ -26,20 +28,13 @@ struct SettingsView: View {
     #endif
 
     var body: some View {
+        let _ = locale
         Group {
             #if os(iOS)
             iOSOverview
             #else
             macOSBody
             #endif
-        }
-        .alert("Sign Out", isPresented: $showSignOutConfirm) {
-            Button("Sign Out", role: .destructive) {
-                router.signOutAndReset()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Are you sure you want to sign out?")
         }
     }
     #endif
@@ -49,8 +44,7 @@ struct SettingsView: View {
         IOSSettingsOverview(
             viewModel: viewModel,
             diagnosticsModel: diagnosticsModel,
-            uiCustomization: uiCustomization,
-            showSignOutConfirm: $showSignOutConfirm
+            uiCustomization: uiCustomization
         )
         .task {
             await viewModel.loadSettings()
@@ -72,7 +66,7 @@ struct SettingsView: View {
             signOutSection
         }
         .settingsListChrome()
-        .navigationTitle("Settings")
+        .navigationTitle(Text(.settingsTitle))
         .prairieNavigationTitleDisplayMode(.large)
         .prairieToolbarColorSchemeDark()
         .task {
@@ -89,10 +83,10 @@ struct SettingsView: View {
                 AccountSignInView(model: accountSignIn)
             } label: {
                 SettingsRowLabel(
-                    title: "Sign-in",
+                    title: .settingsSignInTitle,
                     systemImage: "person.badge.key.fill",
                     color: .blue,
-                    value: accountSignIn.identities.first?.providerName
+                    value: accountSignIn.identities.first.map { .verbatim($0.providerName) }
                 )
             }
         }
@@ -132,11 +126,11 @@ struct SettingsView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityHint("Switches to a different profile")
+            .accessibilityHint(Text(.settingsOverviewSwitchProfileHint))
 
         } footer: {
             if viewModel.userInfo?.isAdmin == true {
-                Text("Signed in as an administrator.")
+                Text(.settingsOverviewAdministratorFooter)
                     .foregroundStyle(Color.prairieSecondaryText)
             }
         }
@@ -154,7 +148,7 @@ struct SettingsView: View {
                 GeneralSettingsView()
             } label: {
                 SettingsRowLabel(
-                    title: "General",
+                    title: .settingsGeneral,
                     systemImage: "gearshape.fill",
                     color: .purple,
                     value: launchPreferences.behavior.title
@@ -165,7 +159,7 @@ struct SettingsView: View {
                 InterfaceCustomizationView()
             } label: {
                 SettingsRowLabel(
-                    title: "Interface",
+                    title: .settingsInterfaceTitle,
                     systemImage: "rectangle.3.group.fill",
                     color: .indigo,
                     value: uiCustomization.cardPresentation.posterSize.title
@@ -176,10 +170,10 @@ struct SettingsView: View {
                 PlaybackSettingsView(viewModel: viewModel)
             } label: {
                 SettingsRowLabel(
-                    title: "Playback",
+                    title: .settingsPlayback,
                     systemImage: "play.fill",
                     color: .blue,
-                    value: viewModel.preferredQualityLabel
+                    value: .verbatim(viewModel.preferredQualityLabel)
                 )
             }
 
@@ -187,10 +181,10 @@ struct SettingsView: View {
                 SubtitleSettingsView(viewModel: viewModel)
             } label: {
                 SettingsRowLabel(
-                    title: "Subtitles",
+                    title: .settingsSubtitles,
                     systemImage: "captions.bubble.fill",
                     color: .pink,
-                    value: viewModel.subtitleLanguageName
+                    value: .verbatim(viewModel.subtitleLanguageName)
                 )
             }
 
@@ -199,7 +193,7 @@ struct SettingsView: View {
                     DownloadsSettingsView()
                 } label: {
                     SettingsRowLabel(
-                        title: "Downloads",
+                        title: .settingsDownloadsTitle,
                         systemImage: "arrow.down.circle.fill",
                         color: .blue
                     )
@@ -224,14 +218,14 @@ struct SettingsView: View {
             }
 
             Button {
-                router.navigate(to: .serverList)
+                router.navigate(to: .accounts)
             } label: {
                 HStack(spacing: 0) {
                     SettingsRowLabel(
-                        title: "Server",
-                        systemImage: "server.rack",
+                        title: .accountsTitle,
+                        systemImage: "person.2.fill",
                         color: .teal,
-                        value: viewModel.serverDisplayName
+                        value: .verbatim(viewModel.serverDisplayName)
                     )
                     SettingsRowChevron()
                         .padding(.leading, 8)
@@ -244,52 +238,52 @@ struct SettingsView: View {
     // MARK: - About
 
     private var aboutSection: some View {
-        Section("About") {
+        Section(.settingsAboutTitle) {
             SettingsRowLabel(
-                title: "Version",
+                title: .settingsAboutVersion,
                 systemImage: "info",
                 color: .gray,
-                value: SettingsViewModel.versionString
+                value: .verbatim(SettingsViewModel.versionString)
             )
 
             // Prairie: update check against the Prairie release feed (PR #18).
             LabeledContent {
-                Text(viewModel.appUpdateStatus.statusLabel)
+                Text(verbatim: viewModel.appUpdateStatus.statusLabel)
                     .foregroundStyle(Color.prairieSecondaryText)
             } label: {
-                Text("Update status")
+                Text(verbatim: "Update status")
                     .foregroundStyle(Color.prairieOnSurface)
             }
             if let latest = viewModel.appUpdateStatus.latestVersionLabel {
                 LabeledContent {
-                    Text(latest)
+                    Text(verbatim: latest)
                         .foregroundStyle(Color.prairieSecondaryText)
                 } label: {
-                    Text("Latest version")
+                    Text(verbatim: "Latest version")
                         .foregroundStyle(Color.prairieOnSurface)
                 }
             }
             if let changelogURL = viewModel.appUpdateStatus.changelogURL {
-                Link("Changelog", destination: changelogURL)
+                Link(destination: changelogURL) { Text(verbatim: "Changelog") }
             }
             if let releaseURL = viewModel.appUpdateStatus.releaseURL {
-                Link("View update", destination: releaseURL)
+                Link(destination: releaseURL) { Text(verbatim: "View update") }
             }
 
-            externalLink("Privacy Policy", systemImage: "hand.raised.fill", PrairieLegalLinks.privacyPolicy)
+            externalLink(.settingsAboutPrivacyPolicy, systemImage: "hand.raised.fill", PrairieLegalLinks.privacyPolicy)
 
             NavigationLink {
                 AcknowledgementsView()
             } label: {
                 SettingsRowLabel(
-                    title: "Acknowledgements",
+                    title: .settingsAboutAcknowledgements,
                     systemImage: "curlybraces",
                     color: .indigo
                 )
             }
 
             externalLink(
-                "Source Code",
+                .settingsAboutSourceCode,
                 systemImage: "chevron.left.forwardslash.chevron.right",
                 PrairieLegalLinks.sourceCode
             )
@@ -300,14 +294,14 @@ struct SettingsView: View {
     /// around it so every label in the section shares one leading edge. The
     /// arrow marks it as opening in the browser.
     private func externalLink(
-        _ title: String,
+        _ title: LocalizedStringResource,
         systemImage: String,
         _ destination: URL
     ) -> some View {
         Link(destination: destination) {
             HStack {
                 SettingsRowLabel(title: title, systemImage: systemImage, color: .gray)
-                Image(systemName: "arrow.up.right")
+                Image(systemName: "arrow.up.forward")
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(Color.prairieSecondaryText.opacity(0.6))
             }
@@ -319,10 +313,11 @@ struct SettingsView: View {
 
     private var signOutSection: some View {
         Section {
+            // The router confirms first, naming the account and its downloads.
             Button(role: .destructive) {
-                showSignOutConfirm = true
+                router.signOutAndReset()
             } label: {
-                Text("Sign Out")
+                Text(.settingsSignOut)
                     .font(.prairieBody.weight(.semibold))
                     .foregroundStyle(Color.prairieErrorInk)
                     .frame(maxWidth: .infinity)
@@ -346,10 +341,10 @@ struct SettingsView: View {
 /// Settings-app style row label: a colored rounded-square icon badge,
 /// the row title, and an optional trailing value in secondary color.
 struct SettingsRowLabel: View {
-    let title: String
+    let title: LocalizedStringResource
     let systemImage: String
     let color: Color
-    var value: String? = nil
+    var value: LocalizedStringResource? = nil
 
     /// The Mac keeps its chrome monochrome, so every tile is the same grey
     /// whatever `color` a row passes.
@@ -387,7 +382,7 @@ struct SettingsRowLabel: View {
 /// (`NavigationLink` rows draw their own).
 struct SettingsRowChevron: View {
     var body: some View {
-        Image(systemName: "chevron.right")
+        Image(systemName: "chevron.forward")
             .font(.footnote.weight(.semibold))
             .foregroundStyle(Color.prairieSecondaryText.opacity(0.6))
             .accessibilityHidden(true)

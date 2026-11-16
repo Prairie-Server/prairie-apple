@@ -25,6 +25,7 @@ struct PhoneCastRail: View {
             .scrollTargetLayout()
             .padding(.vertical, 4)
             .phoneMediaRailBounds()
+            .mouseDragScrolling()
         }
         .contentMargins(.horizontal, PrairieTheme.safePadding, for: .scrollContent)
         .mediaRailScrolling()

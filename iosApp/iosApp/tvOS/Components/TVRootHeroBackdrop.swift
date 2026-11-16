@@ -113,6 +113,10 @@ struct TVRootHeroBackdrop: View {
     let tints: HeroBackdropPalette.Tints
     let artworkURL: String?
     let artworkThumbhash: String?
+    /// Set when the artwork is a cover standing in for a missing backdrop:
+    /// the hero draws it framed at this shape over a glow of itself instead
+    /// of stretching it across the backdrop area.
+    var artworkCoverAspect: MediaCardAspect? = nil
     var isVisible: Bool = true
     /// Artwork/tint crossfade duration. Focus-marquee hosts pass the §4.2
     /// 240 ms swap; other surfaces keep the slower ambient default.
@@ -129,6 +133,25 @@ struct TVRootHeroBackdrop: View {
     /// bright artwork.
     private let topScrimHeight: CGFloat = 190
 
+    /// A framed cover's height. It sits in the top-right corner between the
+    /// top menu and the row band, so it never reaches the rows.
+    private static let coverHeight: CGFloat = 380
+    private static let coverTopInset: CGFloat = 170
+    private static let coverTrailingInset: CGFloat = 150
+    static let coverCornerRadius: CGFloat = 14
+
+    /// Where a framed cover sits on a `canvas`-sized screen. The ambient wash
+    /// draws its glow and shadow around this frame.
+    static func coverFrame(for aspect: MediaCardAspect, canvas: CGSize) -> CGRect {
+        let size = coverSize(for: aspect)
+        return CGRect(
+            x: canvas.width - coverTrailingInset - size.width,
+            y: coverTopInset,
+            width: size.width,
+            height: size.height
+        )
+    }
+
     var body: some View {
         ZStack(alignment: .top) {
             Color.prairieBackground
@@ -137,6 +160,7 @@ struct TVRootHeroBackdrop: View {
 
             if isVisible {
                 backdropImage
+                coverImage
                 topChromeScrim
             }
         }
@@ -147,23 +171,25 @@ struct TVRootHeroBackdrop: View {
         }
     }
 
-    /// Sampled-color wash; when the caller passes flat `.prairieBackground`
-    /// tints (Calendar) every stop collapses to the app background, so the
-    /// wash renders flat.
+    /// Sampled-color wash, with a framed cover's glow and shadow, dithered
+    /// so its dark ramps don't band. When the caller passes flat
+    /// `.prairieBackground` tints (Calendar) every stop collapses to the app
+    /// background, so the wash renders flat.
     private var tintBackground: some View {
-        TVBackdropTintWash(tints: tints, isVisible: isVisible)
+        TVHeroAmbientWash(
+            tints: tints,
+            isVisible: isVisible,
+            cover: displayedCover,
             // The first tint (cold-entry seed with a prefetch-warmed sample)
             // snaps in with the artwork; only tint→tint changes crossfade.
-            .animation(
-                reduceMotion || !hasDisplayedArtwork
-                    ? nil
-                    : .easeInOut(duration: crossfadeDuration),
-                value: tints
-            )
-            .animation(
-                reduceMotion || !hasDisplayedArtwork ? nil : .easeInOut(duration: 0.24),
-                value: isVisible
-            )
+            animatesChanges: !reduceMotion && hasDisplayedArtwork,
+            crossfadeDuration: crossfadeDuration
+        )
+    }
+
+    private var displayedCover: TVHeroAmbientWash.Cover? {
+        guard isVisible, let artworkURL, !artworkURL.isEmpty, let artworkCoverAspect else { return nil }
+        return TVHeroAmbientWash.Cover(url: artworkURL, aspect: artworkCoverAspect)
     }
 
     @ViewBuilder
@@ -177,7 +203,7 @@ struct TVRootHeroBackdrop: View {
             // a swap renders one masked offscreen pass instead of two
             // full-resolution ones while both artworks are on screen.
             ZStack {
-                if let artworkURL, !artworkURL.isEmpty {
+                if let artworkURL, !artworkURL.isEmpty, artworkCoverAspect == nil {
                     AsyncImageView(
                         url: artworkURL,
                         thumbhash: artworkThumbhash,
@@ -185,11 +211,7 @@ struct TVRootHeroBackdrop: View {
                         contentMode: .fill
                     )
                     .id(artworkURL)
-                    .transition(
-                        reduceMotion || !hasDisplayedArtwork
-                            ? .identity
-                            : .opacity.animation(.easeInOut(duration: crossfadeDuration))
-                    )
+                    .transition(artworkTransition)
                 }
             }
             .frame(width: artworkSize.width, height: artworkSize.height)
@@ -205,6 +227,47 @@ struct TVRootHeroBackdrop: View {
             )
         }
         .ignoresSafeArea()
+    }
+
+    /// The first artwork paints without a fade; every later swap
+    /// crossfades. The removal fade is set for the first artwork too: a view
+    /// inserted with `.identity` kept it when it was removed, so the first
+    /// swap on a page blinked the old art out before the new one faded in.
+    private var artworkTransition: AnyTransition {
+        guard !reduceMotion else { return .identity }
+        let fade = AnyTransition.opacity.animation(.easeInOut(duration: crossfadeDuration))
+        return .asymmetric(insertion: hasDisplayedArtwork ? fade : .identity, removal: fade)
+    }
+
+    /// A cover standing in for a missing backdrop, drawn whole and sharp at
+    /// a size its artwork can carry. Its glow and shadow are part of the
+    /// ambient wash. Its own layer, so a backdrop-to-cover swap still
+    /// crossfades.
+    private var coverImage: some View {
+        ZStack {
+            if let artworkURL, !artworkURL.isEmpty, let aspect = artworkCoverAspect {
+                framedCover(url: artworkURL, size: Self.coverSize(for: aspect))
+                    .id(artworkURL)
+                    .transition(artworkTransition)
+            }
+        }
+        .padding(.top, Self.coverTopInset)
+        .padding(.trailing, Self.coverTrailingInset)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+        .ignoresSafeArea()
+    }
+
+    private func framedCover(url: String, size: CGSize) -> some View {
+        AsyncImageView(url: url, thumbhash: artworkThumbhash, targetSize: size, contentMode: .fill)
+            .frame(width: size.width, height: size.height)
+            .clipShape(RoundedRectangle(cornerRadius: Self.coverCornerRadius, style: .continuous))
+    }
+
+    private static func coverSize(for aspect: MediaCardAspect) -> CGSize {
+        switch aspect {
+        case .square: CGSize(width: coverHeight, height: coverHeight)
+        case .poster: CGSize(width: coverHeight * 2 / 3, height: coverHeight)
+        }
     }
 
     /// Black ramp pinned to the top so the wordmark, tabs, and avatar stay

@@ -1,0 +1,144 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "NSLocalNetworkUsageDescription" : {
+      "comment" : "macOS permission prompt text the system shows when Prairie first asks for this access. Keep it in step with iosApp/macOS-Info.plist.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "يستخدم Prairie شبكتك المحلية للعثور على خوادم Prairie."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie používá vaši místní síť k vyhledání serverů Prairie."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie bruger dit lokale netværk til at finde Prairie-servere."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie verwendet dein lokales Netzwerk, um Prairie-Server zu finden."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie uses your local network to find Prairie servers."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie usa tu red local para encontrar servidores de Prairie."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie käyttää lähiverkkoasi Prairie-palvelimien löytämiseen."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie utilise votre réseau local pour trouver des serveurs Prairie."
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie upotrebljava vašu lokalnu mrežu za pronalaženje poslužitelja Prairie."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie usa la tua rete locale per trovare i server Prairie."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairieはローカルネットワークを使用して、Prairieサーバーを検出します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie는 로컬 네트워크를 사용해 Prairie 서버를 찾아요."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie bruker det lokale nettverket ditt til å finne Prairie-servere."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie gebruikt je lokale netwerk om Prairie-servers te vinden."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie używa sieci lokalnej do wyszukiwania serwerów Prairie."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Prairie usa sua rede local para encontrar servidores Prairie."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie использует локальную сеть, чтобы находить серверы Prairie."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie använder ditt lokala nätverk för att hitta Prairie-servrar."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie, Prairie sunucularını bulmak için yerel ağınızı kullanır."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie використовує вашу локальну мережу, щоб знаходити сервери Prairie."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie使用你的本地网络查找Prairie服务器。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie 會使用你的區域網路來尋找 Prairie 伺服器。"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

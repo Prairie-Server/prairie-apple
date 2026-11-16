@@ -1,13 +1,17 @@
 import SwiftUI
 
-func libraryCollectionAccessibilityLabel(_ collection: LibraryCollection, showItemCount: Bool = true) -> String {
+func libraryCollectionAccessibilityLabel(
+    _ collection: LibraryCollection,
+    showItemCount: Bool = true,
+    locale: Locale
+) -> String {
     let type = collection.kind == .userCollections
-        ? "User collection"
-        : collection.collectionType?.capitalized ?? "Collection"
+        ? AppLanguage.string(.collectionsUserCollection, locale: locale)
+        : collection.collectionType?.capitalized ?? AppLanguage.string(.collectionsCollection, locale: locale)
     let count = if let itemCount = collection.itemCount {
-        "\(itemCount) item\(itemCount == 1 ? "" : "s")"
+        AppLanguage.string(.collectionsItemCount(count: itemCount, LocaleFormat.groupedCount(itemCount, locale: locale)), locale: locale)
     } else {
-        "Smart"
+        AppLanguage.string(.collectionsTypeSmart, locale: locale)
     }
     return (showItemCount ? [collection.name, type, count] : [collection.name, type]).joined(separator: ", ")
 }
@@ -17,6 +21,7 @@ func libraryCollectionAccessibilityLabel(_ collection: LibraryCollection, showIt
 struct CollectionsView: View {
     @State private var viewModel = CollectionsViewModel()
     @Environment(AppRouter.self) private var router
+    @Environment(\.locale) private var locale
 
     var body: some View {
         Group {
@@ -29,8 +34,8 @@ struct CollectionsView: View {
             } else {
                 EmptyStateView(
                     icon: "square.stack",
-                    title: "No collections",
-                    subtitle: "Create a collection to organize your media"
+                    title: AppLanguage.string(.collectionsNone, locale: locale),
+                    subtitle: AppLanguage.string(.collectionsNoneBody, locale: locale)
                 )
             }
         }
@@ -40,7 +45,7 @@ struct CollectionsView: View {
             }
         }
         .prairiePageBackground()
-        .navigationTitle("Collections")
+        .navigationTitle(Text(.collectionsTitle))
         .prairieNavigationTitleDisplayMode(.large)
         .toolbar {
             #if os(macOS)
@@ -117,13 +122,13 @@ struct CollectionsView: View {
                                     Button(role: .destructive) {
                                         viewModel.pendingGroupAction = .deleteCollection(collection)
                                     } label: {
-                                        Label("Delete", systemImage: "trash")
+                                        Label(.collectionsDelete, systemImage: "trash")
                                     }
                                     if viewModel.canManageGroups {
                                         Button {
                                             viewModel.pendingGroupAction = .move(collection)
                                         } label: {
-                                            Label("Move", systemImage: "folder")
+                                            Label(.collectionsMove, systemImage: "folder")
                                         }
                                         .tint(.prairiePrimary)
                                     }
@@ -145,18 +150,24 @@ struct CollectionsView: View {
     }
 
     /// tvOS has no Move action, so it only notes the group is empty.
-    private var emptyGroupHint: String {
+    private var emptyGroupHint: LocalizedStringResource {
         #if os(tvOS)
-        "No collections in this group yet."
+        .collectionsGroupEmpty
         #else
-        "Use Move on a collection to add it to this group."
+        .collectionsGroupEmptyHint
         #endif
     }
 
     @ViewBuilder
     private func sectionHeader(_ section: UserCollectionSection) -> some View {
         HStack {
-            Text(section.name)
+            Group {
+                if let name = section.name {
+                    Text(name)
+                } else {
+                    Text(.collectionsUngrouped)
+                }
+            }
                 .font(.prairieCaption)
                 .foregroundColor(.prairieSecondaryText)
             Spacer()
@@ -166,12 +177,12 @@ struct CollectionsView: View {
                     Button {
                         viewModel.pendingGroupAction = .rename(group)
                     } label: {
-                        Label("Rename", systemImage: "pencil")
+                        Label(.collectionsGroupRename, systemImage: "pencil")
                     }
                     Button(role: .destructive) {
                         viewModel.pendingGroupAction = .delete(group)
                     } label: {
-                        Label("Delete group", systemImage: "trash")
+                        Label(.collectionsGroupDelete, systemImage: "trash")
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
@@ -189,7 +200,7 @@ struct CollectionsView: View {
                 .font(.prairieCaption)
                 .foregroundColor(.prairieSecondaryText)
             Spacer()
-            Button("Retry") {
+            Button(.commonRetry) {
                 Task { await viewModel.retryGroupSupport() }
             }
             .foregroundColor(.prairiePrimary)
@@ -216,7 +227,7 @@ struct CollectionsView: View {
 
                 Spacer()
 
-                Image(systemName: "chevron.right")
+                Image(systemName: "chevron.forward")
                     .font(.prairieCaption)
                     .foregroundColor(.prairieSecondaryText)
             }
@@ -224,10 +235,13 @@ struct CollectionsView: View {
         }
     }
 
+    /// The kind is the server's collection type; a collection without one
+    /// reads as Custom.
     private func rowSubtitle(for collection: UserCollection) -> String {
-        let kind = (collection.collectionType ?? "custom").capitalized
+        let kind = collection.collectionType?.capitalized
+            ?? AppLanguage.string(.collectionsTypeCustom, locale: locale)
         if let count = collection.itemCount, count > 0 {
-            return "\(kind) · \(count) item\(count == 1 ? "" : "s")"
+            return AppLanguage.string(.collectionsRowKindCount(count: count, LocaleFormat.groupedCount(count, locale: locale), kind), locale: locale)
         }
         return kind
     }
@@ -237,7 +251,7 @@ struct CollectionsView: View {
     private var createSheet: some View {
         NavigationStack {
             VStack(spacing: PrairieTheme.largePadding) {
-                TextField("Collection name", text: $viewModel.newCollectionName)
+                TextField(text: $viewModel.newCollectionName) { Text(.collectionsCreateNameLabel) }
                     .textFieldStyle(PrairieTextFieldStyle())
 
                 if let message = viewModel.createError {
@@ -247,7 +261,7 @@ struct CollectionsView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                Button("Create Collection", systemImage: "plus") {
+                Button(.collectionsCreateAction, systemImage: "plus") {
                     Task { await viewModel.createCollection() }
                 }
                 .prairiePrimaryButton()
@@ -258,11 +272,11 @@ struct CollectionsView: View {
             }
             .padding(PrairieTheme.padding)
             .prairieSheetBackground()
-            .navigationTitle("New Collection")
+            .navigationTitle(Text(.collectionsCreateTitle))
             .prairieNavigationTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", systemImage: "xmark") {
+                    Button(.commonCancel, systemImage: "xmark") {
                         viewModel.showCreateSheet = false
                     }
                     .foregroundColor(.prairieSecondaryText)
@@ -285,6 +299,7 @@ private struct GroupActionSheet: View {
     @State private var name: String = ""
     @State private var pendingMoveTarget: String? = nil
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.locale) private var locale
 
     var body: some View {
         NavigationStack {
@@ -293,7 +308,7 @@ private struct GroupActionSheet: View {
                 .prairieNavigationTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel", systemImage: "xmark") { dismiss() }
+                        Button(.commonCancel, systemImage: "xmark") { dismiss() }
                             .foregroundColor(.prairieSecondaryText)
                     }
                     ToolbarItem(placement: .confirmationAction) {
@@ -321,15 +336,15 @@ private struct GroupActionSheet: View {
     private var content: some View {
         switch action {
         case .create:
-            nameForm(title: "New group", prompt: "Group name")
+            nameForm(title: .collectionsGroupNewTitle, prompt: .collectionsGroupNamePrompt)
         case .rename(let group):
-            nameForm(title: "Rename “\(group.name)”", prompt: "Group name")
+            nameForm(title: .collectionsGroupRenameTitle(group.name), prompt: .collectionsGroupNamePrompt)
         case .delete(let group):
             VStack(spacing: PrairieTheme.padding) {
-                Text("Delete “\(group.name)”?")
+                Text(.collectionsDeleteNamed(group.name))
                     .font(.prairieTitle)
                     .foregroundStyle(Color.prairieOnSurface)
-                Text("Collections in this group will move to Ungrouped. This cannot be undone.")
+                Text(.collectionsGroupDeleteBody)
                     .font(.prairieBody)
                     .foregroundStyle(Color.prairieSecondaryText)
                     .multilineTextAlignment(.center)
@@ -337,13 +352,13 @@ private struct GroupActionSheet: View {
                 Spacer()
             }
             .padding(PrairieTheme.padding)
-            .navigationTitle("Delete group")
+            .navigationTitle(Text(.collectionsGroupDelete))
         case .deleteCollection(let collection):
             VStack(spacing: PrairieTheme.padding) {
-                Text("Delete “\(collection.name)”?")
+                Text(.collectionsDeleteNamed(collection.name))
                     .font(.prairieTitle)
                     .foregroundStyle(Color.prairieOnSurface)
-                Text("This cannot be undone.")
+                Text(.collectionsDeleteBody)
                     .font(.prairieBody)
                     .foregroundStyle(Color.prairieSecondaryText)
                     .multilineTextAlignment(.center)
@@ -351,15 +366,18 @@ private struct GroupActionSheet: View {
                 Spacer()
             }
             .padding(PrairieTheme.padding)
-            .navigationTitle("Delete collection")
+            .navigationTitle(Text(.collectionsDeleteTitle))
         case .move(let collection):
             VStack(spacing: 0) {
                 List {
-                    Section("Move “\(collection.name)” to") {
+                    Section {
                         Button {
                             pendingMoveTarget = nil
                         } label: {
-                            moveOptionRow(label: "Ungrouped", selected: pendingMoveTarget == nil)
+                            moveOptionRow(
+                                label: AppLanguage.string(.collectionsUngrouped, locale: locale),
+                                selected: pendingMoveTarget == nil
+                            )
                         }
                         .listRowBackground(Color.prairieSurface)
                         ForEach(viewModel.groups) { group in
@@ -370,6 +388,8 @@ private struct GroupActionSheet: View {
                             }
                             .listRowBackground(Color.prairieSurface)
                         }
+                    } header: {
+                        Text(.collectionsMoveTo(collection.name))
                     }
                 }
                 #if os(tvOS) || os(macOS)
@@ -382,19 +402,19 @@ private struct GroupActionSheet: View {
                     .padding(.horizontal, PrairieTheme.padding)
                     .padding(.bottom, PrairieTheme.padding)
             }
-            .navigationTitle("Move collection")
+            .navigationTitle(Text(.collectionsMoveTitle))
         }
     }
 
-    private func nameForm(title: String, prompt: String) -> some View {
+    private func nameForm(title: LocalizedStringResource, prompt: LocalizedStringResource) -> some View {
         VStack(spacing: PrairieTheme.largePadding) {
-            TextField(prompt, text: $name)
+            TextField(text: $name) { Text(prompt) }
                 .textFieldStyle(PrairieTextFieldStyle())
             errorBanner
             Spacer()
         }
         .padding(PrairieTheme.padding)
-        .navigationTitle(title)
+        .navigationTitle(Text(title))
     }
 
     @ViewBuilder
@@ -406,7 +426,7 @@ private struct GroupActionSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         if viewModel.editorNeedsReload {
-            Button("Reload") {
+            Button(.collectionsReload) {
                 Task { await viewModel.loadEditor() }
             }
             .foregroundColor(.prairiePrimary)
@@ -428,12 +448,12 @@ private struct GroupActionSheet: View {
         }
     }
 
-    private var confirmLabel: String {
+    private var confirmLabel: LocalizedStringResource {
         switch action {
-        case .create: return "Create"
-        case .rename: return "Save"
-        case .delete, .deleteCollection: return "Delete"
-        case .move: return "Move"
+        case .create: return .collectionsGroupCreate
+        case .rename: return .commonSave
+        case .delete, .deleteCollection: return .collectionsDelete
+        case .move: return .collectionsMove
         }
     }
 
@@ -523,12 +543,14 @@ struct LibraryCollectionsView: View {
     let libraryId: Int
     var mediaScope: LibraryVideoScope? = nil
 
+    @Environment(\.libraryPageDidRefresh) private var pageDidRefresh
     @State private var viewModel = LibraryCollectionsViewModel()
     @State private var uiCustomization = UICustomizationPreferences.shared
     @State private var gridWidth: CGFloat = 0
     @Environment(AppRouter.self) private var router
     @Environment(\.horizontalSizeClass) private var hSize
     @Environment(\.verticalSizeClass) private var vSize
+    @Environment(\.locale) private var locale
 
     private var columns: [GridItem] {
         if let fit = widePhonePosterFit {
@@ -559,6 +581,7 @@ struct LibraryCollectionsView: View {
                     .padding(.bottom, PrairieTheme.largePadding)
                 }
                 .reportsPageChromeScroll()
+                .scrollsToTopOnLibraryDockRequest()
             } else if let error = viewModel.error {
                 ErrorView(state: error, onRetry: { Task { await viewModel.loadCollections(libraryId: libraryId) } })
             } else if viewModel.isLoading {
@@ -566,8 +589,8 @@ struct LibraryCollectionsView: View {
             } else {
                 EmptyStateView(
                     icon: "square.stack.3d.up.fill",
-                    title: "No collections yet",
-                    subtitle: "Create library collections in the web app to feature curated shelves here."
+                    title: AppLanguage.string(.collectionsEmpty, locale: locale),
+                    subtitle: AppLanguage.string(.collectionsEmptyLibraryHint, locale: locale)
                 )
             }
         }
@@ -577,6 +600,7 @@ struct LibraryCollectionsView: View {
         }
         .refreshable {
             await viewModel.loadCollections(libraryId: libraryId)
+            pageDidRefresh?()
         }
     }
 
@@ -612,7 +636,9 @@ struct LibraryCollectionsView: View {
                     .buttonStyle(.plain)
                     .frame(maxWidth: .infinity)
                     .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(libraryCollectionAccessibilityLabel(collection, showItemCount: mediaScope == nil))
+                    .accessibilityLabel(libraryCollectionAccessibilityLabel(
+                        collection, showItemCount: mediaScope == nil, locale: locale
+                    ))
                 }
             }
             #if os(iOS)
@@ -661,6 +687,7 @@ private struct LibraryCollectionCard: View {
     let cardWidthOverride: CGFloat?
     var showItemCount = true
     @State private var uiCustomization = UICustomizationPreferences.shared
+    @Environment(\.locale) private var locale
 
     private var cardWidth: CGFloat {
         cardWidthOverride
@@ -730,16 +757,16 @@ private struct LibraryCollectionCard: View {
 
     private var countLabel: String {
         if let itemCount = collection.itemCount {
-            return "\(itemCount)"
+            return LocaleFormat.groupedCount(itemCount, locale: locale)
         }
-        return "Smart"
+        return AppLanguage.string(.collectionsTypeSmart, locale: locale)
     }
 
     private var typeLabel: String {
         if collection.kind == .userCollections {
-            return "User collection"
+            return AppLanguage.string(.collectionsUserCollection, locale: locale)
         }
-        return collection.collectionType?.capitalized ?? "Collection"
+        return collection.collectionType?.capitalized ?? AppLanguage.string(.collectionsCollection, locale: locale)
     }
 }
 
@@ -753,6 +780,7 @@ struct LibraryCollectionDetailView: View {
     @State private var viewModel = LibraryCollectionDetailViewModel()
     @State private var shuffleLauncher = ShuffleLauncher()
     @Environment(AppRouter.self) private var router
+    @Environment(\.locale) private var locale
 
     private var shuffleKind: ShuffleScopeKind {
         (kind ?? .regular).shuffleScopeKind
@@ -775,8 +803,8 @@ struct LibraryCollectionDetailView: View {
             } else {
                 EmptyStateView(
                     icon: "square.stack.3d.up.fill",
-                    title: "Collection is empty",
-                    subtitle: "This collection does not have any items yet."
+                    title: AppLanguage.string(.collectionsEmptyItemsTitle, locale: locale),
+                    subtitle: AppLanguage.string(.collectionsEmptyItemsBody, locale: locale)
                 )
             }
         }
@@ -785,7 +813,7 @@ struct LibraryCollectionDetailView: View {
         // item read 404s for those. Keep cards and play actions unscoped, like
         // the web client.
         .environment(\.browseLibraryId, nil)
-        .navigationTitle(title ?? "Collection")
+        .navigationTitle(title.map { Text($0) } ?? Text(.collectionsCollection))
         .prairieNavigationTitleDisplayMode(.large)
         .task(id: "\(libraryId)-\(collectionId)-\(mediaScope?.rawValue ?? "all")-\(kind?.rawValue ?? "regular")") {
             await loadItems(reset: true)
@@ -833,12 +861,12 @@ struct LibraryCollectionDetailView: View {
         }
     }
 
-    private var countLabel: String {
-        if let totalItems = viewModel.totalItems, !viewModel.hasMore {
-            return "\(totalItems) item\(totalItems == 1 ? "" : "s")"
+    private var countLabel: LocalizedStringResource {
+        if viewModel.hasMore {
+            return .collectionsItemCountMore(count: viewModel.items.count, LocaleFormat.integer(viewModel.items.count))
         }
-        let suffix = viewModel.hasMore ? "+" : ""
-        return "\(viewModel.items.count)\(suffix) item\(viewModel.items.count == 1 && !viewModel.hasMore ? "" : "s")"
+        let count = viewModel.totalItems ?? viewModel.items.count
+        return .collectionsItemCount(count: count, LocaleFormat.integer(count))
     }
 
     private func loadMoreIfNeeded() async {

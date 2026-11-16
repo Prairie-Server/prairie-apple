@@ -29,6 +29,8 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.entertainment</string>
 	<key>NSAppTransportSecurity</key>
@@ -46,6 +48,8 @@
 	<true/>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>
 	<true/>
+	<key>PrairieKeychainAccessGroup</key>
+	<string>$(AppIdentifierPrefix)org.prairieserver.prairie.shared</string>
 	<key>PrairieBuildChannel</key>
 	<string>$(PRAIRIE_BUILD_CHANNEL)</string>
 	<key>PrairieSourceURL</key>

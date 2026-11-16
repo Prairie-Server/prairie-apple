@@ -7,6 +7,7 @@ struct ThirdPartyCreditRow: View {
     var nameFont: Font = .headline
     var detailFont: Font = .subheadline
     var logoHeight: CGFloat = 14
+    @Environment(\.locale) private var locale
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -32,7 +33,11 @@ struct ThirdPartyCreditRow: View {
         .foregroundStyle(Color.prairieSecondaryText)
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel([credit.name, credit.use, credit.notice].compactMap { $0 }.joined(separator: ". "))
+        .accessibilityLabel(
+            [credit.name, AppLanguage.string(credit.use, locale: locale), credit.notice]
+                .compactMap { $0 }
+                .joined(separator: ". ")
+        )
     }
 }
 
@@ -49,7 +54,7 @@ struct AcknowledgementsView: View {
                         .listRowBackground(Color.prairieGroupedCell)
                 }
             } header: {
-                Text("Services")
+                Text(.settingsAboutServicesHeader)
                     .foregroundStyle(Color.prairieSecondaryText)
             } footer: {
                 Text(ThirdPartyCredits.trademarkNotice)
@@ -60,20 +65,20 @@ struct AcknowledgementsView: View {
                 NavigationLink {
                     OpenSourceAcknowledgementsView()
                 } label: {
-                    Text("Open Source Licenses")
+                    Text(.settingsAboutOpenSourceLicenses)
                         .foregroundStyle(Color.prairieOnSurface)
                 }
                 .listRowBackground(Color.prairieGroupedCell)
             } header: {
-                Text("Open Source")
+                Text(.settingsAboutOpenSourceHeader)
                     .foregroundStyle(Color.prairieSecondaryText)
             } footer: {
-                Text("Prairie's license, and the licenses and exact source revisions of the code built into it.")
+                Text(.settingsAboutOpenSourceFooter)
                     .foregroundStyle(Color.prairieSecondaryText)
             }
         }
         .settingsListChrome()
-        .navigationTitle("Acknowledgements")
+        .navigationTitle(Text(.settingsAboutAcknowledgements))
         .prairieNavigationTitleDisplayMode(.inline)
         .prairieToolbarColorSchemeDark()
     }

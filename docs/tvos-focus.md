@@ -29,6 +29,14 @@ actionable item can be a real focus target.
   `defaultFocus` is evaluated when the view first appears and on automatic
   focus-state updates, not on user-driven moves, unless you pass
   `priority: .userInitiated`.
+- When the user leaves a row and comes back to it, focus returns to the
+  control they left. Store the last focused value and pass it to
+  `defaultFocus(_:_:priority: .userInitiated)` on the row's focus section,
+  as `TVEpisodeRail` and `TVDetailActionRow` do. Without it, entry picks the
+  control geometrically nearest to the one below. When the remembered control
+  is gone or disabled, name a fallback that can take focus:
+  `TVDetailActionRow` uses Play when Start Over has disappeared or a playback
+  selector is disabled while an episode's versions load.
 - Do not move focus programmatically in response to app state unless the
   focused item disappeared. Apple's Human Interface Guidelines say to avoid
   changing focus without the user's interaction; the one exception is moving
@@ -152,17 +160,50 @@ row reaches it natively, whether the user clicks or swipes. The bar's
 entry land on the selected tab instead of the tab above the focused card. The
 page is the shell focus scope's preferred default, so a repair after the
 focused card disappears returns to the page, not the bar. The shell disables the
-bar only for a short window while it hands focus down to the page, so the
+bar for a short window while it hands focus down to the page, so the
 engine's repair from the resigning tab cannot land back in the bar. The pages'
-first-row Up handlers remain as a fallback for that window.
+first-row Up handlers remain as a fallback for that window. A native Down from
+a tab is not a hand-down: focus has already landed on the page, so the shell
+leaves the bar enabled and an immediate Up, a swipe included, returns to it.
+
+The shell's body runs for every menu state change, and the page must not
+re-render with it. `TVRootPage` is compared by the values the page is built
+from, so a shell update that leaves them unchanged skips the page. Add any new
+page input to that comparison. A page asks for the top menu through
+`TVTopMenuFocusRelay`, not a closure over the shell: a page that skipped an
+update would call an outdated copy of the shell.
+
+A page that opens its own panel over its content, like the library Sort panel,
+publishes `TVPagePanelOpenKey`, and the shell disables the bar while the panel
+is open. The bar sits outside the page, so disabling the page's own content
+does not stop Up from the panel's first row from reaching a tab. Explicit bar
+claims, such as the focus watchdog's last-resort repair, lift that lock until
+the panel closes. Only publish it for a panel that reliably claims focus when it
+opens: with the bar disabled, a failed claim leaves nothing focused until that
+last-resort repair, about ten seconds later.
+
+The bar's own menus stay mounted when closed, so dwell-opening one does not
+mount a new panel subtree. A closed menu is invisible but still covers the page, and
+while it stays enabled the focus engine treats page controls under it as
+covered and skips them. Disable a closed menu as well as hiding it.
 
 The top menu has three conceptual states:
 
 - `closed`: no panel is visible; focus belongs to content or the bar.
-- `preview`: a dwell-open panel is visible, but the bar still owns focus and
-  the panel is passive.
+- `preview`: a dwell-open panel is visible and the bar still owns focus. The
+  panel takes no input, but it is a native focus target, so Down from its tab
+  reaches it by a click or a swipe; the host then enters it.
 - `entered`: the user pressed Down or otherwise entered the panel; the panel
-  owns focus and the bar is inert until the panel closes.
+  owns focus and every other bar element is inert until the panel closes. The
+  panel's own anchor can stay live (`isPanelAnchorLive`), so focus leaves the
+  panel by moving straight to it.
+
+Down from a library tab, For You, or the avatar always goes to that element's
+menu, never to the page. The shell keeps the page out of reach of native focus
+while bar focus rests on one of them (`isPageBehindMenu`), so before the preview
+opens a Down click has no native target and the tab's move handler opens and
+enters the menu. A swipe fires no move handler; it enters once the preview is
+up. Home, Calendar, and Search have no menu and Down goes to the page.
 
 Implementation details may use booleans, but the state machine above is the
 contract. In entered mode, it should be impossible for the bar to accept focus
@@ -172,7 +213,20 @@ signal is the host's "entered panel" state.
 
 When closing a panel, choose the next owner explicitly:
 
-- Menu/Back closes and returns focus to the panel's bar anchor.
+- Up past the first row returns focus to the panel's bar anchor and leaves the
+  panel showing as a preview. Menu/Back returns focus there and closes it.
+  Both move focus first, while the panel and the anchor are live, and change
+  the panel only once focus has landed (`leavePanelForAnchor`). Closing first
+  left nothing focused: the engine picked a bar element itself (the selected
+  tab, or Search) and the correction a frame later flashed. A dropdown's
+  anchor stays live the whole time it is entered, so Up from its first row is
+  a native move. The cascade is one composite focus item, and a live anchor
+  above it would take every Up press, so its anchor goes live only for the
+  return.
+- A close that moves focus elsewhere (a row selection, a hand-down to the
+  page) still closes at once. If it returns to the bar, the shell claims the
+  bar and requests focus a turn later; the bar must not clear that claim when
+  the panel reports losing focus.
 - Down past the last row closes and hands focus to page content.
 - Selecting a panel row closes, updates route/scope state, and then hands focus
   to the destination content.

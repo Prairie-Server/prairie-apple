@@ -93,7 +93,8 @@ final class DetailDismissalNavigationTests: XCTestCase {
 
         let card = try XCTUnwrap(router.presentedItemDetail)
         XCTAssertEqual(card.section, target)
-        XCTAssertFalse(card.fillsWindow)
+        // Fills the open iPhone Duo instead of a capped centered card.
+        XCTAssertTrue(card.fillsWindow)
         XCTAssertTrue(router.path.isEmpty)
 
         router.presentItemDetail(contentId: "movie", libraryId: 4)
@@ -103,6 +104,13 @@ final class DetailDismissalNavigationTests: XCTestCase {
             .itemDetail(contentId: "movie", libraryId: 4, seriesContext: nil),
         ])
         XCTAssertTrue(router.path.isEmpty)
+    }
+
+    func testRequestDetailStaysASheetWhenTheWindowWouldSplit() throws {
+        let router = AppRouter()
+        router.presentsItemDetailFullWindow = true
+        router.navigate(to: .requestDetail(mediaType: .movie, tmdbId: 603))
+        XCTAssertFalse(try XCTUnwrap(router.presentedItemDetail).fillsWindow)
     }
 
     func testMoreLikeThisHopsReplaceEachOtherSoBackLeavesInTwoSteps() {
@@ -198,6 +206,8 @@ final class DetailDismissalNavigationTests: XCTestCase {
     func testCloseButtonWaitsForTapInEveryPhase() async throws {
         let model = PlayerViewModel()
         defer { model.cleanup() }
+        // Each phase taps twice in a row and expects the second tap to hide.
+        model.controlsTapGrace = .zero
         for phase in ["loading", "playing", "next-up", "error"] {
             model.isLoading = phase == "loading"
             model.showNextUpScreen = phase == "next-up"
@@ -721,6 +731,15 @@ final class DetailDismissalNavigationTests: XCTestCase {
         XCTAssertEqual(reopened.audioTrackIndex, original.audioTrackIndex)
         XCTAssertEqual(reopened.subtitleTrackIndex, original.subtitleTrackIndex)
         XCTAssertEqual(reopened.resumePosition, original.resumePosition)
+    }
+
+    func testDetailRemembersTheCardThatOpenedItAndPushedPagesDoNotReplaceIt() throws {
+        let router = AppRouter()
+        let card = UUID()
+        router.presentItemDetail(contentId: "series", zoomSourceID: card)
+        router.presentItemDetail(contentId: "episode", zoomSourceID: UUID())
+        XCTAssertEqual(router.presentedItemDetail?.zoomSourceID, card)
+        XCTAssertEqual(router.itemDetailPath.count, 1)
     }
 
     func testActorPullGoesBackOnePageWithoutClosingTheSheet() throws {

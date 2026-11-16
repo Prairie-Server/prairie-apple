@@ -10,11 +10,11 @@ enum CardPosterSize: String, Codable, CaseIterable, Identifiable, Sendable {
 
     var id: String { rawValue }
 
-    var title: String {
+    var title: LocalizedStringResource {
         switch self {
-        case .compact: return "Compact"
-        case .standard: return "Standard"
-        case .large: return "Large"
+        case .compact: .settingsCardsSizeCompact
+        case .standard: .settingsCardsSizeStandard
+        case .large: .settingsCardsSizeLarge
         }
     }
 
@@ -1040,26 +1040,24 @@ final class UICustomizationPreferences {
         return identity
     }
 
+    /// The active identity's cache key, after the legacy owner takes over
+    /// the cache (and its outbox) saved before accounts.
     private static func activeCacheKey() -> String? {
         guard let identity = activeRequestIdentity() else { return nil }
-        return cacheKey(for: identity)
+        return identity.adoptedAccountScopedKey(cachePrefix, suffix: identity.clientFamily, defaults: .shared)
     }
 
     private static func activeRequestIdentity() -> HTTPRequestIdentity? {
-        guard let server = ServerRegistry.shared.activeServer,
-              ServerRegistry.shared.activeServerId == server.id,
-              let profileId = AuthService.shared.profileId,
-              !profileId.isEmpty else { return nil }
-        return HTTPRequestIdentity(
-            serverId: server.id,
-            serverURL: server.url,
-            profileId: profileId,
-            clientFamily: AppleDeviceIdentity.current.clientFamily
-        )
+        HTTPRequestIdentity.activeProfile()
     }
 
+    nonisolated static let cachePrefix = "prairie.uiCustomization"
+
+    /// `prairie.uiCustomization.v2.<server>.<account>.<profile>.<client family>`.
+    /// The record holds the outbox too, so queued writes stay with the
+    /// account that made them.
     private static func cacheKey(for identity: HTTPRequestIdentity) -> String {
-        "silo.uiCustomization.\(identity.serverId).\(identity.profileId).\(identity.clientFamily)"
+        identity.accountScopedKey(cachePrefix, suffix: identity.clientFamily)
     }
 
     private static func deleteIdentity(key: SettingKey, scope: SettingScope) -> String {

@@ -313,3 +313,98 @@ struct SectionCatalogTarget: Hashable {
     let sectionId: String
     let title: String
 }
+
+/// ServerRegistry activates the per-account download scope and
+/// TrackSelectionPersistence records offline track-pref writes; the real
+/// manager (Downloads/DownloadManager.swift) pulls AVFoundation and the
+/// download session into the host.
+@MainActor
+final class DownloadManager {
+    static let shared = DownloadManager()
+
+    @discardableResult
+    func activateScopeIfNeeded() async -> Bool { false }
+
+    func noteTrackPrefWrite<Body: TrackPrefBody>(
+        _ body: Body?,
+        key: String,
+        in ledger: WritableKeyPath<TrackPrefsStore, TrackPrefLedger<Body>>,
+        auth: CapturedOrdinaryRequestAuth,
+        sentAt: Date,
+        stored: Bool,
+        serverDate: Date?
+    ) {}
+}
+
+/// ServerMerge folds duplicate servers' download folders together; the real
+/// store lives in Downloads/DownloadStore.swift.
+actor DownloadStore {
+    nonisolated static func mergeScopes(_ scopes: [URL], into destination: URL) -> Bool { true }
+}
+
+/// AccountLocalData and ServerMerge clear or move per-account player
+/// settings; the real class (Screens/Player/PlayerSettings.swift) is SwiftUI
+/// and AVFoundation.
+final class PlayerSettings {
+    static func purgeLocalData(
+        localAccountId: String,
+        serverId: String,
+        includingLegacy: Bool,
+        defaults: UserDefaults = .standard
+    ) {}
+
+    static func moveLocalData(
+        fromServerURL: String,
+        toServerURL: String,
+        accounts: Set<String>,
+        legacyTarget: String?,
+        defaults: UserDefaults = .standard
+    ) {}
+}
+
+/// CurrentProfileStore checks the decoded-image cache before refetching an
+/// avatar; the real cache (Components/Images) needs the platform image stack.
+enum PosterImageCache {
+    static func cachedVariant(of url: URL, for pixelSize: CGSize) -> (image: AnyObject, isSufficient: Bool)? { nil }
+}
+
+/// CurrentProfileStore resolves the avatar URL; copied from
+/// Screens/Profiles/ProfileTile.swift, whose views stay out of the host.
+enum ProfileAvatarResolver {
+    static func serverResolvedImageURL(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+
+        let lowercased = trimmed.lowercased()
+
+        // The Nuke pipeline registers no SVG decoder. Legacy presets use an
+        // `.svg` extension, while DiceBear uses an `/svg` format path.
+        // Decline both and let the caller's raw-ref fallback build a PNG URL.
+        // Uploaded avatars are WebP and continue through this path.
+        let pathOnly = lowercased.split(separator: "?", maxSplits: 1)[0]
+        if pathOnly.hasSuffix(".svg") || pathOnly.hasSuffix("/svg") { return nil }
+
+        if lowercased.hasPrefix("http://")
+            || lowercased.hasPrefix("https://")
+            || lowercased.hasPrefix("data:image/")
+            || lowercased.hasPrefix("file://") {
+            return trimmed
+        }
+
+        guard trimmed.hasPrefix("/") else { return nil }
+        let serverURL = ServerRegistry.shared.activeServerUrl
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !serverURL.isEmpty else { return nil }
+        return serverURL + trimmed
+    }
+}
+
+/// ArtworkSurface sizes the macOS hero; the real theme is SwiftUI.
+enum PrairieTheme {
+    static func macHeroHeight(forWindowHeight windowHeight: CGFloat) -> CGFloat {
+        min(760, max(380, windowHeight * 0.66))
+    }
+}

@@ -41,8 +41,7 @@ final class ContentProvider: TVTopShelfContentProvider {
         // The profile's last confirmed spoiler answer, cached by the app. Read
         // with the credentials, before any request suspends.
         let hidesEpisodeStills = EpisodeSpoilerCache.hidesImages(
-            serverId: defaults.string(forKey: SharedStorage.activeServerIdKey),
-            profileId: defaults.string(forKey: SharedStorage.profileIdKey),
+            scope: AccountScope.current(defaults: SharedDefaults(suite: defaults)),
             in: defaults
         )
         let response: TopShelfSectionsResponse
@@ -73,13 +72,13 @@ final class ContentProvider: TVTopShelfContentProvider {
         }
 
         let continueWatching = collection(
-            title: "Continue Watching",
+            title: AppLanguage.string(.homeSectionContinueWatching),
             items: cwItems,
             seriesPosters: seriesPosters,
             hidesEpisodeStills: hidesEpisodeStills
         )
         let nextUp = collection(
-            title: "Next Up",
+            title: AppLanguage.string(.homeSectionNextUp),
             items: nuItems,
             seriesPosters: seriesPosters,
             hidesEpisodeStills: hidesEpisodeStills
@@ -303,6 +302,7 @@ final class ContentProvider: TVTopShelfContentProvider {
               let episode = item.episodeNumber else {
             return item.title
         }
-        return "\(seriesTitle) · S\(season)E\(episode)"
+        let code = AppLanguage.string(.catalogEpisodeTag(LocaleFormat.codeNumber(season), LocaleFormat.codeNumber(episode)))
+        return "\(AppLanguage.isolated(seriesTitle)) · \(code)"
     }
 }
