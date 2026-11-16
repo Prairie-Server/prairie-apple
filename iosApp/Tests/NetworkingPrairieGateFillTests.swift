@@ -676,10 +676,10 @@ final class NetworkingPrairieTokenStoreGateFillTests: XCTestCase {
 
     override func tearDown() {
         for key in [
-            TokenStore.accessTokenKey(for: serverID),
-            TokenStore.refreshTokenKey(for: serverID),
-            TokenStore.profileTokenKey(for: serverID),
-            TokenStore.accountEpochKey(for: serverID),
+            SharedStorage.accessTokenAccount(for: serverID),
+            SharedStorage.refreshTokenAccount(for: serverID),
+            SharedStorage.profileTokenAccount(for: serverID),
+            SharedStorage.accountEpochAccount(for: serverID),
             SharedStorage.mirroredAccessTokenAccount,
             SharedStorage.mirroredProfileTokenAccount,
         ] {
@@ -798,11 +798,7 @@ final class NetworkingPrairieTokenStoreGateFillTests: XCTestCase {
         XCTAssertNil(epoch)
     }
 
-    func testAccountEpochKeyDerivationHelper() {
-        XCTAssertEqual(
-            TokenStore.accountEpochKey(for: "abc"),
-            SharedStorage.accountEpochAccount(for: "abc")
-        )
+    func testCredentialAudiences() {
         XCTAssertEqual(TokenStore.accountCredentialAudience, .userIndependent)
         XCTAssertEqual(TokenStore.profileCredentialAudience, .currentUser)
     }

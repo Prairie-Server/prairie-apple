@@ -1044,7 +1044,32 @@ final class UICustomizationPreferences {
     /// the cache (and its outbox) saved before accounts.
     private static func activeCacheKey() -> String? {
         guard let identity = activeRequestIdentity() else { return nil }
+        adoptForkCache(identity)
         return identity.adoptedAccountScopedKey(cachePrefix, suffix: identity.clientFamily, defaults: .shared)
+    }
+
+    /// Prairie builds from before accounts saved the cache as
+    /// `silo.uiCustomization.<server>.<profile>.<client family>`, the fork's
+    /// original key. Account adoption only reads the `cachePrefix` form, so
+    /// that value moves there first; otherwise the owning account would lose
+    /// its cache and any queued writes on upgrade.
+    nonisolated static let forkLegacyCachePrefix = "silo.uiCustomization"
+
+    private static func adoptForkCache(_ identity: HTTPRequestIdentity) {
+        guard let localAccountId = identity.localAccountId else { return }
+        _ = AccountScopedKeyAdoption.adoptValue(
+            from: AccountScopedKeyAdoption.legacyKey(
+                forkLegacyCachePrefix, serverId: identity.serverId,
+                profileId: identity.profileId, suffix: identity.clientFamily
+            ),
+            to: AccountScopedKeyAdoption.legacyKey(
+                cachePrefix, serverId: identity.serverId,
+                profileId: identity.profileId, suffix: identity.clientFamily
+            ),
+            serverId: identity.serverId,
+            localAccountId: localAccountId,
+            defaults: .shared
+        )
     }
 
     private static func activeRequestIdentity() -> HTTPRequestIdentity? {

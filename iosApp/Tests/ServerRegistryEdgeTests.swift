@@ -157,12 +157,12 @@ final class ServerRegistryEdgeTests: XCTestCase {
         first.addOrUpdate(signedIn)
         XCTAssertEqual(first.entry(with: signedIn.id)?.legacyProfileId, "p-in")
         let accountKeychain = keychain.withAudience(.userIndependent)
-        XCTAssertTrue(accountKeychain.set("access", for: TokenStore.accessTokenKey(for: signedIn.id)))
+        XCTAssertTrue(accountKeychain.set("access", for: SharedStorage.accessTokenAccount(for: signedIn.id)))
 
         let relaunched = registry(defaults: shared)
         XCTAssertNil(relaunched.entry(with: signedOut.id)?.legacyProfileId, "no account, so the profile is dropped")
         XCTAssertNil(relaunched.entry(with: signedIn.id)?.legacyProfileId, "moved into the launch store")
-        XCTAssertNotNil(accountKeychain.get(TokenStore.accountEpochKey(for: signedIn.id)),
+        XCTAssertNotNil(accountKeychain.get(SharedStorage.accountEpochAccount(for: signedIn.id)),
                         "the move binds the profile to a fresh account epoch")
     }
 }
