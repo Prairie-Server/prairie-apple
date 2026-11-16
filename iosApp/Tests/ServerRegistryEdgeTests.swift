@@ -10,6 +10,21 @@ import XCTest
 final class ServerRegistryEdgeTests: XCTestCase {
     private final class Flag { var ok = true }
 
+    /// A registry entry as builds before the profile split saved it, with
+    /// the profile on the server (same shape as ProfileLaunchMigrationTests).
+    private struct LegacyRegistryState: Codable {
+        let activeServerId: String?
+        let entries: [LegacyServerEntry]
+    }
+
+    private struct LegacyServerEntry: Codable {
+        let id: String
+        let url: String
+        let fetchedName: String?
+        let profileId: String?
+        let lastUsedAt: Date
+    }
+
     private var names: [String] = []
     private var keychain: SharedKeychain!
 
@@ -47,9 +62,9 @@ final class ServerRegistryEdgeTests: XCTestCase {
         )
     }
 
-    private func entry(_ url: String, profile: String? = nil) -> ServerEntry {
+    private func entry(_ url: String) -> ServerEntry {
         ServerEntry(id: ServerRegistry.serverId(for: url), url: url, fetchedName: nil,
-                    profileId: profile, lastUsedAt: Date())
+                    lastUsedAt: Date())
     }
 
     func testEmptyRegistryHasNoActiveServer() {
@@ -148,18 +163,22 @@ final class ServerRegistryEdgeTests: XCTestCase {
         XCTAssertTrue(shared.bool(forKey: ServerRegistry.migratedKey))
     }
 
-    func testLegacyEntryProfilesMoveIntoTheLaunchStore() {
+    func testLegacyEntryProfilesMoveIntoTheLaunchStore() throws {
         let shared = SharedDefaults(suite: suite(), standard: suite())
-        let signedOut = entry("https://signed-out.example", profile: "p-out")
-        let signedIn = entry("https://signed-in.example", profile: "p-in")
-        let first = registry(defaults: shared)
-        first.addOrUpdate(signedOut)
-        first.addOrUpdate(signedIn)
-        XCTAssertEqual(first.entry(with: signedIn.id)?.legacyProfileId, "p-in")
+        let signedOut = entry("https://signed-out.example")
+        let signedIn = entry("https://signed-in.example")
+        let legacy = LegacyRegistryState(activeServerId: nil, entries: [
+            LegacyServerEntry(id: signedOut.id, url: signedOut.url, fetchedName: nil,
+                              profileId: "p-out", lastUsedAt: signedOut.lastUsedAt),
+            LegacyServerEntry(id: signedIn.id, url: signedIn.url, fetchedName: nil,
+                              profileId: "p-in", lastUsedAt: signedIn.lastUsedAt),
+        ])
+        shared.set(try JSONEncoder().encode(legacy), forKey: ServerRegistry.defaultsKey)
         let accountKeychain = keychain.withAudience(.userIndependent)
         XCTAssertTrue(accountKeychain.set("access", for: SharedStorage.accessTokenAccount(for: signedIn.id)))
 
         let relaunched = registry(defaults: shared)
+        XCTAssertNotNil(relaunched.entry(with: signedOut.id))
         XCTAssertNil(relaunched.entry(with: signedOut.id)?.legacyProfileId, "no account, so the profile is dropped")
         XCTAssertNil(relaunched.entry(with: signedIn.id)?.legacyProfileId, "moved into the launch store")
         XCTAssertNotNil(accountKeychain.get(SharedStorage.accountEpochAccount(for: signedIn.id)),

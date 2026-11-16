@@ -420,11 +420,11 @@ final class NetworkingPrairieRegistryGateFillTests: XCTestCase {
         let registry = makeRegistry { _, _ in allowPersist }
         registry.addOrUpdate(ServerEntry(
             id: keep, url: "https://keep.example", fetchedName: "Keep",
-            profileId: "pk", lastUsedAt: Date(timeIntervalSince1970: 2)
+            lastUsedAt: Date(timeIntervalSince1970: 2)
         ))
         registry.addOrUpdate(ServerEntry(
             id: drop, url: "https://drop.example", fetchedName: "Drop",
-            profileId: "pd", lastUsedAt: Date(timeIntervalSince1970: 1)
+            lastUsedAt: Date(timeIntervalSince1970: 1)
         ))
         await registry.switchTo(serverId: keep)
 
@@ -442,11 +442,11 @@ final class NetworkingPrairieRegistryGateFillTests: XCTestCase {
         let registry = makeRegistry { _, _ in allowPersist }
         registry.addOrUpdate(ServerEntry(
             id: active, url: "https://active.example", fetchedName: "Active",
-            profileId: "pa", lastUsedAt: Date(timeIntervalSince1970: 2)
+            lastUsedAt: Date(timeIntervalSince1970: 2)
         ))
         registry.addOrUpdate(ServerEntry(
             id: fallback, url: "https://fallback.example", fetchedName: "Fallback",
-            profileId: "pf", lastUsedAt: Date(timeIntervalSince1970: 1)
+            lastUsedAt: Date(timeIntervalSince1970: 1)
         ))
         await registry.switchTo(serverId: active)
 
@@ -462,7 +462,7 @@ final class NetworkingPrairieRegistryGateFillTests: XCTestCase {
         let id = ServerRegistry.serverId(for: "https://gated.example")
         registry.addOrUpdate(ServerEntry(
             id: id, url: "https://gated.example", fetchedName: "Gated",
-            profileId: nil, lastUsedAt: Date()
+            lastUsedAt: Date()
         ))
 
         // Fabricate an inactive lease by beginning and ending a transition.
@@ -485,7 +485,7 @@ final class NetworkingPrairieRegistryGateFillTests: XCTestCase {
         let id = ServerRegistry.serverId(for: "https://live-lease.example")
         registry.addOrUpdate(ServerEntry(
             id: id, url: "https://live-lease.example", fetchedName: "Live",
-            profileId: "p-live", lastUsedAt: Date()
+            lastUsedAt: Date()
         ))
         guard let lease = await HTTPClient.shared.beginIdentityTransition() else {
             XCTFail("expected identity transition lease")
@@ -504,7 +504,7 @@ final class NetworkingPrairieRegistryGateFillTests: XCTestCase {
         let id = ServerRegistry.serverId(for: "https://name.example")
         let entry = ServerEntry(
             id: id, url: "https://name.example", fetchedName: nil,
-            profileId: nil, lastUsedAt: Date()
+            lastUsedAt: Date()
         )
         registry.addOrUpdate(entry)
         XCTAssertTrue(registry.updateFetchedName(for: id, fetchedName: "Named"))
@@ -519,41 +519,31 @@ final class NetworkingPrairieRegistryGateFillTests: XCTestCase {
         XCTAssertFalse(registry.updateFetchedName(for: "missing-server", fetchedName: "Nope"))
     }
 
-    func testAddOrUpdatePreservesOrReplacesLegacyProfileAndFetchedName() {
+    func testAddOrUpdateKeepsFetchedNameWhenUpdateHasNone() {
         let registry = makeRegistry()
         let id = ServerRegistry.serverId(for: "https://merge.example")
         registry.addOrUpdate(ServerEntry(
             id: id,
             url: "https://merge.example",
             fetchedName: "Original",
-            profileId: "legacy-a",
             lastUsedAt: Date(timeIntervalSince1970: 1)
         ))
 
-        let preserved = registry.addOrUpdate(
-            ServerEntry(
-                id: id,
-                url: "https://merge.example",
-                fetchedName: nil,
-                profileId: nil,
-                lastUsedAt: Date(timeIntervalSince1970: 2)
-            ),
-            preservingProfile: true
-        )
-        XCTAssertEqual(preserved?.fetchedName, "Original")
+        let nilName = registry.addOrUpdate(ServerEntry(
+            id: id,
+            url: "https://merge.example",
+            fetchedName: nil,
+            lastUsedAt: Date(timeIntervalSince1970: 2)
+        ))
+        XCTAssertEqual(nilName?.fetchedName, "Original")
 
-        let replaced = registry.addOrUpdate(
-            ServerEntry(
-                id: id,
-                url: "https://merge.example",
-                fetchedName: "",
-                profileId: nil,
-                lastUsedAt: Date(timeIntervalSince1970: 3)
-            ),
-            preservingProfile: false
-        )
-        XCTAssertEqual(replaced?.fetchedName, "Original")
-        XCTAssertNil(replaced?.legacyProfileId)
+        let emptyName = registry.addOrUpdate(ServerEntry(
+            id: id,
+            url: "https://merge.example",
+            fetchedName: "",
+            lastUsedAt: Date(timeIntervalSince1970: 3)
+        ))
+        XCTAssertEqual(emptyName?.fetchedName, "Original")
     }
 
     func testRemoveWithResolveFallbackProfileFlag() async {
@@ -561,7 +551,7 @@ final class NetworkingPrairieRegistryGateFillTests: XCTestCase {
         let only = ServerRegistry.serverId(for: "https://solo-resolve.example")
         registry.addOrUpdate(ServerEntry(
             id: only, url: "https://solo-resolve.example", fetchedName: "Solo",
-            profileId: "solo", lastUsedAt: Date()
+            lastUsedAt: Date()
         ))
         await registry.switchTo(serverId: only)
         // The networking host's AuthService stub has a settable login flag;
@@ -587,7 +577,6 @@ final class NetworkingPrairieRegistryGateFillTests: XCTestCase {
             id: id,
             url: "https://persist-fail.example",
             fetchedName: "Fail",
-            profileId: "p",
             lastUsedAt: Date()
         ))
         XCTAssertNil(added)
@@ -598,7 +587,6 @@ final class NetworkingPrairieRegistryGateFillTests: XCTestCase {
             id: id,
             url: "https://persist-fail.example",
             fetchedName: "Ok",
-            profileId: "p",
             lastUsedAt: Date()
         )))
         allowPersist = false
@@ -615,11 +603,11 @@ final class NetworkingPrairieRegistryGateFillTests: XCTestCase {
         let other = ServerRegistry.serverId(for: "https://other-pin.example")
         registry.addOrUpdate(ServerEntry(
             id: keep, url: "https://keep-pin.example", fetchedName: "Keep",
-            profileId: "pk", lastUsedAt: Date(timeIntervalSince1970: 2)
+            lastUsedAt: Date(timeIntervalSince1970: 2)
         ))
         registry.addOrUpdate(ServerEntry(
             id: other, url: "https://other-pin.example", fetchedName: "Other",
-            profileId: "po", lastUsedAt: Date(timeIntervalSince1970: 1)
+            lastUsedAt: Date(timeIntervalSince1970: 1)
         ))
         // Incomplete legacy migration pin: switching away discards leftover
         // fixed-name keychain accounts.
@@ -643,11 +631,11 @@ final class NetworkingPrairieRegistryGateFillTests: XCTestCase {
         let b = ServerRegistry.serverId(for: "https://switch-b.example")
         registry.addOrUpdate(ServerEntry(
             id: a, url: "https://switch-a.example", fetchedName: "A",
-            profileId: "pa", lastUsedAt: Date(timeIntervalSince1970: 2)
+            lastUsedAt: Date(timeIntervalSince1970: 2)
         ))
         registry.addOrUpdate(ServerEntry(
             id: b, url: "https://switch-b.example", fetchedName: "B",
-            profileId: "pb", lastUsedAt: Date(timeIntervalSince1970: 1)
+            lastUsedAt: Date(timeIntervalSince1970: 1)
         ))
         let switchedA = await registry.switchTo(serverId: a)
         XCTAssertTrue(switchedA)

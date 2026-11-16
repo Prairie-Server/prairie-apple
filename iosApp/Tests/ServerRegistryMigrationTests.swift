@@ -59,6 +59,28 @@ final class ServerRegistryMigrationTests: XCTestCase {
         super.tearDown()
     }
 
+    /// A registry entry as builds before the profile split saved it, with
+    /// the profile on the server (same shape as ProfileLaunchMigrationTests).
+    private struct LegacyRegistryState: Codable {
+        let activeServerId: String?
+        let entries: [LegacyServerEntry]
+    }
+
+    private struct LegacyServerEntry: Codable {
+        let id: String
+        let url: String
+        let fetchedName: String?
+        let profileId: String?
+        let lastUsedAt: Date
+    }
+
+    private func seedLegacyRegistry(_ entries: [LegacyServerEntry]) throws {
+        defaults.set(
+            try JSONEncoder().encode(LegacyRegistryState(activeServerId: nil, entries: entries)),
+            forKey: ServerRegistry.defaultsKey
+        )
+    }
+
     private func makeRegistry() -> ServerRegistry {
         ServerRegistry(
             defaults: defaults,
@@ -113,7 +135,6 @@ final class ServerRegistryMigrationTests: XCTestCase {
             id: "x",
             url: "https://x.example",
             fetchedName: nil,
-            profileId: nil,
             lastUsedAt: Date()
         )
         XCTAssertEqual(bare.displayName, "https://x.example")
@@ -122,26 +143,30 @@ final class ServerRegistryMigrationTests: XCTestCase {
         XCTAssertEqual(named.displayName, "Home")
     }
 
-    func testPersistedRegistrySurvivesReinitWithoutClearingOnVersionBump() {
-        let registry = makeRegistry()
+    func testPersistedRegistrySurvivesReinitWithoutClearingOnVersionBump() throws {
         let id = ServerRegistry.serverId(for: "https://persist.example")
-        registry.addOrUpdate(ServerEntry(
+        try seedLegacyRegistry([LegacyServerEntry(
             id: id,
             url: "https://persist.example",
             fetchedName: "Persist",
             profileId: "prof",
             lastUsedAt: Date()
-        ))
+        )])
         XCTAssertTrue(keychain.set("TOK", for: SharedStorage.accessTokenAccount(for: id)))
+        _ = makeRegistry()
 
-        // Re-create with the same stores — no version-bump wipe path exists;
-        // registry + token must still be present.
+        // Re-create with the same stores: no version-bump wipe path exists,
+        // so the registry and token must still be present.
         let reloaded = makeRegistry()
         XCTAssertEqual(reloaded.entry(with: id)?.fetchedName, "Persist")
-        // Access token present → legacy profileId migrates into launch prefs.
+        // Access token present: the legacy profileId moves into launch prefs,
+        // then onto the account the server's session became.
         XCTAssertNil(reloaded.entry(with: id)?.legacyProfileId)
+        let account = try XCTUnwrap(
+            AccountStore(keychain: keychain, defaults: defaults).accounts(onServer: id).first
+        )
         XCTAssertEqual(
-            launchPreferences.rememberedProfile(for: id)?.profileID,
+            launchPreferences.rememberedProfile(forAccount: account.localAccountId)?.profileID,
             "prof"
         )
         XCTAssertEqual(keychain.get(SharedStorage.accessTokenAccount(for: id)), "TOK")
@@ -153,14 +178,12 @@ final class ServerRegistryMigrationTests: XCTestCase {
             id: "old",
             url: "https://old.example",
             fetchedName: "Old",
-            profileId: nil,
             lastUsedAt: Date(timeIntervalSince1970: 1)
         )
         let newer = ServerEntry(
             id: "new",
             url: "https://new.example",
             fetchedName: nil,
-            profileId: nil,
             lastUsedAt: Date(timeIntervalSince1970: 100)
         )
         registry.addOrUpdate(older)
@@ -172,27 +195,21 @@ final class ServerRegistryMigrationTests: XCTestCase {
         XCTAssertFalse(registry.hasActiveServer)
     }
 
-    func testAddOrUpdateWithoutPreservingProfileAndEmptyFetchedName() {
+    func testAddOrUpdateWithEmptyFetchedNameKeepsName() {
         let registry = makeRegistry()
         let id = ServerRegistry.serverId(for: "https://home.example")
         registry.addOrUpdate(ServerEntry(
             id: id,
             url: "https://home.example",
             fetchedName: "Home",
-            profileId: "keep-me",
             lastUsedAt: Date()
         ))
-        registry.addOrUpdate(
-            ServerEntry(
-                id: id,
-                url: "https://home.example",
-                fetchedName: "",
-                profileId: nil,
-                lastUsedAt: Date()
-            ),
-            preservingProfile: false
-        )
-        XCTAssertNil(registry.entry(with: id)?.legacyProfileId)
+        registry.addOrUpdate(ServerEntry(
+            id: id,
+            url: "https://home.example",
+            fetchedName: "",
+            lastUsedAt: Date()
+        ))
         XCTAssertEqual(registry.entry(with: id)?.fetchedName, "Home")
 
         registry.updateFetchedName(for: id, fetchedName: "")
@@ -205,7 +222,7 @@ final class ServerRegistryMigrationTests: XCTestCase {
         let only = ServerRegistry.serverId(for: "https://solo.example")
         registry.addOrUpdate(ServerEntry(
             id: only, url: "https://solo.example", fetchedName: "Solo",
-            profileId: "solo", lastUsedAt: Date()
+            lastUsedAt: Date()
         ))
         await registry.switchTo(serverId: only)
 
@@ -223,11 +240,11 @@ final class ServerRegistryMigrationTests: XCTestCase {
         let drop = ServerRegistry.serverId(for: "https://drop.example")
         registry.addOrUpdate(ServerEntry(
             id: keep, url: "https://keep.example", fetchedName: "Keep",
-            profileId: "pk", lastUsedAt: Date(timeIntervalSince1970: 2)
+            lastUsedAt: Date(timeIntervalSince1970: 2)
         ))
         registry.addOrUpdate(ServerEntry(
             id: drop, url: "https://drop.example", fetchedName: "Drop",
-            profileId: "pd", lastUsedAt: Date(timeIntervalSince1970: 1)
+            lastUsedAt: Date(timeIntervalSince1970: 1)
         ))
         await registry.switchTo(serverId: keep)
 
@@ -251,7 +268,6 @@ final class ServerRegistryMigrationTests: XCTestCase {
             id: "x",
             url: "https://x.example",
             fetchedName: "",
-            profileId: nil,
             lastUsedAt: Date()
         )
         XCTAssertEqual(entry.displayName, "https://x.example")
@@ -265,11 +281,11 @@ final class ServerRegistryMigrationTests: XCTestCase {
         let newer = ServerRegistry.serverId(for: "https://newer.example")
         registry.addOrUpdate(ServerEntry(
             id: older, url: "https://older.example", fetchedName: "Older",
-            profileId: nil, lastUsedAt: Date(timeIntervalSince1970: 1)
+            lastUsedAt: Date(timeIntervalSince1970: 1)
         ))
         registry.addOrUpdate(ServerEntry(
             id: newer, url: "https://newer.example", fetchedName: "Newer",
-            profileId: nil, lastUsedAt: Date(timeIntervalSince1970: 100)
+            lastUsedAt: Date(timeIntervalSince1970: 100)
         ))
         await registry.switchTo(serverId: older)
         XCTAssertEqual(registry.sortedEntries.map(\.id), [older, newer])
