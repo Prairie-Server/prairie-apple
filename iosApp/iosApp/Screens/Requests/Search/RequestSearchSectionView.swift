@@ -16,12 +16,12 @@ struct RequestSearchSectionView: View {
                     HStack(spacing: 6) {
                         Image(systemName: "sparkles")
                             .font(.prairieCaption)
-                        Text("Available to request")
+                        Text(.requestsSearchAvailableTitle)
                             .font(.prairieHeadline)
                     }
                     .foregroundColor(.prairieOnSurface)
 
-                    Text("Not in the library yet · tap to request")
+                    Text(.requestsSearchAvailableSubtitle)
                         .font(.prairieSmall)
                         .foregroundColor(.prairieSecondaryText)
                 }

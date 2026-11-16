@@ -13,6 +13,8 @@ struct TVSkylineSectionFeed: View {
     /// Section rows to page through, in order (already filtered to
     /// non-empty, non-featured by the caller).
     let sections: [ResolvedSection]
+    /// The app language, so a switch gives the marquee the row's current title.
+    @Environment(\.locale) private var locale
     /// Marquee scale. Every Skyline landing currently uses `.home` so the
     /// pages render identically; kept as a parameter for explicit variants.
     var marqueeScale: TVFocusMarquee.Scale = .home
@@ -221,7 +223,7 @@ struct TVSkylineSectionFeed: View {
             },
             // The marquee keeps the last card it previewed.
             onExploreAllFocus: { focusRestorationOwnerSectionId = section.id },
-            cardWidth: PrairieTheme.Skyline.densePosterCardWidth,
+            cardWidth: PrairieTheme.Skyline.denseCardWidth(for: SectionRow.layout(for: section)),
             cardVerticalPadding: PrairieTheme.Skyline.rowBandCardVerticalPadding,
             focusRestorationOwner: Binding(
                 get: { focusRestorationOwnerSectionId == section.id },
@@ -243,10 +245,11 @@ struct TVSkylineSectionFeed: View {
     private func warmRows(after index: Int) -> [CardArtwork] {
         let next = sections.dropFirst(index + 1).prefix(ArtworkLookahead.rowsAhead)
         return ArtworkLookahead.warmRows(next, items: \.items) { section, item in
-            MediaRow.cardArtwork(
+            let layout = SectionRow.layout(for: section)
+            return MediaRow.cardArtwork(
                 for: item,
-                layout: SectionRow.layout(for: section),
-                cardWidth: PrairieTheme.Skyline.densePosterCardWidth
+                layout: layout,
+                cardWidth: PrairieTheme.Skyline.denseCardWidth(for: layout)
             )
         }
     }
@@ -293,7 +296,7 @@ struct TVSkylineSectionFeed: View {
         TVMarqueeContent(
             item: item,
             rowId: section.id,
-            rowTitle: section.title,
+            rowTitle: section.displayTitle(in: locale),
             isContinueWatching: section.isContinueWatchingSection,
             isFeatured: section.isFeatured,
             spoilers: EpisodeSpoilerPreferences.shared.settings
@@ -373,6 +376,7 @@ struct TVSkylineBackdrop: View {
             tints: model.tints,
             artworkURL: model.backdropURL,
             artworkThumbhash: model.backdropThumbhash,
+            artworkCoverAspect: model.backdropCoverAspect,
             isVisible: model.backdropURL != nil,
             crossfadeDuration: PrairieTheme.Skyline.marqueeCrossfadeDuration
         )

@@ -12,25 +12,25 @@ struct TVDiagnosticsDestinationScreen: View {
             SettingsBackdrop()
 
             VStack(alignment: .leading, spacing: 24) {
-                Text("Send Reports To")
+                Text(.diagnosticsRowSendReportsTo)
                     .font(.largeTitle.bold())
-                Text("Prairie Diagnostics is the default and does not require diagnostics storage on your own server.")
+                Text(.diagnosticsDestinationHostedDefaultDescription)
                     .font(.title2)
                     .foregroundStyle(Color.prairieSecondaryText)
 
-                Button("Prairie Diagnostics") {
+                Button(.diagnosticsDestinationHosted) {
                     select(.hosted)
                 }
                 .buttonStyle(TVSettingsPaneRowStyle())
                 .focused($focusedDestination, equals: .hosted)
 
-                Button("My Prairie Server") {
+                Button(.diagnosticsDestinationMyServer) {
                     select(.selfHosted)
                 }
                 .buttonStyle(TVSettingsPaneRowStyle())
                 .focused($focusedDestination, equals: .selfHosted)
 
-                Button("Cancel", action: dismiss.callAsFunction)
+                Button(.commonCancel, action: dismiss.callAsFunction)
                     .buttonStyle(TVSettingsPaneRowStyle())
             }
             .frame(maxWidth: 950, alignment: .leading)

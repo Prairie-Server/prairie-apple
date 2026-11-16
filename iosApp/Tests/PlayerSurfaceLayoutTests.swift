@@ -27,7 +27,7 @@ final class PlayerSurfaceLayoutTests: XCTestCase {
                 ZStack {
                     Color.black.ignoresSafeArea()
                     if presentation.preview, let nextUpModel {
-                        PlayerNextUpScreen(viewModel: nextUpModel, onBack: {})
+                        PlayerNextUpScreen(viewModel: nextUpModel, onClose: {})
                     } else if presentation.preview && presentation.hasPreviewBounds {
                         Color.clear
                             .frame(width: 240, height: 135)
@@ -110,7 +110,7 @@ final class PlayerSurfaceLayoutTests: XCTestCase {
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("mobile-layout")) } action: { frames.preview = $0 }
             } panel: { compact in
                 // Measure the real production metadata/buttons.
-                PlayerNextUpScreen(viewModel: model, onBack: {}).mobileNextUpPanel(compact: compact)
+                PlayerNextUpScreen(viewModel: model, onClose: {}).mobileNextUpPanel(compact: compact)
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("mobile-layout")) } action: { frames.panel = $0 }
             }
             let viewport = layout
@@ -196,7 +196,7 @@ final class PlayerSurfaceLayoutTests: XCTestCase {
         let presentation: Presentation
         let model: PlayerViewModel
         var body: some View {
-            PlayerNextUpScreen(viewModel: model, onBack: {})
+            PlayerNextUpScreen(viewModel: model, onClose: {})
                 .frame(width: presentation.viewport?.width, height: presentation.viewport?.height)
         }
     }
@@ -334,8 +334,8 @@ final class PlayerSurfaceLayoutTests: XCTestCase {
     }
 
     /// A scope-width video in Fit ran under the Dynamic Island because the
-    /// surface spanned the whole landscape screen. Only the sides and the top
-    /// edge hold the sensor housing; the home indicator may overlay video.
+    /// surface spanned the whole landscape screen. The picture must also stay
+    /// centred, so the top inset is mirrored at the bottom.
     func testFitKeepsThePictureClearOfTheSensorHousing() async throws {
         let engine = try AetherEngine()
         let presentation = Presentation()
@@ -355,7 +355,8 @@ final class PlayerSurfaceLayoutTests: XCTestCase {
         let fitFrame = surface.convert(surface.bounds, to: window)
         XCTAssertEqual(fitFrame.midX, window.bounds.midX, accuracy: 1)
         XCTAssertGreaterThanOrEqual(fitFrame.minY, fullFrame.minY + 30 - 1)
-        XCTAssertEqual(fitFrame.maxY, fullFrame.maxY, accuracy: 1)
+        // A top-only inset pushed portrait video below the screen's centre.
+        XCTAssertEqual(fitFrame.midY, fullFrame.midY, accuracy: 1)
 
         presentation.fitsSafeArea = false
         try await settle(window) { abs(surface.bounds.width - fullWidth) < 1 }

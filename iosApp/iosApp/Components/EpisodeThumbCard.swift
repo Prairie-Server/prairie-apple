@@ -36,7 +36,10 @@ struct EpisodeThumbCard: View {
     var baseCardWidth: CGFloat? = nil
 
     @Environment(\.browseLibraryId) private var browseLibraryId
+    @Environment(\.locale) private var locale
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var personalState = MediaCardPersonalState()
+    @State private var zoomSourceID = UUID()
     @EnvironmentObject private var overlayStore: OverlayPrefsStore
     #if os(tvOS)
     @State private var continueWatchingMetadata = TVContinueWatchingPlaybackMetadataStore.shared
@@ -132,11 +135,16 @@ struct EpisodeThumbCard: View {
             if usesProvidedTapAction {
                 action()
             } else {
-                router.presentItemDetail(contentId: item.contentId, libraryId: browseLibraryId)
+                DetailSeedStore.offer(.section(item), opening: item.contentId)
+                router.presentItemDetail(
+                    contentId: item.contentId,
+                    libraryId: browseLibraryId,
+                    zoomSourceID: zoomSourceID
+                )
             }
         } label: {
             VStack(alignment: .leading, spacing: 6) {
-                thumbnail
+                thumbnail.detailZoomSource(zoomSourceID)
                 Text(displayTitle)
                     .font(.prairieCardTitle)
                     .foregroundStyle(Color.prairieOnSurface)
@@ -189,20 +197,17 @@ struct EpisodeThumbCard: View {
                 CardOverlays(
                     data: resolvedOverlayData,
                     prefs: overlayStore.prefs,
-                    variant: .wide
+                    variant: .wide,
+                    images: overlayStore.images
                 )
                 .frame(width: cardWidth, height: cardHeight)
                 .clipShape(RoundedRectangle(cornerRadius: PrairieTheme.cornerRadius))
             }
 
             // Progress bar (resume)
-            if showProgress, let p = progressValue, p > 0 {
-                VStack {
-                    Spacer()
-                    ProgressBar(value: p)
-                }
-                .frame(width: cardWidth, height: cardHeight)
-                .clipShape(RoundedRectangle(cornerRadius: PrairieTheme.cornerRadius))
+            if let p = barProgress {
+                ProgressBar(value: p)
+                    .frame(width: cardWidth, height: cardHeight)
             }
 
             // Watched check
@@ -212,10 +217,10 @@ struct EpisodeThumbCard: View {
                     ZStack {
                         Circle()
                             .fill(Color.prairieOnSurface)
-                            .frame(width: checkBadgeSize, height: checkBadgeSize)
+                            .frame(width: checkBadgeSize * checkScale, height: checkBadgeSize * checkScale)
                             .shadow(color: .black.opacity(0.3), radius: 4)
                         Image(systemName: "checkmark")
-                            .font(.system(size: checkIconSize, weight: .bold))
+                            .font(.system(size: checkIconSize * checkScale, weight: .bold))
                             .foregroundColor(Color.prairieBackground)
                     }
                 }
@@ -224,7 +229,7 @@ struct EpisodeThumbCard: View {
             }
 
             #if !os(tvOS)
-            DownloadedBadgeOverlay(contentId: item.contentId, padding: badgeInset)
+            DownloadedBadgeOverlay(contentId: item.contentId, padding: badgeInset, clearsProgressBar: barProgress != nil)
             #endif
         }
         .frame(width: cardWidth, height: cardHeight)
@@ -269,18 +274,16 @@ struct EpisodeThumbCard: View {
         item.seriesTitle ?? item.title
     }
 
-    /// Secondary line — "S01E02 · Pilot" for episodes, otherwise year.
+    /// Secondary line — "S01E02 · Pilot" for episodes, otherwise the year,
+    /// or the years a series ran.
     private var subtitleLine: String? {
-        if let episodeLine = EpisodeCardCaption.line(for: item) {
+        if let episodeLine = EpisodeCardCaption.line(for: item, locale: locale) {
             return episodeLine
         }
         if item.seriesTitle != nil {
             return item.title
         }
-        if let year = item.year {
-            return String(year)
-        }
-        return nil
+        return CardYears.caption(for: item, locale: locale)
     }
 
     private var accessibilityDescription: String {
@@ -291,13 +294,19 @@ struct EpisodeThumbCard: View {
             components.append(subtitleLine)
         }
         if isPlayed {
-            components.append("Watched")
+            components.append(AppLanguage.string(.shellCardWatched, locale: locale))
         }
         return components.joined(separator: ", ")
     }
 
     private var episodeAccessibilityLabel: String? {
-        EpisodeCardCaption.accessibilityLabel(for: item)
+        EpisodeCardCaption.accessibilityLabel(for: item, locale: locale)
+    }
+
+    /// The progress the card draws a bar for, if any.
+    private var barProgress: Double? {
+        guard showProgress, let p = progressValue, p > 0 else { return nil }
+        return p
     }
 
     private var progressValue: Double? {
@@ -326,6 +335,14 @@ struct EpisodeThumbCard: View {
         #else
         return 20
         #endif
+    }
+
+    /// The watched check grows with the card's overlay badges.
+    private var checkScale: CGFloat {
+        OverlayScale.wide(
+            posterSize: UICustomizationPreferences.shared.cardPresentation.posterSize,
+            dynamicTypeSize: dynamicTypeSize
+        )
     }
 
     private var checkIconSize: CGFloat {

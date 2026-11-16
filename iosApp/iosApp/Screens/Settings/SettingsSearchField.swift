@@ -12,15 +12,19 @@ struct SettingsSearchField: View {
                 .foregroundStyle(Color.prairieSecondaryText)
                 .accessibilityHidden(true)
 
-            TextField("Search", text: $text)
+            TextField(text: $text, prompt: Text(.settingsSearchPlaceholder)) {
+                Text(.settingsSearchPlaceholder)
+            }
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .foregroundStyle(Color.prairieOnSurface)
-                .accessibilityLabel("Search settings")
+                .accessibilityLabel(Text(.settingsSearchFieldLabel))
 
             if !text.isEmpty {
-                Button("Clear search", systemImage: "xmark.circle.fill") {
+                Button {
                     text = ""
+                } label: {
+                    Label(.settingsSearchClear, systemImage: "xmark.circle.fill")
                 }
                 .labelStyle(.iconOnly)
                 .buttonStyle(.plain)

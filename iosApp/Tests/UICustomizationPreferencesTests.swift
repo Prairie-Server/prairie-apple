@@ -107,7 +107,7 @@ final class UICustomizationPreferencesTests: XCTestCase {
             badges: ["series_premiere", "finale"]
         )
         XCTAssertEqual(
-            calendarEventAccessibilityLabel(event),
+            calendarEventAccessibilityLabel(event, locale: Locale(identifier: "en")),
             "The Show, S1 · E8, Finale, PREMIERE, FINALE, Watched"
         )
 
@@ -118,12 +118,13 @@ final class UICustomizationPreferencesTests: XCTestCase {
             itemCount: 12
         )
         XCTAssertEqual(
-            libraryCollectionAccessibilityLabel(collection),
+            libraryCollectionAccessibilityLabel(collection, locale: Locale(identifier: "en")),
             "Favorites, Movies, 12 items"
         )
         XCTAssertEqual(
             libraryCollectionAccessibilityLabel(
-                LibraryCollection(id: "empty", name: "Empty", itemCount: 0)
+                LibraryCollection(id: "empty", name: "Empty", itemCount: 0),
+                locale: Locale(identifier: "en")
             ),
             "Empty, Collection, 0 items"
         )
@@ -158,7 +159,7 @@ final class UICustomizationPreferencesTests: XCTestCase {
             watched: false,
             badges: nil
         )
-        XCTAssertEqual(calendarEventAccessibilityLabel(movie), "The Movie, Movie")
+        XCTAssertEqual(calendarEventAccessibilityLabel(movie, locale: Locale(identifier: "en")), "The Movie, Movie")
     }
 
     func testCustomizationModelsUseTheExactSettingsContractShape() throws {
@@ -402,7 +403,7 @@ final class UICustomizationPreferencesTests: XCTestCase {
 
         // A cache written while Apple clients still synced the top menu: menu
         // and shortcut members plus queued, held menu changes.
-        let cacheKey = "silo.uiCustomization.server.profile.mobile"
+        let cacheKey = testCacheKey(family: "mobile")
         let item: [String: Any] = ["type": "library", "library_id": 7, "label": "Films"]
         let held: [String: Any] = ["failedAttempts": 6, "isHeld": true]
         let cache: [String: Any] = [
@@ -484,7 +485,7 @@ final class UICustomizationPreferencesTests: XCTestCase {
         let preferences = UICustomizationPreferences(
             defaults: SharedDefaults(suite: suite, standard: standard),
             transport: transport,
-            cacheKey: { "silo.uiCustomization.server.profile.mobile" },
+            cacheKey: { testCacheKey(family: "mobile") },
             requestIdentity: { testRequestIdentity(family: "mobile") },
             initialCapabilityState: .supported
         )
@@ -529,7 +530,7 @@ final class UICustomizationPreferencesTests: XCTestCase {
         }
 
         let defaults = SharedDefaults(suite: suite, standard: standard)
-        let cacheKey = "silo.uiCustomization.server.profile.mobile"
+        let cacheKey = testCacheKey(family: "mobile")
         let transport = FakeUICustomizationTransport(
             effectiveResponse: FakeUICustomizationTransport.emptyResponse
         )
@@ -574,7 +575,7 @@ final class UICustomizationPreferencesTests: XCTestCase {
             try .init(.uiCardPresentation, .profileClient, encoding: CardPresentationPreference.standard),
         ])
         await transport.fail(.puts)
-        let cacheKey = "silo.uiCustomization.server.profile.mobile"
+        let cacheKey = testCacheKey(family: "mobile")
         let offline = UICustomizationPreferences(
             defaults: defaults,
             transport: transport,
@@ -641,7 +642,7 @@ final class UICustomizationPreferencesTests: XCTestCase {
             try .init(.uiCardPresentation, .profileClient, encoding: CardPresentationPreference.standard),
         ])
         await transport.fail(.puts)
-        let cacheKey = "silo.uiCustomization.server.profile.mobile"
+        let cacheKey = testCacheKey(family: "mobile")
         let preferences = UICustomizationPreferences(
             defaults: defaults,
             transport: transport,
@@ -721,7 +722,7 @@ final class UICustomizationPreferencesTests: XCTestCase {
             try .init(.uiCardPresentation, .profileClient, encoding: CardPresentationPreference.standard),
         ])
         await transport.fail(.puts)
-        let cacheKey = "silo.uiCustomization.server.profile.mobile"
+        let cacheKey = testCacheKey(family: "mobile")
         let preferences = UICustomizationPreferences(
             defaults: SharedDefaults(suite: suite, standard: standard),
             transport: transport,
@@ -772,7 +773,7 @@ final class UICustomizationPreferencesTests: XCTestCase {
         }
 
         let defaults = SharedDefaults(suite: suite, standard: standard)
-        let cacheKey = "silo.uiCustomization.server.profile.mobile"
+        let cacheKey = testCacheKey(family: "mobile")
         let transport = FakeUICustomizationTransport(
             capabilities: .failed(.transport(description: "offline")),
             effectiveResponse: FakeUICustomizationTransport.emptyResponse
@@ -902,7 +903,7 @@ final class UICustomizationPreferencesTests: XCTestCase {
         }
 
         let defaults = SharedDefaults(suite: suite, standard: standard)
-        let cacheKey = "silo.uiCustomization.server.profile.mobile"
+        let cacheKey = testCacheKey(family: "mobile")
         let transport = FakeUICustomizationTransport(
             rows: [
                 try .init(
@@ -982,7 +983,8 @@ final class UICustomizationPreferencesTests: XCTestCase {
             serverId: "server-b",
             serverURL: "http://server-b.invalid",
             profileId: "profile-b",
-            clientFamily: "mobile"
+            clientFamily: "mobile",
+            localAccountId: testLocalAccountId
         )
         await transport.release(.puts)
         await preferences.waitForPendingSaves()
@@ -1023,7 +1025,7 @@ final class UICustomizationPreferencesTests: XCTestCase {
         let preferences = UICustomizationPreferences(
             defaults: SharedDefaults(suite: suite, standard: standard),
             transport: FakeUICustomizationTransport(effectiveResponse: response),
-            cacheKey: { "silo.uiCustomization.server.profile.tv" },
+            cacheKey: { testCacheKey(family: "tv") },
             requestIdentity: { testRequestIdentity(family: "tv") },
             initialCapabilityState: .supported
         )
@@ -1044,7 +1046,7 @@ final class UICustomizationPreferencesTests: XCTestCase {
             UserDefaults().removePersistentDomain(forName: standardName)
         }
 
-        let cacheKey = "silo.uiCustomization.server.profile.tv"
+        let cacheKey = testCacheKey(family: "tv")
         let defaults = SharedDefaults(suite: suite, standard: standard)
         let transport = FakeUICustomizationTransport(
             rows: try deviceOverrideRows(),
@@ -1101,7 +1103,7 @@ final class UICustomizationPreferencesTests: XCTestCase {
             UserDefaults().removePersistentDomain(forName: standardName)
         }
 
-        let cacheKey = "silo.uiCustomization.server.profile.tv"
+        let cacheKey = testCacheKey(family: "tv")
         let defaults = SharedDefaults(suite: suite, standard: standard)
         let transport = FakeUICustomizationTransport(
             rows: try deviceOverrideRows(),
@@ -1172,7 +1174,7 @@ final class UICustomizationPreferencesTests: XCTestCase {
             revision: SettingKey.revision
         )
         let transport = FakeUICustomizationTransport(effectiveResponse: initialResponse)
-        let cacheKey = "silo.uiCustomization.server.profile.mobile"
+        let cacheKey = testCacheKey(family: "mobile")
         let preferences = UICustomizationPreferences(
             defaults: SharedDefaults(suite: suite, standard: standard),
             transport: transport,
@@ -1260,7 +1262,7 @@ final class UICustomizationPreferencesTests: XCTestCase {
             revision: SettingKey.revision
         )
         let defaults = SharedDefaults(suite: suite, standard: standard)
-        let cacheKey = "silo.uiCustomization.server.profile.mobile"
+        let cacheKey = testCacheKey(family: "mobile")
         let online = UICustomizationPreferences(
             defaults: defaults,
             transport: FakeUICustomizationTransport(effectiveResponse: response),
@@ -1318,13 +1320,22 @@ final class UICustomizationPreferencesTests: XCTestCase {
     }
 }
 
+/// The signed-in account the test identities belong to; preferences are
+/// cached per server, account, profile and client family.
+private let testLocalAccountId = "6F9619FF-8B86-D011-B42D-00C04FC964FF"
+
 private func testRequestIdentity(family: String) -> HTTPRequestIdentity {
     HTTPRequestIdentity(
         serverId: "server",
         serverURL: "http://settings-test.invalid",
         profileId: "profile",
-        clientFamily: family
+        clientFamily: family,
+        localAccountId: testLocalAccountId
     )
+}
+
+private func testCacheKey(family: String) -> String {
+    testCacheKey(for: testRequestIdentity(family: family))
 }
 
 private func testRequestIdentity(for cacheKey: String) -> HTTPRequestIdentity {
@@ -1332,7 +1343,7 @@ private func testRequestIdentity(for cacheKey: String) -> HTTPRequestIdentity {
 }
 
 private func testCacheKey(for identity: HTTPRequestIdentity) -> String {
-    "silo.uiCustomization.\(identity.serverId).\(identity.profileId).\(identity.clientFamily)"
+    identity.accountScopedKey("prairie.uiCustomization", suffix: identity.clientFamily)
 }
 
 private final class MutableRequestIdentity: @unchecked Sendable {

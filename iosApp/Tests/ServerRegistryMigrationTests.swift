@@ -45,9 +45,9 @@ final class ServerRegistryMigrationTests: XCTestCase {
         // Best-effort cleanup of any per-server keys we may have written.
         if let url = defaults.string(forKey: "serverUrl"), !url.isEmpty {
             let id = ServerRegistry.serverId(for: url)
-            keychain.delete(TokenStore.accessTokenKey(for: id))
-            keychain.delete(TokenStore.refreshTokenKey(for: id))
-            keychain.delete(TokenStore.profileTokenKey(for: id))
+            keychain.delete(SharedStorage.accessTokenAccount(for: id))
+            keychain.delete(SharedStorage.refreshTokenAccount(for: id))
+            keychain.delete(SharedStorage.profileTokenAccount(for: id))
         }
         suite.removePersistentDomain(forName: suiteName)
         standard.removePersistentDomain(forName: standardName)
@@ -94,9 +94,9 @@ final class ServerRegistryMigrationTests: XCTestCase {
         let again = makeRegistry()
         XCTAssertEqual(again.entries.count, 1)
         XCTAssertEqual(again.activeServerId, id)
-        XCTAssertEqual(keychain.get(TokenStore.accessTokenKey(for: id)), "ACCESS-LEGACY")
-        XCTAssertEqual(keychain.get(TokenStore.refreshTokenKey(for: id)), "REFRESH-LEGACY")
-        XCTAssertEqual(keychain.get(TokenStore.profileTokenKey(for: id)), "PROFILE-LEGACY")
+        XCTAssertEqual(keychain.get(SharedStorage.accessTokenAccount(for: id)), "ACCESS-LEGACY")
+        XCTAssertEqual(keychain.get(SharedStorage.refreshTokenAccount(for: id)), "REFRESH-LEGACY")
+        XCTAssertEqual(keychain.get(SharedStorage.profileTokenAccount(for: id)), "PROFILE-LEGACY")
     }
     #endif
 
@@ -132,7 +132,7 @@ final class ServerRegistryMigrationTests: XCTestCase {
             profileId: "prof",
             lastUsedAt: Date()
         ))
-        XCTAssertTrue(keychain.set("TOK", for: TokenStore.accessTokenKey(for: id)))
+        XCTAssertTrue(keychain.set("TOK", for: SharedStorage.accessTokenAccount(for: id)))
 
         // Re-create with the same stores — no version-bump wipe path exists;
         // registry + token must still be present.
@@ -144,7 +144,7 @@ final class ServerRegistryMigrationTests: XCTestCase {
             launchPreferences.rememberedProfile(for: id)?.profileID,
             "prof"
         )
-        XCTAssertEqual(keychain.get(TokenStore.accessTokenKey(for: id)), "TOK")
+        XCTAssertEqual(keychain.get(SharedStorage.accessTokenAccount(for: id)), "TOK")
     }
 
     func testSetProfileIdUpdateFetchedNameAndSortedEntries() {

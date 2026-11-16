@@ -1,14 +1,14 @@
 #if os(macOS)
 import SwiftUI
 
-/// Hero for a Home section the server marks as featured.
+/// Hero for a Home section the server marks as featured, laid out like the
+/// web app's `HeroBanner`.
 ///
-/// The section's layout is defined on the server, so a featured section is a
-/// hero on every client, not a poster row. The current title fills the
-/// backdrop with its metadata, synopsis, and primary actions, and the
-/// section's full list runs along the bottom with the current title
-/// highlighted. Clicking a title in the list brings it up; the hero also
-/// advances on its own and pauses while the pointer is over it.
+/// The current title fills the backdrop with its metadata, synopsis, and
+/// primary actions. A counter and progress rail in the trailing corner show
+/// where the slideshow is; arrows at the edges appear while the pointer is
+/// over the hero. The hero advances on its own and pauses under the pointer
+/// or from its pause button.
 struct MacFeaturedHero: View {
     let section: ResolvedSection
 
@@ -17,6 +17,10 @@ struct MacFeaturedHero: View {
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     @State private var index = 0
     @State private var isHovering = false
+    /// The viewer paused the slideshow with its pause button.
+    @State private var isUserPaused = false
+    /// How long the current title has been on show while the slideshow ran.
+    @State private var clock = SlideClock()
     /// The logo that has finished loading. Until a title's logo is in, its
     /// name is shown as text, so the hero is never untitled.
     @State private var loadedLogoURL: String?
@@ -33,29 +37,44 @@ struct MacFeaturedHero: View {
         return section.items[min(index, section.items.count - 1)]
     }
 
+    private var hasSeveralTitles: Bool { section.items.count > 1 }
+
     var body: some View {
         if let item {
             ZStack(alignment: .bottomLeading) {
                 backdrop(for: item)
                 scrim
-                VStack(alignment: .leading, spacing: PrairieTheme.largePadding) {
-                    details(for: item)
-                    titleStrip
+                details(for: item)
+                    .padding(.bottom, PrairieTheme.macHeroContentBottomPadding)
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if hasSeveralTitles {
+                    slideIndicator
+                        .padding(.trailing, PrairieTheme.macHeroIndicatorInset)
+                        .padding(.bottom, PrairieTheme.macHeroIndicatorBottomInset)
                 }
-                .padding(.bottom, PrairieTheme.padding)
+            }
+            .overlay {
+                if hasSeveralTitles {
+                    pagingArrows
+                }
             }
             .frame(maxWidth: .infinity)
             // A share of the window, so the rows below stay in view.
             .containerRelativeFrame(.vertical) { length, _ in
-                min(
-                    PrairieTheme.macHeroMaxHeight,
-                    max(PrairieTheme.macHeroMinHeight, length * PrairieTheme.macHeroWindowFraction)
-                )
+                PrairieTheme.macHeroHeight(forWindowHeight: length)
             }
             .clipped()
             .onHover { isHovering = $0 }
+            .animation(.easeOut(duration: PrairieTheme.normalDuration), value: isHovering)
             .task(id: AdvanceTrigger(index: index, isPaused: isPaused, ids: section.items.map(\.contentId))) {
-                await advanceAfterDelay()
+                await runSlideTimer()
+            }
+            // Back on Home, the title on show gets its full time again. The
+            // pointer may have left while the page was covered.
+            .onDisappear {
+                clock.restart(at: .now, running: false)
+                isHovering = false
             }
             // Only the slide on show translates on view; the others wait
             // until they come up.
@@ -71,9 +90,10 @@ struct MacFeaturedHero: View {
                 )
             }
             .onChange(of: section.items.map(\.contentId)) { _, ids in
-                // A reload can shorten the section; keep the label and the
-                // highlight on a title that still exists.
-                if index >= ids.count { index = max(0, ids.count - 1) }
+                // New titles get their full time on show. A reload can also
+                // shorten the section; keep the counter on a title that
+                // still exists.
+                show(min(index, max(0, ids.count - 1)))
             }
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Featured")
@@ -82,53 +102,67 @@ struct MacFeaturedHero: View {
 
     // MARK: - Layers
 
+    /// The current title's artwork. A new title cross-fades in over the old
+    /// one, as on web; the text beside it changes at once.
     private func backdrop(for item: SectionItem) -> some View {
-        Group {
-            if let seriesBackdrop = item.episodeSeriesBackdrop {
-                // An episode's own backdrop is usually a small still; its
-                // series backdrop fills the hero and is never a spoiler.
-                AsyncImageView(url: seriesBackdrop.url, thumbhash: seriesBackdrop.thumbhash, contentMode: .fill)
-            } else if let url = item.backdropUrl?.nonEmpty ?? item.posterUrl?.nonEmpty {
-                // An empty URL is no artwork: fall back as for a missing one.
-                let backdropURL = item.backdropUrl?.nonEmpty
-                AsyncImageView(
-                    url: url,
-                    thumbhash: backdropURL == nil ? item.posterThumbhash : item.backdropThumbhash,
-                    contentMode: .fill
-                )
-                .episodeSpoilerBlur(EpisodeSpoilerPreferences.shared.settings.hidesImage(for: item))
-            } else {
-                Color.prairieSurfaceElevated
-            }
+        ZStack {
+            Color.prairieSurfaceElevated
+            artwork(for: item)
+                // Web dims the backdrop to 90% brightness.
+                .overlay(Color.black.opacity(0.1))
+                .id(item.contentId)
+                .transition(.opacity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
-        .id(item.contentId)
-        .transition(.opacity)
+        .animation(.easeInOut(duration: PrairieTheme.macHeroCrossFadeSeconds), value: item.contentId)
         .accessibilityHidden(true)
     }
 
-    /// Fades the artwork into the page canvas on the leading and bottom
-    /// edges: the text stays legible, and the hero has no hard edge beside
-    /// the sidebar or above the first row.
+    @ViewBuilder
+    private func artwork(for item: SectionItem) -> some View {
+        if let seriesBackdrop = item.episodeSeriesBackdrop {
+            // An episode's own backdrop is usually a small still; its series
+            // backdrop fills the hero and is never a spoiler.
+            AsyncImageView(url: seriesBackdrop.url, thumbhash: seriesBackdrop.thumbhash, contentMode: .fill)
+        } else if let url = item.backdropUrl?.nonEmpty ?? item.posterUrl?.nonEmpty {
+            // An empty URL is no artwork: fall back as for a missing one.
+            let backdropURL = item.backdropUrl?.nonEmpty
+            AsyncImageView(
+                url: url,
+                thumbhash: backdropURL == nil ? item.posterThumbhash : item.backdropThumbhash,
+                contentMode: .fill
+            )
+            .episodeSpoilerBlur(EpisodeSpoilerPreferences.shared.settings.hidesImage(for: item))
+        } else {
+            Color.prairieSurfaceElevated
+        }
+    }
+
+    /// Web's two scrims: the artwork fades into the page canvas from the
+    /// bottom, under the rows, and from the leading edge, under the text.
     private var scrim: some View {
         ZStack {
             LinearGradient(
                 stops: [
                     .init(color: .prairiePageCanvas, location: 0),
-                    .init(color: Color.prairiePageCanvas.opacity(0.7), location: 0.3),
-                    .init(color: .clear, location: 0.7),
+                    .init(color: Color.prairiePageCanvas.opacity(0.88), location: 0.12),
+                    .init(color: Color.prairiePageCanvas.opacity(0.48), location: 0.30),
+                    .init(color: Color.prairiePageCanvas.opacity(0.12), location: 0.50),
+                    .init(color: .clear, location: 0.66),
                 ],
-                startPoint: .leading,
-                endPoint: .trailing
+                startPoint: .bottom,
+                endPoint: .top
             )
             LinearGradient(
                 stops: [
-                    .init(color: .clear, location: 0.45),
-                    .init(color: .prairiePageCanvas, location: 1),
+                    .init(color: Color.prairiePageCanvas.opacity(0.88), location: 0),
+                    .init(color: Color.prairiePageCanvas.opacity(0.58), location: 0.16),
+                    .init(color: Color.prairiePageCanvas.opacity(0.22), location: 0.34),
+                    .init(color: .clear, location: 0.50),
                 ],
-                startPoint: .top,
-                endPoint: .bottom
+                startPoint: .leading,
+                endPoint: .trailing
             )
         }
         .allowsHitTesting(false)
@@ -136,20 +170,23 @@ struct MacFeaturedHero: View {
     }
 
     private func details(for item: SectionItem) -> some View {
-        VStack(alignment: .leading, spacing: PrairieTheme.spacing) {
-            Text("Featured — No. \(Self.twoDigit(index + 1))")
-                .font(.prairieCaption.weight(.semibold))
-                .textCase(.uppercase)
-                .tracking(PrairieTheme.macSidebarHeadingTracking)
-                .foregroundStyle(Color.prairieSecondaryText)
+        VStack(alignment: .leading, spacing: 0) {
+            eyebrow
+                .padding(.bottom, PrairieTheme.padding)
 
             title(for: item)
+                .padding(.bottom, PrairieTheme.padding)
 
-            if let metadata = Self.metadataLine(for: item) {
-                Text(metadata)
-                    .font(.prairieBody.weight(.semibold))
-                    .foregroundStyle(Color.prairieOnSurface)
-                    .lineLimit(1)
+            if let metadata = Self.metadata(for: item) {
+                // On a slide change the old and new lines crossfade in place,
+                // so the rating doesn't slide sideways, and the ZStack keeps
+                // the line moving with the title and overview around it.
+                ZStack(alignment: .leading) {
+                    metadataLine(metadata)
+                        .id(item.contentId)
+                        .transition(.opacity)
+                }
+                .padding(.bottom, PrairieTheme.largePadding)
             }
 
             overview(for: item)
@@ -158,31 +195,28 @@ struct MacFeaturedHero: View {
                 // A series has nothing to play directly; More Info opens it.
                 if PrairieMediaType.isDirectlyPlayable(item.type) {
                     Button { play(item) } label: {
-                        Label("Play", systemImage: "play.fill")
-                            .font(.prairieBody.weight(.semibold))
-                            .foregroundStyle(Color.prairieBackground)
-                            .padding(.horizontal, PrairieTheme.largePadding)
-                            .padding(.vertical, PrairieTheme.spacing)
-                            .background(Capsule().fill(Color.prairiePrimary))
-                            .contentShape(Capsule())
+                        MacHeroPill(title: "Play", systemImage: "play.fill", isProminent: true)
                     }
                 }
                 Button { openDetail(item) } label: {
-                    Label("More Info", systemImage: "info.circle")
-                        .font(.prairieBody.weight(.semibold))
-                        .foregroundStyle(Color.prairieOnSurface)
-                        .padding(.horizontal, PrairieTheme.largePadding)
-                        .padding(.vertical, PrairieTheme.spacing)
-                        .background(Capsule().fill(Color.prairieChromeSelectedFill))
-                        .overlay(Capsule().stroke(Color.prairieChromeSelectedBorder))
-                        .contentShape(Capsule())
+                    MacHeroPill(title: "More Info", systemImage: "info.circle", isProminent: false)
                 }
             }
             .buttonStyle(.prairieFlat)
-            .padding(.top, PrairieTheme.smallPadding)
         }
         .frame(maxWidth: PrairieTheme.macHeroTextWidth, alignment: .leading)
         .padding(.leading, HomeFeedMetrics.gutter)
+        .padding(.trailing, PrairieTheme.macHeroIndicatorInset)
+    }
+
+    /// "FEATURED — NO. 03"
+    private var eyebrow: some View {
+        Text("\(Text("Featured").foregroundStyle(Color.white.opacity(0.92)))\(Text("  —  ").foregroundStyle(Color.white.opacity(0.45)))No. \(Self.twoDigit(index + 1))")
+            .font(.system(size: 11.5, weight: .semibold))
+            .textCase(.uppercase)
+            .tracking(2.5)
+            .foregroundStyle(Color.white.opacity(0.62))
+            .accessibilityLabel("Featured, \(index + 1) of \(section.items.count)")
     }
 
     /// The synopsis, with its on-view translation status and, in the
@@ -197,10 +231,12 @@ struct MacFeaturedHero: View {
             )
             VStack(alignment: .leading, spacing: PrairieTheme.smallPadding) {
                 Text(overview)
-                    .font(.prairieBody)
-                    .foregroundStyle(Color.prairieSecondaryText)
+                    .font(.system(size: 15))
+                    .lineSpacing(5)
+                    .foregroundStyle(Color.prairieOnSurface.opacity(0.72))
                     .lineLimit(3)
                     .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: PrairieTheme.macHeroOverviewWidth, alignment: .leading)
                     .opacity(presentation.status == .translating ? 0.5 : 1)
                 if presentation.status != nil || offersTranslation {
                     HStack(spacing: PrairieTheme.spacing) {
@@ -228,6 +264,7 @@ struct MacFeaturedHero: View {
                     }
                 }
             }
+            .padding(.bottom, PrairieTheme.macHeroOverviewBottomPadding)
         }
     }
 
@@ -244,10 +281,12 @@ struct MacFeaturedHero: View {
     @ViewBuilder
     private func title(for item: SectionItem) -> some View {
         let name = Text(item.title)
-            .font(.prairieHeroTitle)
+            .font(.system(size: PrairieTheme.macHeroTitleSize, weight: .heavy))
+            .tracking(-1.5)
             .foregroundStyle(Color.prairieOnSurface)
             .lineLimit(2)
-            .minimumScaleFactor(0.7)
+            .minimumScaleFactor(0.6)
+            .shadow(color: .black.opacity(0.45), radius: 25, y: 18)
 
         // A profile that turned title art off (`ui.title_art`) gets the name.
         if TitleArtPreferences.shared.showsTitleArt,
@@ -273,78 +312,75 @@ struct MacFeaturedHero: View {
         CGSize(width: PrairieTheme.macHeroLogoWidth, height: PrairieTheme.macHeroLogoHeight)
     }
 
-    /// Every title in the section, with the one on show highlighted.
-    private var titleStrip: some View {
-        ScrollViewReader { proxy in
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: HomeFeedMetrics.cardSpacing) {
-                    ForEach(Array(section.items.enumerated()), id: \.element.contentId) { offset, entry in
-                        Button { select(offset) } label: {
-                            thumbnail(for: entry, isCurrent: offset == index)
-                        }
-                        .buttonStyle(.prairieFlat)
-                        .id(entry.contentId)
-                        .accessibilityLabel(entry.title)
-                        .accessibilityAddTraits(offset == index ? .isSelected : [])
-                    }
-                }
-                .padding(.horizontal, HomeFeedMetrics.gutter)
-                // Room for the highlight ring, which draws outside the art.
-                .padding(.vertical, PrairieTheme.smallPadding)
+    // MARK: - Slideshow controls
+
+    /// "01 ──── 05", the progress rail, and the pause button.
+    private var slideIndicator: some View {
+        HStack(spacing: PrairieTheme.spacing) {
+            HStack(spacing: PrairieTheme.spacing) {
+                Text(Self.twoDigit(index + 1))
+                    .foregroundStyle(Color.white)
+                Rectangle()
+                    .fill(Color.white.opacity(0.35))
+                    .frame(width: 40, height: 1)
+                Text(Self.twoDigit(section.items.count))
+                    .foregroundStyle(Color.white.opacity(0.68))
             }
-            .onChange(of: index) { _, newIndex in
-                guard section.items.indices.contains(newIndex) else { return }
-                withAnimation(.easeInOut(duration: PrairieTheme.slowDuration)) {
-                    proxy.scrollTo(section.items[newIndex].contentId, anchor: .center)
+            .font(.system(size: 11, design: .monospaced))
+            .tracking(1.3)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Title \(index + 1) of \(section.items.count)")
+
+            if advancesAutomatically {
+                progressRail
+                MacHeroIconButton(
+                    systemImage: isUserPaused ? "play.fill" : "pause.fill",
+                    help: isUserPaused ? "Resume slideshow" : "Pause slideshow",
+                    size: PrairieTheme.macHeroPauseButtonSize
+                ) {
+                    isUserPaused.toggle()
                 }
             }
         }
-        .frame(height: Self.thumbnailSize.height + PrairieTheme.smallPadding * 2)
     }
 
-    /// The list's posters match the poster rows below the hero, including
-    /// the Poster Size setting.
-    private static var thumbnailSize: CGSize {
-        let width = HomeFeedRow.posterWidth
-        return CGSize(width: width, height: width * HomeFeedMetrics.posterAspect)
-    }
-
-    private func thumbnail(for entry: SectionItem, isCurrent: Bool) -> some View {
-        let shape = RoundedRectangle(cornerRadius: HomeFeedMetrics.posterRadius, style: .continuous)
-        return Group {
-            if let url = entry.posterUrl?.nonEmpty {
-                AsyncImageView(
-                    url: url,
-                    thumbhash: entry.posterThumbhash,
-                    targetSize: Self.thumbnailSize,
-                    contentMode: .fill
-                )
-                .episodeSpoilerBlur(entry.isEpisodeItem && EpisodeSpoilerPreferences.shared.settings.hidesImage(
-                    for: EpisodeWatchState(sectionItem: entry), isEpisodeStill: entry.posterIsEpisodeStill
-                ))
-            } else {
-                Color.prairieSurfaceElevated
-                    .overlay {
-                        Text(entry.title)
-                            .font(.prairieSmall)
-                            .foregroundStyle(Color.prairieSecondaryText)
-                            .multilineTextAlignment(.center)
-                            .padding(PrairieTheme.smallPadding)
-                    }
+    /// Fills over the time a title stays up, and holds while paused.
+    private var progressRail: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: isPaused)) { context in
+            let progress = min(1, clock.elapsed(at: context.date) / PrairieTheme.macHeroAdvanceSeconds)
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.white.opacity(0.18))
+                Capsule()
+                    .fill(Color.white.opacity(0.88))
+                    .frame(width: PrairieTheme.macHeroProgressRailWidth * progress)
             }
         }
-        .frame(width: Self.thumbnailSize.width, height: Self.thumbnailSize.height)
-        .clipShape(shape)
-        .overlay {
-            shape.fill(Color.black.opacity(isCurrent ? 0 : PrairieTheme.macHeroUnselectedShade))
+        .frame(width: PrairieTheme.macHeroProgressRailWidth, height: 2)
+        .accessibilityHidden(true)
+    }
+
+    /// Previous and next, at the hero's edges, shown while the pointer is
+    /// over it, and always with VoiceOver, which stops the slideshow.
+    private var pagingArrows: some View {
+        let isShown = isHovering || voiceOverEnabled
+        return HStack {
+            MacHeroIconButton(
+                systemImage: "chevron.left",
+                help: "Previous featured title",
+                size: PrairieTheme.macHeroArrowSize,
+                isGlass: true
+            ) { step(-1) }
+            Spacer()
+            MacHeroIconButton(
+                systemImage: "chevron.right",
+                help: "Next featured title",
+                size: PrairieTheme.macHeroArrowSize,
+                isGlass: true
+            ) { step(1) }
         }
-        .overlay {
-            shape.strokeBorder(
-                isCurrent ? Color.prairiePrimary : Color.clear,
-                lineWidth: PrairieTheme.macHeroSelectionRingWidth
-            )
-        }
-        .contentShape(shape)
+        .padding(.horizontal, PrairieTheme.largePadding)
+        .opacity(isShown ? 0.9 : 0)
+        .allowsHitTesting(isShown)
     }
 
     // MARK: - Behaviour
@@ -358,36 +394,40 @@ struct MacFeaturedHero: View {
         let ids: [String]
     }
 
-    /// The title must not change under someone reading or operating the
-    /// hero: under the pointer, with Reduce Motion, or with VoiceOver on.
+    /// Reduce Motion and VoiceOver turn the slideshow off: the title must
+    /// not change under someone reading it.
+    private var advancesAutomatically: Bool {
+        hasSeveralTitles && !reduceMotion && !voiceOverEnabled
+    }
+
+    /// The slideshow holds under the pointer and from the pause button.
     private var isPaused: Bool {
-        isHovering || reduceMotion || voiceOverEnabled
+        !advancesAutomatically || isHovering || isUserPaused
     }
 
-    private func advanceAfterDelay() async {
-        guard !isPaused, section.items.count > 1 else { return }
-        try? await Task.sleep(for: .seconds(PrairieTheme.macHeroAdvanceSeconds))
-        guard !Task.isCancelled else { return }
-        step(1)
-    }
-
-    /// Brings a title up; clicking the one already on show opens it.
-    private func select(_ offset: Int) {
-        guard offset != index else {
-            if let item { openDetail(item) }
+    private func runSlideTimer() async {
+        let now = Date.now
+        guard !isPaused else {
+            clock.pause(at: now)
             return
         }
-        withAnimation(.easeInOut(duration: PrairieTheme.slowDuration)) {
-            index = offset
-        }
+        clock.resume(at: now)
+        let remaining = max(0, PrairieTheme.macHeroAdvanceSeconds - clock.elapsed(at: now))
+        try? await Task.sleep(for: .seconds(remaining))
+        guard !Task.isCancelled else { return }
+        step(1)
     }
 
     private func step(_ delta: Int) {
         let count = section.items.count
         guard count > 1 else { return }
-        withAnimation(.easeInOut(duration: PrairieTheme.slowDuration)) {
-            index = (index + delta + count) % count
-        }
+        show((index + delta + count) % count)
+    }
+
+    /// Brings a title up and starts its time on show from zero.
+    private func show(_ newIndex: Int) {
+        index = newIndex
+        clock.restart(at: .now, running: !isPaused)
     }
 
     private func play(_ item: SectionItem) {
@@ -402,10 +442,44 @@ struct MacFeaturedHero: View {
         )
     }
 
+    /// The facts line, separated by dimmed middle dots as on web. The rating
+    /// is drawn as its source's mark and score and keeps its full width; the
+    /// text truncates.
+    private func metadataLine(_ metadata: Metadata) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 0) {
+            if let rating = metadata.rating {
+                if !metadata.lead.isEmpty {
+                    Text("\(Self.factsText(metadata.lead))\(Self.factSeparator)") // i18n-ignore: joins two Text values
+                }
+                RatingEntryView(rating: rating, size: 13)
+                if !metadata.trailing.isEmpty {
+                    Text("\(Self.factSeparator)\(Self.factsText(metadata.trailing))") // i18n-ignore: joins two Text values
+                }
+            } else {
+                Self.factsText(metadata.lead + metadata.trailing)
+            }
+        }
+        .font(.system(size: 13, weight: .medium))
+        .tracking(0.25)
+        .foregroundStyle(Color.white.opacity(0.85))
+        .lineLimit(1)
+        .accessibilityElement(children: .combine)
+    }
+
+    private static let factSeparator = Text(verbatim: "  ·  ").foregroundStyle(Color.white.opacity(0.55))
+
+    private static func factsText(_ parts: [String]) -> Text {
+        parts.dropFirst().reduce(Text(verbatim: parts.first ?? "")) { text, part in
+            Text("\(text)\(factSeparator)\(Text(verbatim: part))") // i18n-ignore: joins Text values
+        }
+    }
+
     private func openDetail(_ item: SectionItem) {
-        router.navigate(
-            to: .itemDetail(destinationContentId: item.contentId, sectionItem: item)
-        )
+        let route = Route.itemDetail(destinationContentId: item.contentId, sectionItem: item)
+        if case .itemDetail(let contentId, _, _, _) = route {
+            DetailSeedStore.offer(.section(item), opening: contentId)
+        }
+        router.navigate(to: route)
     }
 
     // MARK: - Formatting
@@ -414,20 +488,121 @@ struct MacFeaturedHero: View {
         value < 10 ? "0\(value)" : "\(value)"
     }
 
-    /// "2015 · 2h 1m · IMDb 8.1 · Action · Adventure · R", skipping whatever
-    /// the item does not carry.
-    static func metadataLine(for item: SectionItem) -> String? {
-        var parts: [String] = []
-        if let year = item.year { parts.append(String(year)) }
-        if let runtime = MediaTextFormatting.runtime(minutes: item.runtime) { parts.append(runtime) }
-        if let rating = item.ratingImdb, rating > 0 {
-            parts.append("IMDb " + String(format: "%.1f", rating))
-        }
-        parts.append(contentsOf: (item.genres ?? []).prefix(2))
+    /// "2015 · 2h 1m · IMDb 8.1 · Action · Adventure · R", split around the
+    /// rating so it can be drawn as its source's mark and score.
+    private struct Metadata {
+        let lead: [String]
+        let rating: DisplayRating?
+        let trailing: [String]
+    }
+
+    /// The facts line's parts, skipping whatever the item does not carry.
+    /// Episodes show no rating.
+    private static func metadata(for item: SectionItem) -> Metadata? {
+        var lead: [String] = []
+        if let year = item.year { lead.append(LocaleFormat.integer(year)) }
+        if let runtime = MediaTextFormatting.runtime(minutes: item.runtime) { lead.append(runtime) }
+        let rating = item.isEpisodeItem
+            ? nil
+            : DisplayRating.primaryCard(imdb: item.ratingImdb, tmdb: item.ratingTmdb)
+        var trailing = Array((item.genres ?? []).prefix(2))
         if let contentRating = item.contentRating, !contentRating.isEmpty {
-            parts.append(contentRating)
+            trailing.append(contentRating.uppercased())
         }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        guard !lead.isEmpty || rating != nil || !trailing.isEmpty else { return nil }
+        return Metadata(lead: lead, rating: rating, trailing: trailing)
+    }
+}
+
+/// Time a slide has been on show, counting only while the slideshow runs.
+private struct SlideClock {
+    private var banked: TimeInterval = 0
+    private var runningSince: Date?
+
+    func elapsed(at date: Date) -> TimeInterval {
+        banked + (runningSince.map { date.timeIntervalSince($0) } ?? 0)
+    }
+
+    mutating func pause(at date: Date) {
+        banked = elapsed(at: date)
+        runningSince = nil
+    }
+
+    mutating func resume(at date: Date) {
+        if runningSince == nil { runningSince = date }
+    }
+
+    mutating func restart(at date: Date, running: Bool) {
+        banked = 0
+        runningSince = running ? date : nil
+    }
+}
+
+/// Web's hero pills: a solid Play and a glass More Info.
+private struct MacHeroPill: View {
+    let title: LocalizedStringKey
+    let systemImage: String
+    let isProminent: Bool
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Label(title, systemImage: systemImage)
+            .font(.system(size: 13.5, weight: .bold))
+            .tracking(0.15)
+            .foregroundStyle(isProminent ? Color.prairieBackground : Color.prairieOnSurface)
+            .padding(.horizontal, 22)
+            .padding(.vertical, 12)
+            .background {
+                if isProminent {
+                    Capsule()
+                        .fill(Color.prairiePrimary)
+                        .brightness(isHovering ? -0.04 : 0)
+                        .shadow(color: Color.prairiePrimary.opacity(0.25), radius: 14, y: 10)
+                } else {
+                    Capsule()
+                        .fill(Color.white.opacity(isHovering ? 0.18 : 0.12))
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .overlay(Capsule().stroke(Color.white.opacity(0.14)))
+                }
+            }
+            .offset(y: isProminent && isHovering ? -1 : 0)
+            .contentShape(Capsule())
+            .onHover { isHovering = $0 }
+            .animation(.easeOut(duration: PrairieTheme.fastDuration), value: isHovering)
+    }
+}
+
+/// A round icon button for the slideshow: the pause button and, with
+/// `isGlass`, the paging arrows.
+private struct MacHeroIconButton: View {
+    let systemImage: String
+    let help: String
+    let size: CGFloat
+    var isGlass = false
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: size * (isGlass ? 0.44 : 0.5), weight: .semibold))
+                .foregroundStyle(Color.white.opacity(isGlass || isHovering ? 1 : 0.7))
+                .frame(width: size, height: size)
+                .background {
+                    if isGlass {
+                        Circle()
+                            .fill(.ultraThinMaterial)
+                            .overlay(Circle().stroke(Color.white.opacity(0.18)))
+                    }
+                }
+                .contentShape(Circle())
+        }
+        .buttonStyle(.prairieFlat)
+        .onHover { isHovering = $0 }
+        .help(help)
+        .accessibilityLabel(help)
     }
 }
 

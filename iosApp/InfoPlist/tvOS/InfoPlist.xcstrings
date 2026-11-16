@@ -1,0 +1,144 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "NSLocalNetworkUsageDescription" : {
+      "comment" : "tvOS permission prompt text the system shows when Prairie first asks for this access. Keep it in step with iosApp/iosApp/tvOS-Info.plist.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "يستخدم Prairie شبكتك المحلية للعثور على خوادم Prairie، ولإعداد Prairie على Apple TV والتحكم فيه."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie používá vaši místní síť k vyhledání serverů Prairie a k nastavení a ovládání aplikace Prairie na vašem Apple TV."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie bruger dit lokale netværk til at finde Prairie-servere og til at konfigurere og styre Prairie på dit Apple TV."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie verwendet dein lokales Netzwerk, um Prairie-Server zu finden und um Prairie auf deinem Apple TV einzurichten und zu steuern."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie uses your local network to find Prairie servers, and to set up and control Prairie on your Apple TV."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie usa tu red local para encontrar servidores de Prairie y para configurar y controlar Prairie en tu Apple TV."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie käyttää lähiverkkoasi Prairie-palvelimien löytämiseen sekä Prairien määrittämiseen ja ohjaamiseen Apple TV:ssäsi."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie utilise votre réseau local pour trouver des serveurs Prairie, et pour configurer et contrôler Prairie sur votre Apple TV."
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie upotrebljava vašu lokalnu mrežu za pronalaženje poslužitelja Prairie te za postavljanje i upravljanje aplikacijom Prairie na vašem Apple TV-u."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie usa la tua rete locale per trovare i server Prairie e per configurare e controllare Prairie sulla tua Apple TV."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairieはローカルネットワークを使用して、Prairieサーバーを検出したり、Apple TV のPrairieを設定・操作したりします。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie는 로컬 네트워크를 사용해 Prairie 서버를 찾고, Apple TV에서 Prairie를 설정하고 제어해요."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie bruker det lokale nettverket ditt til å finne Prairie-servere og til å konfigurere og styre Prairie på Apple TV-en din."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie gebruikt je lokale netwerk om Prairie-servers te vinden, en om Prairie op je Apple TV in te stellen en te bedienen."
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie używa sieci lokalnej do wyszukiwania serwerów Prairie oraz do konfigurowania aplikacji Prairie na urządzeniu Apple TV i sterowania nią."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Prairie usa sua rede local para encontrar servidores Prairie e para configurar e controlar o Prairie na sua Apple TV."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie использует локальную сеть, чтобы находить серверы Prairie, а также настраивать Prairie на вашем Apple TV и управлять им."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie använder ditt lokala nätverk för att hitta Prairie-servrar och för att konfigurera och styra Prairie på din Apple TV."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie, Prairie sunucularını bulmak ve Apple TV’nizde Prairie’yu kurmak ve kontrol etmek için yerel ağınızı kullanır."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie використовує вашу локальну мережу, щоб знаходити сервери Prairie, а також налаштовувати Prairie на Apple TV і керувати ним."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie使用你的本地网络查找Prairie服务器，以及在你的Apple TV上设置和控制Prairie。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prairie 會使用你的區域網路來尋找 Prairie 伺服器，以及在你的 Apple TV 上設定和控制 Prairie。"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

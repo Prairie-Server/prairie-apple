@@ -8,21 +8,29 @@ enum MediaCardAspect {
     case square
 }
 
+/// `subtitle` is the card's second caption line, spoken in place of the year.
+/// An episode card's line is its code and title, which `episodeLabel` already
+/// spells out, so that card keeps its year.
 func mediaCardAccessibilityLabel(
     title: String,
     episodeLabel: String?,
     year: Int?,
-    isWatched: Bool
+    subtitle: String? = nil,
+    isWatched: Bool,
+    locale: Locale = AppLanguage.formattingLocale
 ) -> String {
     var components = [title]
-    if let episodeLabel, !episodeLabel.isEmpty {
+    let hasEpisodeLabel = episodeLabel?.isEmpty == false
+    if let episodeLabel, hasEpisodeLabel {
         components.append(episodeLabel)
     }
-    if let year {
-        components.append(String(year))
+    if let subtitle, !hasEpisodeLabel {
+        components.append(subtitle)
+    } else if let year {
+        components.append(LocaleFormat.integer(year, locale: locale))
     }
     if isWatched {
-        components.append("Watched")
+        components.append(AppLanguage.string(.shellCardWatched, locale: locale))
     }
     return components.joined(separator: ", ")
 }
@@ -33,10 +41,10 @@ func episodeRailAccessibilityLabel(
     title: String?,
     metadata: String?,
     isCurrent: Bool,
-    isPlayed: Bool
+    isPlayed: Bool,
+    locale: Locale = AppLanguage.formattingLocale
 ) -> String {
-    let seasonLabel = seasonNumber == 0 ? "Specials" : "Season \(seasonNumber)"
-    var components = ["\(seasonLabel), Episode \(episodeNumber)"]
+    var components = [EpisodeCardCaption.spokenCode(season: seasonNumber, episode: episodeNumber, locale: locale)]
     if let title, !title.isEmpty {
         components.append(title)
     }
@@ -44,10 +52,10 @@ func episodeRailAccessibilityLabel(
         components.append(metadata)
     }
     if isCurrent {
-        components.append("Now viewing")
+        components.append(AppLanguage.string(.detailA11YNowViewing, locale: locale))
     }
     if isPlayed {
-        components.append("Watched")
+        components.append(AppLanguage.string(.shellCardWatched, locale: locale))
     }
     return components.joined(separator: ", ")
 }
@@ -67,7 +75,8 @@ struct MediaCard: View {
     var year: Int? = nil
     /// Secondary caption line drawn in place of the year — episode cards pass
     /// "S01E02 · Pilot" so the code and episode title sit under the series
-    /// name. Always one line; see `EpisodeCardCaption`.
+    /// name, and series cards pass the years they ran (`CardYears`). Always
+    /// one line; see `EpisodeCardCaption`.
     var subtitle: String? = nil
     var progress: Double? = nil
     var userState: MediaItemUserState? = nil
@@ -90,6 +99,9 @@ struct MediaCard: View {
     /// An episode card's series and episode. When set, a tap opens the
     /// series on that episode instead of loading the episode first.
     var seriesContext: SeriesDetailContext? = nil
+    /// The item behind the card. A tap offers it to the page it opens,
+    /// which draws from it until its own detail loads.
+    var detailSeedSource: DetailSeedSource? = nil
     var contextPlayTitle: String? = nil
     var contextDetailTitle: String? = nil
     var onOpenContextDetail: (() -> Void)? = nil
@@ -128,6 +140,7 @@ struct MediaCard: View {
     @Environment(AppRouter.self) private var router
     @Environment(\.browseLibraryId) private var browseLibraryId
     #endif
+    @Environment(\.locale) private var locale
 
     private var cardWidth: CGFloat { artworkSize.width }
     private var cardHeight: CGFloat { artworkSize.height }
@@ -146,6 +159,10 @@ struct MediaCard: View {
             return CGSize(width: width, height: width)
         }
     }
+
+    /// This card's own artwork, so the detail zooms from the card that was
+    /// tapped even when the same title is in two rows.
+    @State private var zoomSourceID = UUID()
 
     var body: some View {
         cardBody.mediaActionFeedback(personalState.feedback)
@@ -200,14 +217,23 @@ struct MediaCard: View {
         Group {
             if let contentId {
                 Button {
+                    DetailSeedStore.offer(
+                        detailSeedSource,
+                        opening: seriesContext?.seriesContentId ?? contentId
+                    )
                     if let seriesContext {
                         router.presentItemDetail(
                             contentId: seriesContext.seriesContentId,
                             libraryId: browseLibraryId,
-                            resumeContext: seriesContext
+                            resumeContext: seriesContext,
+                            zoomSourceID: zoomSourceID
                         )
                     } else {
-                        router.presentItemDetail(contentId: contentId, libraryId: browseLibraryId)
+                        router.presentItemDetail(
+                            contentId: contentId,
+                            libraryId: browseLibraryId,
+                            zoomSourceID: zoomSourceID
+                        )
                     }
                 } label: {
                     cardContent
@@ -238,7 +264,7 @@ struct MediaCard: View {
             Button(role: .destructive) {
                 onRemoveFromContinueWatching()
             } label: {
-                Label("Remove from Continue Watching", systemImage: "xmark.circle")
+                Label(.cardMenuRemoveContinueWatching, systemImage: "xmark.circle")
             }
         }
     }
@@ -300,7 +326,7 @@ struct MediaCard: View {
 
     private var cardContent: some View {
         VStack(alignment: .leading, spacing: 4) {
-            posterImage
+            posterImage.detailZoomSource(zoomSourceID)
             titleText
             yearText
         }
@@ -328,11 +354,17 @@ struct MediaCard: View {
                 .frame(width: cardWidth, height: cardHeight)
 
             // Server / user-customized overlays (resolution, HDR, ratings, …)
-            // sit under the watched check + progress bar so those built-in
-            // affordances always win the same corner if they conflict.
+            // sit under the progress bar, and leave the top-right corner to
+            // the watch status below.
             if let overlayData, overlayStore.enabled {
-                CardOverlays(data: overlayData, prefs: overlayStore.prefs, variant: .poster)
-                    .frame(width: cardWidth, height: cardHeight)
+                CardOverlays(
+                    data: overlayData,
+                    prefs: overlayStore.prefs,
+                    variant: .poster,
+                    images: overlayStore.images,
+                    hasProgressBar: (progress ?? 0) > 0
+                )
+                .frame(width: cardWidth, height: cardHeight)
             }
 
             if let boxSet {
@@ -341,29 +373,18 @@ struct MediaCard: View {
             }
 
             if let progress, progress > 0 {
-                ProgressBar(value: progress)
+                ProgressBar(value: progress, belowCornerLabel: boxSet != nil)
             }
 
-            // Watched indicator — white circle with check (Plezy style)
-            if isPlayed {
-                HStack {
-                    Spacer()
-                    ZStack {
-                        Circle()
-                            .fill(Color.prairieOnSurface)
-                            .frame(width: checkBadgeSize, height: checkBadgeSize)
-                            .shadow(color: .black.opacity(0.3), radius: 4)
-                        Image(systemName: "checkmark")
-                            .font(.system(size: checkIconSize, weight: .bold))
-                            .foregroundColor(Color.prairieBackground)
-                    }
-                }
-                .padding(checkBadgePadding)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-            }
+            // Shown whether or not badges are on.
+            CardWatchStatus(
+                played: isPlayed,
+                episodesLeft: personalState.episodesLeft(userState),
+                cardWidth: cardWidth
+            )
 
             #if !os(tvOS)
-            DownloadedBadgeOverlay(contentId: contentId, padding: checkBadgePadding)
+            DownloadedBadgeOverlay(contentId: contentId, padding: 6, clearsProgressBar: (progress ?? 0) > 0)
             #endif
         }
         .frame(width: cardWidth, height: cardHeight)
@@ -390,9 +411,11 @@ struct MediaCard: View {
             title: title,
             episodeLabel: episodeAccessibilityLabel,
             year: year,
-            isWatched: isPlayed
+            subtitle: subtitle,
+            isWatched: isPlayed,
+            locale: locale
         )
-        return marksCurrentFilm ? label + ", This film" : label
+        return marksCurrentFilm ? label + ", " + AppLanguage.string(.shellCardThisFilm, locale: locale) : label
     }
 
     @ViewBuilder
@@ -435,7 +458,7 @@ struct MediaCard: View {
 
     @ViewBuilder
     private var yearText: some View {
-        if let secondLine = subtitle ?? year.map(String.init) {
+        if let secondLine = subtitle ?? year.map({ LocaleFormat.integer($0, locale: locale) }) {
             Text(secondLine)
                 .font(.prairieCardMetadata)
                 .foregroundColor(.prairieSecondaryText)
@@ -446,33 +469,6 @@ struct MediaCard: View {
                 .frame(width: cardWidth, alignment: .leading)
         }
     }
-
-    // MARK: - Metric helpers
-
-    private var checkBadgeSize: CGFloat {
-        #if os(tvOS)
-        return 40
-        #else
-        return 20
-        #endif
-    }
-
-    private var checkIconSize: CGFloat {
-        #if os(tvOS)
-        return 20
-        #else
-        return 10
-        #endif
-    }
-
-    private var checkBadgePadding: CGFloat {
-        #if os(tvOS)
-        return 12
-        #else
-        return 6
-        #endif
-    }
-
 }
 
 // MARK: - tvOS Focusable wrapper
@@ -503,6 +499,7 @@ private struct FocusableMediaCard<Content: View>: View {
     let onRemoveFromContinueWatching: (() -> Void)?
     let stateMenu: MediaStateMenuItems?
     @ViewBuilder var content: () -> Content
+    @Environment(\.locale) private var locale
 
     @ViewBuilder
     var body: some View {
@@ -529,7 +526,7 @@ private struct FocusableMediaCard<Content: View>: View {
 
             TVMediaCardCaption(
                 title: title,
-                secondLine: subtitle ?? year.map(String.init),
+                secondLine: subtitle ?? year.map { LocaleFormat.integer($0, locale: locale) },
                 cardWidth: cardWidth,
                 cardHeight: cardHeight,
                 focusedItemId: focusedItemId,
@@ -585,7 +582,9 @@ private struct FocusableMediaCard<Content: View>: View {
             title: title,
             episodeLabel: episodeAccessibilityLabel,
             year: year,
-            isWatched: isWatched
+            subtitle: subtitle,
+            isWatched: isWatched,
+            locale: locale
         )
     }
 
@@ -609,7 +608,7 @@ private struct FocusableMediaCard<Content: View>: View {
             Button(role: .destructive) {
                 onRemoveFromContinueWatching()
             } label: {
-                Label("Remove from Continue Watching", systemImage: "xmark.circle")
+                Label(.cardMenuRemoveContinueWatching, systemImage: "xmark.circle")
             }
         }
     }

@@ -83,6 +83,7 @@ struct CalendarDayShelf: View {
             #endif
             .padding(.vertical, verticalCardPadding)
             .phoneMediaRailBounds()
+            .mouseDragScrolling()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         #if !os(tvOS)
@@ -104,7 +105,7 @@ struct CalendarDayShelf: View {
             Image(systemName: "moon.stars")
                 .font(.prairieCaption)
                 .foregroundColor(.prairieSecondaryText.opacity(0.5))
-            Text("Nothing scheduled")
+            Text(.calendarNothingScheduled)
                 .font(.prairieCaption)
                 .foregroundColor(.prairieSecondaryText)
         }

@@ -493,9 +493,11 @@ final class ConnectServerListViewModel {
         errorText = nil
         defer { isConnecting = false }
 
-        let hasAccess = SharedKeychain().get(TokenStore.accessTokenKey(for: entry.id)) != nil
-        if hasAccess {
-            await ServerRegistry.shared.switchTo(serverId: entry.id)
+        // A server with a signed-in account resumes that account (most
+        // recently used first); otherwise it falls through to sign-in.
+        let saved = (try? AccountStore.shared.accounts(onServer: entry.id)) ?? []
+        if let account = saved.first(where: \.isSignedIn),
+           (try? await AccountSessions.switchTo(account: account.localAccountId, onServer: entry.id)) != nil {
             refreshAuthState(router: router)
             return
         }

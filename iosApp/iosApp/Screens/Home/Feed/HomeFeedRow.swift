@@ -5,13 +5,22 @@ import SwiftUI
 /// layouts stay structural rather than incidental.
 struct HomeFeedRow: View {
     let section: ResolvedSection
-    /// Opens the row's full page from its title and a trailing Explore all card.
+    /// Opens the row's full page from its title and a trailing Explore all
+    /// card, unless the row already shows all of it.
     var onExploreAll: (() -> Void)? = nil
     /// Long-press actions, forwarded to every card in the row.
     var onRemoveFromContinueWatching: ((SectionItem) -> Void)? = nil
     var onSetWatched: ((SectionItem, Bool) async -> Bool)? = nil
     @State private var visibleItemId: String?
     @Environment(AppRouter.self) private var router
+    @Environment(\.browseLibraryId) private var browseLibraryId
+    /// The app language, so a switch re-renders the title.
+    @Environment(\.locale) private var locale
+
+    /// Nil when the row already shows all its page would.
+    private var exploreAll: (() -> Void)? {
+        section.showsWholeSection ? nil : onExploreAll
+    }
 
     private var isResume: Bool { HomeFeed.isResume(section) }
     private var usesStills: Bool { Self.usesStills(section) }
@@ -58,9 +67,9 @@ struct HomeFeedRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: HomeFeedMetrics.headerGap) {
             HomeSectionHeader(
-                title: section.title,
+                title: section.displayTitle(in: locale),
                 icon: isResume ? "play.circle.fill" : nil,
-                action: onExploreAll
+                action: exploreAll
             )
 
             rowScroller
@@ -78,12 +87,23 @@ struct HomeFeedRow: View {
                 )
                 visibleItemId = initialId
             }
-            .onChange(of: section.items.map(\.contentId)) { _, newIds in
-                let preferred = newIds.contains(visibleItemId ?? "")
-                    ? visibleItemId
-                    : newIds.first
-                visibleItemId = preferred
+            .onChange(of: section.items.map(\.contentId)) { oldIds, newIds in
+                visibleItemId = Self.scrollAnchorId(keeping: visibleItemId, from: oldIds, to: newIds)
             }
+    }
+
+    /// The card a row stays parked on when its items change. Removing the card
+    /// at the scroll anchor keeps the row where it was by settling on the card
+    /// that slid into its place, or the one before it when it was last, rather
+    /// than sending the row back to its start.
+    static func scrollAnchorId(keeping currentId: String?, from oldIds: [String], to newIds: [String]) -> String? {
+        guard let currentId else { return newIds.first }
+        if newIds.contains(currentId) { return currentId }
+        guard let oldIndex = oldIds.firstIndex(of: currentId) else { return newIds.first }
+        let remaining = Set(newIds)
+        return oldIds[oldIndex...].first(where: remaining.contains)
+            ?? oldIds[..<oldIndex].last(where: remaining.contains)
+            ?? newIds.first
     }
 
     private var cardsScroll: some View {
@@ -113,21 +133,26 @@ struct HomeFeedRow: View {
                         }
                     }
                     .id(item.contentId)
-                    .onAppear { warmCards(after: item) }
+                    .onAppear {
+                        warmCards(after: item)
+                        DetailPrewarmer.shared.offer(prewarmTarget(for: item), router: router)
+                    }
+                    .onDisappear { DetailPrewarmer.shared.withdraw(prewarmTarget(for: item)) }
                 }
-                if let onExploreAll, !section.items.isEmpty {
+                if let exploreAll, !section.items.isEmpty {
                     SectionExploreAllCard(
                         size: usesStills
                             ? HomeStillCard.artworkSize(width: Self.stillWidth)
                             : HomePosterCard.artworkSize(width: Self.posterWidth, aspect: isAudiobookRow ? .square : .poster),
                         cornerRadius: usesStills ? HomeFeedMetrics.stillRadius : HomeFeedMetrics.posterRadius,
-                        rowTitle: section.title,
-                        action: onExploreAll
+                        rowTitle: section.displayTitle(in: locale),
+                        action: exploreAll
                     )
                 }
             }
             .scrollTargetLayout()
             .phoneMediaRailBounds()
+            .mouseDragScrolling()
         }
         .contentMargins(.horizontal, HomeFeedMetrics.gutter, for: .scrollContent)
         .scrollClipDisabled()
@@ -137,6 +162,11 @@ struct HomeFeedRow: View {
     private func warmCards(after item: SectionItem) {
         guard let index = section.items.firstIndex(where: { $0.id == item.id }) else { return }
         ArtworkLookahead.warmCards(after: index, in: section.items) { Self.cardArtwork(for: $0, in: section) }
+    }
+
+    /// The page this row's card opens, as `HomeCardTap` opens it.
+    private func prewarmTarget(for item: SectionItem) -> DetailPrewarmTarget? {
+        .homeCard(item, opensResumeContext: isResume, libraryId: browseLibraryId)
     }
 
     private func validSelectionId(preferred: String?) -> String? {
@@ -150,7 +180,7 @@ struct HomeFeedRow: View {
     /// Episode context for accessibility when episode-discovery cards are
     /// visually captioned with their series name.
     private func episodeAccessibilityLabel(for item: SectionItem) -> String? {
-        EpisodeCardCaption.accessibilityLabel(for: item)
+        EpisodeCardCaption.accessibilityLabel(for: item, locale: locale)
     }
 
     /// Removal is only offered where it means something: Continue Watching

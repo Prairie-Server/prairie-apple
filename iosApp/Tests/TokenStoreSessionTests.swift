@@ -31,11 +31,12 @@ final class TokenStoreSessionTests: XCTestCase {
         super.tearDown()
     }
 
-    /// The persisted profile proof for a server, read straight from the
-    /// profile-audience keychain (upstream dropped `hasStoredProfileToken`).
+    /// The persisted profile proof for a server's most recent account
+    /// (upstream dropped `hasStoredProfileToken`; proofs live per account).
     private func storedProfileProof(for serverID: String) -> String? {
-        keychain.withAudience(TokenStore.profileCredentialAudience)
-            .get(TokenStore.profileTokenKey(for: serverID))
+        let accounts = AccountStore(keychain: keychain, defaults: defaults)
+        guard let account = (try? accounts.accounts(onServer: serverID))?.first else { return nil }
+        return accounts.profileToken(for: account.localAccountId, onServer: serverID)
     }
 
     private func signedInStore(accountID: String? = "account-1") async throws -> TokenStore {
@@ -76,8 +77,8 @@ final class TokenStoreSessionTests: XCTestCase {
         try await store.installAccountSession(accessToken: "a", refreshToken: "r", accountID: "acct")
         let access = await store.getAccessToken()
         XCTAssertEqual(access, "a")
-        XCTAssertEqual(keychain.get(TokenStore.accessTokenKey(for: serverA)), "a")
-        XCTAssertNotNil(keychain.get(TokenStore.accountEpochKey(for: serverA)))
+        let persisted = try XCTUnwrap(AccountStore(keychain: keychain, defaults: defaults).accounts(onServer: serverA).first)
+        XCTAssertEqual(persisted.accessToken, "a")
 
         let identity = await store.refreshAccountIdentity()
         let otherAccount = RefreshAccountIdentity(serverId: "x", serverURL: "https://x.example",

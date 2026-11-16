@@ -1,3 +1,5 @@
+import Foundation
+
 /// Which Home list a card's dismissal goes to, and so what its menu calls it.
 ///
 /// The server keys the two lists differently. In-progress items are
@@ -22,11 +24,11 @@ enum HomeDismissal: Equatable {
     }
 
     /// The long-press label names the list the card is removed from.
-    static func menuTitle(for item: SectionItem) -> String {
+    static func menuTitle(for item: SectionItem) -> LocalizedStringResource {
         if case .nextUp = HomeDismissal(item) {
-            return "Remove from Next Up"
+            return .cardMenuRemoveNextUp
         }
-        return "Remove from Continue Watching"
+        return .cardMenuRemoveContinueWatching
     }
 }
 
@@ -88,16 +90,27 @@ enum HomeSectionsMutation {
             let removedCount = section.items.count - items.count
             guard removedCount > 0 else { return section }
 
+            // A Continue Watching row cut at its limit can hold more than its
+            // count says, so losing a card must not make it read as its whole
+            // section.
+            let totalCount = section.totalCount.map { total in
+                let remaining = max(0, total - removedCount)
+                guard section.isContinueWatchingSection, !section.showsWholeSection else { return remaining }
+                return max(remaining, items.count + 1)
+            }
+
             return ResolvedSection(
                 id: section.id,
                 sectionType: section.sectionType,
                 title: section.title,
                 featured: section.featured,
                 itemLimit: section.itemLimit,
-                totalCount: section.totalCount.map { max(0, $0 - removedCount) },
+                totalCount: totalCount,
                 isCustom: section.isCustom,
                 customized: section.customized,
-                items: items
+                items: items,
+                titleKey: section.titleKey,
+                titleArgs: section.titleArgs
             )
         }
     }
