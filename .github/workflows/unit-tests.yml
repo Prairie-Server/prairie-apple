@@ -143,6 +143,11 @@ jobs:
             PrairieNetworkingTests/TitleArtPreferencesTests
             PrairieNetworkingTests/TitleArtWritePlanTests
             PrairieNetworkingTests/NetworkingUpstreamGateFillTests
+            PrairieNetworkingTests/NetworkingPrefsCacheGateFillTests
+            PrairieNetworkingTests/NetworkingSessionGateFillTests
+            PrairieNetworkingTests/NetworkingAccountGateFillTests
+            PrairieNetworkingTests/NetworkingSmallStoresGateFillTests
+            PrairieNetworkingTests/NetworkingRegistryRacesGateFillTests
             PrairieNetworkingTests/SectionRowLimitTests
             PrairieNetworkingTests/ThemeMusicPreferencesTests
             PrairieNetworkingTests/ThemeSongsV2Tests

@@ -116,6 +116,26 @@ final class ServerRegistryEdgeTests: XCTestCase {
         XCTAssertNotNil(registry.entry(with: home.id))
     }
 
+    func testRemovalRollsBackWhenTheSessionCannotBeInvalidated() async throws {
+        let shared = SharedDefaults(suite: suite(), standard: suite())
+        let tokens = TokenStore(keychain: keychain, defaults: shared)
+        let registry = registry(defaults: shared, tokenStore: tokens)
+        let home = entry("https://home.example")
+        let other = entry("https://other.example")
+        registry.addOrUpdate(home)
+        registry.addOrUpdate(other)
+        // Adapted: sessions now live in the account index, so the server needs
+        // a saved account and the storage must refuse the removal write.
+        _ = try AccountStore(keychain: keychain, defaults: shared).saveSignIn(
+            serverId: other.id, origin: other.url, serverUserId: "acct", username: nil,
+            accessToken: "access", refreshToken: "refresh", replacingOtherAccounts: false)
+        keychain.memoryStore?.failWrites = true
+
+        let removed = await registry.remove(serverId: other.id)
+        XCTAssertFalse(removed)
+        XCTAssertNotNil(registry.entry(with: other.id), "the entry comes back when sign-out cannot persist")
+    }
+
     // tvOS keeps the registry in the shared Keychain instead of the suite.
     #if !os(tvOS)
     func testLoadSeedsTheSharedSuiteFromTheStandardFallback() async throws {

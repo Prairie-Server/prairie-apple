@@ -634,6 +634,19 @@ targets:
           - ResponseCacheWriteFenceTests.swift
           # Covers the upstream Networking models those app-level suites test.
           - NetworkingUpstreamGateFillTests.swift
+          # Covers upstream app-language prefs, the current-profile store and
+          # response snapshots, which the app-level suites drive through views.
+          - NetworkingPrefsCacheGateFillTests.swift
+          # TokenStore session and storage-failure paths the upstream account
+          # model added.
+          - NetworkingSessionGateFillTests.swift
+          # Upstream server merge, account migration and local-data ownership.
+          - NetworkingAccountGateFillTests.swift
+          # Small upstream stores (title art, advisory age, password capability,
+          # trickplay sheets, job poller) and their transport paths.
+          - NetworkingSmallStoresGateFillTests.swift
+          # ServerRegistry merge, switch and legacy-migration failure paths.
+          - NetworkingRegistryRacesGateFillTests.swift
           # Upstream's theme music, theme songs and row-limit suites run on host
           # types only; box sets' suite drives app view models, so its models and
           # client reads are covered by the gate-fill suite beside them.
