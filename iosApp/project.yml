@@ -641,6 +641,8 @@ targets:
           - ThemeMusicPreferencesTests.swift
           - ThemeSongsV2Tests.swift
           - NetworkingBoxSetGateFillTests.swift
+          - AppLanguageTests.swift
+          - AccountSessionPersistenceTests.swift
       - path: Tests/Fixtures/SettingsContract/conformance.json
         buildPhase: resources
       - path: Tests/Fixtures/APIv2
