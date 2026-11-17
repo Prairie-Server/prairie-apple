@@ -10,6 +10,21 @@ import XCTest
 final class ServerRegistryEdgeTests: XCTestCase {
     private final class Flag { var ok = true }
 
+    /// A registry entry as builds before the profile split saved it, with
+    /// the profile on the server (same shape as ProfileLaunchMigrationTests).
+    private struct LegacyRegistryState: Codable {
+        let activeServerId: String?
+        let entries: [LegacyServerEntry]
+    }
+
+    private struct LegacyServerEntry: Codable {
+        let id: String
+        let url: String
+        let fetchedName: String?
+        let profileId: String?
+        let lastUsedAt: Date
+    }
+
     private var names: [String] = []
     private var keychain: SharedKeychain!
 
@@ -47,9 +62,9 @@ final class ServerRegistryEdgeTests: XCTestCase {
         )
     }
 
-    private func entry(_ url: String, profile: String? = nil) -> ServerEntry {
+    private func entry(_ url: String) -> ServerEntry {
         ServerEntry(id: ServerRegistry.serverId(for: url), url: url, fetchedName: nil,
-                    profileId: profile, lastUsedAt: Date())
+                    lastUsedAt: Date())
     }
 
     func testEmptyRegistryHasNoActiveServer() {
@@ -101,16 +116,20 @@ final class ServerRegistryEdgeTests: XCTestCase {
         XCTAssertNotNil(registry.entry(with: home.id))
     }
 
-    func testRemovalRollsBackWhenTheSessionCannotBeInvalidated() async {
+    func testRemovalRollsBackWhenTheSessionCannotBeInvalidated() async throws {
         let shared = SharedDefaults(suite: suite(), standard: suite())
-        let failingSessions = AccountSessionPersistence(read: { _ in nil }, write: { _, _ in false },
-                                                        remove: { _ in false })
-        let tokens = TokenStore(keychain: keychain, defaults: shared, sessionPersistence: failingSessions)
+        let tokens = TokenStore(keychain: keychain, defaults: shared)
         let registry = registry(defaults: shared, tokenStore: tokens)
         let home = entry("https://home.example")
         let other = entry("https://other.example")
         registry.addOrUpdate(home)
         registry.addOrUpdate(other)
+        // Adapted: sessions now live in the account index, so the server needs
+        // a saved account and the storage must refuse the removal write.
+        _ = try AccountStore(keychain: keychain, defaults: shared).saveSignIn(
+            serverId: other.id, origin: other.url, serverUserId: "acct", username: nil,
+            accessToken: "access", refreshToken: "refresh", replacingOtherAccounts: false)
+        keychain.memoryStore?.failWrites = true
 
         let removed = await registry.remove(serverId: other.id)
         XCTAssertFalse(removed)
@@ -148,21 +167,34 @@ final class ServerRegistryEdgeTests: XCTestCase {
         XCTAssertTrue(shared.bool(forKey: ServerRegistry.migratedKey))
     }
 
-    func testLegacyEntryProfilesMoveIntoTheLaunchStore() {
+    func testLegacyEntryProfilesMoveIntoTheLaunchStore() throws {
         let shared = SharedDefaults(suite: suite(), standard: suite())
-        let signedOut = entry("https://signed-out.example", profile: "p-out")
-        let signedIn = entry("https://signed-in.example", profile: "p-in")
-        let first = registry(defaults: shared)
-        first.addOrUpdate(signedOut)
-        first.addOrUpdate(signedIn)
-        XCTAssertEqual(first.entry(with: signedIn.id)?.legacyProfileId, "p-in")
+        let signedOut = entry("https://signed-out.example")
+        let signedIn = entry("https://signed-in.example")
+        let legacy = LegacyRegistryState(activeServerId: nil, entries: [
+            LegacyServerEntry(id: signedOut.id, url: signedOut.url, fetchedName: nil,
+                              profileId: "p-out", lastUsedAt: signedOut.lastUsedAt),
+            LegacyServerEntry(id: signedIn.id, url: signedIn.url, fetchedName: nil,
+                              profileId: "p-in", lastUsedAt: signedIn.lastUsedAt),
+        ])
+        shared.set(try JSONEncoder().encode(legacy), forKey: ServerRegistry.defaultsKey)
         let accountKeychain = keychain.withAudience(.userIndependent)
         XCTAssertTrue(accountKeychain.set("access", for: SharedStorage.accessTokenAccount(for: signedIn.id)))
 
         let relaunched = registry(defaults: shared)
+        XCTAssertNotNil(relaunched.entry(with: signedOut.id))
         XCTAssertNil(relaunched.entry(with: signedOut.id)?.legacyProfileId, "no account, so the profile is dropped")
         XCTAssertNil(relaunched.entry(with: signedIn.id)?.legacyProfileId, "moved into the launch store")
-        XCTAssertNotNil(accountKeychain.get(SharedStorage.accountEpochAccount(for: signedIn.id)),
-                        "the move binds the profile to a fresh account epoch")
+        // AccountMigration then moves the session, epoch included, into an
+        // account and deletes the per-server slots.
+        let account = try XCTUnwrap(
+            AccountStore(keychain: keychain, defaults: shared).accounts(onServer: signedIn.id).first,
+            "the signed-in session became an account"
+        )
+        XCTAssertEqual(account.accessToken, "access")
+        let epoch = try XCTUnwrap(account.epoch, "the move binds the profile to a fresh account epoch")
+        let remembered = ProfileLaunchPreferences(defaults: shared).rememberedProfile(forAccount: account.localAccountId)
+        XCTAssertEqual(remembered?.profileID, "p-in")
+        XCTAssertEqual(remembered?.accountEpoch, epoch.uuidString)
     }
 }

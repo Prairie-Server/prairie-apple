@@ -86,7 +86,11 @@ final class CatalogShapeModelsTests: XCTestCase {
           { "content_id": "sx", "season_number": 9, "is_specials": true, "title": "Extras", "episode_count": 1 },
           { "content_id": "s3", "season_number": 3, "title": "Third", "episode_count": 8 } ]
         """)
-        XCTAssertEqual(seasons.map(\.downloadDisplayName), ["Specials", "Specials", "Extras", "Season 3"])
+        // Season.displayName(locale:) lives in the app target (SeriesSeasonSelection),
+        // not the Networking host, so pin the decoded fields it names seasons from.
+        XCTAssertEqual(seasons.map(\.seasonNumber), [0, 0, 9, 3])
+        XCTAssertEqual(seasons.map(\.isSpecials), [nil, nil, true, nil])
+        XCTAssertEqual(seasons.map(\.title), ["Specials", nil, "Extras", "Third"])
         XCTAssertEqual(SeasonsResponse(seasons: seasons).seasons.count, 4)
         XCTAssertTrue(EpisodesResponse(episodes: []).episodes.isEmpty)
 

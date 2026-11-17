@@ -3,50 +3,14 @@ import XCTest
 @testable import Prairie
 
 /// TokenStore's fail-closed paths: rotations and invalidations that must be
-/// discarded because the captured owner no longer matches, and canonical
-/// session storage that cannot be read or written.
+/// discarded because the captured owner no longer matches, snapshots of
+/// servers with no session or no server at all, and storage that fails
+/// reads, writes, or deletes.
 final class TokenStoreFailureTests: XCTestCase {
-    /// Canonical session storage that can be made to fail on demand.
-    private final class FlakySessions: @unchecked Sendable {
-        private let lock = NSLock()
-        private var values: [String: String] = [:]
-        var failReads = false
-        var failWrites = false
-        var failRemoves = false
-
-        func put(_ value: String?, for key: String) { lock.withLock { values[key] = value } }
-
-        var persistence: AccountSessionPersistence {
-            AccountSessionPersistence(
-                read: { [self] key in
-                    try lock.withLock {
-                        if failReads { throw AccountSessionPersistenceError.unavailable }
-                        return values[key]
-                    }
-                },
-                write: { [self] value, key in
-                    lock.withLock {
-                        guard !failWrites else { return false }
-                        values[key] = value
-                        return true
-                    }
-                },
-                remove: { [self] key in
-                    lock.withLock {
-                        guard !failRemoves else { return false }
-                        values[key] = nil
-                        return true
-                    }
-                }
-            )
-        }
-    }
-
     private var suiteName: String!
     private var suite: UserDefaults!
     private var keychain: SharedKeychain!
     private var defaults: SharedDefaults!
-    private var sessions: FlakySessions!
 
     private let serverA = ServerRegistry.serverId(for: "https://flaky-a.example")
     private let serverB = ServerRegistry.serverId(for: "https://flaky-b.example")
@@ -57,7 +21,6 @@ final class TokenStoreFailureTests: XCTestCase {
         suite = UserDefaults(suiteName: suiteName)!
         keychain = .inMemory(service: "TokenStoreFailureTests.\(UUID().uuidString)")
         defaults = SharedDefaults(suite: suite, standard: suite)
-        sessions = FlakySessions()
     }
 
     override func tearDown() {
@@ -65,12 +28,11 @@ final class TokenStoreFailureTests: XCTestCase {
         suite = nil
         keychain = nil
         defaults = nil
-        sessions = nil
         super.tearDown()
     }
 
     private func signedInStore() async throws -> TokenStore {
-        let store = TokenStore(keychain: keychain, defaults: defaults, sessionPersistence: sessions.persistence)
+        let store = TokenStore(keychain: keychain, defaults: defaults)
         await store.switchActiveServer(serverId: serverA)
         await store.setServerUrl("https://flaky-a.example")
         try await store.installAccountSession(accessToken: "access-1", refreshToken: "refresh-1", accountID: "acct")
@@ -134,7 +96,29 @@ final class TokenStoreFailureTests: XCTestCase {
         XCTAssertFalse(consumed)
     }
 
+    // MARK: - Reinstall and snapshots
+
+    func testReinstallReplacesTheActiveSessionAndOtherServersStayEmpty() async throws {
+        let store = try await signedInStore()
+        let expectation = await store.captureAccountInstallationExpectation()
+        try await store.installAccountSessionForServer(serverID: serverA, origin: "https://flaky-a.example",
+            accessToken: "access-2", refreshToken: "refresh-2", accountID: "acct", expected: expectation)
+        let reinstalled = await store.getAccessToken()
+        XCTAssertEqual(reinstalled, "access-2")
+
+        let other = await store.accountSessionSnapshot(for: serverB)
+        guard case .saved(let empty, _) = other else { return XCTFail("\(other)") }
+        XCTAssertTrue(empty.accounts.isEmpty)
+        let otherAccess = await store.getAccessToken(for: serverB)
+        XCTAssertNil(otherAccess)
+
+        let noServer = await store.accountSessionSnapshot(for: "")
+        XCTAssertEqual(noServer, .unreadable)
+    }
+
     // MARK: - Canonical storage failures
+
+    private var memory: InMemoryKeychainStore { keychain.memoryStore! }
 
     func testRotationFailsClosedWhenStorageMisbehaves() async throws {
         let store = try await signedInStore()
@@ -142,25 +126,34 @@ final class TokenStoreFailureTests: XCTestCase {
         let captureValue = await store.captureRefreshCredential(expected: current)
         let capture = try XCTUnwrap(captureValue)
 
-        sessions.failReads = true
+        memory.failReads = true
         let unreadable = await store.saveRefreshedTokens("a2", "r2", replacing: capture)
         XCTAssertFalse(unreadable)
-        sessions.failReads = false
+        memory.failReads = false
+        let blockedAfterRead = await store.getAccessToken()
+        XCTAssertNil(blockedAfterRead, "an unreadable record blocks the runtime session")
 
-        // Another writer replaced the stored record behind this actor.
-        let replaced = CanonicalAccountSession(version: 1, signedOut: false, origin: "https://flaky-a.example",
-            accountID: "acct", epoch: UUID(), accessToken: "other-access", refreshToken: "other-refresh")
-        let original = try XCTUnwrap(sessions.persistence.read(AccountSessionPersistence.recordKey(serverA)))
-        sessions.put(String(decoding: try JSONEncoder().encode(replaced), as: UTF8.self),
-                     for: AccountSessionPersistence.recordKey(serverA))
-        let mismatched = await store.saveRefreshedTokens("a2", "r2", replacing: capture)
+        // Another writer refreshed the same account behind this actor.
+        let second = try await signedInStore()
+        let secondAccount = try await account(second)
+        let secondCaptureValue = await second.captureRefreshCredential(expected: secondAccount)
+        let secondCapture = try XCTUnwrap(secondCaptureValue)
+        let writer = AccountStore(keychain: keychain, defaults: defaults)
+        _ = try writer.saveSignIn(serverId: serverA, origin: "https://flaky-a.example", serverUserId: "acct",
+                                  username: nil, accessToken: "other-access", refreshToken: "other-refresh",
+                                  replacingOtherAccounts: false)
+        let mismatched = await second.saveRefreshedTokens("a2", "r2", replacing: secondCapture)
         XCTAssertFalse(mismatched)
-        sessions.put(original, for: AccountSessionPersistence.recordKey(serverA))
 
-        sessions.failWrites = true
-        let unwritable = await store.saveRefreshedTokens("a2", "r2", replacing: capture)
+        // The record can be read but not written.
+        let third = try await signedInStore()
+        let thirdAccount = try await account(third)
+        let thirdCaptureValue = await third.captureRefreshCredential(expected: thirdAccount)
+        let thirdCapture = try XCTUnwrap(thirdCaptureValue)
+        memory.failWrites = true
+        let unwritable = await third.saveRefreshedTokens("a2", "r2", replacing: thirdCapture)
         XCTAssertFalse(unwritable)
-        let blocked = await store.getAccessToken()
+        let blocked = await third.getAccessToken()
         XCTAssertNil(blocked, "a rotation that cannot be saved blocks the runtime session")
     }
 
@@ -170,14 +163,15 @@ final class TokenStoreFailureTests: XCTestCase {
         let captureValue = await store.captureRefreshCredential(expected: current)
         let capture = try XCTUnwrap(captureValue)
 
-        sessions.failWrites = true
+        memory.failWrites = true
         let invalidated = await store.invalidateRejectedRefresh(capture)
         XCTAssertNil(invalidated, "no expiry is reported while the tombstone cannot be written")
         let stillSignedIn = await store.getAccessToken()
         XCTAssertEqual(stillSignedIn, "access-1")
 
-        sessions.failRemoves = true
-        let deleted = await store.deleteTokens(for: serverB)
+        // Adapted: removing a server with no accounts writes nothing, so the
+        // deletion failure needs a server that holds an account.
+        let deleted = await store.deleteTokens(for: serverA)
         XCTAssertFalse(deleted)
     }
 
@@ -189,10 +183,7 @@ final class TokenStoreFailureTests: XCTestCase {
         let reinstalled = await store.getAccessToken()
         XCTAssertEqual(reinstalled, "access-2")
 
-        let legacy = await store.accountSessionSnapshot(for: serverB)
-        XCTAssertEqual(legacy, .legacy(accessToken: nil, refreshToken: nil, epoch: nil, profileToken: nil))
-
-        sessions.failReads = true
+        memory.failReads = true
         let other = await store.getAccessToken(for: serverB)
         XCTAssertNil(other)
         let snapshot = await store.accountSessionSnapshot(for: serverB)
@@ -200,16 +191,16 @@ final class TokenStoreFailureTests: XCTestCase {
         let epoch = await store.getOrCreateAccountEpoch(for: serverB)
         XCTAssertNil(epoch)
 
-        let fresh = TokenStore(keychain: keychain, defaults: defaults, sessionPersistence: sessions.persistence)
+        let fresh = TokenStore(keychain: keychain, defaults: defaults)
         await fresh.switchActiveServer(serverId: serverA)
         let freshAccess = await fresh.getAccessToken()
-        XCTAssertNil(freshAccess, "an unreadable canonical record fails closed")
+        XCTAssertNil(freshAccess, "an unreadable account record fails closed")
     }
 
     func testInstallForTheActiveServerBlocksWhenItCannotBeSaved() async throws {
         let store = try await signedInStore()
         let expectation = await store.captureAccountInstallationExpectation()
-        sessions.failWrites = true
+        memory.failWrites = true
         do {
             try await store.installAccountSessionForServer(serverID: serverA, origin: "https://flaky-a.example",
                 accessToken: "x", refreshToken: "y", accountID: "acct", expected: expectation)

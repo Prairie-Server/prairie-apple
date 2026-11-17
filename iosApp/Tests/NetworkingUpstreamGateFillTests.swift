@@ -547,7 +547,7 @@ final class NetworkingUpstreamGateFillTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("NetworkingUpstreamGateFill-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let scope = ResponseSnapshotStore.Scope(serverId: "server-a", profileId: "adult")
+        let scope = ResponseSnapshotStore.Scope(serverId: "server-a", localAccountId: "account-a", profileId: "adult")
         let extra = 2
         for libraryId in 0..<(ResponseSnapshotStore.maxSnapshotsPerScope + extra) {
             ResponseSnapshotStore.store(SectionsResponse(sections: []), forKey: CacheKey.librarySections(libraryId),
@@ -665,7 +665,8 @@ final class NetworkingUpstreamGateFillTests: XCTestCase {
     func testBitratePickerLabelsAndKeepsAnUncoveredStoredCap() {
         XCTAssertEqual(PrairieQualityPresets.bitrateLabel(nil), PrairieQualityPresets.noBitrateLimitLabel)
         XCTAssertEqual(PrairieQualityPresets.bitrateLabel(0), PrairieQualityPresets.noBitrateLimitLabel)
-        XCTAssertEqual(PrairieQualityPresets.bitrateLabel(8_000), ApplePlaybackQuality.formatBitrate(kbps: 8_000))
+        XCTAssertEqual(String(localized: PrairieQualityPresets.bitrateLabel(8_000)),
+                       ApplePlaybackQuality.formatBitrate(kbps: 8_000))
 
         let choices = PrairieQualityPresets.bitrateChoicesKbps
         XCTAssertEqual(PrairieQualityPresets.bitrateChoices(including: nil), choices)

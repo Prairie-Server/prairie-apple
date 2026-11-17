@@ -61,6 +61,20 @@ actor DiagnosticsCoordinator {
     func purgeDiagnosticsForCurrentBinding() async -> Bool { false }
 
     func purgeDiagnosticsForServerRegistryID(_ serverId: String) async {}
+
+    // Test hooks ServerIdentityMatchingTests drives. The stand-in never
+    // evaluates the capture gate, so the evaluation count stays 0.
+    nonisolated(unsafe) private static var breadcrumbDecisionInEffect = false
+
+    nonisolated static func installBreadcrumbDecisionInEffectForTests(_ inEffect: Bool) {
+        breadcrumbDecisionInEffect = inEffect
+    }
+
+    nonisolated static var breadcrumbDecisionInEffectForTests: Bool { breadcrumbDecisionInEffect }
+
+    nonisolated static var captureGateAuthoritativeEvaluationCountForTests: Int { 0 }
+
+    nonisolated static func resetCaptureGateCacheForTests() {}
 }
 
 @MainActor
@@ -227,8 +241,9 @@ struct PlaybackV3TerminalFailure: LocalizedError, Equatable {
     let reason: String
     let message: String
     let retryable: Bool
+    var displayMessage: String? = nil
 
-    var errorDescription: String? { message }
+    var errorDescription: String? { displayMessage ?? message }
 }
 
 /// Only the destination CalendarModels builds; the full Route enum pulls
@@ -263,6 +278,9 @@ final class DownloadSessionDelegate {
 @MainActor
 final class SeekIntervalPreferences {
     static func activeRequestIdentity() -> HTTPRequestIdentity? { nil }
+
+    /// Same prefix as the real store; AccountLocalData adopts and purges it.
+    nonisolated static let cachePrefix = "prairie.seekIntervals"
 }
 
 /// The real enum (Screens/Auth/NetworkSignIn.swift) also drives the sign-in
@@ -337,9 +355,26 @@ final class DownloadManager {
 }
 
 /// ServerMerge folds duplicate servers' download folders together; the real
-/// store lives in Downloads/DownloadStore.swift.
+/// store lives in Downloads/DownloadStore.swift. Like the real merge, a scope
+/// whose source or target has no store merges its files as they are. Scopes
+/// where both have a store need the real record merge, which the host leaves
+/// out, so they report failure and stay in place, as an unreadable store does.
 actor DownloadStore {
-    nonisolated static func mergeScopes(_ scopes: [URL], into destination: URL) -> Bool { true }
+    nonisolated static func mergeScopes(_ scopes: [URL], into destination: URL) -> Bool {
+        let fm = FileManager.default
+        var complete = true
+        for scope in scopes {
+            let target = destination.appendingPathComponent(scope.lastPathComponent, isDirectory: true)
+            let sourceStore = scope.appendingPathComponent(DownloadFilePaths.storeFileName, isDirectory: false)
+            let targetStore = target.appendingPathComponent(DownloadFilePaths.storeFileName, isDirectory: false)
+            if fm.fileExists(atPath: sourceStore.path), fm.fileExists(atPath: targetStore.path) {
+                complete = false
+            } else if !DownloadFilePaths.merge(scope, into: target) {
+                complete = false
+            }
+        }
+        return complete
+    }
 }
 
 /// AccountLocalData and ServerMerge clear or move per-account player

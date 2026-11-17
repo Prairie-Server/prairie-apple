@@ -4,6 +4,8 @@ import XCTest
 @testable import Prairie
 
 final class AccountSessionPersistenceTests: XCTestCase {
+    // AuthService is app-layer; the PrairieNetworkingHost CI framework stubs it,
+    // so its sign-out and login suites run in the app test targets only.
     private func harness() async throws -> (TokenStore, SharedKeychain, SharedDefaults, AccountStore) {
         let name = "AccountSessionPersistenceTests.\(UUID().uuidString)"
         let suite = try XCTUnwrap(UserDefaults(suiteName: name))
@@ -21,6 +23,7 @@ final class AccountSessionPersistenceTests: XCTestCase {
         await store.switchActiveServer(serverId: "server")
         return store
     }
+#if !PRAIRIE_NETWORKING_HOST
     @MainActor
     private func lifecycleHarness(
         purgeDiagnostics: @escaping @Sendable (String) async -> Bool = { _ in true },
@@ -53,6 +56,7 @@ final class AccountSessionPersistenceTests: XCTestCase {
             accountEpoch: try XCTUnwrap(epoch), forAccount: try XCTUnwrap(account))
         return (store, keys, defaults, accounts, registry, auth, http, stub)
     }
+#endif
 
     /// Records each request to turn a server's pushes off with the access
     /// token the device still held at the time.
@@ -69,6 +73,7 @@ final class AccountSessionPersistenceTests: XCTestCase {
         }
     }
 
+#if !PRAIRIE_NETWORKING_HOST
     /// A server can only be told to stop pushing while this device can still
     /// authenticate to it, so sign-out and removal ask before clearing.
     @MainActor
@@ -91,6 +96,7 @@ final class AccountSessionPersistenceTests: XCTestCase {
             XCTAssertNil(remaining)
         }
     }
+#endif
 
     /// Removing a server turns its pushes off first. When the removal then
     /// fails, the server stays saved and signed in, so its pushes are turned
@@ -126,6 +132,7 @@ final class AccountSessionPersistenceTests: XCTestCase {
         func record(_ call: String) { lock.withLock { recorded.append(call) } }
     }
 
+#if !PRAIRIE_NETWORKING_HOST
     @MainActor
     func testSignOutReportsDiagnosticsFailureWithoutKeepingCredentials() async throws {
         let h = try await lifecycleHarness(purgeDiagnostics: { _ in false })
@@ -138,7 +145,9 @@ final class AccountSessionPersistenceTests: XCTestCase {
         try await h.store.installAccountSession(accessToken: "replacement", refreshToken: "new-refresh", accountID: "12")
         XCTAssertTrue(h.auth.isLoggedIn)
     }
+#endif
 
+#if !PRAIRIE_NETWORKING_HOST
     @MainActor
     func testSignOutCompletesBeforeServerRepliesAndStaysSignedOutAfterRestart() async throws {
         let h = try await lifecycleHarness()
@@ -167,7 +176,9 @@ final class AccountSessionPersistenceTests: XCTestCase {
         XCTAssertNil(h.stub.requests.first?.header("X-Profile-Id"))
         XCTAssertNil(h.stub.requests.first?.header("X-Profile-Token"))
     }
+#endif
 
+#if !PRAIRIE_NETWORKING_HOST
     @MainActor
     func testLateUnauthorizedLogoutCannotRefreshOrClearNewLogin() async throws {
         let h = try await lifecycleHarness()
@@ -189,7 +200,9 @@ final class AccountSessionPersistenceTests: XCTestCase {
         XCTAssertTrue(h.auth.isLoggedIn)
         XCTAssertEqual(h.stub.requestedPaths, ["/api/v2/auth/logout"])
     }
+#endif
 
+#if !PRAIRIE_NETWORKING_HOST
     @MainActor
     func testRemovingLastServerSurvivesRestartAndReaddingRequiresLogin() async throws {
         let h = try await lifecycleHarness()
@@ -216,7 +229,9 @@ final class AccountSessionPersistenceTests: XCTestCase {
         let relaunched = await restarted(h.keys, h.defaults).getAccessToken()
         XCTAssertEqual(relaunched, "new-login")
     }
+#endif
 
+#if !PRAIRIE_NETWORKING_HOST
     @MainActor
     func testRemovingActiveServerPreservesFallbackAccount() async throws {
         let h = try await lifecycleHarness()
@@ -235,6 +250,7 @@ final class AccountSessionPersistenceTests: XCTestCase {
         XCTAssertNil(oldAccess)
         XCTAssertTrue(h.auth.isLoggedIn)
     }
+#endif
 
     func testDelayedLoginInstallRejectsSameAccountReloginInsideActor() async throws {
         let (store, _, _, _) = try await harness()
@@ -394,6 +410,7 @@ final class AccountSessionPersistenceTests: XCTestCase {
         let current = await store.getAccessToken()
         XCTAssertEqual(current, "new-login")
     }
+#if !PRAIRIE_NETWORKING_HOST
     @MainActor
     func testLoginInstallsIntoItsInjectedStore() async throws {
         let (store, _, defaults, _) = try await harness()
@@ -420,7 +437,9 @@ final class AccountSessionPersistenceTests: XCTestCase {
         let durable = await store.captureDurableAccountAuth()
         XCTAssertEqual(durable?.accountID, "34")
     }
+#endif
 
+#if !PRAIRIE_NETWORKING_HOST
     /// Wrong credentials are the answer, not a session failure: the previous
     /// session and profile stay, and the 401 never starts a refresh.
     @MainActor
@@ -448,6 +467,7 @@ final class AccountSessionPersistenceTests: XCTestCase {
         let durable = await store.captureDurableAccountAuth()
         XCTAssertEqual(durable?.accountID, "12")
     }
+#endif
 
     private static let tokenPair = #"{"access_token":"replacement","refresh_token":"new-refresh","expires_in":3600,"user":{"id":"34","username":"new","email":"new@example.test","role":"user","permissions":[],"download_allowed":true}}"#
 

@@ -31,6 +31,8 @@ enum AppTab: String, CaseIterable, Identifiable {
         case .libraries: return AppLanguage.string(.shellTabLibraries)
         case .recommendations: return AppLanguage.string(.topBarForYou)
         case .calendar: return AppLanguage.string(.topBarCalendar)
+        // Prairie-only tab with no catalog key yet.
+        case .liveTV: return AppLanguage.string(.verbatim("Live TV"))
         case .downloads: return AppLanguage.string(.tabDownloads)
         case .requests: return AppLanguage.string(.menuRequests)
         case .settings: return AppLanguage.string(.menuSettings)

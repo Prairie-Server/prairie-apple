@@ -97,6 +97,8 @@ DEFAULT_EXCLUDES=(
   "/Networking/APIv2/APIv2Client.swift"
   "/Networking/APIv2/APIv2Client+ExternalSignIn.swift"
   "/Networking/APIv2/APIv2Client+Shuffles.swift"
+  "/Networking/APIv2/APIv2Client+PasswordReset.swift"
+  "/Networking/APIv2/APIv2Client+Ratings.swift"
   # Live unauthenticated /api/v2/system/info probe (network I/O only).
   "/Networking/APIv2/APIv2Probe.swift"
   # Bonjour/UDP discovery and identity probes (network I/O only), like

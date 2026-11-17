@@ -309,6 +309,25 @@ struct SharedDefaults: @unchecked Sendable {
 final class InMemoryKeychainStore: @unchecked Sendable {
     private let lock = NSLock()
     private var values: [String: String] = [:]
+    private var failReadsFlag = false
+    private var failWritesFlag = false
+    private var failDeletesFlag = false
+
+    /// Test-only failure injection, off by default. While on, `SharedKeychain`
+    /// reports the matching operation as a Keychain error
+    /// (`errSecInteractionNotAllowed`), as a locked Keychain would.
+    var failReads: Bool {
+        get { lock.withLock { failReadsFlag } }
+        set { lock.withLock { failReadsFlag = newValue } }
+    }
+    var failWrites: Bool {
+        get { lock.withLock { failWritesFlag } }
+        set { lock.withLock { failWritesFlag = newValue } }
+    }
+    var failDeletes: Bool {
+        get { lock.withLock { failDeletesFlag } }
+        set { lock.withLock { failDeletesFlag = newValue } }
+    }
 
     private static func storageKey(service: String, account: String, accessGroup: String?) -> String {
         "\(service)\u{0}\(account)\u{0}\(accessGroup ?? "")"
@@ -740,6 +759,7 @@ struct SharedKeychain {
     /// one. The lenient `get` treats both as "no value", as before.
     private func readResult(account: String, accessGroup: String?) -> (status: OSStatus, value: String?) {
         if let memoryStore {
+            if memoryStore.failReads { return (errSecInteractionNotAllowed, nil) }
             let value = memoryStore.get(service: service, account: account, accessGroup: accessGroup)
             return (value == nil ? errSecItemNotFound : errSecSuccess, value)
         }
@@ -791,6 +811,7 @@ struct SharedKeychain {
 
     private func write(_ data: Data, for account: String, accessGroup: String?) -> OSStatus {
         if let memoryStore {
+            if memoryStore.failWrites { return errSecInteractionNotAllowed }
             guard let value = String(data: data, encoding: .utf8) else { return errSecParam }
             memoryStore.set(value, service: service, account: account, accessGroup: accessGroup)
             return errSecSuccess
@@ -808,6 +829,7 @@ struct SharedKeychain {
 
     private func deleteStatus(account: String, accessGroup: String?) -> OSStatus {
         if let memoryStore {
+            if memoryStore.failDeletes { return errSecInteractionNotAllowed }
             return memoryStore.delete(service: service, account: account, accessGroup: accessGroup)
                 ? errSecSuccess : errSecItemNotFound
         }
