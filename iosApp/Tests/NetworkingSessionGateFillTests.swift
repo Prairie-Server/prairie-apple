@@ -122,7 +122,8 @@ final class NetworkingSessionGateFillTests: XCTestCase {
 
     func testSwitchActiveAccountAndInactiveSignOut() async throws {
         let store = try await signedIn()
-        let firstId = try XCTUnwrap(try await identity(store).localAccountId)
+        let firstIdentity = try await identity(store)
+        let firstId = try XCTUnwrap(firstIdentity.localAccountId)
         let second = try saveOther(serverUserId: "acct2", access: "access-2", refresh: "refresh-2").account
         let unknown = await store.switchActiveAccount(localAccountId: "missing-account")
         XCTAssertFalse(unknown)
@@ -140,7 +141,8 @@ final class NetworkingSessionGateFillTests: XCTestCase {
 
     func testInactiveSignOutIsRefusedWhenTheRemovalCannotBeSaved() async throws {
         let store = try await signedIn()
-        let firstId = try XCTUnwrap(try await identity(store).localAccountId)
+        let firstIdentity = try await identity(store)
+        let firstId = try XCTUnwrap(firstIdentity.localAccountId)
         let second = try saveOther(serverUserId: "acct2", access: "access-2", refresh: "refresh-2").account
         let switched = await store.switchActiveAccount(localAccountId: second.localAccountId)
         XCTAssertTrue(switched)

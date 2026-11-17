@@ -272,7 +272,8 @@ final class NetworkingRegistryRacesGateFillTests: XCTestCase {
         XCTAssertNotNil(reg.addOrUpdate(keep))
         XCTAssertNotNil(reg.addOrUpdate(target))
 
-        let held = try XCTUnwrap(await http.beginIdentityTransition())
+        let heldLease = await http.beginIdentityTransition()
+        let held = try XCTUnwrap(heldLease)
         let removing = Task { @MainActor in await reg.remove(serverId: target.id) }
         await waitForPending(http, count: 1)
         let switching = Task { @MainActor in await reg.switchTo(serverId: target.id) }
