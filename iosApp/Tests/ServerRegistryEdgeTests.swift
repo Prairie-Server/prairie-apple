@@ -165,7 +165,16 @@ final class ServerRegistryEdgeTests: XCTestCase {
         XCTAssertNotNil(relaunched.entry(with: signedOut.id))
         XCTAssertNil(relaunched.entry(with: signedOut.id)?.legacyProfileId, "no account, so the profile is dropped")
         XCTAssertNil(relaunched.entry(with: signedIn.id)?.legacyProfileId, "moved into the launch store")
-        XCTAssertNotNil(accountKeychain.get(SharedStorage.accountEpochAccount(for: signedIn.id)),
-                        "the move binds the profile to a fresh account epoch")
+        // AccountMigration then moves the session, epoch included, into an
+        // account and deletes the per-server slots.
+        let account = try XCTUnwrap(
+            AccountStore(keychain: keychain, defaults: shared).accounts(onServer: signedIn.id).first,
+            "the signed-in session became an account"
+        )
+        XCTAssertEqual(account.accessToken, "access")
+        let epoch = try XCTUnwrap(account.epoch, "the move binds the profile to a fresh account epoch")
+        let remembered = ProfileLaunchPreferences(defaults: shared).rememberedProfile(forAccount: account.localAccountId)
+        XCTAssertEqual(remembered?.profileID, "p-in")
+        XCTAssertEqual(remembered?.accountEpoch, epoch.uuidString)
     }
 }

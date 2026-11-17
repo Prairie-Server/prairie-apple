@@ -106,7 +106,7 @@ final class ServerRegistryMigrationTests: XCTestCase {
     // tvOS keeps the registry in the shared Keychain, and this suite's
     // fixture only seeds the iOS/macOS defaults-backed store.
     #if !os(tvOS)
-    func testMigrateLegacyIsIdempotentAcrossRelaunch() {
+    func testMigrateLegacyIsIdempotentAcrossRelaunch() throws {
         seedLegacySingleServer(url: "https://media.lan")
 
         _ = makeRegistry()
@@ -116,9 +116,15 @@ final class ServerRegistryMigrationTests: XCTestCase {
         let again = makeRegistry()
         XCTAssertEqual(again.entries.count, 1)
         XCTAssertEqual(again.activeServerId, id)
-        XCTAssertEqual(keychain.get(SharedStorage.accessTokenAccount(for: id)), "ACCESS-LEGACY")
-        XCTAssertEqual(keychain.get(SharedStorage.refreshTokenAccount(for: id)), "REFRESH-LEGACY")
-        XCTAssertEqual(keychain.get(SharedStorage.profileTokenAccount(for: id)), "PROFILE-LEGACY")
+        // AccountMigration moves the session into one account and deletes
+        // the per-server slots; a relaunch must not add a second account.
+        let store = AccountStore(keychain: keychain, defaults: defaults)
+        let accounts = try store.accounts(onServer: id)
+        XCTAssertEqual(accounts.count, 1)
+        let account = try XCTUnwrap(accounts.first)
+        XCTAssertEqual(account.accessToken, "ACCESS-LEGACY")
+        XCTAssertEqual(account.refreshToken, "REFRESH-LEGACY")
+        XCTAssertEqual(store.profileToken(for: account.localAccountId, onServer: id), "PROFILE-LEGACY")
     }
     #endif
 
@@ -169,7 +175,7 @@ final class ServerRegistryMigrationTests: XCTestCase {
             launchPreferences.rememberedProfile(forAccount: account.localAccountId)?.profileID,
             "prof"
         )
-        XCTAssertEqual(keychain.get(SharedStorage.accessTokenAccount(for: id)), "TOK")
+        XCTAssertEqual(account.accessToken, "TOK")
     }
 
     func testSetProfileIdUpdateFetchedNameAndSortedEntries() {

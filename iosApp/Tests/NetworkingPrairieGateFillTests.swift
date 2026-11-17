@@ -50,12 +50,14 @@ final class NetworkingPrairieGateFillTests: XCTestCase {
 
         UnrenderableOnboardingTourSuppression.set(
             serverId: serverId,
+            localAccountId: "account-a",
             profileId: profileId,
             tourId: tourId
         )
         XCTAssertEqual(
             UnrenderableOnboardingTourSuppression.pendingTourId(
                 serverId: serverId,
+                localAccountId: "account-a",
                 profileId: profileId
             ),
             tourId
@@ -63,29 +65,34 @@ final class NetworkingPrairieGateFillTests: XCTestCase {
         XCTAssertNil(
             UnrenderableOnboardingTourSuppression.pendingTourId(
                 serverId: serverId,
+                localAccountId: "account-a",
                 profileId: "other"
             )
         )
         UnrenderableOnboardingTourSuppression.clear(
             serverId: serverId,
+            localAccountId: "account-a",
             profileId: profileId,
             tourId: "wrong"
         )
         XCTAssertEqual(
             UnrenderableOnboardingTourSuppression.pendingTourId(
                 serverId: serverId,
+                localAccountId: "account-a",
                 profileId: profileId
             ),
             tourId
         )
         UnrenderableOnboardingTourSuppression.clear(
             serverId: serverId,
+            localAccountId: "account-a",
             profileId: profileId,
             tourId: tourId
         )
         XCTAssertNil(
             UnrenderableOnboardingTourSuppression.pendingTourId(
                 serverId: serverId,
+                localAccountId: "account-a",
                 profileId: profileId
             )
         )
