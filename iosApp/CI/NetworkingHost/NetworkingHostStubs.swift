@@ -355,9 +355,26 @@ final class DownloadManager {
 }
 
 /// ServerMerge folds duplicate servers' download folders together; the real
-/// store lives in Downloads/DownloadStore.swift.
+/// store lives in Downloads/DownloadStore.swift. Like the real merge, a scope
+/// whose source or target has no store merges its files as they are. Scopes
+/// where both have a store need the real record merge, which the host leaves
+/// out, so they report failure and stay in place, as an unreadable store does.
 actor DownloadStore {
-    nonisolated static func mergeScopes(_ scopes: [URL], into destination: URL) -> Bool { true }
+    nonisolated static func mergeScopes(_ scopes: [URL], into destination: URL) -> Bool {
+        let fm = FileManager.default
+        var complete = true
+        for scope in scopes {
+            let target = destination.appendingPathComponent(scope.lastPathComponent, isDirectory: true)
+            let sourceStore = scope.appendingPathComponent(DownloadFilePaths.storeFileName, isDirectory: false)
+            let targetStore = target.appendingPathComponent(DownloadFilePaths.storeFileName, isDirectory: false)
+            if fm.fileExists(atPath: sourceStore.path), fm.fileExists(atPath: targetStore.path) {
+                complete = false
+            } else if !DownloadFilePaths.merge(scope, into: target) {
+                complete = false
+            }
+        }
+        return complete
+    }
 }
 
 /// AccountLocalData and ServerMerge clear or move per-account player
